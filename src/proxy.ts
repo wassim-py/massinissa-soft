@@ -1,12 +1,16 @@
-import { clerkMiddleware, createRouteMatcher, clerkClient } from "@clerk/nextjs/server";
+import { clerkMiddleware, createRouteMatcher, createClerkClient } from "@clerk/nextjs/server";
 import { routeAccessMap } from "./lib/settings";
 import { NextResponse } from "next/server";
+
+const clerkBackend = createClerkClient({
+  secretKey: process.env.CLERK_SECRET_KEY,
+  publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+});
 
 const matchers = Object.keys(routeAccessMap).map((route) => ({
   matcher: createRouteMatcher([route]),
   allowedRoles: routeAccessMap[route],
 }));
-
 
 export default clerkMiddleware(async (auth, req) => {
   const { userId, sessionClaims } = await auth();
@@ -19,8 +23,7 @@ export default clerkMiddleware(async (auth, req) => {
   // Fallback: If logged in but role is missing from sessionClaims, fetch from Clerk API
   if (userId && !role) {
     try {
-      const client = await clerkClient();
-      const user = await client.users.getUser(userId);
+      const user = await clerkBackend.users.getUser(userId);
       role = (user.publicMetadata as { role?: string })?.role;
     } catch (e) {
       console.error("Error fetching Clerk user role in proxy:", e);

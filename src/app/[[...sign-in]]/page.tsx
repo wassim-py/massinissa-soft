@@ -9,16 +9,38 @@ import { useEffect } from "react";
 
 const LoginPage = () => {
   const { isLoaded, isSignedIn, user } = useUser();
-
   const router = useRouter();
 
   useEffect(() => {
-    const role = user?.publicMetadata?.role;
-
-    if (role && typeof role === "string") {
-      router.push(`/${role}`);
+    if (isLoaded && isSignedIn && user) {
+      const role = user.publicMetadata?.role;
+      if (role && typeof role === "string") {
+        window.location.href = `/${role}`;
+      }
     }
-  }, [user, router]);
+  }, [isLoaded, isSignedIn, user]);
+
+  if (isLoaded && isSignedIn) {
+    const role = user?.publicMetadata?.role;
+    return (
+      <div className="h-screen flex items-center justify-center bg-wsmSkyLight">
+        <div className="bg-white p-10 rounded-md shadow-2xl flex flex-col items-center gap-4 text-center">
+          <Image src="/logo.png" alt="" width={50} height={50} />
+          <h1 className="text-2xl font-bold">Classty</h1>
+          {role ? (
+            <div className="flex flex-col items-center gap-2">
+              <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-gray-500">جاري توجيهك إلى لوحة التحكم...</p>
+            </div>
+          ) : (
+            <p className="text-red-500 text-sm max-w-xs">
+              تم تسجيل الدخول بنجاح، ولكن لم يتم تعيين دور (role) لحسابك في Clerk بعد. يرجى إضافة <code>{`{ "role": "admin" }`}</code> إلى بيانات المستخدم العامة (publicMetadata).
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen flex items-center justify-center bg-wsmSkyLight">
