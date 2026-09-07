@@ -4,33 +4,37 @@ import * as Clerk from "@clerk/elements/common";
 import * as SignIn from "@clerk/elements/sign-in";
 import { useUser } from "@clerk/nextjs";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 const LoginPage = () => {
   const { isLoaded, isSignedIn, user } = useUser();
-  const router = useRouter();
 
   useEffect(() => {
     if (isLoaded && isSignedIn && user) {
       const role = user.publicMetadata?.role;
       if (role && typeof role === "string") {
-        router.replace(`/${role}`);
+        window.location.href = `/${role}`;
       }
     }
-  }, [isLoaded, isSignedIn, user, router]);
+  }, [isLoaded, isSignedIn, user]);
 
   if (isLoaded && isSignedIn) {
-    const role = user?.publicMetadata?.role;
+    const role = user?.publicMetadata?.role as string | undefined;
     return (
       <div className="h-screen flex items-center justify-center bg-wsmSkyLight">
         <div className="bg-white p-10 rounded-md shadow-2xl flex flex-col items-center gap-4 text-center">
           <Image src="/logo.png" alt="" width={50} height={50} />
           <h1 className="text-2xl font-bold">Classty</h1>
           {role ? (
-            <div className="flex flex-col items-center gap-2">
+            <div className="flex flex-col items-center gap-4">
               <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
               <p className="text-gray-500">جاري توجيهك إلى لوحة التحكم...</p>
+              <a
+                href={`/${role}`}
+                className="text-sm text-blue-600 underline font-medium hover:text-blue-800 cursor-pointer"
+              >
+                اضغط هنا للدخول إلى لوحة التحكم
+              </a>
             </div>
           ) : (
             <p className="text-red-500 text-sm max-w-xs">
