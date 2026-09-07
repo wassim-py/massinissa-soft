@@ -8,7 +8,7 @@ const matchers = Object.keys(routeAccessMap).map((route) => ({
 }));
 
 export default clerkMiddleware(async (auth, req) => {
-  const { userId, sessionClaims } = await auth();
+  const { userId, sessionClaims } = await auth({ treatPendingAsSignedOut: false });
 
   // Try to resolve role from sessionClaims (custom JWT claim)
   let role = (sessionClaims?.metadata as { role?: string })?.role

@@ -11,7 +11,7 @@ const roleTranslations: { [key: string]: string } = {
 };
 
 const Navbar = async () => {
-  const user = await currentUser();
+  const user = await currentUser({ treatPendingAsSignedOut: false });
   const role = user?.publicMetadata.role as string;
   const translatedRole = roleTranslations[role] || role; // Fallback to the original role if no translation is found
 
