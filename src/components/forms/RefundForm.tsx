@@ -1,6 +1,7 @@
 "use client";
 
-import { useFormState, useFormStatus } from "react-dom";
+import { useFormStatus } from "react-dom";
+import { useActionState } from "react";
 import { useEffect, useRef, useState } from "react";
 import { RefundSchema, refundSchema } from "@/lib/formValidationSchemas";
 import { createRefund } from "@/lib/actions";
@@ -34,7 +35,7 @@ const RefundForm = ({ payment }: { payment: PaymentData }) => {
   const initialState = { success: false, error: false, message: "" };
   
   // MODIFIED: Wrapped the server action to handle FormData parsing and validation
-  const [state, formAction] = useFormState(async (prevState: any, formData: FormData) => {
+  const [state, formAction] = useActionState(async (prevState: any, formData: FormData) => {
     const dataToValidate = {
         amount: Number(formData.get('amount')),
         notes: formData.get('notes') as string,

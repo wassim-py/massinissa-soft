@@ -4,15 +4,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, Controller } from "react-hook-form";
 import InputField from "../InputField";
 import Image from "next/image";
-import {
-  Dispatch,
+import { useActionState, Dispatch,
   SetStateAction,
   useEffect,
   useState,
-  useRef,
-} from "react";
+  useRef, } from "react";
 import { teacherSchema, TeacherSchema } from "@/lib/formValidationSchemas";
-import { useFormState } from "react-dom";
 import { createTeacher, updateTeacher } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { CldUploadWidget } from "next-cloudinary";
@@ -78,7 +75,7 @@ const TeacherForm = ({
 
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createTeacher : updateTeacher;
-  const [state, formAction] = useFormState(actionToRun, initialState);
+  const [state, formAction] = useActionState(actionToRun, initialState);
 
   const onSubmit = (formData: TeacherSchema) => {
     setIsSubmitting(true);

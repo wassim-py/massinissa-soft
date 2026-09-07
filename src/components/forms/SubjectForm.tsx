@@ -5,14 +5,11 @@ import { useForm, Controller } from "react-hook-form";
 import InputField from "../InputField";
 import { subjectSchema, SubjectSchema } from "@/lib/formValidationSchemas";
 import { createSubject, updateSubject } from "@/lib/actions";
-import { useFormState } from "react-dom";
-import {
-  Dispatch,
+import { useActionState, Dispatch,
   SetStateAction,
   useEffect,
   useState,
-  useRef,
-} from "react";
+  useRef, } from "react";
 import { toast } from "react-toastify";
 import Image from "next/image";
 
@@ -52,7 +49,7 @@ const SubjectForm = ({
     message: "",
   };
 
-  const [state, formAction] = useFormState(
+  const [state, formAction] = useActionState(
     type === "create" ? createSubject : updateSubject,
     initialState
   );

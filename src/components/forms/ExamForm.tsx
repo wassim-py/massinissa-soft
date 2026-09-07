@@ -5,8 +5,7 @@ import { useForm } from "react-hook-form";
 import InputField from "../InputField";
 import { examSchema, ExamSchema } from "@/lib/formValidationSchemas";
 import { createExam, updateExam } from "@/lib/actions";
-import { useFormState } from "react-dom";
-import { Dispatch, SetStateAction, useEffect, useState } from "react";
+import { useActionState, Dispatch, SetStateAction, useEffect, useState } from "react";
 import { toast } from "react-toastify";
 import { Class, Classroom, Subject, Teacher } from "@prisma/client";
 
@@ -96,7 +95,7 @@ const ExamForm = ({
     }
   }, [selectedSubjectId, allSubjects, allTeachers, setValue, selectedTeacherId]);
 
-  const [state, formAction] = useFormState(
+  const [state, formAction] = useActionState(
     type === "create" ? createExam : updateExam,
     { success: false, error: false, message: "" }
   );

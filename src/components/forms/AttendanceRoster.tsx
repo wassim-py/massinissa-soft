@@ -3,7 +3,8 @@
 import { Student, Attendance, Payment, Lesson, Class, Subject, Teacher, Refund } from "@prisma/client";
 import { useState, useEffect } from "react";
 import Image from "next/image";
-import { useFormState, useFormStatus } from "react-dom";
+import { useFormStatus } from "react-dom";
+import { useActionState } from "react";
 import { saveAttendance } from "@/lib/actions";
 import { toast } from "react-toastify";
 import PaymentForm from "./PaymentForm";
@@ -70,7 +71,7 @@ const AttendanceRoster = ({
     };
 
     const saveAttendanceWithId = saveAttendance.bind(null, lesson.id);
-    const [state, formAction] = useFormState(saveAttendanceWithId, {
+    const [state, formAction] = useActionState(saveAttendanceWithId, {
         success: false,
         error: false,
         message: "",

@@ -5,8 +5,7 @@ import { useForm } from "react-hook-form";
 import InputField from "../InputField";
 import { classSchema, ClassSchema } from "@/lib/formValidationSchemas";
 import { createClass, updateClass } from "@/lib/actions";
-import { useFormState } from "react-dom";
-import { Dispatch, SetStateAction, useEffect, useState } from "react";
+import { useActionState, Dispatch, SetStateAction, useEffect, useState } from "react";
 import { toast } from "react-toastify";
 
 const ClassForm = ({
@@ -37,7 +36,7 @@ const ClassForm = ({
     message: "",
   };
 
-  const [state, formAction] = useFormState(
+  const [state, formAction] = useActionState(
     type === "create" ? createClass : updateClass,
     initialState
   );

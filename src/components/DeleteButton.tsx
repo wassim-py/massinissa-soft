@@ -15,8 +15,8 @@ import {
   deleteWorkshopParticipant, // ADDED: Import the new action
 } from "@/lib/actions";
 import Image from "next/image";
-import { useEffect, useState } from "react";
-import { useFormState } from "react-dom";
+import { useActionState, useEffect, useState } from "react";
+
 import { toast } from "react-toastify";
 
 
@@ -132,7 +132,7 @@ const DeleteButton = ({ table, id, data }: { table: string, id: number | string,
       workshopParticipant: deleteWorkshopParticipant, // ADDED
     }[table] || deleteSubject;
 
-  const [state, formAction] = useFormState(deleteAction, { success: false, error: false, message: "" });
+  const [state, formAction] = useActionState(deleteAction, { success: false, error: false, message: "" });
 
   useEffect(() => {
     if (state.success) {

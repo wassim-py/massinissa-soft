@@ -5,8 +5,8 @@ import { useForm, Controller } from "react-hook-form";
 import InputField from "../InputField";
 import { announcementSchema, AnnouncementSchema } from "@/lib/formValidationSchemas";
 import { createAnnouncement, updateAnnouncement } from "@/lib/actions";
-import { useFormState } from "react-dom";
-import { Dispatch, SetStateAction, useEffect, useState, useRef } from "react";
+
+import { useActionState, Dispatch, SetStateAction, useEffect, useState, useRef } from "react";
 import { toast } from "react-toastify";
 import { Class } from "@prisma/client";
 import Image from "next/image";
@@ -41,7 +41,7 @@ const AnnouncementForm = ({
   const [isClassesOpen, setIsClassesOpen] = useState(false);
   const classesDropdownRef = useRef<HTMLDivElement>(null);
 
-  const [state, formAction] = useFormState(
+  const [state, formAction] = useActionState(
     type === "create" ? createAnnouncement : updateAnnouncement,
     { success: false, error: false, message: "" }
   );

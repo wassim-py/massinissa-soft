@@ -1,6 +1,7 @@
 "use client";
 
-import { useFormState, useFormStatus } from "react-dom";
+import { useFormStatus } from "react-dom";
+import { useActionState } from "react";
 import { useEffect } from "react";
 import { toast } from "react-toastify";
 import Image from "next/image";
@@ -26,7 +27,7 @@ const EnterResultsForm = ({ exam, students, existingResults }: any) => {
   const saveResultsWithId = saveResults.bind(null, exam.id);
 
   // Initialize form state using the useFormState hook
-  const [state, formAction] = useFormState(saveResultsWithId, {
+  const [state, formAction] = useActionState(saveResultsWithId, {
     success: false,
     error: false,
     message: "",

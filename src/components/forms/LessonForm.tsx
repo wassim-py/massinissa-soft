@@ -5,8 +5,8 @@ import { useForm } from "react-hook-form";
 import InputField from "../InputField";
 import { LessonSchema, lessonSchema } from "@/lib/formValidationSchemas";
 import { createLesson, updateLesson } from "@/lib/actions";
-import { useFormState } from "react-dom";
-import { Dispatch, SetStateAction, useEffect, useState } from "react";
+
+import { useActionState, Dispatch, SetStateAction, useEffect, useState } from "react";
 import { toast } from "react-toastify";
 import { Day, Subject, Class, Teacher, Classroom } from "@prisma/client";
 
@@ -149,7 +149,7 @@ const LessonForm = ({
   
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createLesson : updateLesson;
-  const [state, formAction] = useFormState(actionToRun, initialState);
+  const [state, formAction] = useActionState(actionToRun, initialState);
 
   const onSubmit = handleSubmit((formData) => {
     setIsSubmitting(true);

@@ -4,15 +4,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, Controller } from "react-hook-form";
 import InputField from "../InputField";
 import Image from "next/image";
-import {
-  Dispatch,
+import { useActionState, Dispatch,
   SetStateAction,
   useEffect,
   useState,
-  useRef,
-} from "react";
+  useRef, } from "react";
 import { studentSchema, StudentSchema } from "@/lib/formValidationSchemas";
-import { useFormState } from "react-dom";
 import { createStudent, updateStudent } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { CldUploadWidget } from "next-cloudinary";
@@ -70,7 +67,7 @@ const StudentForm = ({
 
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createStudent : updateStudent;
-  const [state, formAction] = useFormState(actionToRun, initialState);
+  const [state, formAction] = useActionState(actionToRun, initialState);
 
   // UPDATED: The onSubmit function now controls the pending state
   const onSubmit = (formData: StudentSchema) => {

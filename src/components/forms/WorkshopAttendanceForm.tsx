@@ -3,7 +3,8 @@
 import { WorkshopParticipant, WorkshopAttendance } from "@prisma/client";
 import { useState, useEffect } from "react";
 import Image from "next/image";
-import { useFormState, useFormStatus } from "react-dom";
+import { useFormStatus } from "react-dom";
+import { useActionState } from "react";
 import { saveWorkshopAttendance } from "@/lib/actions";
 import { toast } from "react-toastify";
 
@@ -50,7 +51,7 @@ const WorkshopAttendanceForm = ({
 
   // Set up the server action with the form state
   const saveAttendanceWithId = saveWorkshopAttendance.bind(null, sessionId);
-  const [state, formAction] = useFormState(saveAttendanceWithId, {
+  const [state, formAction] = useActionState(saveAttendanceWithId, {
     success: false,
     error: false,
     message: "",

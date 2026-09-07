@@ -3,9 +3,9 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { paymentSchema, PaymentSchema } from "@/lib/formValidationSchemas";
-import { useFormState } from "react-dom";
+
 import { recordPayment, updatePayment } from "@/lib/actions";
-import { useEffect } from "react";
+import { useActionState, useEffect } from "react";
 import { toast } from "react-toastify";
 import { Payment, Student, Class } from "@prisma/client";
 import PrintTicketButton from "../PrintTicketButton";
@@ -45,7 +45,7 @@ const PaymentForm = ({
     });
 
     const actionToRun = type === 'create' ? recordPayment : updatePayment;
-    const [state, formAction] = useFormState(actionToRun, { success: false, error: false, message: "" });
+    const [state, formAction] = useActionState(actionToRun, { success: false, error: false, message: "" });
 
     useEffect(() => {
         if (state?.success) {

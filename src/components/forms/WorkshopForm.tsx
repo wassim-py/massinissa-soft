@@ -5,8 +5,8 @@ import { useForm, Controller, useFieldArray } from "react-hook-form";
 import InputField from "../InputField";
 import { workshopSchema, WorkshopSchema } from "@/lib/formValidationSchemas";
 import { createWorkshop, updateWorkshop } from "@/lib/actions";
-import { useFormState } from "react-dom";
-import { Dispatch, SetStateAction, useEffect, useState, useRef } from "react";
+
+import { useActionState, Dispatch, SetStateAction, useEffect, useState, useRef } from "react";
 import { toast } from "react-toastify";
 import { Teacher, Student } from "@prisma/client";
 import Image from "next/image";
@@ -56,7 +56,7 @@ const WorkshopForm = ({
     name: "sessions",
   });
 
-  const [state, formAction] = useFormState(
+  const [state, formAction] = useActionState(
     type === "create" ? createWorkshop : updateWorkshop,
     { success: false, error: false, message: "" }
   );

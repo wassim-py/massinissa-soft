@@ -5,8 +5,8 @@ import { useForm } from "react-hook-form";
 import InputField from "../InputField";
 import { CourseSchema, courseSchema } from "@/lib/formValidationSchemas";
 import { createCourse, updateCourse } from "@/lib/actions";
-import { useFormState } from "react-dom";
-import { Dispatch, SetStateAction, useEffect, useRef, useState } from "react";
+
+import { useActionState, Dispatch, SetStateAction, useEffect, useRef, useState } from "react";
 import { toast } from "react-toastify";
 import { useUser } from "@clerk/nextjs";
 import Image from "next/image";
@@ -83,7 +83,7 @@ const CourseForm = ({
 
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createCourse : updateCourse;
-  const [state, formAction] = useFormState(actionToRun, initialState);
+  const [state, formAction] = useActionState(actionToRun, initialState);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = event.target.files;

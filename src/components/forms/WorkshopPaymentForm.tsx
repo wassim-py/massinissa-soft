@@ -3,9 +3,9 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { workshopPaymentSchema, WorkshopPaymentSchema } from "@/lib/formValidationSchemas";
-import { useFormState } from "react-dom";
+
 import { addWorkshopPayment, updateWorkshopPayment } from "@/lib/actions";
-import { useEffect } from "react";
+import { useActionState, useEffect } from "react";
 import { toast } from "react-toastify";
 import { Workshop, WorkshopParticipant, WorkshopPayment } from "@prisma/client";
 import PrintWorkshopTicketButton from "../PrintWorkshopTicketButton"; // Import the new print button
@@ -41,7 +41,7 @@ const WorkshopPaymentForm = ({
     });
 
     const actionToRun = type === 'create' ? addWorkshopPayment : updateWorkshopPayment;
-    const [state, formAction] = useFormState(actionToRun, { success: false, error: false, message: "" });
+    const [state, formAction] = useActionState(actionToRun, { success: false, error: false, message: "" });
 
     useEffect(() => {
         if (state?.success) {

@@ -1,13 +1,13 @@
 "use client";
 
 import { updateExamSeasonStatus } from "@/lib/actions";
-import { useEffect } from "react";
-import { useFormState } from "react-dom";
+import { useActionState, useEffect } from "react";
+
 import { toast } from "react-toastify";
 
 const ExamSeasonToggle = ({ isActive }: { isActive: boolean }) => {
   const initialState = { success: false, error: false, message: "" };
-  const [state, formAction] = useFormState(updateExamSeasonStatus, initialState);
+  const [state, formAction] = useActionState(updateExamSeasonStatus, initialState);
 
   useEffect(() => {
     if (state.success) {

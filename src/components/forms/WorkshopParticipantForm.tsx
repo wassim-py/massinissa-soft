@@ -4,8 +4,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { registerParticipantSchema, RegisterParticipantSchema } from "@/lib/formValidationSchemas";
 import { registerParticipant, updateWorkshopParticipant } from "@/lib/actions";
-import { useFormState } from "react-dom";
-import { Dispatch, SetStateAction, useEffect, useState } from "react";
+
+import { useActionState, Dispatch, SetStateAction, useEffect, useState } from "react";
 import { toast } from "react-toastify";
 
 type FormSchema = RegisterParticipantSchema & { id?: number };
@@ -35,7 +35,7 @@ const WorkshopParticipantForm = ({
   });
 
   const actionToRun = type === "create" ? registerParticipant : updateWorkshopParticipant;
-  const [state, formAction] = useFormState(actionToRun, { success: false, error: false, message: "" });
+  const [state, formAction] = useActionState(actionToRun, { success: false, error: false, message: "" });
 
   const onSubmit = (formData: FormSchema) => {
     setIsSubmitting(true);

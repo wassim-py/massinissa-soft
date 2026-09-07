@@ -15,14 +15,11 @@ import {
 } from "@/lib/actions";
 import dynamic from "next/dynamic";
 import Image from "next/image";
-import {
-  ComponentType,
+import { useActionState, ComponentType,
   Dispatch,
   SetStateAction,
   useEffect,
-  useState,
-} from "react";
-import { useFormState } from "react-dom";
+  useState, } from "react";
 import { toast } from "react-toastify";
 import { FormContainerProps } from "./FormContainer";
 
@@ -111,7 +108,7 @@ const DeleteConfirmation = ({
 
   const deleteAction = deleteActionMap[table] || deleteSubject;
 
-  const [state, formAction] = useFormState(deleteAction, {
+  const [state, formAction] = useActionState(deleteAction, {
     success: false,
     error: false,
     message: "",
