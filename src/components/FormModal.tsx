@@ -194,10 +194,10 @@ const FormModal = ({
   const buttonSize = type === "create" ? "w-8 h-8" : "w-7 h-7";
   const buttonBgColor =
     type === "create"
-      ? "bg-lamaYellow"
+      ? "bg-wsmYellow"
       : type === "update"
-      ? "bg-lamaSky"
-      : "bg-lamaPurple";
+      ? "bg-wsmSky"
+      : "bg-wsmPurple";
 
   const modalContentClasses =
     type === "delete"

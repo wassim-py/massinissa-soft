@@ -159,7 +159,7 @@ const DeleteButton = ({ table, id, data }: { table: string, id: number | string,
     <>
       <button
         onClick={() => setOpen(true)}
-        className="w-7 h-7 flex items-center justify-center rounded-full bg-lamaPurple hover:opacity-80"
+        className="w-7 h-7 flex items-center justify-center rounded-full bg-wsmPurple hover:opacity-80"
       >
         <Image src="/delete.png" alt="Delete" width={14} height={14} />
       </button>

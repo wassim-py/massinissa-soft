@@ -26,9 +26,9 @@ const MyClasses = async () => {
 
   // Define a color palette to cycle through for the class cards
   const colors = [
-    "bg-lamaSkyLight",
-    "bg-lamaPurpleLight",
-    "bg-lamaYellowLight",
+    "bg-wsmSkyLight",
+    "bg-wsmPurpleLight",
+    "bg-wsmYellowLight",
     "bg-red-100",
   ];
 

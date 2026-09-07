@@ -60,7 +60,7 @@ const WorkshopRoster = ({ workshop, participants }: { workshop: Workshop, partic
                     <h2 className="text-xl font-bold text-gray-800">التلاميذ المسجلون ({participants.length})</h2>
                     <button 
                         onClick={() => openParticipantModal('create')} 
-                        className="w-8 h-8 flex items-center justify-center rounded-full bg-lamaYellow hover:opacity-90 transition-opacity"
+                        className="w-8 h-8 flex items-center justify-center rounded-full bg-wsmYellow hover:opacity-90 transition-opacity"
                         title="Add Participant"
                     >
                         <Image src="/create.png" alt="Add Participant" width={16} height={16} />
@@ -96,7 +96,7 @@ const WorkshopRoster = ({ workshop, participants }: { workshop: Workshop, partic
                                         <button onClick={() => openPaymentModal('create', participant)} className="px-3 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full hover:bg-blue-200">
                                             تسجيل دفع
                                         </button>
-                                        <button onClick={() => openParticipantModal('update', participant)} className="w-7 h-7 flex items-center justify-center rounded-full bg-lamaSky hover:opacity-80">
+                                        <button onClick={() => openParticipantModal('update', participant)} className="w-7 h-7 flex items-center justify-center rounded-full bg-wsmSky hover:opacity-80">
                                             <Image src="/update.png" alt="Update" width={14} height={14} />
                                         </button>
                                         <DeleteButton table="workshopParticipant" id={participant.id} data={{ workshopId: workshop.id }} />
@@ -131,7 +131,7 @@ const WorkshopRoster = ({ workshop, participants }: { workshop: Workshop, partic
                                                             <td className="py-2 pl-4 text-gray-600">{payment.notes || '-'}</td>
                                                             <td className="py-2 text-right">
                                                                 <div className="flex items-center justify-end gap-1">
-                                                                    <button onClick={() => openPaymentModal('update', participant, payment)} className="w-7 h-7 flex items-center justify-center rounded-full bg-lamaSky hover:opacity-80">
+                                                                    <button onClick={() => openPaymentModal('update', participant, payment)} className="w-7 h-7 flex items-center justify-center rounded-full bg-wsmSky hover:opacity-80">
                                                                         <Image src="/update.png" alt="Update" width={14} height={14} />
                                                                     </button>
                                                                     <RefundForm payment={{...payment, paymentType: 'workshop'}} />
