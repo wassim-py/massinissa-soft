@@ -25,10 +25,12 @@ export default clerkMiddleware(async (auth, req) => {
     try {
       const user = await clerkBackend.users.getUser(userId);
       role = (user.publicMetadata as { role?: string })?.role;
-    } catch (e) {
-      console.error("Error fetching Clerk user role in proxy:", e);
+    } catch (e: any) {
+      console.error("Error fetching Clerk user role in proxy:", e?.message || e);
     }
   }
+
+  console.log("PROXY DEBUG:", { path: req.nextUrl.pathname, userId, role, metadata: (sessionClaims as any)?.metadata });
 
   // If already authenticated and visiting root '/', redirect to the role dashboard
   if (req.nextUrl.pathname === "/" && userId && role) {
@@ -43,13 +45,8 @@ export default clerkMiddleware(async (auth, req) => {
         return NextResponse.redirect(new URL("/", req.url));
       }
 
-      // If user has no role defined, redirect to sign-in page
-      if (!role) {
-        return NextResponse.redirect(new URL("/", req.url));
-      }
-
-      // If user role is not permitted on this route, redirect to their role's page
-      if (!allowedRoles.includes(role)) {
+      // If user has a resolved role and it is NOT permitted on this route, redirect to their own role page
+      if (role && !allowedRoles.includes(role)) {
         const destination = `/${role}`;
         if (req.nextUrl.pathname !== destination) {
           return NextResponse.redirect(new URL(destination, req.url));

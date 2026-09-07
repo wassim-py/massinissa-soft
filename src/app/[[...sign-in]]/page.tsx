@@ -15,10 +15,10 @@ const LoginPage = () => {
     if (isLoaded && isSignedIn && user) {
       const role = user.publicMetadata?.role;
       if (role && typeof role === "string") {
-        window.location.href = `/${role}`;
+        router.replace(`/${role}`);
       }
     }
-  }, [isLoaded, isSignedIn, user]);
+  }, [isLoaded, isSignedIn, user, router]);
 
   if (isLoaded && isSignedIn) {
     const role = user?.publicMetadata?.role;
