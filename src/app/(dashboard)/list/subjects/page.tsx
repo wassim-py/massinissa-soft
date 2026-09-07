@@ -4,7 +4,7 @@ import Table from "@/components/Table";
 import prisma from "@/lib/prisma";
 import { ITEM_PER_PAGE } from "@/lib/settings";
 import { Prisma, Subject, Teacher } from "@prisma/client";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import PageHeader from "@/components/PageHeader"; // ADDED: Import the new header
 
 

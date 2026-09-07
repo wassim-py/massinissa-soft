@@ -1,10 +1,10 @@
 import prisma from "@/lib/prisma";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { Announcement } from "@prisma/client"; // Import the Announcement type
 import Link from "next/link";
 
 const Announcements = async () => {
-  const { userId, sessionClaims } = await auth();
+  const { userId, sessionClaims } = await auth({ treatPendingAsSignedOut: false });
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   let data: Announcement[] = []; // Initialize with an empty array as a fallback

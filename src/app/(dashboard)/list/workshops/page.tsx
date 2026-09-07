@@ -3,7 +3,7 @@ import PageHeader from "@/components/PageHeader";
 import Pagination from "@/components/Pagination";
 import prisma from "@/lib/prisma";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { Prisma } from "@prisma/client";
 import Image from "next/image";
 import Link from "next/link";

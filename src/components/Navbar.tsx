@@ -1,5 +1,5 @@
 import { UserButton } from "@clerk/nextjs";
-import { currentUser } from "@clerk/nextjs/server";
+import { currentUser } from "@/lib/auth";
 import Image from "next/image";
 
 // ADDED: A simple mapping to translate roles for display

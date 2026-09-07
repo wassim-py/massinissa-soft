@@ -2,7 +2,7 @@ import BackButton from "@/components/BackButton";
 import FormContainer from "@/components/FormContainer";
 import Timetable from "@/components/Timetable";
 import prisma from "@/lib/prisma";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { Class, Subject, Teacher } from "@prisma/client";
 import Image from "next/image";
 import { notFound } from "next/navigation";

@@ -1,5 +1,5 @@
 import prisma from "@/lib/prisma";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { Day, Prisma } from "@prisma/client";
 import Image from "next/image";
 

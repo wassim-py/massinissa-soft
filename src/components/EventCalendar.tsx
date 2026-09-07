@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 
@@ -14,16 +14,16 @@ const EventCalendar = () => {
 
   const router = useRouter();
 
-  useEffect(() => {
-    if (value instanceof Date) {
-      // Use toISOString() for a standardized URL parameter
-      router.push(`?date=${value.toISOString()}`);
+  const handleDateChange = (val: Value) => {
+    onChange(val);
+    if (val instanceof Date) {
+      router.push(`?date=${val.toISOString()}`);
     }
-  }, [value, router]);
+  };
 
   return (
     <Calendar
-      onChange={onChange}
+      onChange={handleDateChange}
       value={value}
       locale="ar-DZ" // Set the calendar language to Algerian Arabic
     />

@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import Image from "next/image";
 import WorkshopRoster from "@/components/WorkshopRoster";
 import FormContainer from "@/components/FormContainer";

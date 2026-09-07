@@ -1,7 +1,7 @@
 import Announcements from "@/components/Announcements";
 import TodaysSchedule from "@/components/TodaysSchedule";
 import UpcomingDeadlines from "@/components/UpcomingDeadlines";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 
 
 

@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import EnterResultsForm from "@/components/forms/EnterResultsForm"; // Import the Client Component
 import BackButton from "@/components/BackButton";
 

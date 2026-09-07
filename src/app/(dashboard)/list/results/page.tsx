@@ -4,7 +4,7 @@ import TableSearch from "@/components/TableSearch";
 import prisma from "@/lib/prisma";
 import { ITEM_PER_PAGE } from "@/lib/settings";
 import { Prisma, Student } from "@prisma/client";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import Image from "next/image";
 import ResultsFilters from "@/components/ResultsFilters";
 import ChildSwitcher from "@/components/ChildSwitcher";

@@ -5,7 +5,7 @@ import { ITEM_PER_PAGE } from "@/lib/settings";
 import { Class, Grade, Prisma, Student } from "@prisma/client";
 import Image from "next/image";
 import Link from "next/link";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import PageHeader from "@/components/PageHeader"; // ADDED: Import the new header
 import FormContainer from "@/components/FormContainer";
 import ExportButton from "@/components/ExportButton";

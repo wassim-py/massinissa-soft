@@ -4,7 +4,7 @@ import Timetable from "@/components/Timetable";
 import TimetableFilters from "@/components/TimetableFilters";
 import prisma from "@/lib/prisma";
 import { Prisma, Lesson, Subject, Class, Teacher, Classroom } from "@prisma/client";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import BackButton from "@/components/BackButton";
 
 

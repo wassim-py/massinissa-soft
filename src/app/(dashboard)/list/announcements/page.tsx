@@ -1,7 +1,7 @@
 import FormContainer from "@/components/FormContainer";
 import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import Image from "next/image";
 import PageHeader from "@/components/PageHeader"; // ADDED
 

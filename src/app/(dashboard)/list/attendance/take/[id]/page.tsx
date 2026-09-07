@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import AttendanceRoster from "@/components/forms/AttendanceRoster";
 import TableSearch from "@/components/TableSearch";
 import BackButton from "@/components/BackButton";

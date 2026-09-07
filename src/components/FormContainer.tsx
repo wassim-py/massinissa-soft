@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma";
 import FormModal from "./FormModal";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 
 // UPDATED: This type now includes "workshop"
 export type FormContainerProps = {
