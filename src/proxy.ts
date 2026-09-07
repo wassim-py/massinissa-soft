@@ -52,6 +52,10 @@ export default clerkMiddleware(async (auth, req) => {
       }
     }
   }
+}, {
+  secretKey: process.env.CLERK_SECRET_KEY || "sk_test_Kl9ipSmhibmv01RtA6iGMMBjrdfbtgUlvShsXlKRdo",
+  publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || "pk_test_cmVhbC1idWZmYWxvLTgwOTIuY2xlcmsuYWNjb3VudHMuZGV2JA",
+  debug: true,
 });
 
 export const config = {

@@ -4,19 +4,23 @@ import * as Clerk from "@clerk/elements/common";
 import * as SignIn from "@clerk/elements/sign-in";
 import { useUser } from "@clerk/nextjs";
 import Image from "next/image";
-import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef } from "react";
 
 const LoginPage = () => {
   const { isLoaded, isSignedIn, user } = useUser();
+  const router = useRouter();
+  const hasRedirected = useRef(false);
 
   useEffect(() => {
-    if (isLoaded && isSignedIn && user) {
+    if (isLoaded && isSignedIn && user && !hasRedirected.current) {
       const role = user.publicMetadata?.role;
       if (role && typeof role === "string") {
-        window.location.href = `/${role}`;
+        hasRedirected.current = true;
+        router.push(`/${role}`);
       }
     }
-  }, [isLoaded, isSignedIn, user]);
+  }, [isLoaded, isSignedIn, user, router]);
 
   if (isLoaded && isSignedIn) {
     const role = user?.publicMetadata?.role as string | undefined;
