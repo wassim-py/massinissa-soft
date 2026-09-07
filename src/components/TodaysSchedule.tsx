@@ -5,7 +5,7 @@ import Image from "next/image";
 
 // The component now accepts an optional studentId prop to make it reusable.
 const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
-  const { userId } = auth();
+  const { userId } = await auth();
 
   // If we are in a parent/student context, the ID to use is the studentId prop.
   // If we are in a teacher context, the ID is the logged-in user's ID.

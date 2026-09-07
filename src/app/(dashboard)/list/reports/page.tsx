@@ -6,6 +6,8 @@ import { arDZ } from "date-fns/locale";
 import Image from "next/image";
 import Link from "next/link";
 
+
+
 // Helper component for styling the summary cards
 const ReportCard = ({ title, amount, colorClass, icon }: { title: string, amount: number, colorClass:string, icon: string }) => (
     <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 flex flex-col justify-between">
@@ -73,8 +75,11 @@ const TransactionsTable = ({ title, transactions, type }: { title: string, trans
 
 
 // The main page component
-const FinancialReportPage = async ({ searchParams }: { searchParams: { dateFrom?: string, dateTo?: string, classId?: string, workshopId?: string } }) => {
-    
+const FinancialReportPage = async (
+    props: { searchParams: Promise<{ dateFrom?: string, dateTo?: string, classId?: string, workshopId?: string }> }
+) => {
+    const searchParams = await props.searchParams;
+
     const today = new Date();
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(today.getDate());
@@ -107,7 +112,7 @@ const FinancialReportPage = async ({ searchParams }: { searchParams: { dateFrom?
         prisma.class.findMany({ orderBy: { name: 'asc' } }),
         prisma.workshop.findMany({ orderBy: { title: 'asc' } })
     ]);
-    
+
     const paymentWhereClause = { ...(classId && { classId: parseInt(classId) }) };
     const workshopPaymentWhereClause = { ...(workshopId && { workshopId: parseInt(workshopId) }) };
 
@@ -133,7 +138,7 @@ const FinancialReportPage = async ({ searchParams }: { searchParams: { dateFrom?
     ]);
 
     const allIncomeTransactions = [...incomePayments, ...incomeWorkshopPayments];
-    
+
     const filteredIncome = allIncomeTransactions.reduce((sum, t) => sum + t.amount, 0);
     const filteredOutcome = outcomeRefunds.reduce((sum, t) => sum + t.amount, 0);
     const filteredNetTotal = filteredIncome - filteredOutcome;

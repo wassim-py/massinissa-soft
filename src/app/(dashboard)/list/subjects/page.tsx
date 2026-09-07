@@ -7,14 +7,17 @@ import { Prisma, Subject, Teacher } from "@prisma/client";
 import { auth } from "@clerk/nextjs/server";
 import PageHeader from "@/components/PageHeader"; // ADDED: Import the new header
 
+
+
 type SubjectList = Subject & { teachers: Teacher[] };
 
-const SubjectListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { sessionClaims } = auth();
+const SubjectListPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   const columns = [

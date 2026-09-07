@@ -9,14 +9,17 @@ import { auth } from "@clerk/nextjs/server";
 import PageHeader from "@/components/PageHeader"; // ADDED: Import the new header
 import FormContainer from "@/components/FormContainer";
 
+
+
 type TeacherList = Teacher & { subjects: Subject[] } & { classes: Class[] };
 
-const TeacherListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { sessionClaims } = auth();
+const TeacherListPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   if (role !== "admin") {
@@ -63,7 +66,7 @@ const TeacherListPage = async ({
       </td>
     </tr>
   );
-  
+
   const { page, search } = searchParams;
   const p = page ? parseInt(page) : 1;
 

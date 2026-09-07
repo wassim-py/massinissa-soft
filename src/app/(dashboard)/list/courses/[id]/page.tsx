@@ -5,12 +5,20 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-const SingleCoursePage = async ({
-  params: { id },
-}: {
-  params: { id: string };
-}) => {
-  const { sessionClaims } = auth();
+
+
+const SingleCoursePage = async (
+  props: {
+    params: Promise<{ id: string }>;
+  }
+) => {
+  const params = await props.params;
+
+  const {
+    id
+  } = params;
+
+  const { sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   const course = await prisma.course.findUnique({

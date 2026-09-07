@@ -5,6 +5,8 @@ import { auth } from "@clerk/nextjs/server";
 import Image from "next/image";
 import PageHeader from "@/components/PageHeader"; // ADDED
 
+
+
 const AnnouncementCard = ({
   announcement,
   isPinned = false,
@@ -79,12 +81,13 @@ const AnnouncementCard = ({
   );
 };
 
-const AnnouncementListPage = async ({
-  searchParams,
-}: {
-  searchParams: { search?: string };
-}) => {
-  const { userId, sessionClaims } = auth();
+const AnnouncementListPage = async (
+  props: {
+    searchParams: Promise<{ search?: string }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { userId, sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
   const currentUserId = userId;
   const { search } = searchParams;

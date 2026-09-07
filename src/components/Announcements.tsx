@@ -4,7 +4,7 @@ import { Announcement } from "@prisma/client"; // Import the Announcement type
 import Link from "next/link";
 
 const Announcements = async () => {
-  const { userId, sessionClaims } = auth();
+  const { userId, sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   let data: Announcement[] = []; // Initialize with an empty array as a fallback

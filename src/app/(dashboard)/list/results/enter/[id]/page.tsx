@@ -4,10 +4,13 @@ import { auth } from "@clerk/nextjs/server";
 import EnterResultsForm from "@/components/forms/EnterResultsForm"; // Import the Client Component
 import BackButton from "@/components/BackButton";
 
+
+
 // This is a Server Component. It has no "use client" directive.
 // It is responsible for fetching data and handling authorization.
-const EnterResultsPage = async ({ params }: { params: { id: string } }) => {
-  const { sessionClaims } = auth();
+const EnterResultsPage = async (props: { params: Promise<{ id: string }> }) => {
+  const params = await props.params;
+  const { sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   // Authorization check on the server

@@ -198,7 +198,7 @@ export const createTeacher = async (
   data: TeacherSchema
 ) => {
   try {
-    const user = await clerkClient().users.createUser({
+    const user = await (await clerkClient()).users.createUser({
       username: data.username,
       password: data.password,
       firstName: data.name,
@@ -248,7 +248,7 @@ export const updateTeacher = async (
     return { success: false, error: true, message: "لا يوجد معرف للاستاذ." };
   }
   try {
-    await clerkClient().users.updateUser(data.id, {
+    await (await clerkClient()).users.updateUser(data.id, {
       username: data.username,
       ...(data.password !== "" && { password: data.password }),
       firstName: data.name,
@@ -321,7 +321,7 @@ export const deleteTeacher = async (
 
     // --- Step 3: Delete the user from Clerk ---
     try {
-      await clerkClient().users.deleteUser(id);
+      await (await clerkClient()).users.deleteUser(id);
     } catch (err: any) {
       if (err.status === 404) {
         console.log(
@@ -359,7 +359,7 @@ export const createStudent = async (
     // This capacity check is no longer valid for multiple classes and has been removed.
     // A more complex check could be added here in the future if needed.
 
-    const user = await clerkClient().users.createUser({
+    const user = await (await clerkClient()).users.createUser({
       username: data.username,
       password: data.password,
       firstName: data.name,
@@ -405,7 +405,7 @@ export const updateStudent = async (
     return { success: false, error: true, message: "لا يوجد معرف للتلميذ." };
   }
   try {
-    await clerkClient().users.updateUser(data.id, {
+    await (await clerkClient()).users.updateUser(data.id, {
       username: data.username,
       ...(data.password !== "" && { password: data.password }),
       firstName: data.name,
@@ -492,7 +492,7 @@ export const deleteStudent = async (
 
     // --- Step 3: Delete the user from Clerk ---
     try {
-      await clerkClient().users.deleteUser(id);
+      await (await clerkClient()).users.deleteUser(id);
     } catch (err: any) {
       if (err.status === 404) {
         console.log(`User ${id} not found in Clerk. Proceeding to delete from local DB.`);
@@ -664,7 +664,7 @@ export const createParent = async (
   data: ParentSchema
 ) => {
   try {
-    const user = await clerkClient().users.createUser({
+    const user = await (await clerkClient()).users.createUser({
       username: data.username,
       password: data.password,
       firstName: data.name,
@@ -706,7 +706,7 @@ export const updateParent = async (
     return { success: false, error: true, message: "لا يوجد معرف لولي الامر." };
   }
   try {
-    await clerkClient().users.updateUser(data.id, {
+    await (await clerkClient()).users.updateUser(data.id, {
       username: data.username,
       ...(data.password !== "" && { password: data.password }),
       firstName: data.name,
@@ -751,7 +751,7 @@ export const deleteParent = async (
 
   try {
     try {
-      await clerkClient().users.deleteUser(id);
+      await (await clerkClient()).users.deleteUser(id);
     } catch (err: any) {
       if (err.status === 404) {
         console.log(

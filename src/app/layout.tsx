@@ -6,6 +6,8 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
+
+
 const tajawal = Tajawal({ subsets: ["arabic"], weight: ["400", "500", "700"] });
 export const metadata: Metadata = {
   title: "Classty - منصة إدارة المدارس",

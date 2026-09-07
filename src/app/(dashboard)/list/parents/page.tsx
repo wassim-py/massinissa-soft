@@ -8,14 +8,17 @@ import Image from "next/image";
 import { auth } from "@clerk/nextjs/server";
 import PageHeader from "@/components/PageHeader";
 
+
+
 type ParentList = Parent & { students: Student[] };
 
-const ParentListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { sessionClaims } = auth();
+const ParentListPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   if (role !== "admin") {

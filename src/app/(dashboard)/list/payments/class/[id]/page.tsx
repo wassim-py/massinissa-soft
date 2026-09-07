@@ -6,14 +6,17 @@ import TableSearch from "@/components/TableSearch";
 import BackButton from "@/components/BackButton";
 import ExportButton from "@/components/ExportButton";
 
-const ClassPaymentHistoryPage = async ({ 
-    params,
-    searchParams 
-}: { 
-    params: { id: string },
-    searchParams: { [key: string]: string | undefined } 
-}) => {
-  const { sessionClaims } = auth();
+
+
+const ClassPaymentHistoryPage = async (
+  props: { 
+      params: Promise<{ id: string }>,
+      searchParams: Promise<{ [key: string]: string | undefined }> 
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
+  const { sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   // Authorization check

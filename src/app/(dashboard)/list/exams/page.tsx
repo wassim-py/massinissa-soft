@@ -8,12 +8,15 @@ import Link from "next/link";
 import Image from "next/image";
 import BackButton from "@/components/BackButton";
 
-const ExamListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { userId, sessionClaims } = auth();
+
+
+const ExamListPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { userId, sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
   const currentUserId = userId;
 
@@ -93,7 +96,7 @@ const ExamListPage = async ({
       </div>
     );
     return acc;
-  }, {} as { [key: number]: JSX.Element });
+  }, {} as { [key: number]: React.JSX.Element });
 
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">

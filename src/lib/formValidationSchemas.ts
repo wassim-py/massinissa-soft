@@ -13,10 +13,11 @@ export const classSchema = z.object({
   name: z.string().min(1, { message: "اسم القسم مطلوب!" }),
   capacity: z.coerce.number().min(1, { message: "سعة القسم مطلوبة!" }),
   gradeId: z.coerce.number().min(1, { message: "المستوى مطلوب!" }),
-  supervisorId: z.preprocess(
-    (val) => (val === "" ? undefined : val),
-    z.string().optional()
-  ),
+  supervisorId: z
+    .string()
+    .optional()
+    .or(z.literal(""))
+    .transform((val) => (val === "" ? undefined : val)),
   price: z.coerce.number().min(0, { message: "لا يمكن أن يكون السعر سالبًا." }), // ADDED: Price for 4 sessions
 });
 

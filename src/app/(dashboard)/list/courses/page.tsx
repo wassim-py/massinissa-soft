@@ -8,6 +8,8 @@ import { Course, Prisma, Student, Subject, Teacher } from "@prisma/client";
 import Image from "next/image";
 import Link from "next/link";
 
+
+
 // Define a more complete type for our course data
 type CourseDetails = Course & {
   subject: Subject;
@@ -17,12 +19,13 @@ type CourseDetails = Course & {
   };
 };
 
-const CoursesPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { userId, sessionClaims } = auth();
+const CoursesPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { userId, sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
   const { page, search } = searchParams;
   const p = page ? parseInt(page) : 1;

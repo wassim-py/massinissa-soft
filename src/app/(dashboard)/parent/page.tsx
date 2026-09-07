@@ -4,12 +4,15 @@ import ChildSwitcher from "@/components/ChildSwitcher";
 import UpcomingDeadlines from "@/components/UpcomingDeadlines";
 import TodaysSchedule from "@/components/TodaysSchedule";
 
-const ParentPage = async ({
-  searchParams,
-}: {
-  searchParams: { studentId?: string };
-}) => {
-  const { userId } = auth();
+
+
+const ParentPage = async (
+  props: {
+    searchParams: Promise<{ studentId?: string }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { userId } = await auth();
   if (!userId) return <p>لم يتم تسجيل الدخول.</p>;
 
   // --- FIX: Fetch the parent's children on the server ---

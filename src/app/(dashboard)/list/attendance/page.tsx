@@ -6,6 +6,8 @@ import { Prisma, Student } from "@prisma/client";
 import ChildSwitcher from "@/components/ChildSwitcher";
 import PageHeader from "@/components/PageHeader";
 
+
+
 const AttendanceStatCard = ({
   label,
   value,
@@ -60,12 +62,13 @@ const RecentAbsences = ({ absences }: { absences: any[] }) => (
   </div>
 );
 
-const AttendanceListPage = async ({
-  searchParams,
-}: {
-  searchParams: { studentId?: string; search?: string };
-}) => {
-  const { userId, sessionClaims } = auth();
+const AttendanceListPage = async (
+  props: {
+    searchParams: Promise<{ studentId?: string; search?: string }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { userId, sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
   const currentUserId = userId;
 

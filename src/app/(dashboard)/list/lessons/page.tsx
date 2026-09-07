@@ -7,6 +7,8 @@ import { Prisma, Lesson, Subject, Class, Teacher, Classroom } from "@prisma/clie
 import { auth } from "@clerk/nextjs/server";
 import BackButton from "@/components/BackButton";
 
+
+
 // --- FIX: Define the expected shape of a lesson object for the Timetable ---
 type TimetableLesson = Lesson & {
   subject: Subject;
@@ -16,12 +18,13 @@ type TimetableLesson = Lesson & {
   forChildren?: string[];
 };
 
-const LessonListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { userId, sessionClaims } = auth();
+const LessonListPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { userId, sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   const { search, teacherId, classId } = searchParams;
@@ -99,7 +102,7 @@ const LessonListPage = async ({
         );
     }
     return acc;
-  }, {} as { [key: number]: JSX.Element });
+  }, {} as { [key: number]: React.JSX.Element });
 
   return (
     <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">

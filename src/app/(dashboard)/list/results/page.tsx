@@ -10,6 +10,8 @@ import ResultsFilters from "@/components/ResultsFilters";
 import ChildSwitcher from "@/components/ChildSwitcher";
 import BackButton from "@/components/BackButton";
 
+
+
 // =================================================================
 // STUDENT & PARENT VIEW: REPORT CARD COMPONENT
 // =================================================================
@@ -70,12 +72,13 @@ const ReportCard = ({ results }: { results: any[] }) => {
 // =================================================================
 // MAIN PAGE COMPONENT
 // =================================================================
-const ResultListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key:string]: string | undefined };
-}) => {
-  const { userId, sessionClaims } = auth();
+const ResultListPage = async (
+  props: {
+    searchParams: Promise<{ [key:string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { userId, sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
   const currentUserId = userId;
 
@@ -141,7 +144,7 @@ const ResultListPage = async ({
   if (searchParams.subjectId) {
     examWhere.subjectId = parseInt(searchParams.subjectId);
   }
-  
+
   if (searchParams.studentId) {
     query.studentId = searchParams.studentId;
   }
@@ -191,7 +194,7 @@ const ResultListPage = async ({
     className: item.exam.class.name,
     examDate: item.exam.startTime,
   }));
-  
+
   const columns = [
     { header: "اسم الامتحان", accessor: "examTitle" },
     { header: "الطالب", accessor: "student" },

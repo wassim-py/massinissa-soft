@@ -1,7 +1,7 @@
 "use client";
 
 import { Day, Subject, Class, Teacher, Classroom, Exam } from "@prisma/client";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import ExamDetailModal from "./ExamDetailModal";
 
 // Define the type for the exam data
@@ -36,25 +36,25 @@ const timeSlots = [
 const dayMap: Day[] = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
 
 
-const ExamTimetable = ({ exams, actions, relatedDataForForms }: { exams: TimetableExam[], actions: { [key: number]: JSX.Element }, relatedDataForForms: any }) => {
+const ExamTimetable = ({ exams, actions, relatedDataForForms }: { exams: TimetableExam[], actions: { [key: number]: React.JSX.Element }, relatedDataForForms: any }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedExam, setSelectedExam] = useState<TimetableExam | null>(null);
 
-  useEffect(() => {
-    if (selectedExam && !exams.find(e => e.id === selectedExam.id)) {
-      handleCloseModal();
-    }
-  }, [exams, selectedExam]);
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedExam(null);
+  };
 
   const handleExamClick = (exam: TimetableExam) => {
     setSelectedExam(exam);
     setIsModalOpen(true);
   };
 
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setSelectedExam(null);
-  };
+  useEffect(() => {
+    if (selectedExam && !exams.find(e => e.id === selectedExam.id)) {
+      handleCloseModal();
+    }
+  }, [exams, selectedExam]);
 
   // This function finds exams for a given day and time slot.
   const findExamsForSlot = (day: Day, time: string): TimetableExam[] => {

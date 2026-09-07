@@ -3,6 +3,8 @@ import MyClasses from "@/components/MyClasses";
 import TodaysSchedule from "@/components/TodaysSchedule";
 import UpcomingEvents from "@/components/UpcomingEvents"; // 1. Import the new component
 
+
+
 const TeacherPage = () => {
   return (
     <div className="flex-1 p-4 flex gap-4 flex-col xl:flex-row">

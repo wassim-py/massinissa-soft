@@ -6,6 +6,8 @@ import AttendanceGridFilters from "@/components/AttendanceGridFilters";
 import BackButton from "@/components/BackButton";
 import ExportButton from "@/components/ExportButton";
 
+
+
 // This type will represent a unique column in our grid
 export type LessonInstance = {
     key: string; // A unique key like "lessonId-date"
@@ -14,8 +16,12 @@ export type LessonInstance = {
     date: string;
 };
 
-const ClassAttendancePage = async ({ params, searchParams }: { params: { id: string }, searchParams: { [key: string]: string | undefined } }) => {
-    const { sessionClaims } = auth();
+const ClassAttendancePage = async (
+    props: { params: Promise<{ id: string }>, searchParams: Promise<{ [key: string]: string | undefined }> }
+) => {
+    const searchParams = await props.searchParams;
+    const params = await props.params;
+    const { sessionClaims } = await auth();
     const role = (sessionClaims?.metadata as { role?: string })?.role;
 
     if (role !== 'admin' && role !== 'teacher') {
@@ -66,7 +72,7 @@ const ClassAttendancePage = async ({ params, searchParams }: { params: { id: str
     // --- REFINED DATA PROCESSING LOGIC ---
 
     const allRecords = classData.students.flatMap(s => s.attendances);
-    
+
     // 1. Get a list of all unique lesson instances first to avoid counting per-student records
     const uniqueLessonInstancesTemp: { key: string; lessonId: number; subjectName: string; date: string }[] = [];
     const seenInstancesTemp = new Set<string>();

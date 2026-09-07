@@ -1,7 +1,7 @@
 "use client";
 
 import { Day, Lesson, Subject, Class, Teacher, Classroom } from "@prisma/client";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import LessonDetailModal from "./LessonDetailModal";
 import Image from "next/image";
 import Link from "next/link";
@@ -29,25 +29,25 @@ const timeSlots = [
 // Get today's day as an uppercase string (e.g., "MONDAY") to match the Day enum
 const today = new Date().toLocaleString('en-GB', { weekday: 'long' }).toUpperCase() as Day;
 
-const Timetable = ({ lessons, actions, relatedDataForForms, userRole }: { lessons: TimetableLesson[], actions: { [key: number]: JSX.Element }, relatedDataForForms: any, userRole: string }) => {
+const Timetable = ({ lessons, actions, relatedDataForForms, userRole }: { lessons: TimetableLesson[], actions: { [key: number]: React.JSX.Element }, relatedDataForForms: any, userRole: string }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedLesson, setSelectedLesson] = useState<TimetableLesson | null>(null);
 
-  useEffect(() => {
-    if (selectedLesson && !lessons.find(l => l.id === selectedLesson.id)) {
-      handleCloseModal();
-    }
-  }, [lessons, selectedLesson]);
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedLesson(null);
+  };
 
   const handleLessonClick = (lesson: TimetableLesson) => {
     setSelectedLesson(lesson);
     setIsModalOpen(true);
   };
 
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setSelectedLesson(null);
-  };
+  useEffect(() => {
+    if (selectedLesson && !lessons.find(l => l.id === selectedLesson.id)) {
+      handleCloseModal();
+    }
+  }, [lessons, selectedLesson]);
 
   const findLessonsForSlot = (day: Day, time: string): TimetableLesson[] => {
     return lessons.filter((lesson) => {

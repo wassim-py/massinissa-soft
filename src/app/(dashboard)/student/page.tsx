@@ -3,8 +3,10 @@ import TodaysSchedule from "@/components/TodaysSchedule";
 import UpcomingDeadlines from "@/components/UpcomingDeadlines";
 import { auth } from "@clerk/nextjs/server";
 
+
+
 const StudentPage = async () => {
-  const { userId } = auth();
+  const { userId } = await auth();
 
   // The page will only render if a student is logged in.
   if (!userId) {

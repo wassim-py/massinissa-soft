@@ -10,14 +10,17 @@ import PageHeader from "@/components/PageHeader"; // ADDED: Import the new heade
 import FormContainer from "@/components/FormContainer";
 import ExportButton from "@/components/ExportButton";
 
+
+
 type StudentList = Student & { classes: Class[] } & { grade: Grade };
 
-const StudentListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { userId, sessionClaims } = auth();
+const StudentListPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { userId, sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   const columns = [

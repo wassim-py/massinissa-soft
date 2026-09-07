@@ -7,14 +7,17 @@ import { Class, Grade, Prisma, Teacher } from "@prisma/client";
 import { auth } from "@clerk/nextjs/server";
 import PageHeader from "@/components/PageHeader"; // ADDED: Import the new header
 
+
+
 type ClassList = Class & { supervisor: Teacher | null } & { grade: Grade };
 
-const ClassListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { sessionClaims } = auth();
+const ClassListPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
 
   if (role !== "admin") {

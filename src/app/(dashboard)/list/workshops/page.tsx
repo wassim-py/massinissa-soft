@@ -8,12 +8,15 @@ import { Prisma } from "@prisma/client";
 import Image from "next/image";
 import Link from "next/link";
 
-const WorkshopListPage = async ({
-  searchParams,
-}: {
-  searchParams: { [key: string]: string | undefined };
-}) => {
-  const { sessionClaims } = auth();
+
+
+const WorkshopListPage = async (
+  props: {
+    searchParams: Promise<{ [key: string]: string | undefined }>;
+  }
+) => {
+  const searchParams = await props.searchParams;
+  const { sessionClaims } = await auth();
   const role = (sessionClaims?.metadata as { role?: string })?.role;
   const { page, search } = searchParams;
   const p = page ? parseInt(page) : 1;
