@@ -1,4 +1,4 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware, createRouteMatcher, clerkClient } from "@clerk/nextjs/server";
 import { routeAccessMap } from "./lib/settings";
 import { NextResponse } from "next/server";
 
@@ -9,15 +9,49 @@ const matchers = Object.keys(routeAccessMap).map((route) => ({
 
 
 export default clerkMiddleware(async (auth, req) => {
-  // if (isProtectedRoute(req)) (await auth()).protect()
+  const { userId, sessionClaims } = await auth();
 
-  const { sessionClaims } = await auth();
+  // Try to resolve role from sessionClaims (custom JWT claim)
+  let role = (sessionClaims?.metadata as { role?: string })?.role
+    || (sessionClaims as any)?.publicMetadata?.role
+    || (sessionClaims as any)?.role;
 
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
+  // Fallback: If logged in but role is missing from sessionClaims, fetch from Clerk API
+  if (userId && !role) {
+    try {
+      const client = await clerkClient();
+      const user = await client.users.getUser(userId);
+      role = (user.publicMetadata as { role?: string })?.role;
+    } catch (e) {
+      console.error("Error fetching Clerk user role in proxy:", e);
+    }
+  }
 
+  // If already authenticated and visiting root '/', redirect to the role dashboard
+  if (req.nextUrl.pathname === "/" && userId && role) {
+    return NextResponse.redirect(new URL(`/${role}`, req.url));
+  }
+
+  // Match protected routes
   for (const { matcher, allowedRoles } of matchers) {
-    if (matcher(req) && !allowedRoles.includes(role!)) {
-      return NextResponse.redirect(new URL(`/${role}`, req.url));
+    if (matcher(req)) {
+      // If unauthenticated, redirect to sign-in page
+      if (!userId) {
+        return NextResponse.redirect(new URL("/", req.url));
+      }
+
+      // If user has no role defined, redirect to sign-in page
+      if (!role) {
+        return NextResponse.redirect(new URL("/", req.url));
+      }
+
+      // If user role is not permitted on this route, redirect to their role's page
+      if (!allowedRoles.includes(role)) {
+        const destination = `/${role}`;
+        if (req.nextUrl.pathname !== destination) {
+          return NextResponse.redirect(new URL(destination, req.url));
+        }
+      }
     }
   }
 });
