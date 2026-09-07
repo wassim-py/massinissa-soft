@@ -1,0 +1,320 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id       String @id
+  username String @unique
+}
+
+model Student {
+  id          String       @id
+  username    String       @unique
+  name        String
+  surname     String
+  email       String?      @unique
+  phone       String?      @unique
+  address     String
+  img         String?
+  sex         UserSex
+  createdAt   DateTime     @default(now())
+  gradeId     Int
+  grade       Grade        @relation(fields: [gradeId], references: [id])
+  classes     Class[]
+  attendances Attendance[]
+  results     Result[]
+  birthday    DateTime
+  parentId    String?
+  parent      Parent?      @relation(fields: [parentId], references: [id], onDelete: SetNull)
+  payments    Payment[]
+}
+
+model Teacher {
+  id                String     @id
+  username          String     @unique
+  name              String
+  surname           String
+  email             String?    @unique
+  phone             String     @unique
+  address           String?
+  img               String?
+  sex               UserSex
+  createdAt         DateTime   @default(now())
+  subjects          Subject[]
+  lessons           Lesson[]
+  classes           Class[]    @relation("ClassesTaught")
+  supervisedClasses Class[]    @relation("ClassSupervisor")
+  courses           Course[]
+  exams             Exam[]
+  birthday          DateTime
+}
+
+model Parent {
+  id        String   @id
+  username  String   @unique
+  name      String
+  surname   String
+  email     String?  @unique
+  phone     String   @unique
+  address   String
+  img       String?
+  createdAt DateTime @default(now())
+  students  Student[]
+}
+
+model Grade {
+  id       Int      @id @default(autoincrement())
+  level    String   @unique
+  students Student[]
+  classess Class[]
+}
+
+model Class {
+  id            Int            @id @default(autoincrement())
+  name          String         @unique
+  capacity      Int
+  supervisorId  String?
+  supervisor    Teacher?       @relation("ClassSupervisor", fields: [supervisorId], references: [id], onDelete: SetNull)
+  lessons       Lesson[]
+  students      Student[]
+  gradeId       Int
+  grade         Grade          @relation(fields: [gradeId], references: [id])
+  events        Event[]        @relation("ClassEvents")
+  announcements Announcement[]
+  teachers      Teacher[]      @relation("ClassesTaught")
+  exams         Exam[]
+  price         Float          @default(0)
+  payments      Payment[]
+}
+
+model Subject {
+  id       Int      @id @default(autoincrement())
+  name     String   @unique
+  teachers Teacher[]
+  lessons  Lesson[]
+  courses  Course[]
+  exams    Exam[]
+}
+
+model Lesson {
+  id          Int          @id @default(autoincrement())
+  name        String
+  day         Day
+  startTime   DateTime
+  endTime     DateTime
+  subjectId   Int
+  subject     Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  classId     Int
+  class       Class        @relation(fields: [classId], references: [id], onDelete: Cascade)
+  teacherId   String
+  teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  classroomId Int?
+  classroom   Classroom?   @relation(fields: [classroomId], references: [id], onDelete: SetNull)
+  attendances Attendance[]
+}
+
+model Course {
+  id          Int          @id @default(autoincrement())
+  title       String
+  description String?
+  createdAt   DateTime     @default(now())
+  subjectId   Int
+  subject     Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacherId   String
+  teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  files       CourseFile[]
+}
+
+model CourseFile {
+  id          Int    @id @default(autoincrement())
+  name        String
+  url         String
+  storagePath String
+  courseId    Int
+  course      Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
+
+model Exam {
+  id          Int       @id @default(autoincrement())
+  title       String
+  startTime   DateTime
+  endTime     DateTime
+  subjectId   Int
+  subject     Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  classId     Int
+  class       Class     @relation(fields: [classId], references: [id], onDelete: Cascade)
+  teacherId   String
+  teacher     Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  classroomId Int
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  results     Result[]
+}
+
+model Result {
+  id        Int     @id @default(autoincrement())
+  score     Float
+  examId    Int
+  exam      Exam    @relation(fields: [examId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, studentId])
+}
+
+model Attendance {
+  id        Int     @id @default(autoincrement())
+  date      DateTime
+  present   Boolean
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  lessonId  Int
+  lesson    Lesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+}
+
+model Event {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String
+  startTime   DateTime
+  endTime     DateTime
+  classes     Class[]  @relation("ClassEvents")
+}
+
+model Announcement {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String
+  date        DateTime @default(now())
+  isPinned    Boolean  @default(false)
+  classes     Class[]
+}
+
+model Classroom {
+  id      Int      @id @default(autoincrement())
+  name    String   @unique
+  lessons Lesson[]
+  exams   Exam[]
+}
+
+model SchoolSetting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+}
+
+model Payment {
+  id        Int      @id @default(autoincrement())
+  amount    Float
+  date      DateTime @default(now())
+  notes     String?
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classId   Int
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  
+  // ADDED: Relation to the new Refund model
+  refunds   Refund[]
+}
+
+model Workshop {
+  id           Int                   @id @default(autoincrement())
+  title        String
+  description  String?
+  price        Float                 @default(0)
+  createdAt    DateTime              @default(now())
+  teacherName  String
+  sessions     WorkshopSession[]
+  participants WorkshopParticipant[]
+  payments     WorkshopPayment[]
+}
+
+model WorkshopSession {
+  id          Int                  @id @default(autoincrement())
+  startTime   DateTime
+  endTime     DateTime
+  workshopId  Int
+  workshop    Workshop             @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  attendances WorkshopAttendance[]
+}
+
+model WorkshopParticipant {
+  id          Int                  @id @default(autoincrement())
+  name        String
+  phone       String?
+  email       String?
+  workshopId  Int
+  workshop    Workshop             @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  payments    WorkshopPayment[]
+  attendances WorkshopAttendance[]
+}
+
+model WorkshopPayment {
+  id            Int                 @id @default(autoincrement())
+  amount        Float
+  date          DateTime            @default(now())
+  notes         String?
+  participantId Int
+  participant   WorkshopParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  workshopId    Int
+  workshop      Workshop            @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+
+  // ADDED: Relation to the new Refund model
+  refunds       Refund[]
+}
+
+model WorkshopAttendance {
+  id            Int                 @id @default(autoincrement())
+  present       Boolean
+  date          DateTime            @default(now())
+  participantId Int
+  participant   WorkshopParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  sessionId     Int
+  session       WorkshopSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([participantId, sessionId])
+}
+
+model DailyLedger {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @unique
+  income    Float
+  outcome   Float
+  netTotal  Float
+  createdAt DateTime @default(now())
+}
+
+// ADDED: New model to handle partial refunds
+model Refund {
+  id                Int      @id @default(autoincrement())
+  amount            Float
+  date              DateTime @default(now())
+  notes             String?
+
+  // A refund must belong to either a class payment OR a workshop payment
+  paymentId         Int?
+  payment           Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  workshopPaymentId Int?
+  workshopPayment   WorkshopPayment? @relation(fields: [workshopPaymentId], references: [id], onDelete: Cascade)
+}
+
+// REMOVED: The PaymentStatus enum is no longer needed
+enum UserSex {
+  MALE
+  FEMALE
+}
+
+enum Day {
+  SATURDAY
+  SUNDAY
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+}
