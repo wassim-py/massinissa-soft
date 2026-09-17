@@ -1,22 +1,26 @@
 import prisma from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import Image from "next/image";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { getTranslations } from "next-intl/server";
 
 const MyClasses = async () => {
   const { userId } = await auth();
   if (!userId) return null;
+  const t = await getTranslations("dashboard");
 
   const classes = await prisma.class.findMany({
     where: {
-      teachers: {
+      lessons: {
         some: {
-          id: userId,
+          teacherId: userId,
         },
       },
     },
     include: {
       _count: {
-        select: { students: true },
+        select: { enrollments: true },
       },
     },
     orderBy: {
@@ -24,55 +28,43 @@ const MyClasses = async () => {
     },
   });
 
-  // Define a color palette to cycle through for the class cards
-  const colors = [
-    "bg-wsmSkyLight",
-    "bg-wsmPurpleLight",
-    "bg-wsmYellowLight",
-    "bg-red-100",
-  ];
-
   return (
-    <div className="bg-white p-4 rounded-md">
-      <h1 className="text-xl font-semibold mb-4">أقسامي</h1>
+    <Card className="p-6 font-sans">
+      <h1 className="text-section-title font-bold text-gray-900 mb-4">{t("myClassesTitle")}</h1>
       {classes.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {classes.map((classItem, index) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {classes.map((classItem) => (
             <div
               key={classItem.id}
-              className={`p-4 rounded-lg flex flex-col justify-between h-32 ${
-                colors[index % colors.length]
-              }`}
+              className="p-3.5 rounded-xl bg-surface-subtle border border-border flex flex-col justify-between h-28 hover:border-primary/40 transition-colors"
             >
-              <div>
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-white rounded-md shadow-sm">
-                    <Image
-                      src="/class.png"
-                      alt="class icon"
-                      width={16}
-                      height={16}
-                    />
-                  </div>
-                  <p className="font-bold text-gray-800 text-lg">
-                    {classItem.name}
-                  </p>
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-primary/10 rounded-lg">
+                  <Image
+                    src="/class.png"
+                    alt="class icon"
+                    width={16}
+                    height={16}
+                  />
                 </div>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-semibold text-gray-600">
-                  {classItem._count.students} تلميذ
+                <p className="font-bold text-gray-900 text-sm">
+                  {classItem.name}
                 </p>
+              </div>
+              <div className="flex justify-end">
+                <Badge variant="neutral" size="sm">
+                  {t("studentsUnit", { count: classItem._count.enrollments })}
+                </Badge>
               </div>
             </div>
           ))}
         </div>
       ) : (
-        <p className="text-sm text-gray-500 text-center py-4">
-          أنت غير معين لأي قسم.
+        <p className="text-xs text-gray-500 text-center py-4">
+          {t("noClassesAssigned")}
         </p>
       )}
-    </div>
+    </Card>
   );
 };
 

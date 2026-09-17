@@ -1,139 +1,131 @@
-import { currentUser } from "@/lib/auth";
+import { getAuthSession } from "@/lib/auth";
 import Image from "next/image";
-import Link from "next/link";
+import { Link } from "@/i18n/navigation";
+import { getTranslations } from "next-intl/server";
+import { canAccessMenuItem } from "@/lib/permissions";
 
-// UPDATED: All labels and titles are now in Arabic
-const menuItems = [
+import SidebarAnnouncementBadge from "./announcements/SidebarAnnouncementBadge";
+
+const menuConfig = [
   {
-    title: "القائمة الرئيسية",
+    titleKey: "mainMenu",
     items: [
       {
         icon: "/home.png",
-        label: "الرئيسية",
+        key: "home",
         href: "/",
-        visible: ["admin", "teacher", "student", "parent"],
       },
       {
         icon: "/teacher.png",
-        label: "الأساتذة",
+        key: "teachers",
         href: "/list/teachers",
-        visible: ["admin"],
       },
       {
         icon: "/student.png",
-        label: "التلاميذ",
+        key: "students",
         href: "/list/students",
-        visible: ["admin", "teacher"],
       },
       {
         icon: "/parent.png",
-        label: "أولياء الأمور",
+        key: "parents",
         href: "/list/parents",
-        visible: ["admin"],
       },
       {
         icon: "/subject.png",
-        label: "المواد",
+        key: "subjects",
         href: "/list/subjects",
-        visible: ["admin"],
       },
       {
         icon: "/class.png",
-        label: "الأقسام",
+        key: "classes",
         href: "/list/classes",
-        visible: ["admin"],
-      },
-      {
-        icon: "/course.png",
-        label: "الدروس",
-        href: "/list/courses",
-        visible: ["admin", "teacher", "student", "parent"],
       },
       {
         icon: "/lesson.png",
-        label: "جدول الحصص",
+        key: "lessons",
         href: "/list/lessons",
-        visible: ["admin", "teacher", "student", "parent"],
-      },
-      {
-        icon: "/exam.png",
-        label: "الامتحانات",
-        href: "/list/exams",
-        visible: ["admin", "teacher", "student", "parent"],
-      },
-      {
-        icon: "/result.png",
-        label: "النتائج",
-        href: "/list/results",
-        visible: ["admin", "teacher", "student", "parent"],
       },
       {
         icon: "/attendance.png",
-        label: "الحضور والغياب",
+        key: "attendance",
         href: "/list/attendance",
-        visible: ["admin", "teacher", "student", "parent"],
       },
       {
         icon: "/payment.png",
-        label: "المدفوعات",
+        key: "payments",
         href: "/list/payments",
-        visible: ["admin", "student", "parent"],
-      },
-      {
-        icon: "/event.png",
-        label: "الأحداث",
-        href: "/list/events",
-        visible: ["admin", "teacher", "student", "parent"],
       },
       {
         icon: "/announcement.png",
-        label: "الإعلانات",
+        key: "announcements",
         href: "/list/announcements",
-        visible: ["admin", "teacher", "student", "parent"],
       },
       {
         icon: "/workshop.png",
-        label: "الدورات",
+        key: "workshops",
         href: "/list/workshops",
-        visible: ["admin", "student", "parent"],
       },
       {
-        label: "التقارير المالية",
-        href: "/list/reports",
-        icon: "/report.png",
-        visible: ["admin"],
+        icon: "/subject.png",
+        key: "formations",
+        href: "/list/formations",
+      },
+      {
+        icon: "/finance1.png",
+        key: "dailyLedger",
+        href: "/list/daily-ledger",
+      },
+      {
+        icon: "/finance.png",
+        key: "finance",
+        href: "/list/finance",
+      },
+      {
+        icon: "/setting.png",
+        key: "configuration",
+        href: "/admin/configuration",
       },
     ],
   },
 ];
 
 const Menu = async () => {
-  const user = await currentUser({ treatPendingAsSignedOut: false });
-  const role = user?.publicMetadata.role as string;
+  const session = await getAuthSession();
+  const rawRole = session.rawRole || "";
+  const t = await getTranslations("navigation");
+
   return (
-    <div className="mt-4 text-sm sticky">
-      {menuItems.map((i) => (
-        <div className="flex flex-col gap-2" key={i.title}>
-          <span className="hidden lg:block text-black font-light my-4">
-            {i.title}
+    <nav className="flex flex-col gap-4 text-sm">
+      {menuConfig.map((section) => (
+        <div className="flex flex-col gap-1" key={section.titleKey}>
+          <span className="text-muted font-semibold text-[11px] uppercase tracking-wider my-2 px-3">
+            {t(section.titleKey)}
           </span>
-          {i.items.map((item) => {
-            if (item.visible.includes(role)) {
+          {section.items.map((item) => {
+            if (canAccessMenuItem(rawRole, item.key)) {
               return (
                 <Link
                   href={item.href}
-                  key={item.label}
-                  className="flex items-center justify-center lg:justify-start gap-4 text-black font-medium py-2 md:px-2 rounded-md hover:bg-wsmSkyLight"
+                  key={item.key}
+                  className="flex items-center justify-start gap-3 text-gray-700 hover:text-primary font-medium py-2 px-3 rounded-lg hover:bg-primary-light/70 active:bg-primary-light transition-colors"
                 >
-                  <Image src={item.icon} alt="" width={20} height={20} />
-                  <span className="hidden lg:block">{item.label}</span>
+                  <Image
+                    src={item.icon}
+                    alt=""
+                    width={20}
+                    height={20}
+                    className="shrink-0"
+                  />
+                  <span className="text-table-body">{t(item.key)}</span>
+                  {item.key === "announcements" && <SidebarAnnouncementBadge />}
                 </Link>
               );
             }
+            return null;
           })}
         </div>
       ))}
-    </div>
+    </nav>
   );
 };
 

@@ -10,6 +10,7 @@ type InputFieldProps = {
   error?: FieldError;
   hidden?: boolean;
   inputProps?: React.InputHTMLAttributes<HTMLInputElement>;
+  className?: string;
 };
 
 const InputField = ({
@@ -22,20 +23,25 @@ const InputField = ({
   error,
   hidden,
   inputProps,
+  className,
 }: InputFieldProps) => {
   return (
-    <div className={hidden ? "hidden" : "flex flex-col gap-2 w-full md:w-1/4"}>
-      <label className="text-xs text-gray-500">{label}</label>
+    <div className={hidden ? "hidden" : className ? `flex flex-col gap-1.5 ${className}` : "flex flex-col gap-1.5 w-full md:w-1/4"}>
+      <label className="text-form-label text-gray-700 select-none">{label}</label>
       <input
         type={type}
         {...register(name)}
-        className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full"
+        className={`w-full px-3 py-2 text-table-body rounded-lg border bg-surface text-gray-800 placeholder:text-muted-light shadow-xs focus:outline-none focus:ring-2 transition-colors ${
+          error
+            ? "border-danger focus:border-danger focus:ring-danger/20"
+            : "border-border focus:border-primary focus:ring-primary/20"
+        }`}
         placeholder={placeholder}
         {...inputProps}
         defaultValue={defaultValue}
       />
       {error?.message && (
-        <p className="text-xs text-red-400">{error.message.toString()}</p>
+        <p className="text-form-helper text-danger font-medium">{error.message.toString()}</p>
       )}
     </div>
   );

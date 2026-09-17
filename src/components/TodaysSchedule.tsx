@@ -1,73 +1,80 @@
 import prisma from "@/lib/prisma";
 import { auth } from "@/lib/auth";
-import { Day, Prisma } from "@prisma/client";
-import Image from "next/image";
+import { Prisma } from "@prisma/client";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { getTranslations, getLocale } from "next-intl/server";
 
-// The component now accepts an optional studentId prop to make it reusable.
 const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
   const { userId } = await auth();
+  const t = await getTranslations("dashboard");
+  const locale = await getLocale();
 
-  // If we are in a parent/student context, the ID to use is the studentId prop.
-  // If we are in a teacher context, the ID is the logged-in user's ID.
   const targetUserId = studentId || userId;
 
   if (!targetUserId) {
-    return <div className="p-4">تعذر تحديد المستخدم أو الطالب.</div>;
+    return (
+      <Card className="p-5 text-center">
+        <p className="text-gray-500 text-sm">{t("userNotIdentified")}</p>
+      </Card>
+    );
   }
 
-  // Get today's day of the week in the format that matches our Prisma Enum (e.g., "MONDAY")
-  const today = new Date()
-    .toLocaleString("en-GB", { weekday: "long" })
-    .toUpperCase() as Day;
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
 
-  // Build the query dynamically based on whether it's for a student or a teacher
+  const endOfDay = new Date();
+  endOfDay.setHours(23, 59, 59, 999);
+
   const whereClause: Prisma.LessonWhereInput = {
-    day: today,
+    startsAt: {
+      gte: startOfDay,
+      lte: endOfDay,
+    },
   };
 
   if (studentId) {
-    // If a studentId is provided, find lessons for the classes they are in
     whereClause.class = {
-      students: {
+      enrollments: {
         some: {
-          id: studentId,
+          studentId: studentId,
         },
       },
     };
   } else {
-    // --- FIX ---
-    // Otherwise, find lessons for the logged-in teacher.
-    // Use targetUserId which is guaranteed to be a string here.
     whereClause.teacherId = targetUserId;
   }
 
   const todaysLessons = await prisma.lesson.findMany({
     where: whereClause,
     include: {
-      subject: true,
       class: true,
       classroom: true,
-      teacher: true, // Also include the teacher's name for the student/parent view
+      teacher: true,
     },
     orderBy: {
-      startTime: "asc", // Order the lessons by their start time
+      startsAt: "asc",
     },
   });
 
   return (
-    <div className="bg-white p-4 rounded-md h-full">
-      <h1 className="text-xl font-semibold mb-4">
-        جدول اليوم (
-        {new Date().toLocaleDateString("ar-DZ", { weekday: "long" })})
-      </h1>
+    <Card className="p-6 h-full font-sans">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-section-title font-bold text-gray-900">
+          {t("todaysScheduleTitle")}
+        </h1>
+        <Badge variant="neutral" size="sm">
+          {new Date().toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", { weekday: "long" })}
+        </Badge>
+      </div>
       <div className="space-y-3">
         {todaysLessons.length > 0 ? (
           todaysLessons.map((lesson) => {
-            const startTime = new Date(lesson.startTime).toLocaleTimeString(
+            const startTime = new Date(lesson.startsAt).toLocaleTimeString(
               "en-GB",
               { hour: "2-digit", minute: "2-digit", hour12: false }
             );
-            const endTime = new Date(lesson.endTime).toLocaleTimeString(
+            const endTime = new Date(lesson.endsAt).toLocaleTimeString(
               "en-GB",
               { hour: "2-digit", minute: "2-digit", hour12: false }
             );
@@ -75,32 +82,26 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
             return (
               <div
                 key={lesson.id}
-                className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg border"
+                className="flex items-center gap-4 p-3 bg-surface-subtle rounded-xl border border-border"
               >
                 <div className="w-20 text-center">
-                  <p className="font-bold text-gray-800">{startTime}</p>
-                  <p className="text-xs text-gray-500">إلى {endTime}</p>
+                  <p className="font-bold text-gray-900 text-sm">{startTime}</p>
+                  <p className="text-xs text-gray-500">{t("toTime", { time: endTime })}</p>
                 </div>
-                <div className="w-px bg-gray-200 self-stretch"></div>
+                <div className="w-px bg-border self-stretch"></div>
                 <div className="flex-grow">
-                  <p className="font-bold">{lesson.subject.name}</p>
-                  <div className="flex items-center gap-4 text-sm text-gray-600 mt-1">
+                  <p className="font-bold text-gray-900 text-sm">{lesson.class.name}</p>
+                  <div className="flex items-center gap-4 text-xs text-gray-600 mt-1">
                     <span>
-                      <strong className="text-gray-500">القسم:</strong>{" "}
-                      {lesson.class.name}
+                      <strong className="text-gray-500">{t("room")}:</strong>{" "}
+                      {lesson.classroom?.name || t("withoutRoom")}
                     </span>
-                    <span>|</span>
-                    <span>
-                      <strong className="text-gray-500">القاعة:</strong>{" "}
-                      {lesson.classroom?.name || "N/A"}
-                    </span>
-                    {/* Show teacher name in student/parent view */}
                     {studentId && (
                       <>
                         <span>|</span>
                         <span>
-                          <strong className="text-gray-500">الأستاذ:</strong>{" "}
-                          {`${lesson.teacher.name} ${lesson.teacher.surname}`}
+                          <strong className="text-gray-500">{t("teacher")}:</strong>{" "}
+                          {lesson.teacher.name}
                         </span>
                       </>
                     )}
@@ -111,11 +112,11 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
           })
         ) : (
           <div className="text-center py-10">
-            <p className="text-gray-500">لا توجد حصص مجدولة لهذا اليوم.</p>
+            <p className="text-gray-500 text-sm">{t("noLessonsToday")}</p>
           </div>
         )}
       </div>
-    </div>
+    </Card>
   );
 };
 

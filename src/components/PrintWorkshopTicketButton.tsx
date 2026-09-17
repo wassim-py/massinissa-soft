@@ -2,22 +2,25 @@
 
 import React from 'react';
 import ReactDOMServer from 'react-dom/server';
-import { WorkshopTicket } from './printable/WorkshopTicket';
-import { Workshop, WorkshopParticipant, WorkshopPayment } from "@prisma/client";
+import { useLocale } from 'next-intl';
+import { WorkshopTicket, WorkshopTicketPayment } from './printable/WorkshopTicket';
 import Image from 'next/image';
 
 type PrintButtonProps = {
-    payment: WorkshopPayment & { participant: WorkshopParticipant, workshop: Workshop };
+    payment: WorkshopTicketPayment;
     amountOwedByParticipant: number;
 };
 
 const PrintWorkshopTicketButton = ({ payment, amountOwedByParticipant }: PrintButtonProps) => {
+  const locale = useLocale();
+  const isAr = locale === "ar";
 
   const handlePrint = () => {
     const printContent = ReactDOMServer.renderToString(
       <WorkshopTicket 
         payment={payment} 
         amountOwedByParticipant={amountOwedByParticipant}
+        locale={locale}
       />
     );
 
@@ -25,12 +28,14 @@ const PrintWorkshopTicketButton = ({ payment, amountOwedByParticipant }: PrintBu
 
     if (printWindow) {
       printWindow.document.write(`
-        <html>
+        <!DOCTYPE html>
+        <html dir="${isAr ? 'rtl' : 'ltr'}" lang="${locale}">
           <head>
-            <title>Print Workshop Receipt</title>
+            <meta charset="utf-8">
+            <title>${isAr ? 'طباعة وصل الورشة' : 'Reçu Atelier'} ${payment.voucherDisplay ? `- ${payment.voucherDisplay}` : `#BON ${payment.id}`}</title>
             <script src="https://cdn.tailwindcss.com"></script>
           </head>
-          <body>
+          <body class="flex justify-center p-4">
             ${printContent}
           </body>
         </html>
@@ -49,11 +54,12 @@ const PrintWorkshopTicketButton = ({ payment, amountOwedByParticipant }: PrintBu
   return (
     <div>
       <button 
+        type="button"
         onClick={handlePrint} 
-        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-200 hover:bg-gray-300"
-        title="Print Receipt"
+        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-200 hover:bg-gray-300 cursor-pointer"
+        title={isAr ? "طباعة الوصل" : "Imprimer le reçu"}
       >
-        <Image src="/print.png" alt="Print" width={14} height={14} />
+        <Image src="/print.png" alt={isAr ? "طباعة" : "Imprimer"} width={14} height={14} />
       </button>
     </div>
   );

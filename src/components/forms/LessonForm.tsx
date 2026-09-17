@@ -2,13 +2,19 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import InputField from "../InputField";
 import { LessonSchema, lessonSchema } from "@/lib/formValidationSchemas";
 import { createLesson, updateLesson } from "@/lib/actions";
 
-import { useActionState, Dispatch, SetStateAction, useEffect, useState } from "react";
+import { useActionState, Dispatch, SetStateAction, useEffect, useState, useMemo } from "react";
+import { useTranslations, useLocale } from "next-intl";
 import { toast } from "react-toastify";
-import { Day, Subject, Class, Teacher, Classroom } from "@prisma/client";
+import { Class, Teacher, Classroom } from "@prisma/client";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { FormField, Input, Select } from "@/components/ui/FormField";
+import { Sparkles, User, CheckCircle2 } from "lucide-react";
+
+export type Day = "SATURDAY" | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY";
 
 type FormState = {
   success: boolean;
@@ -16,20 +22,21 @@ type FormState = {
   message: string;
 };
 
-// =================================================================
-// DATA TYPES
-// These types define the shape of the data we expect from the parent page.
-// =================================================================
-
-// ADDED: Type for a Subject that includes the teachers who teach it.
-type SubjectWithTeachers = Subject & {
-  teachers: { id: string }[];
+type RelatedClass = Class & {
+  teacherId?: string | null;
+  branchId?: number;
 };
 
-// CHANGED: Renamed for clarity, this type was already present.
-type TeacherWithSubjects = Teacher & {
-  subjects: { id: number }[];
+type RelatedClassroom = Classroom & {
+  branchId?: number;
 };
+
+type BranchItem = {
+  id: number;
+  name: string;
+};
+
+type LessonType = "normal" | "extra" | "catchUp" | "free";
 
 const LessonForm = ({
   type,
@@ -40,14 +47,32 @@ const LessonForm = ({
   type: "create" | "update";
   data?: any;
   setOpen: Dispatch<SetStateAction<boolean>>;
-  // CHANGED: Updated the type for relatedData to reflect the new data shapes
   relatedData?: {
-    subjects: SubjectWithTeachers[];
-    classes: Class[];
-    teachers: TeacherWithSubjects[];
-    classrooms: Classroom[];
+    classes?: RelatedClass[];
+    teachers?: Teacher[];
+    classrooms?: RelatedClassroom[];
+    branches?: BranchItem[];
+    isOwner?: boolean;
+    userBranchId?: number;
+    subjects?: any[];
   };
 }) => {
+  const t = useTranslations("lessons");
+  const tCommon = useTranslations("common");
+  const locale = useLocale();
+
+  const getDayTranslation = (day: Day) => {
+    const keyMap: Record<Day, string> = {
+      SATURDAY: "days.saturday",
+      SUNDAY: "days.sunday",
+      MONDAY: "days.monday",
+      TUESDAY: "days.tuesday",
+      WEDNESDAY: "days.wednesday",
+      THURSDAY: "days.thursday",
+      FRIDAY: "days.friday",
+    };
+    return t(keyMap[day] as any);
+  };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const formatTime = (date: Date | string | undefined) => {
@@ -58,6 +83,24 @@ const LessonForm = ({
     return `${hours}:${minutes}`;
   };
 
+  const isOwner = Boolean(relatedData?.isOwner);
+  const userBranchId = relatedData?.userBranchId ?? 1;
+  const classes = relatedData?.classes || [];
+  const teachers = relatedData?.teachers || [];
+  const classrooms = relatedData?.classrooms || [];
+  const branches = relatedData?.branches || [];
+
+  // Determine initial single lesson type
+  const initialLessonType: LessonType = data?.isFree
+    ? "free"
+    : data?.isExtra
+    ? "extra"
+    : data?.isCatchUp
+    ? "catchUp"
+    : "normal";
+
+  const [lessonType, setLessonType] = useState<LessonType>(initialLessonType);
+
   const {
     register,
     handleSubmit,
@@ -67,86 +110,91 @@ const LessonForm = ({
   } = useForm<LessonSchema>({
     resolver: zodResolver(lessonSchema),
     defaultValues: data
-      ? { ...data, startTime: formatTime(data.startTime), endTime: formatTime(data.endTime) }
-      : {},
+      ? {
+          ...data,
+          startTime: formatTime(data.startTime),
+          endTime: formatTime(data.endTime),
+          branchId: data.branchId ?? (isOwner ? undefined : userBranchId),
+          isExtra: Boolean(data.isExtra),
+          extraFee: data.extraFee ? Number(data.extraFee) : undefined,
+          isCatchUp: Boolean(data.isCatchUp),
+          isFree: Boolean(data.isFree),
+        }
+      : {
+          branchId: isOwner ? undefined : userBranchId,
+          isExtra: false,
+          isCatchUp: false,
+          isFree: false,
+        },
   });
 
-  const { subjects: allSubjects, classes, teachers: allTeachers, classrooms } = relatedData || {};
-  const daysOfWeek: Day[] = ["SATURDAY", "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"];
+  const daysOfWeek: Day[] = [
+    "SATURDAY",
+    "SUNDAY",
+    "MONDAY",
+    "TUESDAY",
+    "WEDNESDAY",
+    "THURSDAY",
+    "FRIDAY",
+  ];
 
-  const dayNamesArabic: Record<Day, string> = {
-  SATURDAY: "السبت",
-  SUNDAY: "الاحد",
-  MONDAY: "الاثنين",
-  TUESDAY: "الثلاثاء",
-  WEDNESDAY: "الاربعاء",
-  THURSDAY: "الخميس",
-  FRIDAY: "الجمعة",
-};
+  const selectedClassId = watch("classId");
+  const selectedBranchId = watch("branchId");
 
+  // Determine active branch for classroom filtering
+  const activeBranchId = isOwner
+    ? selectedBranchId
+      ? Number(selectedBranchId)
+      : null
+    : userBranchId;
 
-  // =================================================================
-  // TWO-WAY FILTERING LOGIC
-  // =================================================================
-  
-  // ADDED: State to hold the available teachers based on subject selection
-  const [availableTeachers, setAvailableTeachers] = useState<TeacherWithSubjects[]>(allTeachers || []);
-  
-  // State for available subjects (already existed)
-  const [availableSubjects, setAvailableSubjects] = useState<SubjectWithTeachers[]>(allSubjects || []);
-  
-  // Watch for changes in both dropdowns
-  const selectedTeacherId = watch("teacherId");
-  const selectedSubjectId = watch("subjectId"); // ADDED: Watch for subject changes
+  // Filter classrooms by branch
+  const availableClassrooms = useMemo(() => {
+    if (!activeBranchId) return classrooms;
+    return classrooms.filter((cr) => !cr.branchId || cr.branchId === activeBranchId);
+  }, [classrooms, activeBranchId]);
 
-  // EFFECT 1: Handle filtering Subjects when a Teacher is selected
+  // Find currently selected group and its assigned head teacher
+  const selectedClass = useMemo(() => {
+    if (!selectedClassId) return null;
+    return classes.find((c) => c.id === Number(selectedClassId)) || null;
+  }, [classes, selectedClassId]);
+
+  const assignedTeacher = useMemo(() => {
+    if (!selectedClass || !selectedClass.teacherId) return null;
+    return teachers.find((t) => t.id === selectedClass.teacherId) || null;
+  }, [teachers, selectedClass]);
+
+  // EFFECT: Auto-derive lesson name and auto-fetch head teacher when group changes
   useEffect(() => {
-    // When a teacher is selected, filter the subjects
-    if (selectedTeacherId) {
-      const selectedTeacher = allTeachers?.find((t) => t.id === selectedTeacherId);
-      const teacherSubjectIds = selectedTeacher?.subjects?.map((s) => s.id) || [];
-      setAvailableSubjects(allSubjects?.filter((s) => teacherSubjectIds.includes(s.id)) || []);
-      
-      // When filtering by teacher, the teacher list should be full
-      setAvailableTeachers(allTeachers || []);
-      
-      // Reset the subject field if the selected teacher doesn't teach the currently selected subject
-      const currentSubjectIsTaught = teacherSubjectIds.includes(Number(selectedSubjectId));
-      if (!currentSubjectIsTaught) {
-        setValue("subjectId", 0);
-      }
-
-    } else {
-      // If no teacher is selected, show all subjects
-      setAvailableSubjects(allSubjects || []);
-    }
-  }, [selectedTeacherId, allTeachers, allSubjects, setValue, selectedSubjectId]);
-
-  // ADDED: EFFECT 2: Handle filtering Teachers when a Subject is selected
-  useEffect(() => {
-    // When a subject is selected, filter the teachers
-    if (selectedSubjectId && Number(selectedSubjectId) > 0) {
-      const selectedSubject = allSubjects?.find((s) => s.id === Number(selectedSubjectId));
-      const subjectTeacherIds = selectedSubject?.teachers?.map((t) => t.id) || [];
-      setAvailableTeachers(allTeachers?.filter((t) => subjectTeacherIds.includes(t.id)) || []);
-
-      // When filtering by subject, the subject list should be full
-      setAvailableSubjects(allSubjects || []);
-      
-      // Reset the teacher field if the selected subject isn't taught by the currently selected teacher
-      const currentTeacherTeaches = subjectTeacherIds.includes(String(selectedTeacherId));
-      if (!currentTeacherTeaches) {
+    if (selectedClass) {
+      // 1. Auto-derive name from selected group
+      setValue("name", selectedClass.name);
+      // 2. Auto-fetch teacher from group's head teacher
+      if (selectedClass.teacherId) {
+        setValue("teacherId", selectedClass.teacherId);
+      } else {
         setValue("teacherId", "");
       }
-      
+      // If owner has not chosen branch yet, default to group's branch
+      if (isOwner && !selectedBranchId && selectedClass.branchId) {
+        setValue("branchId", selectedClass.branchId);
+      }
     } else {
-      // If no subject is selected, show all teachers
-      setAvailableTeachers(allTeachers || []);
+      setValue("name", "");
+      setValue("teacherId", "");
     }
-  }, [selectedSubjectId, allSubjects, allTeachers, setValue, selectedTeacherId]);
-  
-  // =================================================================
-  
+  }, [selectedClass, setValue, isOwner, selectedBranchId]);
+
+  // Single lesson type change handler
+  const handleTypeSelect = (typeVal: LessonType) => {
+    setLessonType(typeVal);
+    setValue("isExtra", typeVal === "extra");
+    setValue("isCatchUp", typeVal === "catchUp");
+    setValue("isFree", typeVal === "free");
+    setValue("extraFee", undefined);
+  };
+
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createLesson : updateLesson;
   const [state, formAction] = useActionState(actionToRun, initialState);
@@ -158,96 +206,372 @@ const LessonForm = ({
 
   useEffect(() => {
     if (state.success || state.error) {
-    setIsSubmitting(false);
+      setIsSubmitting(false);
     }
     if (state.success) {
-      toast.success(state.message || `Lesson has been ${type}d successfully!`);
+      toast.success(
+        state.message ||
+          (type === "create" ? t("createdSuccessfully") : t("updatedSuccessfully"))
+      );
       setOpen(false);
     }
     if (state.error && state.message) {
       toast.error(state.message);
     }
-  }, [state, type, setOpen]);
+  }, [state, type, setOpen, t]);
 
   return (
-    <form className="flex flex-col gap-8" onSubmit={onSubmit}>
+    <form className="flex flex-col gap-6" onSubmit={onSubmit}>
       {type === "update" && (
         <input type="hidden" {...register("id")} defaultValue={data?.id} />
       )}
-      <h1 className="text-xl font-semibold">
-        {type === "create" ? "برمجة حصة جديدة" : "تحديث الحصة"}
+      {/* Hidden field for auto-derived name */}
+      <input type="hidden" {...register("name")} />
+      {/* Hidden field for auto-fetched teacher */}
+      <input type="hidden" {...register("teacherId")} />
+      {/* Hidden fields for single lesson type flags */}
+      <input type="hidden" {...register("isExtra")} />
+      <input type="hidden" {...register("isCatchUp")} />
+      <input type="hidden" {...register("isFree")} />
+
+      {/* If branch admin, branchId is locked and hidden */}
+      {!isOwner && (
+        <input type="hidden" {...register("branchId")} value={userBranchId} />
+      )}
+
+      <h1 className="text-section-title font-bold text-gray-900">
+        {type === "create" ? t("createTitle") : t("updateTitle")}
       </h1>
 
-      <div className="flex justify-between flex-wrap gap-4">
-        <InputField label="اسم الحصة (مثال: مراجعة أسبوعية)" name="name" register={register} error={errors?.name}/>
-        <div className="flex flex-col gap-2 w-full md:w-1/4">
-          <label className="text-xs text-gray-500">القاعة</label>
-          <select className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px]" {...register("classroomId")}>
-            <option value="">حدد القاعة</option>
-            {classrooms?.map((room) => (
-              <option value={room.id} key={room.id}>{room.name}</option>
-            ))}
-          </select>
-          {errors.classroomId?.message && (<p className="text-xs text-red-400">{errors.classroomId.message.toString()}</p>)}
+      {/* Auto-derived Lesson Name banner when class is selected */}
+      {selectedClass && (
+        <div className="flex items-center justify-between p-3.5 rounded-xl border border-primary/20 bg-primary-light/60 text-sm transition-all">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-primary-soft/70 flex items-center justify-center text-primary-hover shrink-0">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-xs text-muted font-medium">{t("group")}</span>
+              <span className="font-bold text-gray-900">{selectedClass.name}</span>
+            </div>
+          </div>
+          <Badge variant="primary" size="sm">
+            {t("autoDerivedNameBadge")}
+          </Badge>
         </div>
-        <div className="flex flex-col gap-2 w-full md:w-1/4">
-          <label className="text-xs text-gray-500">يوم من الاسبوع</label>
-          <select className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px]" {...register("day")}>
-            <option value="">حدد اليوم</option>
-            {daysOfWeek.map((day) => (
-              <option value={day} key={day}>{dayNamesArabic[day]}</option>
-            ))}
-          </select>
-          {errors.day?.message && (<p className="text-xs text-red-400">{errors.day.message.toString()}</p>)}
-        </div>
-        <InputField label="وقت البدء" name="startTime" type="time" register={register} error={errors?.startTime}/>
-        <InputField label="وقت الانتهاء" name="endTime" type="time" register={register} error={errors?.endTime}/>
-        <div className="flex flex-col gap-2 w-full md:w-1/4">
-          <label className="text-xs text-gray-500">القسم</label>
-          <select className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px]" {...register("classId")}>
-            <option value="">حدد القسم</option>
-            {classes?.map((c) => (
-              <option value={c.id} key={c.id}>{c.name}</option>
-            ))}
-          </select>
-          {errors.classId?.message && (<p className="text-xs text-red-400">{errors.classId.message.toString()}</p>)}
-        </div>
-        <div className="flex flex-col gap-2 w-full md:w-1/4">
-          <label className="text-xs text-gray-500">الاستاذ</label>
-          {/* CHANGED: This dropdown now maps over `availableTeachers` */}
-          <select className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px]" {...register("teacherId")}>
-            <option value="">حدد الاستاذ</option>
-            {availableTeachers.map((t) => (
-              <option value={t.id} key={t.id}>{t.name} {t.surname}</option>
-            ))}
-          </select>
-          {errors.teacherId?.message && (<p className="text-xs text-red-400">{errors.teacherId.message.toString()}</p>)}
-        </div>
-        <div className="flex flex-col gap-2 w-full md:w-1/4">
-          <label className="text-xs text-gray-500">المادة</label>
-          <select
-            className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px]"
-            {...register("subjectId")}
-            // CHANGED: The disabled property is removed to allow two-way filtering
+      )}
+
+      {/* Responsive Form Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Branch Selector (Visible ONLY to Owner) */}
+        {isOwner && (
+          <FormField
+            label={t("selectBranch")}
+            required
+            error={errors.branchId?.message?.toString()}
           >
-            <option value={0}>حدد المادة</option>
-            {/* CHANGED: This dropdown continues to map over `availableSubjects` */}
-            {availableSubjects.map((subject) => (
-              <option value={subject.id} key={subject.id}>{subject.name}</option>
+            <Select
+              hasError={!!errors.branchId}
+              {...register("branchId")}
+            >
+              <option value="">{t("selectBranch")}</option>
+              {branches.map((b) => (
+                <option value={b.id} key={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </Select>
+          </FormField>
+        )}
+
+        {/* Group (Class) Selector */}
+        <FormField
+          label={t("group")}
+          required
+          error={errors.classId?.message?.toString()}
+        >
+          <Select
+            hasError={!!errors.classId}
+            {...register("classId")}
+          >
+            <option value="">{t("selectClass")}</option>
+            {classes.map((c) => (
+              <option value={c.id} key={c.id}>
+                {c.name}
+              </option>
             ))}
-          </select>
-          {errors.subjectId?.message && (<p className="text-xs text-red-400">{errors.subjectId.message.toString()}</p>)}
-        </div>
+          </Select>
+        </FormField>
+
+        {/* Auto-fetched Head Teacher Display (Read-Only) */}
+        <FormField
+          label={t("teacher")}
+          error={errors.teacherId?.message?.toString()}
+        >
+          <div className="w-full px-3 py-2 text-table-body rounded-lg border border-border bg-surface-subtle text-gray-800 shadow-xs flex items-center justify-between min-h-[42px]">
+            {assignedTeacher ? (
+              <div className="flex items-center gap-2 font-medium text-gray-900">
+                <User className="w-4 h-4 text-primary shrink-0" />
+                <span>
+                  {assignedTeacher.name}
+                </span>
+              </div>
+            ) : selectedClass ? (
+              <Badge variant="warning" size="sm">
+                {t("noTeacherAssigned")}
+              </Badge>
+            ) : (
+              <span className="text-xs text-muted italic">
+                {t("autoFetchedFromGroup")}
+              </span>
+            )}
+          </div>
+        </FormField>
+
+        {/* Room / Classroom Selector */}
+        <FormField
+          label={t("room")}
+          required
+          error={errors.classroomId?.message?.toString()}
+        >
+          <Select
+            hasError={!!errors.classroomId}
+            {...register("classroomId")}
+          >
+            <option value="">{t("selectRoom")}</option>
+            {availableClassrooms.map((room) => (
+              <option value={room.id} key={room.id}>
+                {room.name}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+
+        {/* Day of Week */}
+        <FormField
+          label={t("dayLabel")}
+          required
+          error={errors.day?.message?.toString()}
+        >
+          <Select
+            hasError={!!errors.day}
+            {...register("day")}
+          >
+            <option value="">{t("selectDay")}</option>
+            {daysOfWeek.map((day) => (
+              <option value={day} key={day}>
+                {getDayTranslation(day)}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+
+        {/* Start Time */}
+        <FormField
+          label={t("startTime")}
+          required
+          error={errors.startTime?.message?.toString()}
+        >
+          <Input
+            type="time"
+            hasError={!!errors.startTime}
+            {...register("startTime")}
+          />
+        </FormField>
+
+        {/* End Time */}
+        <FormField
+          label={t("endTime")}
+          required
+          error={errors.endTime?.message?.toString()}
+        >
+          <Input
+            type="time"
+            hasError={!!errors.endTime}
+            {...register("endTime")}
+          />
+        </FormField>
       </div>
 
-      {state?.error && !state.message && <span className="text-red-500">حدث خطأ ما!</span>}
-      <button 
-        type="submit" 
+      {/* SINGLE LESSON TYPE SELECTOR (Normal, Extra, CatchUp, Free) */}
+      <div className="flex flex-col gap-2.5">
+        <label className="text-form-label text-gray-700 select-none font-medium">
+          {t("sessionTypeTitle")}
+        </label>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {/* Normal Option */}
+          <div
+            onClick={() => handleTypeSelect("normal")}
+            className={`cursor-pointer p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
+              lessonType === "normal"
+                ? "bg-primary-light/70 border-primary ring-1 ring-primary/30 shadow-xs"
+                : "bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span
+                className={`text-sm font-semibold ${
+                  lessonType === "normal" ? "text-primary-hover" : "text-gray-800"
+                }`}
+              >
+                {t("isNormalLabel")}
+              </span>
+              <input
+                type="radio"
+                name="lessonTypeRadio"
+                checked={lessonType === "normal"}
+                onChange={() => handleTypeSelect("normal")}
+                className="w-4 h-4 text-primary focus:ring-primary cursor-pointer accent-primary"
+              />
+            </div>
+            <p
+              className={`text-xs ${
+                lessonType === "normal" ? "text-primary-hover/80" : "text-muted"
+              }`}
+            >
+              {t("isNormalDesc")}
+            </p>
+          </div>
+
+          {/* Extra Option */}
+          <div
+            onClick={() => handleTypeSelect("extra")}
+            className={`cursor-pointer p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
+              lessonType === "extra"
+                ? "bg-secondary-light/70 border-secondary ring-1 ring-secondary/30 shadow-xs"
+                : "bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span
+                className={`text-sm font-semibold ${
+                  lessonType === "extra" ? "text-secondary-hover" : "text-gray-800"
+                }`}
+              >
+                {t("isExtraLabel")}
+              </span>
+              <input
+                type="radio"
+                name="lessonTypeRadio"
+                checked={lessonType === "extra"}
+                onChange={() => handleTypeSelect("extra")}
+                className="w-4 h-4 text-secondary focus:ring-secondary cursor-pointer accent-secondary"
+              />
+            </div>
+            <p
+              className={`text-xs ${
+                lessonType === "extra" ? "text-secondary-hover/80" : "text-muted"
+              }`}
+            >
+              {t("isExtraDesc")}
+            </p>
+          </div>
+
+          {/* Catch-up Option */}
+          <div
+            onClick={() => handleTypeSelect("catchUp")}
+            className={`cursor-pointer p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
+              lessonType === "catchUp"
+                ? "bg-accent-light/70 border-accent ring-1 ring-accent/30 shadow-xs"
+                : "bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span
+                className={`text-sm font-semibold ${
+                  lessonType === "catchUp" ? "text-accent-hover" : "text-gray-800"
+                }`}
+              >
+                {t("isCatchUpLabel")}
+              </span>
+              <input
+                type="radio"
+                name="lessonTypeRadio"
+                checked={lessonType === "catchUp"}
+                onChange={() => handleTypeSelect("catchUp")}
+                className="w-4 h-4 text-accent focus:ring-accent cursor-pointer accent-accent"
+              />
+            </div>
+            <p
+              className={`text-xs ${
+                lessonType === "catchUp" ? "text-accent-hover/80" : "text-muted"
+              }`}
+            >
+              {t("isCatchUpDesc")}
+            </p>
+          </div>
+
+          {/* Free Option */}
+          <div
+            onClick={() => handleTypeSelect("free")}
+            className={`cursor-pointer p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
+              lessonType === "free"
+                ? "bg-success-light/70 border-success ring-1 ring-success/30 shadow-xs"
+                : "bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span
+                className={`text-sm font-semibold ${
+                  lessonType === "free" ? "text-success-text" : "text-gray-800"
+                }`}
+              >
+                {t("isFreeLabel")}
+              </span>
+              <input
+                type="radio"
+                name="lessonTypeRadio"
+                checked={lessonType === "free"}
+                onChange={() => handleTypeSelect("free")}
+                className="w-4 h-4 text-success focus:ring-success cursor-pointer accent-success"
+              />
+            </div>
+            <p
+              className={`text-xs ${
+                lessonType === "free" ? "text-success-text/80" : "text-muted"
+              }`}
+            >
+              {t("isFreeDesc")}
+            </p>
+          </div>
+        </div>
+
+        {/* Informative note when "free" is active */}
+        {lessonType === "free" && (
+          <div className="mt-1 p-3 rounded-xl bg-success-light text-success-text text-xs border border-success-soft flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-success" />
+            <span>{t("freeNote")}</span>
+          </div>
+        )}
+
+        {errors.isExtra?.message && (
+          <p className="text-form-helper text-danger font-medium">
+            {errors.isExtra.message.toString()}
+          </p>
+        )}
+      </div>
+
+      {state?.error && !state.message && (
+        <span className="text-sm text-danger font-medium text-center">{t("errorOccurred")}</span>
+      )}
+
+      <Button
+        type="submit"
+        variant="primary"
+        size="lg"
+        isLoading={isSubmitting}
         disabled={isSubmitting}
-        className="text-xl font-semibold bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-md transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+        className="w-full mt-2"
       >
-        {isSubmitting ? (type === 'create' ? "قيد الإنشاء..." : "قيد التحديث...") : (type === 'create' ? "إنشاء" : "تحديث")}
-      </button>
+        {isSubmitting
+          ? type === "create"
+            ? t("submittingCreate")
+            : t("submittingUpdate")
+          : type === "create"
+          ? tCommon("create")
+          : tCommon("edit")}
+      </Button>
     </form>
   );
 };

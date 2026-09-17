@@ -2,26 +2,37 @@
 
 import { WorkshopParticipant, WorkshopAttendance } from "@prisma/client";
 import { useState, useEffect } from "react";
-import Image from "next/image";
 import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
 import { saveWorkshopAttendance } from "@/lib/actions";
 import { toast } from "react-toastify";
+import { Button } from "@/components/ui/Button";
+import { useTranslations } from "next-intl";
 
 const SubmitButton = () => {
   const { pending } = useFormStatus();
+  const t = useTranslations("workshops");
   return (
-    <button
+    <Button
       type="submit"
+      variant="primary"
+      size="lg"
       disabled={pending}
-      className="text-xl font-semibold w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+      className="w-full"
     >
-      {pending ? "جاري الحفظ..." : "حفظ"}
-    </button>
+      {pending ? t("saving") : t("saveAttendance")}
+    </Button>
   );
 };
 
 type AttendanceStatus = "PRESENT" | "ABSENT";
+
+type ParticipantWithStudent = WorkshopParticipant & {
+  Student?: { name: string } | null;
+  name?: string;
+  gender?: string;
+  chairNumber?: number | null;
+};
 
 const WorkshopAttendanceForm = ({
   sessionId,
@@ -30,26 +41,24 @@ const WorkshopAttendanceForm = ({
   setOpen,
 }: {
   sessionId: number;
-  participants: WorkshopParticipant[];
+  participants: ParticipantWithStudent[];
   existingRecords: WorkshopAttendance[];
   setOpen: (isOpen: boolean) => void;
 }) => {
-  // Initialize the state of attendance for each participant
+  const t = useTranslations("workshops");
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() => {
     const initialState: Record<string, AttendanceStatus> = {};
-    participants.forEach(participant => {
-      const record = existingRecords.find(r => r.participantId === participant.id);
-      // If a record exists, use its status. Otherwise, default to PRESENT.
-      initialState[participant.id] = record?.present ? "PRESENT" : "ABSENT";
+    participants.forEach((participant) => {
+      const record = existingRecords.find((r) => r.studentId === participant.studentId);
+      initialState[participant.id] = record?.status === "PRESENT" ? "PRESENT" : "ABSENT";
     });
     return initialState;
   });
 
   const handleStatusChange = (participantId: number, status: AttendanceStatus) => {
-    setAttendance(prev => ({ ...prev, [participantId]: status }));
+    setAttendance((prev) => ({ ...prev, [participantId]: status }));
   };
 
-  // Set up the server action with the form state
   const saveAttendanceWithId = saveWorkshopAttendance.bind(null, sessionId);
   const [state, formAction] = useActionState(saveAttendanceWithId, {
     success: false,
@@ -57,11 +66,10 @@ const WorkshopAttendanceForm = ({
     message: "",
   });
 
-  // Show toast notifications based on the form action's result
   useEffect(() => {
     if (state?.success) {
       toast.success(state.message);
-      setOpen(false); // Close the modal on success
+      setOpen(false);
     }
     if (state?.error) {
       toast.error(state.message);
@@ -69,17 +77,33 @@ const WorkshopAttendanceForm = ({
   }, [state, setOpen]);
 
   return (
-    <form action={formAction} className="p-4">
-      <h2 className="text-xl font-bold text-gray-800 mb-4">سجل الحضور</h2>
+    <form action={formAction} className="p-4 font-sans">
+      <h2 className="text-section-title font-bold text-gray-900 mb-4">{t("attendanceRosterTitle")}</h2>
       <div className="space-y-3 max-h-96 overflow-y-auto">
         {participants.map((participant) => {
           const currentStatus = attendance[participant.id];
+          const displayName = participant.Student?.name || participant.name || `${t("student")} #${participant.id}`;
+          const isGirl = participant.gender === "FEMALE";
+
           return (
             <div
               key={participant.id}
               className="flex items-center justify-between p-3 border rounded-lg bg-gray-50"
             >
-              <p className="font-semibold">{participant.name}</p>
+              <div className="flex items-center gap-2">
+                {participant.chairNumber && (
+                  <span
+                    className={`inline-flex items-center justify-center font-bold px-2 py-0.5 rounded-full text-xs ${
+                      isGirl
+                        ? "bg-pink-100 text-pink-700 border border-pink-300"
+                        : "bg-blue-100 text-blue-700 border border-blue-300"
+                    }`}
+                  >
+                    #{participant.chairNumber}
+                  </span>
+                )}
+                <p className="font-semibold text-gray-800">{displayName}</p>
+              </div>
 
               <div className="flex items-center gap-2">
                 <input type="hidden" name={`attendance[${participant.id}]`} value={currentStatus} />
@@ -87,23 +111,23 @@ const WorkshopAttendanceForm = ({
                   type="button"
                   onClick={() => handleStatusChange(participant.id, "PRESENT")}
                   className={`px-4 py-1 text-sm font-semibold rounded-full transition-colors ${
-                    currentStatus === 'PRESENT'
-                      ? 'bg-green-500 text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-green-100'
+                    currentStatus === "PRESENT"
+                      ? "bg-green-600 text-white shadow-sm"
+                      : "bg-gray-200 text-gray-700 hover:bg-green-100"
                   }`}
                 >
-                  حاضر
+                  {t("present")}
                 </button>
                 <button
                   type="button"
                   onClick={() => handleStatusChange(participant.id, "ABSENT")}
                   className={`px-4 py-1 text-sm font-semibold rounded-full transition-colors ${
-                    currentStatus === 'ABSENT'
-                      ? 'bg-red-500 text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-red-100'
+                    currentStatus === "ABSENT"
+                      ? "bg-red-600 text-white shadow-sm"
+                      : "bg-gray-200 text-gray-700 hover:bg-red-100"
                   }`}
                 >
-                  غائب
+                  {t("absent")}
                 </button>
               </div>
             </div>

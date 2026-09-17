@@ -43,3 +43,32 @@ export const adjustScheduleToCurrentWeek = (
     };
   });
 };
+
+/**
+ * Recursively converts Decimal and BigInt objects to standard JavaScript numbers,
+ * making them safe to pass across the Server Component -> Client Component boundary.
+ */
+export function serializeForClient<T>(val: T): T {
+  if (val === null || val === undefined) return val;
+  if (typeof val === "bigint") return Number(val) as any;
+  if (typeof val === "object") {
+    if (typeof (val as any).toNumber === "function") {
+      return (val as any).toNumber();
+    }
+    if ((val as any).constructor && (val as any).constructor.name === "Decimal") {
+      return Number(val) as any;
+    }
+    if (val instanceof Date) {
+      return val;
+    }
+    if (Array.isArray(val)) {
+      return val.map(serializeForClient) as any;
+    }
+    const res: any = {};
+    for (const [k, v] of Object.entries(val)) {
+      res[k] = serializeForClient(v);
+    }
+    return res;
+  }
+  return val;
+}

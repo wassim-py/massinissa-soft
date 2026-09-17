@@ -3,7 +3,9 @@
 import { Student } from "@prisma/client";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation"; // 2. Import the usePathname hook
+import { usePathname } from "next/navigation";
+import { Card } from "@/components/ui/Card";
+import { useTranslations } from "next-intl";
 
 const ChildSwitcher = ({
   students,
@@ -12,57 +14,57 @@ const ChildSwitcher = ({
   students: Student[];
   activeStudentId?: string;
 }) => {
-  const pathname = usePathname(); // 3. Get the current page's path (e.g., /list/results)
+  const t = useTranslations("parents");
+  const pathname = usePathname();
 
   if (students.length === 0) {
     return (
-      <div className="bg-white p-4 rounded-md text-center">
-        <p className="text-gray-600">لا يوجد طلاب مرتبطون بهذا الحساب.</p>
-      </div>
+      <Card className="p-5 text-center">
+        <p className="text-gray-500 text-sm">{t("noChildrenLinked")}</p>
+      </Card>
     );
   }
 
   const currentStudentId = activeStudentId || students[0]?.id;
 
   return (
-    <div className="bg-white p-4 rounded-md">
-      <h2 className="text-lg font-semibold mb-3">أبناؤك</h2>
+    <Card className="p-5">
+      <h2 className="text-section-title font-bold text-gray-900 mb-3">{t("yourChildren")}</h2>
       <div className="flex flex-wrap gap-4">
         {students.map((child) => {
           const isActive = child.id === currentStudentId;
-          // 4. Construct the link dynamically using the current path
           const href = `${pathname}?studentId=${child.id}`;
           return (
             <Link
               href={href}
               key={child.id}
-              className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-all ${
+              className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
                 isActive
-                  ? "bg-blue-50 border-blue-500 shadow-sm"
-                  : "bg-gray-50 border-transparent hover:border-gray-300"
+                  ? "bg-primary/5 border-primary shadow-sm"
+                  : "bg-surface-subtle border-border hover:border-primary/40"
               }`}
             >
               <Image
-                src={child.img || "/noAvatar.png"}
-                alt={`${child.name} ${child.surname}`}
+                src="/noAvatar.png"
+                alt={child.name}
                 width={40}
                 height={40}
-                className="rounded-full"
+                className="rounded-full border border-border"
               />
               <div>
                 <p
-                  className={`font-bold ${
-                    isActive ? "text-blue-700" : "text-gray-800"
+                  className={`text-sm font-bold ${
+                    isActive ? "text-primary" : "text-gray-800"
                   }`}
                 >
-                  {child.name} {child.surname}
+                  {child.name}
                 </p>
               </div>
             </Link>
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 };
 

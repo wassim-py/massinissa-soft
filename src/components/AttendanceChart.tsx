@@ -10,36 +10,18 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-// Define the full list of days in the desired order for the chart's X-axis
-const ALL_DAYS = [
-  "السبت",
-  "الأحد",
-  "الإثنين",
-  "الثلاثاء",
-  "الأربعاء",
-  "الخميس",
-  "الجمعة",
-];
-
 const AttendanceChart = ({
   data,
+  presentLabel = "Présent",
+  absentLabel = "Absent",
 }: {
   data: { name: string; present: number; absent: number }[];
+  presentLabel?: string;
+  absentLabel?: string;
 }) => {
-  // Create a map of the provided data for efficient lookup
-  const dataMap = new Map(data.map((item) => [item.name, item]));
-
-  // Create a new, complete data array that includes all days of the week.
-  // If a day is missing from the input data, it will be added with 0 for present and absent.
-  const chartData = ALL_DAYS.map((day) => ({
-    name: day,
-    present: dataMap.get(day)?.present || 0,
-    absent: dataMap.get(day)?.absent || 0,
-  }));
-
   return (
     <ResponsiveContainer width="100%" height="90%">
-      <BarChart width={500} height={300} data={chartData} barSize={20}>
+      <BarChart width={500} height={300} data={data} barSize={20}>
         <CartesianGrid
           strokeDasharray="3 3"
           vertical={false}
@@ -63,14 +45,14 @@ const AttendanceChart = ({
         />
         <Bar
           dataKey="present"
-          name="حاضر"
+          name={presentLabel}
           fill="#FAE27C"
           legendType="circle"
           radius={[10, 10, 0, 0]}
         />
         <Bar
           dataKey="absent"
-          name="غائب"
+          name={absentLabel}
           fill="#C3EBFA"
           legendType="circle"
           radius={[10, 10, 0, 0]}

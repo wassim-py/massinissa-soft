@@ -2,9 +2,6 @@
 
 import {
   deleteClass,
-  deleteCourse,
-  deleteEvent,
-  deleteExam,
   deleteLesson,
   deleteParent,
   deleteStudent,
@@ -13,15 +10,24 @@ import {
   deleteAnnouncement,
   deleteWorkshop,
 } from "@/lib/actions";
+import { deleteFormationAction } from "@/lib/formationActions";
 import dynamic from "next/dynamic";
 import Image from "next/image";
-import { useActionState, ComponentType,
+import {
+  useActionState,
+  ComponentType,
   Dispatch,
   SetStateAction,
   useEffect,
-  useState, } from "react";
+  useState,
+  startTransition,
+} from "react";
 import { toast } from "react-toastify";
 import { FormContainerProps } from "./FormContainer";
+import { useTranslations } from "next-intl";
+import { Button } from "@/components/ui/Button";
+import { usePermission } from "@/hooks/usePermission";
+import { useRouter } from "@/i18n/navigation";
 
 // --- TYPE DEFINITIONS ---
 type FormComponentProps = {
@@ -33,36 +39,16 @@ type FormComponentProps = {
 
 type TableName = FormContainerProps["table"];
 
-// --- ARABIC NAME MAPPING ---
-const tableNamesAr: Record<string, string> = {
-  teacher: "الأستاذ",
-  student: "التلميذ",
-  parent: "ولي الأمر",
-  subject: "المادة",
-  class: "القسم",
-  lesson: "الحصة",
-  exam: "الامتحان",
-  result: "النتيجة",
-  attendance: "الحضور",
-  event: "الحدث",
-  announcement: "الإعلان",
-  course: "الدرس",
-  payment: "الدفع",
-  workshop: "الدورة",
-};
-
 // --- LAZY-LOADED FORMS ---
 const TeacherForm = dynamic(() => import("./forms/TeacherForm"));
 const StudentForm = dynamic(() => import("./forms/StudentForm"));
 const SubjectForm = dynamic(() => import("./forms/SubjectForm"));
 const ClassForm = dynamic(() => import("./forms/ClassForm"));
-const ExamForm = dynamic(() => import("./forms/ExamForm"));
 const ParentForm = dynamic(() => import("./forms/ParentForm"));
 const LessonForm = dynamic(() => import("./forms/LessonForm"));
-const CourseForm = dynamic(() => import("./forms/CourseForm"));
-const EventForm = dynamic(() => import("./forms/EventForm"));
 const AnnouncementForm = dynamic(() => import("./forms/AnnouncementForm"));
 const WorkshopForm = dynamic(() => import("./forms/WorkshopForm"));
+const FormationForm = dynamic(() => import("./forms/FormationForm"));
 
 // --- FORM MAP ---
 const forms: Partial<Record<TableName, ComponentType<FormComponentProps>>> = {
@@ -70,13 +56,11 @@ const forms: Partial<Record<TableName, ComponentType<FormComponentProps>>> = {
   class: ClassForm,
   teacher: TeacherForm,
   student: StudentForm,
-  exam: ExamForm,
   parent: ParentForm,
   lesson: LessonForm,
-  course: CourseForm,
-  event: EventForm,
   announcement: AnnouncementForm,
   workshop: WorkshopForm,
+  formation: FormationForm,
 };
 
 // --- DELETE CONFIRMATION COMPONENT ---
@@ -91,19 +75,23 @@ const DeleteConfirmation = ({
   data?: any;
   setOpen: Dispatch<SetStateAction<boolean>>;
 }) => {
-  // This map only includes delete actions that exist in your actions.ts file.
-  const deleteActionMap: Partial<Record<TableName, (currentState: any, data: FormData) => Promise<any>>> = {
+  const tModals = useTranslations("modals");
+  const tTables = useTranslations("tables");
+  const tCommon = useTranslations("common");
+  const router = useRouter();
+
+  const deleteActionMap: Partial<
+    Record<TableName, (currentState: any, data: FormData) => Promise<any>>
+  > = {
     subject: deleteSubject,
     class: deleteClass,
     teacher: deleteTeacher,
     student: deleteStudent,
-    exam: deleteExam,
     parent: deleteParent,
     lesson: deleteLesson,
-    course: deleteCourse,
-    event: deleteEvent,
     announcement: deleteAnnouncement,
     workshop: deleteWorkshop,
+    formation: deleteFormationAction,
   };
 
   const deleteAction = deleteActionMap[table] || deleteSubject;
@@ -114,17 +102,31 @@ const DeleteConfirmation = ({
     message: "",
   });
 
-  const tableNameInArabic = tableNamesAr[table] || "العنصر";
+  const tableName = tTables(table);
 
   useEffect(() => {
     if (state.success) {
-      toast.success(state.message || `تم حذف ${tableNameInArabic} بنجاح!`);
+      toast.success(
+        tModals("deleteSuccess", { name: tableName })
+      );
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
+      if (table === "announcement") {
+        try {
+          const bc = new BroadcastChannel("massinissa_announcements_channel");
+          bc.postMessage({ type: "ANNOUNCEMENT_CHANGED" });
+          bc.close();
+        } catch {
+          // Ignore
+        }
+      }
     }
     if (state.error && state.message) {
-      toast.error(state.message);
+      toast.error(state.message || tModals("deleteError", { name: tableName }));
     }
-  }, [state, tableNameInArabic, setOpen]);
+  }, [state, tableName, setOpen, tModals, router, table]);
 
   return (
     <form
@@ -148,25 +150,28 @@ const DeleteConfirmation = ({
         <line x1="10" y1="11" x2="10" y2="17" />
         <line x1="14" y1="11" x2="14" y2="17" />
       </svg>
-      <h2 className="text-xl font-bold text-gray-800">هل أنت متأكد؟</h2>
-      <p className="text-gray-600">
-        لا يمكن التراجع عن هذا الإجراء. سيتم حذف جميع البيانات المتعلقة بهذا (
-        {tableNameInArabic}) بشكل دائم.
+      <h2 className="text-section-title font-bold text-gray-900">
+        {tModals("deleteConfirmTitle")}
+      </h2>
+      <p className="text-table-body text-muted">
+        {tModals("deleteConfirmMessage", { name: tableName })}
       </p>
-      <div className="flex items-center gap-4 mt-4 w-full">
-        <button
+      <div className="flex items-center gap-3 mt-4 w-full">
+        <Button
           type="button"
+          variant="outline"
           onClick={() => setOpen(false)}
-          className="flex-1 px-6 py-2 bg-gray-200 text-gray-800 font-semibold rounded-md hover:bg-gray-300"
+          className="flex-1"
         >
-          إلغاء
-        </button>
-        <button
+          {tCommon("cancel")}
+        </Button>
+        <Button
           type="submit"
-          className="flex-1 bg-red-600 text-white px-6 py-2 font-semibold rounded-md hover:bg-red-700"
+          variant="danger"
+          className="flex-1"
         >
-          حذف
-        </button>
+          {tCommon("delete")}
+        </Button>
       </div>
       <input type="hidden" name="id" value={id} />
       {table === "payment" && data?.classId && (
@@ -184,40 +189,60 @@ const FormModal = ({
   id,
   relatedData,
 }: FormContainerProps) => {
+  const { can, isLoaded } = usePermission();
   const [open, setOpen] = useState(false);
+  const tModals = useTranslations("modals");
+
+  if (isLoaded && !can(type, table)) {
+    return null;
+  }
 
   const FormComponent = forms[table];
 
-  const buttonSize = type === "create" ? "w-8 h-8" : "w-7 h-7";
-  const buttonBgColor =
-    type === "create"
-      ? "bg-wsmYellow"
-      : type === "update"
-      ? "bg-wsmSky"
-      : "bg-wsmPurple";
-
   const modalContentClasses =
     type === "delete"
-      ? "bg-white rounded-lg shadow-xl relative w-full max-w-md mx-4"
-      : "bg-white p-4 rounded-md relative w-[90%] md:w-[70%] lg:w-[60%] xl:w-[50%] 2xl:w-[40%] max-h-[90vh] overflow-y-auto";
+      ? "bg-surface rounded-xl border border-border shadow-xl relative w-full max-w-md mx-4"
+      : "bg-surface p-6 rounded-xl border border-border shadow-xl relative w-[90%] md:w-[70%] lg:w-[60%] xl:w-[50%] 2xl:w-[40%] max-h-[90vh] overflow-y-auto";
 
   return (
     <>
-      <button
-        className={`${buttonSize} flex items-center justify-center rounded-full ${buttonBgColor}`}
-        onClick={() => setOpen(true)}
-      >
-        <Image src={`/${type}.png`} alt="" width={16} height={16} />
-      </button>
+      {type === "create" ? (
+        <Button
+          variant="primary"
+          size="icon"
+          title={tModals("create")}
+          onClick={() => setOpen(true)}
+        >
+          <Image src="/create.png" alt="" width={14} height={14} className="brightness-0 invert" />
+        </Button>
+      ) : type === "update" ? (
+        <Button
+          variant="soft"
+          size="icon-sm"
+          title={tModals("update")}
+          onClick={() => setOpen(true)}
+        >
+          <Image src="/update.png" alt="" width={14} height={14} />
+        </Button>
+      ) : (
+        <Button
+          variant="soft-danger"
+          size="icon-sm"
+          title={tModals("delete")}
+          onClick={() => setOpen(true)}
+        >
+          <Image src="/delete.png" alt="" width={14} height={14} />
+        </Button>
+      )}
 
       {open && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className={modalContentClasses}>
             <button
-              className="absolute top-4 left-4 cursor-pointer"
+              className="absolute top-4 end-4 cursor-pointer p-1.5 rounded-lg text-muted hover:text-gray-900 hover:bg-surface-subtle transition-colors"
               onClick={() => setOpen(false)}
             >
-              <Image src="/close.png" alt="إغلاق" width={14} height={14} />
+              <Image src="/close.png" alt={tModals("close")} width={14} height={14} />
             </button>
 
             {type === "delete" && id ? (
@@ -228,7 +253,7 @@ const FormModal = ({
                 setOpen={setOpen}
               />
             ) : (type === "create" || type === "update") && FormComponent ? (
-              <div className="p-4">
+              <div className="p-2">
                 <FormComponent
                   setOpen={setOpen}
                   type={type}
@@ -237,7 +262,9 @@ const FormModal = ({
                 />
               </div>
             ) : (
-              <div className="text-center p-8">لم يتم العثور على النموذج!</div>
+              <div className="text-center p-8 text-muted">
+                {tModals("notFound")}
+              </div>
             )}
           </div>
         </div>

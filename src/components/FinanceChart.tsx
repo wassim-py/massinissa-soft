@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
+import { Link } from "@/i18n/navigation";
 import {
   LineChart,
   Line,
@@ -12,14 +12,26 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import { Card } from "@/components/ui/Card";
 
-// This component receives its data via props but uses your original styling.
-const FinanceChart = ({ data }: { data: any[] }) => {
+const FinanceChart = ({
+  data,
+  title = "Finances",
+  incomeLabel = "Revenus",
+  expenseLabel = "Dépenses",
+}: {
+  data: any[];
+  title?: string;
+  incomeLabel?: string;
+  expenseLabel?: string;
+}) => {
   return (
-    <div className="bg-white rounded-xl w-full h-full p-4">
-      <div className="flex justify-between items-center">
-        <h1 className="text-lg font-semibold">المالية</h1>
-        <Link href="list/reports"><Image src="/moreDark.png" alt="" width={20} height={20} /></Link>
+    <Card className="w-full h-full p-6">
+      <div className="flex justify-between items-center mb-2">
+        <h1 className="text-section-title font-bold text-gray-900">{title}</h1>
+        <Link href="/list/finance">
+          <Image src="/moreDark.png" alt="" width={20} height={20} />
+        </Link>
       </div>
       <ResponsiveContainer width="100%" height="90%">
         <LineChart
@@ -37,13 +49,13 @@ const FinanceChart = ({ data }: { data: any[] }) => {
           <XAxis
             dataKey="name"
             axisLine={false}
-            tick={{ fill: "#d1d5db" }}
+            tick={{ fill: "#6b7280" }}
             tickLine={false}
             tickMargin={10}
           />
           <YAxis
             axisLine={false}
-            tick={{ fill: "#d1d5db" }}
+            tick={{ fill: "#6b7280" }}
             tickLine={false}
             tickMargin={20}
           />
@@ -53,24 +65,23 @@ const FinanceChart = ({ data }: { data: any[] }) => {
             verticalAlign="top"
             wrapperStyle={{ paddingTop: "10px", paddingBottom: "30px" }}
           />
-          {/* --- FIX: Reverted to original colors and stroke width --- */}
           <Line
             type="monotone"
             dataKey="income"
-            name="المدخول"
+            name={incomeLabel}
             stroke="#C3EBFA"
             strokeWidth={5}
           />
           <Line
             type="monotone"
             dataKey="expense"
-            name="المخروج"
+            name={expenseLabel}
             stroke="#CFCEFF"
             strokeWidth={5}
           />
         </LineChart>
       </ResponsiveContainer>
-    </div>
+    </Card>
   );
 };
 

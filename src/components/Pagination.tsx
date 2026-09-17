@@ -1,53 +1,60 @@
 "use client";
 
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "@/i18n/navigation";
+import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { Button } from "@/components/ui/Button";
 
-// This is a utility function that generates the array of page numbers to display.
-// It creates the truncated list with ellipses.
 const getPaginationRange = (currentPage: number, totalPages: number): (number | string)[] => {
-    const siblingCount = 2;
-    const totalNumbersToDisplay = siblingCount + 5;
+  const siblingCount = 2;
+  const totalNumbersToDisplay = siblingCount + 5;
 
-    if (totalPages <= totalNumbersToDisplay) {
-        return Array.from({ length: totalPages }, (_, i) => i + 1);
-    }
+  if (totalPages <= totalNumbersToDisplay) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
 
-    const leftSiblingIndex = Math.max(currentPage - siblingCount, 1);
-    const rightSiblingIndex = Math.min(currentPage + siblingCount, totalPages);
+  const leftSiblingIndex = Math.max(currentPage - siblingCount, 1);
+  const rightSiblingIndex = Math.min(currentPage + siblingCount, totalPages);
 
-    const shouldShowLeftDots = leftSiblingIndex > 2;
-    const shouldShowRightDots = rightSiblingIndex < totalPages - 1;
+  const shouldShowLeftDots = leftSiblingIndex > 2;
+  const shouldShowRightDots = rightSiblingIndex < totalPages - 1;
 
-    const firstPageIndex = 1;
-    const lastPageIndex = totalPages;
+  const firstPageIndex = 1;
+  const lastPageIndex = totalPages;
 
-    if (!shouldShowLeftDots && shouldShowRightDots) {
-        let leftItemCount = 3 + 2 * siblingCount;
-        let leftRange = Array.from({ length: leftItemCount }, (_, i) => i + 1);
-        return [...leftRange, "...", lastPageIndex];
-    }
+  if (!shouldShowLeftDots && shouldShowRightDots) {
+    const leftItemCount = 3 + 2 * siblingCount;
+    const leftRange = Array.from({ length: leftItemCount }, (_, i) => i + 1);
+    return [...leftRange, "...", lastPageIndex];
+  }
 
-    if (shouldShowLeftDots && !shouldShowRightDots) {
-        let rightItemCount = 3 + 2 * siblingCount;
-        let rightRange = Array.from({ length: rightItemCount }, (_, i) => totalPages - rightItemCount + i + 1);
-        return [firstPageIndex, "...", ...rightRange];
-    }
+  if (shouldShowLeftDots && !shouldShowRightDots) {
+    const rightItemCount = 3 + 2 * siblingCount;
+    const rightRange = Array.from(
+      { length: rightItemCount },
+      (_, i) => totalPages - rightItemCount + i + 1
+    );
+    return [firstPageIndex, "...", ...rightRange];
+  }
 
-    if (shouldShowLeftDots && shouldShowRightDots) {
-        let middleRange = Array.from({ length: rightSiblingIndex - leftSiblingIndex + 1 }, (_, i) => leftSiblingIndex + i);
-        return [firstPageIndex, "...", ...middleRange, "...", lastPageIndex];
-    }
+  if (shouldShowLeftDots && shouldShowRightDots) {
+    const middleRange = Array.from(
+      { length: rightSiblingIndex - leftSiblingIndex + 1 },
+      (_, i) => leftSiblingIndex + i
+    );
+    return [firstPageIndex, "...", ...middleRange, "...", lastPageIndex];
+  }
 
-    return [];
+  return [];
 };
 
-
 const Pagination = ({ count }: { count: number }) => {
+  const t = useTranslations("pagination");
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  
+
   const currentPage = Number(searchParams.get("page")) || 1;
   const totalPages = Math.ceil(count / ITEM_PER_PAGE);
 
@@ -55,7 +62,7 @@ const Pagination = ({ count }: { count: number }) => {
   const hasNext = currentPage < totalPages;
 
   const changePage = (newPage: number) => {
-    const params = new URLSearchParams(searchParams);
+    const params = new URLSearchParams(searchParams.toString());
     params.set("page", newPage.toString());
     router.push(`${pathname}?${params.toString()}`);
   };
@@ -67,27 +74,36 @@ const Pagination = ({ count }: { count: number }) => {
   }
 
   return (
-    <div className="p-4 flex items-center justify-between text-gray-500">
-      <button
+    <div className="py-3 px-2 sm:px-4 flex items-center justify-between text-muted border-t border-border/60">
+      <Button
+        variant="outline"
+        size="sm"
         disabled={!hasPrev}
-        className="py-2 px-4 rounded-md bg-slate-200 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
         onClick={() => changePage(currentPage - 1)}
       >
-        Prev
-      </button>
+        {t("prev")}
+      </Button>
 
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-1.5 text-sm">
         {pageNumbers.map((page, index) => {
-          if (typeof page === 'string') {
-            return <span key={`dots-${index}`} className="px-2">...</span>;
+          if (typeof page === "string") {
+            return (
+              <span key={`dots-${index}`} className="px-1.5 text-muted-light">
+                ...
+              </span>
+            );
           }
+          const isActive = currentPage === page;
           return (
             <button
               key={page}
-              className={`px-2 rounded-sm ${
-                currentPage === page ? "bg-wsmSky" : ""
+              className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold transition-all flex items-center justify-center cursor-pointer select-none ${
+                isActive
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-gray-700 hover:bg-surface-subtle border border-border/70 bg-surface"
               }`}
               onClick={() => changePage(page)}
+              aria-current={isActive ? "page" : undefined}
             >
               {page}
             </button>
@@ -95,13 +111,14 @@ const Pagination = ({ count }: { count: number }) => {
         })}
       </div>
 
-      <button
-        className="py-2 px-4 rounded-md bg-slate-200 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+      <Button
+        variant="outline"
+        size="sm"
         disabled={!hasNext}
         onClick={() => changePage(currentPage + 1)}
       >
-        Next
-      </button>
+        {t("next")}
+      </Button>
     </div>
   );
 };

@@ -1,8 +1,10 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 const AttendanceGridFilters = () => {
+  const t = useTranslations("attendance");
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { replace } = useRouter();
@@ -32,9 +34,9 @@ const AttendanceGridFilters = () => {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-4 p-4 bg-gray-50 rounded-lg border mb-6">
+    <div className="flex flex-wrap items-center gap-4 p-4 bg-gray-50 rounded-lg border mb-6 font-sans">
       <div className="flex items-center gap-2">
-        <label htmlFor="startDate" className="text-sm font-medium text-gray-700">من:</label>
+        <label htmlFor="startDate" className="text-sm font-medium text-gray-700">{t("filterFrom")}</label>
         <input
           type="date"
           id="startDate"
@@ -45,7 +47,7 @@ const AttendanceGridFilters = () => {
         />
       </div>
       <div className="flex items-center gap-2">
-        <label htmlFor="endDate" className="text-sm font-medium text-gray-700">إلى:</label>
+        <label htmlFor="endDate" className="text-sm font-medium text-gray-700">{t("filterTo")}</label>
         <input
           type="date"
           id="endDate"
@@ -59,7 +61,7 @@ const AttendanceGridFilters = () => {
         onClick={handleReset}
         className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-gray-300 hover:text-gray-800 transition-colors"
       >
-        إعادة تعيين
+        {t("resetFilters")}
       </button>
     </div>
   );

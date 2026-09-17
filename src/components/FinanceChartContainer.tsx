@@ -1,60 +1,70 @@
-import prisma from "@/lib/prisma";
 import FinanceChart from "./FinanceChart";
+import prisma from "@/lib/prisma";
+import { getTranslations } from "next-intl/server";
 
-// This is a Server Component that fetches and processes data.
 const FinanceChartContainer = async () => {
-  // 1. Define the Algerian Arabic month names.
-  const algerianMonths = [
-    "جانفي",
-    "فيفري",
-    "مارس",
-    "أفريل",
-    "ماي",
-    "جوان",
-    "جويلية",
-    "أوت",
-    "سبتمبر",
-    "أكتوبر",
-    "نوفمبر",
-    "ديسمبر",
-  ];
+  const monthKeys = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ] as const;
 
-  // 2. Initialize a default data structure using the Algerian month names.
-  let monthlyData = algerianMonths.map((monthName) => ({
-    name: monthName,
+  const monthlyData = monthKeys.map((key) => ({
+    key,
     income: 0,
-    expense: 0, // 'expense' will represent refunds
+    expense: 0,
   }));
 
   try {
-    // 3. Fetch all payments and refunds from the database in parallel.
-    const [payments, workshopPayments, refunds] = await Promise.all([
-      prisma.payment.findMany(),
-      prisma.workshopPayment.findMany(),
-      prisma.refund.findMany(),
+    const [rows, refundRows] = await Promise.all([
+      prisma.$queryRaw<
+        Array<{ amount: number | string; issuedAt: Date }>
+      >`
+        SELECT amount, "issuedAt" FROM "Voucher"
+      `,
+      prisma.$queryRaw<
+        Array<{ amount: number | string; refundedAt: Date }>
+      >`
+        SELECT amount, "refundedAt" FROM "Refund"
+      `,
     ]);
-
-    // 4. Process all income (class and workshop payments).
-    payments.forEach((payment) => {
-      const month = new Date(payment.date).getMonth();
-      monthlyData[month].income += payment.amount;
+    rows.forEach((row) => {
+      const month = new Date(row.issuedAt).getMonth();
+      monthlyData[month].income += Number(row.amount);
     });
-    workshopPayments.forEach((payment) => {
-      const month = new Date(payment.date).getMonth();
-      monthlyData[month].income += payment.amount;
+    refundRows.forEach((row) => {
+      const month = new Date(row.refundedAt).getMonth();
+      monthlyData[month].expense += Number(row.amount);
     });
-
-    // 5. Process all outcomes (refunds).
-    refunds.forEach((refund) => {
-      const month = new Date(refund.date).getMonth();
-      monthlyData[month].expense += refund.amount;
-    });
-  } catch (error) {
-    console.error("Failed to fetch finance data for chart:", error);
+  } catch {
+    // Keep zero defaults
   }
 
-  // 6. Render the client chart component, passing the processed data as a prop
-  return <FinanceChart data={monthlyData} />;
+  const t = await getTranslations("dashboard.financeChart");
+
+  const dataForChart = monthlyData.map((item) => ({
+    name: t(`months.${item.key}` as any),
+    income: item.income,
+    expense: item.expense,
+  }));
+
+  return (
+    <FinanceChart
+      data={dataForChart}
+      title={t("title")}
+      incomeLabel={t("income")}
+      expenseLabel={t("expense")}
+    />
+  );
 };
 
 export default FinanceChartContainer;

@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Student" ADD COLUMN IF NOT EXISTS "payerStatus" TEXT NOT NULL DEFAULT 'NORMAL';

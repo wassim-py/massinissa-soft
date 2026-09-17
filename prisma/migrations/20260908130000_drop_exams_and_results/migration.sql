@@ -1,0 +1,11 @@
+-- DropForeignKey
+ALTER TABLE "Result" DROP CONSTRAINT IF EXISTS "Result_examId_fkey";
+ALTER TABLE "Result" DROP CONSTRAINT IF EXISTS "Result_studentId_fkey";
+ALTER TABLE "Exam" DROP CONSTRAINT IF EXISTS "Exam_classId_fkey";
+ALTER TABLE "Exam" DROP CONSTRAINT IF EXISTS "Exam_classroomId_fkey";
+ALTER TABLE "Exam" DROP CONSTRAINT IF EXISTS "Exam_subjectId_fkey";
+ALTER TABLE "Exam" DROP CONSTRAINT IF EXISTS "Exam_teacherId_fkey";
+
+-- DropTable
+DROP TABLE IF EXISTS "Result" CASCADE;
+DROP TABLE IF EXISTS "Exam" CASCADE;

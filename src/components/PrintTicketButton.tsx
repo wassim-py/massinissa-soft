@@ -2,28 +2,28 @@
 
 import React from 'react';
 import ReactDOMServer from 'react-dom/server';
+import { useLocale } from 'next-intl';
 import { PaymentTicket } from './printable/PaymentTicket';
-import { Payment, Student, Class } from "@prisma/client";
+import { Voucher, Student, Class } from "@prisma/client";
 import Image from 'next/image';
 
-// --- UPDATED ---
-// The props type now includes the calculated values.
 type PrintButtonProps = {
-    payment: Payment & { student: Student, class: Class };
-    sessionsForThisPayment: number;
-    amountOwedByStudent: number;
+  voucher: Voucher & { student: Student; class: Class; series?: { scope: string; id: number } | null };
+  sessionsForThisPayment?: number;
+  amountOwedByStudent?: number;
 };
 
-const PrintTicketButton = ({ payment, sessionsForThisPayment, amountOwedByStudent }: PrintButtonProps) => {
+const PrintTicketButton = ({ voucher, sessionsForThisPayment, amountOwedByStudent }: PrintButtonProps) => {
+  const locale = useLocale();
+  const isAr = locale === "ar";
 
   const handlePrint = () => {
-    // --- UPDATED ---
-    // The calculated values are now passed to the PaymentTicket component.
     const printContent = ReactDOMServer.renderToString(
       <PaymentTicket 
-        payment={payment} 
-        sessionsForThisPayment={sessionsForThisPayment}
-        amountOwedByStudent={amountOwedByStudent}
+        voucher={voucher} 
+        sessionsCount={sessionsForThisPayment}
+        remainingBalance={amountOwedByStudent}
+        locale={locale}
       />
     );
 
@@ -31,12 +31,19 @@ const PrintTicketButton = ({ payment, sessionsForThisPayment, amountOwedByStuden
 
     if (printWindow) {
       printWindow.document.write(`
-        <html>
+        <!DOCTYPE html>
+        <html dir="${isAr ? 'rtl' : 'ltr'}" lang="${locale}">
           <head>
-            <title>Print Receipt</title>
+            <meta charset="utf-8">
+            <title>${isAr ? 'طباعة الوصل' : 'Imprimer le reçu'} #${voucher.number}</title>
             <script src="https://cdn.tailwindcss.com"></script>
+            <style>
+              @media print {
+                body { margin: 0; padding: 0; }
+              }
+            </style>
           </head>
-          <body>
+          <body class="flex justify-center p-4">
             ${printContent}
           </body>
         </html>
@@ -55,11 +62,12 @@ const PrintTicketButton = ({ payment, sessionsForThisPayment, amountOwedByStuden
   return (
     <div>
       <button 
+        type="button"
         onClick={handlePrint} 
-        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-200 hover:bg-gray-300"
-        title="Print Receipt"
+        className="w-7 h-7 flex items-center justify-center rounded-full bg-gray-200 hover:bg-gray-300 transition-colors cursor-pointer"
+        title={isAr ? "طباعة الوصل" : "Imprimer le reçu"}
       >
-        <Image src="/print.png" alt="Print" width={14} height={14} />
+        <Image src="/print.png" alt={isAr ? "طباعة" : "Imprimer"} width={14} height={14} />
       </button>
     </div>
   );

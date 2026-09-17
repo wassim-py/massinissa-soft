@@ -3,25 +3,26 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { workshopPaymentSchema, WorkshopPaymentSchema } from "@/lib/formValidationSchemas";
-
 import { addWorkshopPayment, updateWorkshopPayment } from "@/lib/actions";
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, startTransition } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "react-toastify";
-import { Workshop, WorkshopParticipant, WorkshopPayment } from "@prisma/client";
-import PrintWorkshopTicketButton from "../PrintWorkshopTicketButton"; // Import the new print button
+import { Workshop, WorkshopParticipant } from "@prisma/client";
+import PrintWorkshopTicketButton from "../PrintWorkshopTicketButton";
+import { Button } from "@/components/ui/Button";
 
 const WorkshopPaymentForm = ({
-    participant, // Changed from participantId
-    workshop, // Changed from workshopId
+    participant,
+    workshop,
     type,
     data,
     setOpen,
     amountOwedByParticipant,
 }: {
-    participant: WorkshopParticipant;
+    participant: WorkshopParticipant & { Student?: { name: string; phone: string | null } | null; name?: string };
     workshop: Workshop;
     type: 'create' | 'update';
-    data?: WorkshopPayment;
+    data?: any;
     setOpen: (isOpen: boolean) => void;
     amountOwedByParticipant?: number;
 }) => {
@@ -41,7 +42,7 @@ const WorkshopPaymentForm = ({
     });
 
     const actionToRun = type === 'create' ? addWorkshopPayment : updateWorkshopPayment;
-    const [state, formAction] = useActionState(actionToRun, { success: false, error: false, message: "" });
+    const [state, formAction, isPending] = useActionState(actionToRun, { success: false, error: false, message: "" });
 
     useEffect(() => {
         if (state?.success) {
@@ -53,22 +54,46 @@ const WorkshopPaymentForm = ({
         }
     }, [state, setOpen]);
 
+    const t = useTranslations("workshops");
+    const tCommon = useTranslations("common");
+
     const onSubmit = (formData: WorkshopPaymentSchema) => {
-        formAction(formData as any);
+        startTransition(() => {
+            formAction(formData as any);
+        });
     };
 
-    return (
-        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4 p-4">
-            <div className="flex justify-between items-center">
-                <h2 className="text-lg font-bold">{type === 'create' ? 'تسجيل دفع جديد' : 'تعديل الدفع'}</h2>
-            </div>
+    const participantName = participant.Student?.name || participant.name || `${t("student")} #${participant.id}`;
 
+    return (
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4 p-4 font-sans">
+            <div className="flex justify-between items-center">
+                <h2 className="text-section-title font-bold text-gray-900">
+                    {type === 'create' ? t("paymentFormCreate") : t("paymentFormUpdate")}
+                </h2>
+                {type === 'update' && data && (
+                    <PrintWorkshopTicketButton 
+                        payment={{
+                            ...data,
+                            participant: {
+                                name: participantName,
+                                phone: participant.Student?.phone || null,
+                                chairNumber: (participant as any).chairNumber,
+                                gender: (participant as any).gender,
+                            },
+                            workshop: { title: workshop.title, totalPrice: workshop.totalPrice }
+                        }}
+                        amountOwedByParticipant={amountOwedByParticipant || 0}
+                    />
+                )}
+            </div>
+            
             {type === 'update' && <input type="hidden" {...register("id")} />}
             <input type="hidden" {...register("participantId")} />
             <input type="hidden" {...register("workshopId")} />
 
             <div className="flex flex-col gap-2 w-full">
-                <label className="text-xs text-gray-500">المبلغ المدفوع</label>
+                <label className="text-xs text-gray-500">{t("paidAmountLabel")}</label>
                 <input
                     type="number"
                     step="any"
@@ -79,12 +104,12 @@ const WorkshopPaymentForm = ({
             </div>
 
             <div className="flex flex-col gap-2">
-                <label className="text-xs text-gray-500">ملاحظات (اختياري)</label>
-                <textarea {...register("notes")} rows={3} className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full" placeholder="مثال: تم الدفع نقدًا" />
+                <label className="text-xs text-gray-500">{t("notesLabel")}</label>
+                <textarea {...register("notes")} rows={3} className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full" placeholder={t("notesPlaceholder")} />
             </div>
-            <button type="submit" className="text-xl font-semibold bg-blue-500 text-white p-2 rounded-md hover:bg-blue-600 transition-colors">
-                {type === 'create' ? 'حفظ الدفع' : 'تعديل الدفع'}
-            </button>
+            <Button type="submit" variant="primary" size="lg" className="w-full">
+                {type === 'create' ? t("savePayment") : tCommon("update")}
+            </Button>
         </form>
     );
 };

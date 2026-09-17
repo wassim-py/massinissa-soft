@@ -13,7 +13,8 @@ import { parentSchema, ParentSchema } from "@/lib/formValidationSchemas";
 
 import { createParent, updateParent } from "@/lib/actions";
 import { toast } from "react-toastify";
-import { CldUploadWidget } from "next-cloudinary";
+import { Button } from "@/components/ui/Button";
+import { useTranslations } from "next-intl";
 
 type FormState = {
   success: boolean;
@@ -32,6 +33,9 @@ const ParentForm = ({
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
 }) => {
+  const tParents = useTranslations("parents");
+  const tCommon = useTranslations("common");
+  const tErrors = useTranslations("errors");
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const {
@@ -43,21 +47,21 @@ const ParentForm = ({
     resolver: zodResolver(parentSchema),
     defaultValues: data
       ? {
-          ...data,
-          email: data.email ?? "",
+          id: data.id ? String(data.id) : undefined,
+          name: data.name ?? "",
+          surname: data.surname ?? "",
           phone: data.phone ?? "",
           address: data.address ?? "",
-          img: data.img ?? "",
           students: data.students?.map((s: any) => s.id) || [],
         }
       : {
+          name: "",
+          surname: "",
+          phone: "",
+          address: "",
           students: [],
         },
   });
-
-  const [img, setImg] = useState<any>(
-    data?.img ? { secure_url: data.img } : undefined
-  );
 
   const [isStudentsOpen, setIsStudentsOpen] = useState(false);
   const studentsDropdownRef = useRef<HTMLDivElement>(null);
@@ -71,8 +75,7 @@ const ParentForm = ({
 
   const onSubmit = (formData: ParentSchema) => {
     setIsSubmitting(true);
-    const payload = { ...formData, img: img?.secure_url };
-    formAction(payload as any);
+    formAction(formData as any);
   };
 
   useEffect(() => {
@@ -82,14 +85,14 @@ const ParentForm = ({
     }
     if (state.success) {
       toast.success(
-        state.message || `Parent has been ${type}d successfully!`
+        state.message || (type === "create" ? tParents("createdSuccessfully") : tParents("updatedSuccessfully"))
       );
       setOpen(false);
     }
     if (state.error && state.message) {
       toast.error(state.message);
     }
-  }, [state, type, setOpen]);
+  }, [state, type, setOpen, tParents]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -117,62 +120,38 @@ const ParentForm = ({
   );
 
   return (
-    <form className="flex flex-col gap-8" onSubmit={handleSubmit(onSubmit)}>
+    <form className="flex flex-col gap-6" onSubmit={handleSubmit(onSubmit)}>
       {type === "update" && (
         <input type="hidden" {...register("id")} defaultValue={data?.id} />
       )}
-      <h1 className="text-xl font-semibold">
-        {type === "create" ? "انشاء ولي أمر جديد" : "تحديث ولي الأمر"}
+      <h1 className="text-section-title font-bold text-gray-900">
+        {type === "create" ? tParents("createTitle") : tParents("updateTitle")}
       </h1>
+
       <span className="text-xs text-gray-400 font-medium">
-        معلومات تسجيل الدخول
+        {tParents("personalInfo")}
       </span>
       <div className="flex justify-between flex-wrap gap-4">
         <InputField
-          label="اسم المستخدم"
-          name="username"
-          register={register}
-          error={errors?.username}
-        />
-        <InputField
-          label="البريد الالكتروني"
-          name="email"
-          register={register}
-          error={errors?.email}
-        />
-        <InputField
-          label="كلمة المرور"
-          name="password"
-          type="password"
-          placeholder={type === "update" ? "اتركه فارغًا إذا لم ترغب في تغييره" : ""}
-          register={register}
-          error={errors?.password}
-        />
-      </div>
-      <span className="text-xs text-gray-400 font-medium">
-        المعلومات الشخصية
-      </span>
-      <div className="flex justify-between flex-wrap gap-4">
-        <InputField
-          label="الاسم"
+          label={tParents("name")}
           name="name"
           register={register}
           error={errors.name}
         />
         <InputField
-          label="اللقب"
+          label={tParents("surname")}
           name="surname"
           register={register}
           error={errors.surname}
         />
         <InputField
-          label="رقم الهاتف"
+          label={tParents("phone")}
           name="phone"
           register={register}
           error={errors.phone}
         />
         <InputField
-          label="العنوان"
+          label={tParents("address")}
           name="address"
           register={register}
           error={errors.address}
@@ -182,7 +161,7 @@ const ParentForm = ({
           className="flex flex-col gap-2 w-full md:w-1/4 relative"
           ref={studentsDropdownRef}
         >
-          <label className="text-xs text-gray-500">الأبناء (التلاميذ)</label>
+          <label className="text-xs text-gray-500">{tParents("students")}</label>
           <Controller
             name="students"
             control={control}
@@ -195,10 +174,16 @@ const ParentForm = ({
               );
               const getDisplayText = () => {
                 if (selectedStudentObjects.length === 0)
-                  return "حدد التلاميذ";
-                return selectedStudentObjects
+                  return tParents("selectStudents");
+                if (selectedStudentObjects.length <= 2)
+                  return selectedStudentObjects
+                    .map((s: any) => `${s.name} ${s.surname}`)
+                    .join(", ");
+                const firstTwoNames = selectedStudentObjects
+                  .slice(0, 2)
                   .map((s: any) => `${s.name} ${s.surname}`)
                   .join(", ");
+                return `${firstTwoNames}, ${tParents("andXMore", { count: selectedStudentObjects.length - 2 })}`;
               };
               return (
                 <>
@@ -225,54 +210,56 @@ const ParentForm = ({
                     />
                   </button>
                   {isStudentsOpen && (
-                    <div className="top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-10">
-                      {/* ADDED: Search input field */}
+                    <div className="absolute top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-10 max-h-60 flex flex-col">
                       <div className="p-2 border-b border-gray-200">
                         <input
                           type="text"
-                          placeholder="ابحث عن تلميذ..."
-                          className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full"
+                          placeholder={tParents("searchStudentPlaceholder")}
+                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
-                          onClick={(e) => e.stopPropagation()} // Prevent dropdown from closing on click
+                          onClick={(e) => e.stopPropagation()}
                         />
                       </div>
-                      <div className="max-h-48 overflow-y-auto">
-                        {/* UPDATED: Map over the filtered list */}
-                        {filteredStudents.map(
-                          (student: {
-                            id: string;
-                            name: string;
-                            surname: string;
-                          }) => (
-                            <label
-                              key={student.id}
-                              className="flex items-center gap-2 p-2 hover:bg-gray-100 cursor-pointer"
-                            >
-                              <input
-                                type="checkbox"
-                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                checked={safeFieldValue.includes(student.id)}
-                                onChange={(e) => {
-                                  const selectedId = student.id;
-                                  if (e.target.checked)
-                                    field.onChange([
-                                      ...safeFieldValue,
-                                      selectedId,
-                                    ]);
-                                  else
-                                    field.onChange(
-                                      safeFieldValue.filter(
-                                        (id) => id !== selectedId
-                                      )
-                                    );
-                                }}
-                              />
-                              <span className="text-sm">
-                                {student.name} {student.surname}
-                              </span>
-                            </label>
+                      <div className="overflow-y-auto">
+                        {filteredStudents.length > 0 ? (
+                          filteredStudents.map(
+                            (student: {
+                              id: string;
+                              name: string;
+                              surname: string;
+                            }) => (
+                              <label
+                                key={student.id}
+                                className="flex items-center gap-2 p-2 hover:bg-gray-100 cursor-pointer"
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                  checked={safeFieldValue.includes(student.id)}
+                                  onChange={(e) => {
+                                    const selectedId = student.id;
+                                    if (e.target.checked)
+                                      field.onChange([
+                                        ...safeFieldValue,
+                                        selectedId,
+                                      ]);
+                                    else
+                                      field.onChange(
+                                        safeFieldValue.filter(
+                                          (id) => id !== selectedId
+                                        )
+                                      );
+                                  }}
+                                />
+                                <span className="text-sm">
+                                  {student.name} {student.surname}
+                                </span>
+                              </label>
+                            )
                           )
+                        ) : (
+                          <p className="p-2 text-sm text-gray-500">{tParents("noStudentsFound")}</p>
                         )}
                       </div>
                     </div>
@@ -288,41 +275,24 @@ const ParentForm = ({
           )}
         </div>
 
-        <CldUploadWidget
-          uploadPreset="school"
-          onSuccess={(result, { widget }) => {
-            setImg(result.info);
-            widget.close();
-          }}
-        >
-          {({ open }) => (
-            <div className="flex items-center gap-4">
-              <Image
-                src={img?.secure_url || data?.img || "/noAvatar.png"}
-                alt=""
-                width={40}
-                height={40}
-                className="rounded-full object-cover"
-              />
-              <div
-                className="text-xs text-gray-500 flex items-center gap-2 cursor-pointer"
-                onClick={() => open()}
-              >
-                <Image src="/upload.png" alt="" width={28} height={28} />
-                <span>رفع صورة</span>
-              </div>
-            </div>
-          )}
-        </CldUploadWidget>
+
       </div>
-      {state?.error && !state.message && <span className="text-red-500">حدث خطأ ما!</span>}
-      <button 
+      {state?.error && !state.message && <span className="text-red-500">{tErrors("general")}</span>}
+      <Button 
         type="submit" 
+        variant="primary"
+        size="lg"
         disabled={isSubmitting}
-        className="text-xl font-semibold bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-md transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+        className="w-full"
       >
-        {isSubmitting ? (type === 'create' ? "قيد الإنشاء..." : "قيد التحديث...") : (type === 'create' ? "إنشاء" : "تحديث")}
-      </button>
+        {isSubmitting
+          ? type === 'create'
+            ? tParents("submittingCreate")
+            : tParents("submittingUpdate")
+          : type === 'create'
+          ? tCommon("create")
+          : tCommon("edit")}
+      </Button>
     </form>
   );
 };

@@ -1,62 +1,67 @@
 "use client";
 
 import { useFormStatus } from "react-dom";
+import { useTranslations, useLocale } from "next-intl";
 import { useActionState } from "react";
 import { useEffect, useRef, useState } from "react";
 import { RefundSchema, refundSchema } from "@/lib/formValidationSchemas";
 import { createRefund } from "@/lib/actions";
 import Image from "next/image";
+import { Button } from "@/components/ui/Button";
 
 // Helper component for the form submission button
 const SubmitButton = () => {
   const { pending } = useFormStatus();
+  const t = useTranslations("payments");
   return (
-    <button
+    <Button
       type="submit"
+      variant="danger"
+      size="lg"
       disabled={pending}
-      className="text-xl font-semibold w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md transition-colors disabled:bg-red-400 disabled:cursor-not-allowed"
+      className="w-full"
     >
-      {pending ? "قيد المعالجة..." : "استرداد المبلغ"}
-    </button>
+      {pending ? t("processingRefund") : t("confirmRefundBtn")}
+    </Button>
   );
 };
 
-type PaymentData = {
-    id: number;
-    amount: number;
-    refunds: { amount: number }[];
-    paymentType: 'class' | 'workshop';
+export type PaymentData = {
+  id: number;
+  amount: number;
+  refunds: { amount: number }[];
+  paymentType?: string;
+  voucherId?: number;
 };
 
 const RefundForm = ({ payment }: { payment: PaymentData }) => {
+  const t = useTranslations("payments");
+  const locale = useLocale();
   const [isOpen, setIsOpen] = useState(false);
   const modalRef = useRef<HTMLDialogElement>(null);
 
   const initialState = { success: false, error: false, message: "" };
-  
-  // MODIFIED: Wrapped the server action to handle FormData parsing and validation
+
   const [state, formAction] = useActionState(async (prevState: any, formData: FormData) => {
+    const rawVoucherId = formData.get("voucherId") || formData.get("paymentId") || payment.voucherId || payment.id;
     const dataToValidate = {
-        amount: Number(formData.get('amount')),
-        notes: formData.get('notes') as string,
-        paymentId: formData.get('paymentId') ? Number(formData.get('paymentId')) : undefined,
-        workshopPaymentId: formData.get('workshopPaymentId') ? Number(formData.get('workshopPaymentId')) : undefined,
+      voucherId: Number(rawVoucherId),
+      amount: Number(formData.get("amount")),
+      reason: (formData.get("reason") || formData.get("notes") || "") as string,
     };
 
     const validatedFields = refundSchema.safeParse(dataToValidate);
 
     if (!validatedFields.success) {
-        const errorMessage = validatedFields.error.issues.map(issue => issue.message).join(', ');
-        return {
-            success: false,
-            error: true,
-            message: errorMessage,
-        }
+      const errorMessage = validatedFields.error.issues.map((issue) => issue.message).join(", ");
+      return {
+        success: false,
+        error: true,
+        message: errorMessage,
+      };
     }
-    
-    // Call the original server action with the validated data
-    return createRefund(prevState, validatedFields.data);
 
+    return createRefund(prevState, validatedFields.data);
   }, initialState);
 
   const totalRefunded = payment.refunds.reduce((sum, r) => sum + r.amount, 0);
@@ -64,98 +69,115 @@ const RefundForm = ({ payment }: { payment: PaymentData }) => {
 
   useEffect(() => {
     if (state.success) {
-      setIsOpen(false); // Close modal on successful submission
+      setIsOpen(false);
     }
   }, [state]);
 
   useEffect(() => {
     if (isOpen) {
       modalRef.current?.showModal();
-      document.body.style.overflow = 'hidden'; // Prevent background scrolling
+      document.body.style.overflow = "hidden";
     } else {
       modalRef.current?.close();
-      document.body.style.overflow = 'auto';
+      document.body.style.overflow = "auto";
     }
   }, [isOpen]);
 
-  // Don't render the refund button if the payment is fully refunded
+  if (payment.paymentType === "INSCRIPTION") {
+    return null;
+  }
+
   if (remainingBalance <= 0) {
     return (
-        <button className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-300 cursor-not-allowed" disabled title="Fully Refunded">
-            <Image src="/delete.png" alt="Refund" width={16} height={16} className="opacity-50" />
-        </button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        disabled
+        className="opacity-40 cursor-not-allowed"
+        title={t("fullyRefunded")}
+      >
+        <Image src="/delete.png" alt="Refund" width={16} height={16} className="opacity-50" />
+      </Button>
     );
   }
 
   return (
     <>
-      <button
+      <Button
+        variant="soft-danger"
+        size="icon-sm"
         onClick={() => setIsOpen(true)}
-        className="w-8 h-8 flex items-center justify-center rounded-full bg-red-100 hover:bg-red-200"
-        title="Refund Payment"
+        title={t("refundModalTitle")}
       >
         <Image src="/delete.png" alt="Refund" width={16} height={16} />
-      </button>
+      </Button>
 
       {isOpen && (
         <dialog
           ref={modalRef}
           onClose={() => setIsOpen(false)}
-          className="p-0 rounded-lg shadow-xl w-full max-w-md backdrop:bg-black backdrop:opacity-50"
+          className="p-0 rounded-xl border border-border shadow-xl w-full max-w-md backdrop:bg-black/50"
         >
-          <div className="p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold">استرداد المبلغ</h2>
+          <div className="p-6 font-sans bg-surface">
+            <div className="flex justify-between items-center mb-4 border-b border-border pb-2">
+              <h2 className="text-section-title font-bold text-gray-900">{t("refundModalTitle")}</h2>
               <button onClick={() => setIsOpen(false)} className="p-1 rounded-full hover:bg-gray-200">
-                <Image src="/close.png" alt="Close" width={20} height={20} />
+                <Image src="/close.png" alt="Close" width={18} height={18} />
               </button>
             </div>
 
-            <div className="text-sm bg-blue-50 border border-blue-200 p-3 rounded-md mb-4">
-                <p>المبلغ الاصلي: <span className="font-bold">{payment.amount.toLocaleString('fr-DZ', { style: 'currency', currency: 'DZD' })}</span></p>
-                <p>المبلغ المسترجع: <span className="font-bold text-red-600">{totalRefunded.toLocaleString('fr-DZ', { style: 'currency', currency: 'DZD' })}</span></p>
-                <p>الرصيد المتبقي: <span className="font-bold text-green-600">{remainingBalance.toLocaleString('fr-DZ', { style: 'currency', currency: 'DZD' })}</span></p>
+            <div className="text-xs bg-blue-50 border border-blue-200 p-3 rounded-md mb-4 space-y-1">
+              <div className="flex justify-between">
+                <span>{t("originalAmount")}</span>
+                <span className="font-bold">{payment.amount.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD</span>
+              </div>
+              <div className="flex justify-between text-red-600">
+                <span>{t("previouslyRefunded")}</span>
+                <span className="font-bold">{totalRefunded.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD</span>
+              </div>
+              <div className="flex justify-between text-green-700 font-bold">
+                <span>{t("availableForRefund")}</span>
+                <span>{remainingBalance.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD</span>
+              </div>
             </div>
 
             <form action={formAction}>
-              {/* Hidden inputs to pass payment IDs */}
-              {payment.paymentType === 'class' ? (
-                <input type="hidden" name="paymentId" value={payment.id} />
-              ) : (
-                <input type="hidden" name="workshopPaymentId" value={payment.id} />
-              )}
+              <input type="hidden" name="voucherId" value={payment.voucherId || payment.id} />
 
               <div className="mb-4">
-                <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-1">
-                  مبلغ الاسترجاع
+                <label htmlFor="amount" className="block text-xs font-bold text-gray-700 mb-1">
+                  {t("refundAmountLabel")} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="number"
                   id="amount"
                   name="amount"
-                  step="10"
+                  step="100"
+                  min="1"
                   max={remainingBalance}
+                  defaultValue={remainingBalance}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  placeholder={`الحد الأقصى: DA ${remainingBalance.toFixed(2)}`}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-red-500 text-xs font-mono"
+                  placeholder={t("maxRefundPlaceholder", { max: remainingBalance.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ") })}
                 />
               </div>
 
-              <div className="mb-6">
-                <label htmlFor="notes" className="block text-sm font-medium text-gray-700 mb-1">
-                  سبب الاسترداد (اختياري)
+              <div className="mb-5">
+                <label htmlFor="reason" className="block text-xs font-bold text-gray-700 mb-1">
+                  {t("refundReasonLabel")} <span className="text-red-500">*</span>
                 </label>
                 <textarea
-                  id="notes"
-                  name="notes"
+                  id="reason"
+                  name="reason"
                   rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="مثال: انسحاب الطالب"
+                  required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-red-500 text-xs"
+                  placeholder={t("refundReasonPlaceholder")}
                 ></textarea>
               </div>
 
               {state.error && (
-                <p className="text-sm text-red-600 bg-red-50 p-3 rounded-md mb-4">
+                <p className="text-xs text-red-600 bg-red-50 p-2.5 rounded-md mb-4 border border-red-200">
                   {state.message}
                 </p>
               )}

@@ -1,45 +1,61 @@
 import { UserButton } from "@clerk/nextjs";
 import { currentUser } from "@/lib/auth";
-import Image from "next/image";
+import { getTranslations } from "next-intl/server";
+import LanguageSwitcher from "./LanguageSwitcher";
+import BranchSwitcher from "./BranchSwitcher";
 
-// ADDED: A simple mapping to translate roles for display
-const roleTranslations: { [key: string]: string } = {
-    admin: "مدير",
-    teacher: "أستاذ",
-    student: "طالب",
-    parent: "ولي الأمر",
-};
-
-const Navbar = async () => {
+const Navbar = async ({
+  mobileNav,
+}: {
+  mobileNav?: React.ReactNode;
+}) => {
   const user = await currentUser({ treatPendingAsSignedOut: false });
-  const role = user?.publicMetadata.role as string;
-  const translatedRole = roleTranslations[role] || role; // Fallback to the original role if no translation is found
+  const rawRole = (user?.publicMetadata?.role as string) || "";
+  const roleKey = rawRole.toLowerCase();
+
+  const tRoles = await getTranslations("roles");
+  let translatedRole = rawRole;
+  if (roleKey === "branch_admin" || roleKey === "branch") {
+    translatedRole = tRoles("branch_admin");
+  } else if (roleKey === "admin") {
+    translatedRole = tRoles("admin");
+  } else if (roleKey === "owner") {
+    translatedRole = tRoles("owner");
+  } else if (roleKey === "teacher") {
+    translatedRole = tRoles("teacher");
+  } else if (roleKey === "student") {
+    translatedRole = tRoles("student");
+  } else if (roleKey === "parent") {
+    translatedRole = tRoles("parent");
+  }
 
   return (
-    <div className="flex items-center justify-between p-4">
-      {/* SEARCH BAR (Translated placeholder)
-      <div className="hidden md:flex items-center gap-2 text-xs rounded-full ring-[1.5px] ring-gray-300 px-2">
-        <Image src="/search.png" alt="" width={14} height={14} />
-        <input
-          type="text"
-          placeholder="ابحث..."
-          className="w-[200px] p-2 bg-transparent outline-none"
-        />
+    <header
+      className="flex items-center justify-between px-3 sm:px-4 md:px-6 py-3 border-b border-gray-200 bg-white sticky top-0 z-30 shadow-xs"
+      style={{ backgroundColor: "#ffffff" }}
+    >
+      {/* START: HAMBURGER TRIGGER (on <lg) + BRANCH SWITCHER */}
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+        {mobileNav}
+        <BranchSwitcher />
       </div>
-      */}
-      {/* ICONS AND USER */}
-      <div className="flex items-center gap-6 justify-end w-full">
-        <div className="flex flex-col text-right"> {/* Ensure text aligns to the right in RTL */}
-          <span className="text-xs leading-3 font-medium">
+
+      {/* END: LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
+      <div className="flex items-center gap-2.5 sm:gap-4 md:gap-6 justify-end shrink-0">
+        <LanguageSwitcher />
+
+        <div className="hidden sm:flex flex-col text-end">
+          <span className="text-xs font-semibold text-gray-800 truncate max-w-[120px] md:max-w-none">
             {user?.firstName} {user?.lastName}
           </span>
-          <span className="text-[10px] text-gray-500">
+          <span className="text-[11px] text-muted font-normal">
             {translatedRole}
           </span>
         </div>
+
         <UserButton />
       </div>
-    </div>
+    </header>
   );
 };
 

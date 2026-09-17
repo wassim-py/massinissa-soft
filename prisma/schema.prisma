@@ -3,317 +3,669 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
 }
 
-model Admin {
-  id       String @id
-  username String @unique
+model Branch {
+  id                                                  Int                 @id @default(autoincrement())
+  name                                                String              @unique
+  address                                             String              @default("")
+  phone                                               String?
+  manager                                             String?
+  AuditLog                                            AuditLog[]
+  classes                                             Class[]
+  classrooms                                          Classroom[]
+  DailyLedger                                         DailyLedger[]
+  lessons                                             Lesson[]
+  PayslipBranchLine                                   PayslipBranchLine[]
+  PhotocopyCharge                                     PhotocopyCharge[]
+  students                                            Student[]
+  TeacherBranch                                       TeacherBranch[]
+  UserProfile                                         UserProfile[]
+  VoucherSeries_VoucherSeries_issuingBranchIdToBranch VoucherSeries[]     @relation("VoucherSeries_issuingBranchIdToBranch")
+  VoucherSeries_VoucherSeries_targetBranchIdToBranch  VoucherSeries[]     @relation("VoucherSeries_targetBranchIdToBranch")
+  Workshop                                            Workshop[]
+  bookDrops                                           BookDrop[]
+  missingMoney                                        MissingMoney[]
+  surplusMoney                                        SurplusMoney[]
 }
 
 model Student {
-  id          String       @id
-  username    String       @unique
-  name        String
-  surname     String
-  email       String?      @unique
-  phone       String?      @unique
-  address     String
-  img         String?
-  sex         UserSex
-  createdAt   DateTime     @default(now())
-  gradeId     Int
-  grade       Grade        @relation(fields: [gradeId], references: [id])
-  classes     Class[]
-  attendances Attendance[]
-  results     Result[]
-  birthday    DateTime
-  parentId    String?
-  parent      Parent?      @relation(fields: [parentId], references: [id], onDelete: SetNull)
-  payments    Payment[]
+  id                                    String                @id
+  globalNumber                          Int                   @unique
+  name                                  String
+  createdAt                             DateTime              @default(now())
+  familyId                              Int?
+  registeredBranchId                    Int
+  phone                                 String?
+  payerStatus                           String                @default("NORMAL")
+  parentPhoneNumbers                    ParentPhoneNumber[]
+  attendances                           Attendance[]
+  enrollments                           Enrollment[]
+  payerOfFamily                         Family?               @relation("FamilyPayer")
+  LevelTest                             LevelTest[]
+  family                                Family?               @relation("FamilyStudents", fields: [familyId], references: [id])
+  registeredBranch                      Branch                @relation(fields: [registeredBranchId], references: [id])
+  vouchers                              Voucher[]
+  WorkshopAttendance                    WorkshopAttendance[]
+  WorkshopParticipant                   WorkshopParticipant[]
+  bookCopiesReceived                    BookCopyDistribution[]
+  bookReceipts                          BookReceipt[]
+  catchUpAttendances                    CatchUpAttendance[]
+
+  @@index([registeredBranchId])
+  @@index([familyId])
+  @@index([payerStatus])
+  @@index([name])
+  @@index([createdAt])
+}
+
+model ParentPhoneNumber {
+  id        Int     @id @default(autoincrement())
+  studentId String
+  phone     String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
 }
 
 model Teacher {
-  id                String     @id
-  username          String     @unique
-  name              String
-  surname           String
-  email             String?    @unique
-  phone             String     @unique
-  address           String?
-  img               String?
-  sex               UserSex
-  createdAt         DateTime   @default(now())
-  subjects          Subject[]
-  lessons           Lesson[]
-  classes           Class[]    @relation("ClassesTaught")
-  supervisedClasses Class[]    @relation("ClassSupervisor")
-  courses           Course[]
-  exams             Exam[]
-  birthday          DateTime
-}
-
-model Parent {
-  id        String   @id
-  username  String   @unique
-  name      String
-  surname   String
-  email     String?  @unique
-  phone     String   @unique
-  address   String
-  img       String?
-  createdAt DateTime @default(now())
-  students  Student[]
-}
-
-model Grade {
-  id       Int      @id @default(autoincrement())
-  level    String   @unique
-  students Student[]
-  classess Class[]
+  id                   String            @id
+  name                 String
+  phone                String?
+  gender               String?
+  photocopyRatePerPage Decimal?
+  lessons              Lesson[]
+  PhotocopyCharge      PhotocopyCharge[]
+  TeacherBranch        TeacherBranch[]
+  TeacherPayRate       TeacherPayRate[]
+  books                Book[]
+  classes              Class[]
 }
 
 model Class {
-  id            Int            @id @default(autoincrement())
-  name          String         @unique
-  capacity      Int
-  supervisorId  String?
-  supervisor    Teacher?       @relation("ClassSupervisor", fields: [supervisorId], references: [id], onDelete: SetNull)
-  lessons       Lesson[]
-  students      Student[]
-  gradeId       Int
-  grade         Grade          @relation(fields: [gradeId], references: [id])
-  events        Event[]        @relation("ClassEvents")
-  announcements Announcement[]
-  teachers      Teacher[]      @relation("ClassesTaught")
-  exams         Exam[]
-  price         Float          @default(0)
-  payments      Payment[]
-}
+  id               Int             @id @default(autoincrement())
+  name             String
+  ageGroup         String?
+  bookFee          Decimal?
+  branchId         Int
+  teacherId        String?
+  levelId          Int?
+  formationLevelId Int?
+  hasBooks         Boolean         @default(false)
+  inscriptionFee   Decimal
+  isFormation      Boolean         @default(false)
+  pricePerCycle    Decimal?
+  isCompleted      Boolean         @default(false)
+  completedAt      DateTime?
+  branch           Branch          @relation(fields: [branchId], references: [id])
+  teacher          Teacher?        @relation(fields: [teacherId], references: [id])
+  level            Level?          @relation(fields: [levelId], references: [id])
+  FormationLevel   FormationLevel? @relation(fields: [formationLevelId], references: [id])
+  enrollments      Enrollment[]
+  lessons          Lesson[]
+  LevelTest        LevelTest[]
+  vouchers         Voucher[]
+  photocopyCharges PhotocopyCharge[]
 
-model Subject {
-  id       Int      @id @default(autoincrement())
-  name     String   @unique
-  teachers Teacher[]
-  lessons  Lesson[]
-  courses  Course[]
-  exams    Exam[]
+  @@index([branchId])
+  @@index([teacherId])
+  @@index([levelId])
+  @@index([formationLevelId])
+  @@index([isFormation, branchId])
+  @@index([isCompleted])
 }
 
 model Lesson {
   id          Int          @id @default(autoincrement())
-  name        String
-  day         Day
-  startTime   DateTime
-  endTime     DateTime
-  subjectId   Int
-  subject     Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   classId     Int
-  class       Class        @relation(fields: [classId], references: [id], onDelete: Cascade)
   teacherId   String
-  teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  classroomId Int?
-  classroom   Classroom?   @relation(fields: [classroomId], references: [id], onDelete: SetNull)
-  attendances Attendance[]
-}
-
-model Course {
-  id          Int          @id @default(autoincrement())
-  title       String
-  description String?
-  createdAt   DateTime     @default(now())
-  subjectId   Int
-  subject     Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  teacherId   String
-  teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  files       CourseFile[]
-}
-
-model CourseFile {
-  id          Int    @id @default(autoincrement())
-  name        String
-  url         String
-  storagePath String
-  courseId    Int
-  course      Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
-}
-
-model Exam {
-  id          Int       @id @default(autoincrement())
-  title       String
-  startTime   DateTime
-  endTime     DateTime
-  subjectId   Int
-  subject     Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  classId     Int
-  class       Class     @relation(fields: [classId], references: [id], onDelete: Cascade)
-  teacherId   String
-  teacher     Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   classroomId Int
-  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
-  results     Result[]
-}
+  branchId    Int
+  endsAt      DateTime
+  extraFee    Decimal?
+  isCatchUp   Boolean      @default(false)
+  isExtra     Boolean      @default(false)
+  isFree      Boolean      @default(false)
+  startsAt    DateTime
+  attendances Attendance[]
+  missedByCatchUps    CatchUpAttendance[] @relation("MissedLesson")
+  catchUpVisitsHosted CatchUpAttendance[] @relation("CatchUpLessonAttended")
+  branch      Branch       @relation(fields: [branchId], references: [id])
+  class       Class        @relation(fields: [classId], references: [id])
+  classroom   Classroom    @relation(fields: [classroomId], references: [id])
+  teacher     Teacher      @relation(fields: [teacherId], references: [id])
 
-model Result {
-  id        Int     @id @default(autoincrement())
-  score     Float
-  examId    Int
-  exam      Exam    @relation(fields: [examId], references: [id], onDelete: Cascade)
-  studentId String
-  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-
-  @@unique([examId, studentId])
+  @@index([branchId, startsAt])
+  @@index([classId, startsAt])
+  @@index([teacherId, startsAt])
+  @@index([classroomId, startsAt])
+  @@index([startsAt, endsAt])
+  @@index([isExtra, isCatchUp, isFree])
 }
 
 model Attendance {
-  id        Int     @id @default(autoincrement())
-  date      DateTime
-  present   Boolean
-  studentId String
-  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  lessonId  Int
-  lesson    Lesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  id            Int     @id @default(autoincrement())
+  studentId     String
+  lessonId      Int
+  status        String
+  justification String?
+  lesson        Lesson  @relation(fields: [lessonId], references: [id])
+  student       Student @relation(fields: [studentId], references: [id])
+
+  @@index([lessonId, status])
+  @@index([studentId])
+  @@index([lessonId])
+  @@index([studentId, lessonId])
 }
 
-model Event {
-  id          Int      @id @default(autoincrement())
-  title       String
-  description String
-  startTime   DateTime
-  endTime     DateTime
-  classes     Class[]  @relation("ClassEvents")
+model CatchUpAttendance {
+  id              Int      @id @default(autoincrement())
+  studentId       String
+  missedLessonId  Int
+  catchUpLessonId Int
+  recordedBy      String
+  recordedAt      DateTime @default(now())
+
+  student       Student @relation(fields: [studentId], references: [id])
+  missedLesson  Lesson  @relation("MissedLesson", fields: [missedLessonId], references: [id])
+  catchUpLesson Lesson  @relation("CatchUpLessonAttended", fields: [catchUpLessonId], references: [id])
+
+  @@unique([studentId, missedLessonId])
+  @@index([catchUpLessonId])
+  @@index([studentId])
+  @@index([missedLessonId])
 }
 
 model Announcement {
-  id          Int      @id @default(autoincrement())
-  title       String
-  description String
-  date        DateTime @default(now())
-  isPinned    Boolean  @default(false)
-  classes     Class[]
+  id             Int       @id @default(autoincrement())
+  title          String
+  description    String
+  branchId       Int?
+  authorBranchId Int?
+  classId        Int?
+  createdAt      DateTime  @default(now())
+  createdBy      String
+  pinned         Boolean   @default(false)
+  expiresAt      DateTime?
+
+  @@index([branchId, createdAt])
+  @@index([authorBranchId])
+  @@index([pinned, createdAt])
+  @@index([expiresAt])
 }
 
 model Classroom {
-  id      Int      @id @default(autoincrement())
-  name    String   @unique
-  lessons Lesson[]
-  exams   Exam[]
-}
-
-model SchoolSetting {
-  id    String @id @default(cuid())
-  key   String @unique
-  value String
-}
-
-model Payment {
-  id        Int      @id @default(autoincrement())
-  amount    Float
-  date      DateTime @default(now())
-  notes     String?
-  studentId String
-  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  classId   Int
-  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
-  
-  // ADDED: Relation to the new Refund model
-  refunds   Refund[]
+  id       Int      @id @default(autoincrement())
+  name     String
+  branchId Int
+  branch   Branch   @relation(fields: [branchId], references: [id])
+  lessons  Lesson[]
 }
 
 model Workshop {
   id           Int                   @id @default(autoincrement())
   title        String
   description  String?
-  price        Float                 @default(0)
-  createdAt    DateTime              @default(now())
-  teacherName  String
-  sessions     WorkshopSession[]
+  branchId     Int
+  guestTeacher String?
+  totalPrice   Decimal
+  Branch       Branch                @relation(fields: [branchId], references: [id])
   participants WorkshopParticipant[]
-  payments     WorkshopPayment[]
+  sessions     WorkshopSession[]
+  vouchers     Voucher[]
 }
 
 model WorkshopSession {
   id          Int                  @id @default(autoincrement())
-  startTime   DateTime
-  endTime     DateTime
   workshopId  Int
-  workshop    Workshop             @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  endsAt      DateTime
+  startsAt    DateTime
   attendances WorkshopAttendance[]
+  workshop    Workshop             @relation(fields: [workshopId], references: [id])
+
+  @@index([workshopId, startsAt])
+  @@index([startsAt])
 }
 
 model WorkshopParticipant {
-  id          Int                  @id @default(autoincrement())
-  name        String
-  phone       String?
-  email       String?
-  workshopId  Int
-  workshop    Workshop             @relation(fields: [workshopId], references: [id], onDelete: Cascade)
-  payments    WorkshopPayment[]
-  attendances WorkshopAttendance[]
-}
-
-model WorkshopPayment {
-  id            Int                 @id @default(autoincrement())
-  amount        Float
-  date          DateTime            @default(now())
-  notes         String?
-  participantId Int
-  participant   WorkshopParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  id            Int      @id @default(autoincrement())
   workshopId    Int
-  workshop      Workshop            @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  status        String
+  studentId     String
+  gender        String   @default("MALE")
+  chairNumber   Int?
+  totalPaid     Decimal  @default(0)
+  totalRefunded Decimal  @default(0)
+  Student       Student  @relation(fields: [studentId], references: [id])
+  workshop      Workshop @relation(fields: [workshopId], references: [id])
 
-  // ADDED: Relation to the new Refund model
-  refunds       Refund[]
+  @@index([workshopId, gender])
+  @@index([studentId])
 }
 
 model WorkshopAttendance {
-  id            Int                 @id @default(autoincrement())
-  present       Boolean
-  date          DateTime            @default(now())
-  participantId Int
-  participant   WorkshopParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
-  sessionId     Int
-  session       WorkshopSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  id        Int             @id @default(autoincrement())
+  sessionId Int
+  status    String
+  studentId String
+  session   WorkshopSession @relation(fields: [sessionId], references: [id])
+  Student   Student         @relation(fields: [studentId], references: [id])
 
-  @@unique([participantId, sessionId])
+  @@index([sessionId])
+  @@index([studentId])
 }
 
 model DailyLedger {
+  id       Int      @id @default(autoincrement())
+  date     DateTime
+  amount   Decimal
+  branchId Int
+  type     String
+  Branch   Branch   @relation(fields: [branchId], references: [id])
+
+  @@unique([branchId, date, type])
+  @@index([date, branchId])
+  @@index([branchId, date])
+}
+
+model AcademicYear {
+  id          Int          @id @default(autoincrement())
+  label       String
+  startDate   DateTime
+  endDate     DateTime
+  enrollments Enrollment[]
+  trimesters  Trimester[]
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  entityType String
+  entityId   String
+  action     String
+  branchId   Int?
+  userId     String
+  userName   String
+  oldValue   String?
+  newValue   String?
+  details    String?
+  timestamp  DateTime @default(now())
+  Branch     Branch?  @relation(fields: [branchId], references: [id])
+
+  @@index([branchId, timestamp])
+  @@index([entityType, entityId])
+}
+
+model Enrollment {
+  id                    Int                  @id @default(autoincrement())
+  studentId             String
+  classId               Int
+  academicYearId        Int
+  enrolledAt            DateTime             @default(now())
+  inscriptionFeeCharged Boolean
+  inscriptionFeeAmount  Decimal?
+  payerStatus           String               @default("NORMAL")
+  feeOverriddenByOwner  Boolean              @default(false)
+  feeOverrideNote       String?
+  academicYear          AcademicYear         @relation(fields: [academicYearId], references: [id])
+  class                 Class                @relation(fields: [classId], references: [id])
+  student               Student              @relation(fields: [studentId], references: [id])
+  transfersFrom         EnrollmentTransfer[] @relation("FromEnrollment")
+  transfersTo           EnrollmentTransfer[] @relation("ToEnrollment")
+
+  @@index([studentId])
+  @@index([classId])
+  @@index([academicYearId])
+  @@index([classId, academicYearId])
+  @@index([studentId, classId])
+  @@index([enrolledAt])
+}
+
+model EnrollmentTransfer {
+  id                  Int        @id @default(autoincrement())
+  fromEnrollmentId    Int
+  toEnrollmentId      Int
+  transferredSessions Int
+  transferredAt       DateTime   @default(now())
+  transferredBy       String
+  fromEnrollment      Enrollment @relation("FromEnrollment", fields: [fromEnrollmentId], references: [id])
+  toEnrollment        Enrollment @relation("ToEnrollment", fields: [toEnrollmentId], references: [id])
+}
+
+model Family {
+  id             Int       @id @default(autoincrement())
+  payerStudentId String?   @unique
+  payerStudent   Student?  @relation("FamilyPayer", fields: [payerStudentId], references: [id])
+  students       Student[] @relation("FamilyStudents")
+}
+
+model FormationLevel {
+  id            Int         @id @default(autoincrement())
+  languageId    Int
+  levelNumber   Int
+  name          String
+  lumpSumPrice  Decimal
+  Class         Class[]
+  Language      Language    @relation(fields: [languageId], references: [id])
+  LevelTest     LevelTest[]
+}
+
+model Language {
+  id             Int              @id @default(autoincrement())
+  name           String
+  FormationLevel FormationLevel[]
+}
+
+model LevelTest {
+  id               Int            @id @default(autoincrement())
+  studentId        String
+  formationLevelId Int
+  classId          Int
+  testDate         DateTime
+  score            Decimal?
+  passed           Boolean
+  administeredBy   String
+  Class            Class          @relation(fields: [classId], references: [id])
+  FormationLevel   FormationLevel @relation(fields: [formationLevelId], references: [id])
+  Student          Student        @relation(fields: [studentId], references: [id])
+}
+
+model PayrollRun {
+  id          Int       @id @default(autoincrement())
+  periodStart DateTime
+  periodEnd   DateTime
+  status      String
+  Payslip     Payslip[]
+}
+
+model Payslip {
+  id                  Int                 @id @default(autoincrement())
+  payrollRunId        Int
+  personId            String
+  personType          String
+  sessionsCount       Int?
+  grossAmount         Decimal
+  advances            Decimal             @default(0)
+  photocopyDeductions Decimal             @default(0)
+  netAmount           Decimal
+  PayrollRun          PayrollRun          @relation(fields: [payrollRunId], references: [id])
+  PayslipBranchLine   PayslipBranchLine[]
+}
+
+model PayslipBranchLine {
+  id            Int     @id @default(autoincrement())
+  payslipId     Int
+  branchId      Int
+  sessionsCount Int
+  amount        Decimal
+  Branch        Branch  @relation(fields: [branchId], references: [id])
+  Payslip       Payslip @relation(fields: [payslipId], references: [id])
+}
+
+model PhotocopyCharge {
+  id         Int      @id @default(autoincrement())
+  teacherId  String
+  branchId   Int
+  classId    Int?
+  pages      Int
+  costAmount Decimal
+  date       DateTime @default(now())
+  recordedBy String
+  Branch     Branch   @relation(fields: [branchId], references: [id])
+  Teacher    Teacher  @relation(fields: [teacherId], references: [id])
+  class      Class?   @relation(fields: [classId], references: [id])
+
+  @@index([teacherId, date])
+  @@index([branchId, date])
+  @@index([classId])
+}
+
+model SalaryAdvance {
+  id       Int      @id @default(autoincrement())
+  personId String
+  amount   Decimal
+  date     DateTime
+
+  @@index([personId, date])
+  @@index([date])
+}
+
+model Setting {
+  id    String @id
+  value String
+}
+
+model TeacherBranch {
   id        Int      @id @default(autoincrement())
-  date      DateTime @unique
-  income    Float
-  outcome   Float
-  netTotal  Float
-  createdAt DateTime @default(now())
+  teacherId String
+  branchId  Int
+  payRate   Decimal?
+  Branch    Branch   @relation(fields: [branchId], references: [id])
+  Teacher   Teacher  @relation(fields: [teacherId], references: [id])
+
+  @@unique([teacherId, branchId])
 }
 
-// ADDED: New model to handle partial refunds
+model TeacherPayRate {
+  id                     Int      @id @default(autoincrement())
+  teacherId              String
+  ratePerSession         Decimal?
+  fixedMonthly           Decimal?
+  percentageOfSessionFee Decimal? @db.Decimal
+  effectiveFrom          DateTime
+  Teacher                Teacher  @relation(fields: [teacherId], references: [id])
+}
+
+model UserProfile {
+  id               String   @id
+  username         String?  @unique
+  password         String?
+  email            String?  @unique
+  name             String
+  role             Role     @default(BRANCH_ADMIN)
+  branchId         Int?
+  themePreference  String   @default("system")
+  localePreference String   @default("fr")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  Branch           Branch?  @relation(fields: [branchId], references: [id])
+}
+
+model Voucher {
+  id                 Int           @id @default(autoincrement())
+  seriesId           Int
+  number             Int
+  studentId          String
+  classId            Int?
+  workshopId         Int?
+  issuingBranchId    Int
+  targetBranchId     Int
+  paymentType        String
+  amount             Decimal
+  isPartial          Boolean       @default(false)
+  completesVoucherId Int?
+  remainingBalance   Decimal?
+  issuedBy           String
+  issuedAt           DateTime      @default(now())
+  isVoided           Boolean       @default(false)
+  status             String?       @default("ACTIVE")
+  lastEditedAt       DateTime?
+  lastEditedBy       String?
+  trimesterId        Int?
+  class              Class?        @relation(fields: [classId], references: [id])
+  workshop           Workshop?     @relation(fields: [workshopId], references: [id])
+  series             VoucherSeries @relation(fields: [seriesId], references: [id])
+  student            Student       @relation(fields: [studentId], references: [id])
+  trimester          Trimester?    @relation(fields: [trimesterId], references: [id])
+  edits              VoucherEdit[]
+  refunds            Refund[]
+
+  @@index([classId, trimesterId, paymentType])
+  @@index([studentId])
+  @@index([targetBranchId, issuedAt])
+  @@index([issuingBranchId, issuedAt])
+  @@index([trimesterId])
+  @@index([issuedAt])
+  @@index([seriesId])
+}
+
 model Refund {
-  id                Int      @id @default(autoincrement())
-  amount            Float
-  date              DateTime @default(now())
-  notes             String?
+  id          Int      @id @default(autoincrement())
+  voucherId   Int
+  amount      Decimal
+  reason      String
+  refundedBy  String
+  refundedAt  DateTime @default(now())
+  voucher     Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
 
-  // A refund must belong to either a class payment OR a workshop payment
-  paymentId         Int?
-  payment           Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-
-  workshopPaymentId Int?
-  workshopPayment   WorkshopPayment? @relation(fields: [workshopPaymentId], references: [id], onDelete: Cascade)
+  @@index([voucherId])
+  @@index([refundedAt])
 }
 
-// REMOVED: The PaymentStatus enum is no longer needed
-enum UserSex {
-  MALE
-  FEMALE
+model VoucherEdit {
+  id        Int      @id @default(autoincrement())
+  voucherId Int
+  editedBy  String
+  editedAt  DateTime @default(now())
+  fieldName String
+  oldValue  String
+  newValue  String
+  reason    String?
+  voucher   Voucher  @relation(fields: [voucherId], references: [id])
+
+  @@index([voucherId])
 }
 
-enum Day {
-  SATURDAY
-  SUNDAY
-  MONDAY
-  TUESDAY
-  WEDNESDAY
-  THURSDAY
-  FRIDAY
+model VoucherSeries {
+  id                                           Int       @id @default(autoincrement())
+  issuingBranchId                              Int
+  scope                                        String
+  levelId                                      Int?
+  targetBranchId                               Int?
+  currentNumber                                Int       @default(0)
+  vouchers                                     Voucher[]
+  issuingBranch                                Branch    @relation("VoucherSeries_issuingBranchIdToBranch", fields: [issuingBranchId], references: [id])
+  targetBranch                                 Branch?   @relation("VoucherSeries_targetBranchIdToBranch", fields: [targetBranchId], references: [id])
+  level                                        Level?    @relation(fields: [levelId], references: [id])
+}
+
+model Level {
+  id            Int             @id @default(autoincrement())
+  name          String          @unique
+  classes       Class[]
+  books         Book[]
+  voucherSeries VoucherSeries[]
+}
+
+model Trimester {
+  id             Int          @id @default(autoincrement())
+  academicYearId Int
+  name           String
+  label          String       @default("T1") // T1, T2, T3
+  status         String       @default("not_started") // not_started, active, finished
+  startDate      DateTime
+  endDate        DateTime
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id])
+  books          Book[]
+  vouchers       Voucher[]
+}
+
+model Book {
+  id          Int           @id @default(autoincrement())
+  teacherId   String
+  levelId     Int
+  trimesterId Int?
+  title       String
+  createdAt   DateTime      @default(now())
+  teacher     Teacher       @relation(fields: [teacherId], references: [id])
+  level       Level         @relation(fields: [levelId], references: [id])
+  trimester   Trimester?    @relation(fields: [trimesterId], references: [id])
+  drops       BookDrop[]
+  receipts    BookReceipt[]
+
+  @@index([teacherId, levelId, trimesterId])
+  @@index([trimesterId])
+  @@index([levelId])
+}
+
+model BookReceipt {
+  id         Int      @id @default(autoincrement())
+  studentId  String
+  bookId     Int
+  receivedAt DateTime @default(now())
+  receivedBy String?
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  book       Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, bookId])
+  @@index([studentId])
+  @@index([bookId])
+}
+
+model BookDrop {
+  id            Int                    @id @default(autoincrement())
+  bookId        Int
+  branchId      Int
+  quantity      Int
+  dropDate      DateTime               @default(now())
+  recordedBy    String
+  book          Book                   @relation(fields: [bookId], references: [id])
+  branch        Branch                 @relation(fields: [branchId], references: [id])
+  distributions BookCopyDistribution[]
+}
+
+model BookCopyDistribution {
+  id            Int      @id @default(autoincrement())
+  bookDropId    Int
+  studentId     String
+  distributedAt DateTime @default(now())
+  distributedBy String
+  bookDrop      BookDrop @relation(fields: [bookDropId], references: [id])
+  student       Student  @relation(fields: [studentId], references: [id])
+
+  @@unique([bookDropId, studentId])
+}
+
+enum Role {
+  OWNER
+  BRANCH_ADMIN
+  TEACHER
+}
+
+model MissingMoney {
+  id          Int       @id @default(autoincrement())
+  branchId    Int
+  date        DateTime  @default(now())
+  amount      Decimal
+  reason      String?
+  declaredBy  String
+  status      String    @default("PENDING") // PENDING | CONFIRMED | REJECTED
+  confirmedBy String?
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  branch      Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([branchId, date])
+  @@index([status])
+}
+
+model SurplusMoney {
+  id          Int       @id @default(autoincrement())
+  branchId    Int
+  date        DateTime  @default(now())
+  amount      Decimal
+  reason      String?
+  declaredBy  String
+  status      String    @default("PENDING") // PENDING | CONFIRMED | REJECTED
+  confirmedBy String?
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  branch      Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([branchId, date])
+  @@index([status])
 }

@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  html[dir="rtl"],
+  html[lang="ar"],
+  [dir="rtl"] {
+    font-family: var(--font-tajawal), "Tajawal", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+}
+
 .react-calendar {
   width: 100% !important;
   border: none !important;
@@ -105,4 +113,34 @@
 .rbc-event-label{
   color: gray !important;
   margin-bottom: 5px;
+}
+
+/* Announcement Toast static blue countdown progress bar (no gradient) */
+.Toastify__progress-bar--default,
+.toast-announcement-progress {
+  background: #2563eb !important;
+}
+
+/* Soft red flashing border for new unread announcements */
+@keyframes soft-red-border-flash {
+  0%, 100% {
+    border-color: rgba(248, 113, 113, 0.45);
+    box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.18);
+  }
+  50% {
+    border-color: rgba(239, 68, 68, 0.9);
+    box-shadow: 0 0 0 2.5px rgba(239, 68, 68, 0.32);
+  }
+}
+
+.announcement-border-flash {
+  animation: soft-red-border-flash 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .announcement-border-flash {
+    animation: none !important;
+    border-color: rgba(239, 68, 68, 0.8) !important;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25) !important;
+  }
 }

@@ -1,0 +1,12 @@
+-- DropForeignKey
+ALTER TABLE "Course" DROP CONSTRAINT IF EXISTS "Course_subjectId_fkey";
+ALTER TABLE "Course" DROP CONSTRAINT IF EXISTS "Course_teacherId_fkey";
+ALTER TABLE "CourseFile" DROP CONSTRAINT IF EXISTS "CourseFile_courseId_fkey";
+ALTER TABLE "_ClassEvents" DROP CONSTRAINT IF EXISTS "_ClassEvents_A_fkey";
+ALTER TABLE "_ClassEvents" DROP CONSTRAINT IF EXISTS "_ClassEvents_B_fkey";
+
+-- DropTable
+DROP TABLE IF EXISTS "_ClassEvents" CASCADE;
+DROP TABLE IF EXISTS "CourseFile" CASCADE;
+DROP TABLE IF EXISTS "Course" CASCADE;
+DROP TABLE IF EXISTS "Event" CASCADE;

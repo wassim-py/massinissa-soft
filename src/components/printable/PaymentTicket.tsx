@@ -1,100 +1,154 @@
 import React from 'react';
-import { Payment, Student, Class } from "@prisma/client";
+import { Voucher, Student, Class } from "@prisma/client";
 import Image from 'next/image';
+import { formatVoucherDisplay } from "@/lib/voucherUtils";
 
-// --- FIX ---
-// The props are simplified to accept calculated values directly,
-// which resolves the complex type error.
-type TicketProps = {
-    payment: Payment & { student: Student, class: Class };
-    sessionsForThisPayment: number;
-    amountOwedByStudent: number;
+const PAYMENT_TYPE_LABELS_AR: Record<string, string> = {
+  INSCRIPTION: "حقوق التسجيل",
+  TUITION_4SESSION: "اشتراك دراسي (4 حصص)",
+  BOOK: "رسوم الكتب المدرسية",
+  EXTRA_SESSION: "حصة إضافية",
+  CATCHUP: "حصة استدراكية",
+  FORMATION: "دفع التكوين اللغوي",
+  WORKSHOP: "دفع الورشة / الدورة",
 };
 
-// This must be a class component to work reliably with the `ref` from react-to-print
-export class PaymentTicket extends React.Component<TicketProps> {
+const PAYMENT_TYPE_LABELS_FR: Record<string, string> = {
+  INSCRIPTION: "Frais d'inscription",
+  TUITION_4SESSION: "Cycle d'études (4 séances)",
+  BOOK: "Frais des livres",
+  EXTRA_SESSION: "Séance supplémentaire",
+  CATCHUP: "Séance de rattrapage",
+  FORMATION: "Formation linguistique",
+  WORKSHOP: "Atelier / Formation courte",
+};
+
+export type VoucherTicketProps = {
+  voucher: Voucher & {
+    student: Student;
+    class: Class;
+    series?: { scope: string; id: number; level?: { name: string } | null; issuingBranch?: { name: string } | null; targetBranch?: { name: string } | null } | null;
+    issuingBranch?: { name: string } | null;
+    targetBranch?: { name: string } | null;
+  };
+  sessionsCount?: number;
+  remainingBalance?: number;
+  locale?: string;
+};
+
+// Class component for react-to-print compatibility
+export class PaymentTicket extends React.Component<VoucherTicketProps> {
   render() {
-    // The component now receives all necessary data directly via props.
-    const { payment, sessionsForThisPayment, amountOwedByStudent } = this.props;
-    const { student, class: classData } = payment;
+    const { voucher, sessionsCount, remainingBalance, locale = "ar" } = this.props;
+    const isAr = locale === "ar";
+    const { student, class: classData } = voucher;
+    const voucherFormatted = formatVoucherDisplay(voucher);
 
     const ticketStyle: React.CSSProperties = {
       width: '80mm',
-      fontFamily: 'tajawal',
+      fontFamily: isAr ? 'Tajawal, sans-serif' : 'system-ui, -apple-system, sans-serif',
       fontSize: '10pt',
       padding: '16px',
       color: 'black',
-      direction: 'rtl',
+      direction: isAr ? 'rtl' : 'ltr',
     };
+
+    const typeLabels = isAr ? PAYMENT_TYPE_LABELS_AR : PAYMENT_TYPE_LABELS_FR;
+    const typeLabel = typeLabels[voucher.paymentType] || voucher.paymentType;
+    const amountNum = Number(voucher.amount);
 
     return (
       <div style={ticketStyle}>
         {/* Header */}
         <div className="text-center mb-4">
           <Image src="/logo.png" alt="logo" width={48} height={48} className="mx-auto" />
-          <h1 className="text-lg font-bold mt-2">Classty</h1>
-          <p className="text-xs">وصل دفع</p>
+          <h1 className="text-lg font-bold mt-2">{isAr ? "مدرسة ماسينيسا" : "École Massinissa"}</h1>
+          <p className="text-xs font-bold text-gray-800 font-mono tracking-tight mt-1" dir="ltr">
+            {voucherFormatted}
+          </p>
+          {voucher.isVoided && (
+            <div className="mt-1 inline-block border-2 border-red-600 text-red-600 font-extrabold px-2 py-0.5 text-xs rounded">
+              {isAr ? "وصل ملغى (VOIDED)" : "Reçu Annulé (VOIDED)"}
+            </div>
+          )}
         </div>
 
-        <div className="border-t border-b border-dashed border-black my-2 py-2">
-            <div className="flex justify-between">
-                <span>رقم الوصل:</span>
-                <span>{payment.id}</span>
+        <div className="border-t border-b border-dashed border-black my-2 py-2 text-xs space-y-1">
+          <div className="flex justify-between items-center">
+            <span className="font-semibold">{isAr ? "الوصل:" : "Reçu :"}</span>
+            <span className="font-mono font-bold" dir="ltr">{voucherFormatted}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>{isAr ? "التاريخ:" : "Date :"}</span>
+            <span>{new Date(voucher.issuedAt).toLocaleString(isAr ? "ar-DZ" : "fr-DZ")}</span>
+          </div>
+          {voucher.issuingBranchId !== voucher.targetBranchId && (
+            <div className="flex justify-between text-blue-700 font-semibold">
+              <span>{isAr ? "نوع الوصل:" : "Type :"}</span>
+              <span>
+                {isAr
+                  ? `عبر الفروع (فرع مصدر ${voucher.issuingBranchId} ➜ فرع دراسة ${voucher.targetBranchId})`
+                  : `Inter-branches (Émetteur ${voucher.issuingBranchId} ➜ Étude ${voucher.targetBranchId})`}
+              </span>
             </div>
-            <div className="flex justify-between">
-                <span>التاريخ:</span>
-                <span>{new Date(payment.date).toLocaleString()}</span>
-            </div>
+          )}
         </div>
 
-        {/* Details */}
-        <div className="my-2">
-            <p><span className="font-bold">الاسم واللقب:</span> {student.name} {student.surname}</p>
-            <p><span className="font-bold">القسم:</span> {classData.name}</p>
+        {/* Student & Class Details */}
+        <div className="my-2 text-xs space-y-1">
+          <p><span className="font-bold">{isAr ? "التلميذ:" : "Élève :"}</span> {student.name}</p>
+          {student.phone && <p><span className="font-bold">{isAr ? "الهاتف:" : "Tél :"}</span> {student.phone}</p>}
+          <p><span className="font-bold">{isAr ? "الفوج:" : "Classe :"}</span> {classData.name}</p>
+          <p><span className="font-bold">{isAr ? "نوع الدفع:" : "Type :"}</span> {typeLabel}</p>
         </div>
 
         {/* Items Table */}
         <div className="border-t border-dashed border-black pt-2">
-          <div className="flex justify-between font-bold">
-            <span>الوصف</span>
-            <span>المبلغ</span>
+          <div className="flex justify-between font-bold text-xs">
+            <span>{isAr ? "البيان" : "Désignation"}</span>
+            <span>{isAr ? "المبلغ" : "Montant"}</span>
           </div>
-          <div className="flex justify-between mt-1">
-            <span>رسوم الدراسة</span>
-            <span>DZD {payment.amount.toFixed()}</span>
+          <div className="flex justify-between mt-1 text-sm">
+            <span>{typeLabel}</span>
+            <span>{amountNum.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}</span>
           </div>
-        </div>
-        
-        {/* Payment Summary Section */}
-        <div className="border-t border-dashed border-black mt-2 pt-2">
-            <div className="flex justify-between">
-                <span>عدد الحصص:</span>
-                <span>{sessionsForThisPayment.toFixed()}</span>
-            </div>
-            <div className="flex justify-between">
-                <span>المبلغ المتبقي:</span>
-                <span className="font-bold">DZD {amountOwedByStudent.toFixed()}</span>
-            </div>
         </div>
 
-        {/* Total */}
-        <div className="border-t-2 border-black mt-2 pt-2 text-right">
-          <p className="font-bold text-lg">المجموع: DZD {payment.amount.toFixed()}</p>
-        </div>
-
-        {/* Notes */}
-        {payment.notes && (
-            <div className="mt-4 text-xs">
-                <p className="font-bold">ملاحظات:</p>
-                <p>{payment.notes}</p>
-            </div>
+        {/* Additional Info if applicable */}
+        {(sessionsCount !== undefined || remainingBalance !== undefined) && (
+          <div className="border-t border-dashed border-black mt-2 pt-2 text-xs space-y-1">
+            {sessionsCount !== undefined && (
+              <div className="flex justify-between">
+                <span>{isAr ? "عدد الحصص:" : "Séances :"}</span>
+                <span>{sessionsCount}</span>
+              </div>
+            )}
+            {remainingBalance !== undefined && remainingBalance > 0 && (
+              <div className="flex justify-between text-amber-800 font-bold">
+                <span>{isAr ? "المبلغ المتبقي:" : "Reste à payer :"}</span>
+                <span>{remainingBalance.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}</span>
+              </div>
+            )}
+          </div>
         )}
 
+        {/* Total */}
+        <div className="border-t-2 border-black mt-2 pt-2 text-end">
+          <p className="font-bold text-base">
+            {isAr ? "المجموع:" : "Total :"} {amountNum.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}
+          </p>
+        </div>
+
         {/* Footer */}
-        <div className="text-center text-xs mt-6">
-          <p>شكرا لكم!</p>
+        <div className="text-center text-xs mt-6 text-gray-600">
+          <p>{isAr ? "شكرًا لثقتكم بمؤسسة ماسينيسا" : "Merci de votre confiance en l'École Massinissa"}</p>
+          <p className="text-[10px] text-gray-400 mt-1">
+            {isAr ? "حرر بواسطة:" : "Émis par :"} {voucher.issuedBy}
+          </p>
         </div>
       </div>
     );
   }
 }
+
+export default PaymentTicket;

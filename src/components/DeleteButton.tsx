@@ -2,9 +2,6 @@
 
 import {
   deleteClass,
-  deleteCourse,
-  deleteEvent,
-  deleteExam,
   deleteLesson,
   deleteParent,
   deleteStudent,
@@ -16,6 +13,7 @@ import {
 } from "@/lib/actions";
 import Image from "next/image";
 import { useActionState, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 
 import { toast } from "react-toastify";
 
@@ -114,7 +112,7 @@ const DeleteConfirmation = ({
 const DeleteButton = ({ table, id, data }: { table: string, id: number | string, data?: any }) => {
   const [open, setOpen] = useState(false);
 
-  const isRefund = table === 'payment' || table === 'workshopPayment';
+  const isRefund = table === 'payment';
 
   // UPDATED: The map of actions now includes workshopParticipant
   const deleteAction = {
@@ -122,11 +120,8 @@ const DeleteButton = ({ table, id, data }: { table: string, id: number | string,
       class: deleteClass,
       teacher: deleteTeacher,
       student: deleteStudent,
-      exam: deleteExam,
       parent: deleteParent,
       lesson: deleteLesson,
-      course: deleteCourse,
-      event: deleteEvent,
       announcement: deleteAnnouncement,
       workshop: deleteWorkshop,
       workshopParticipant: deleteWorkshopParticipant, // ADDED

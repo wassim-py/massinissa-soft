@@ -10,8 +10,10 @@ import { useActionState, Dispatch,
   useEffect,
   useState,
   useRef, } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "react-toastify";
 import Image from "next/image";
+import { Button } from "@/components/ui/Button";
 
 const SubjectForm = ({
   type,
@@ -24,7 +26,9 @@ const SubjectForm = ({
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
 }) => {
-
+  const t = useTranslations("subjects");
+  const tCommon = useTranslations("common");
+  const tErrors = useTranslations("errors");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const {
     register,
@@ -104,14 +108,14 @@ const SubjectForm = ({
   );
 
   return (
-    <form className="flex flex-col gap-8" onSubmit={onSubmit}>
-      <h1 className="text-xl font-semibold">
-        {type === "create" ? "انشاء مادة جديدة" : "تحديث المادة"}
+    <form className="flex flex-col gap-6" onSubmit={onSubmit}>
+      <h1 className="text-section-title font-bold text-gray-900">
+        {type === "create" ? t("createTitle") : t("updateTitle")}
       </h1>
 
       <div className="flex justify-between flex-wrap gap-4">
         <InputField
-          label="اسم المادة"
+          label={t("name")}
           name="name"
           register={register}
           error={errors?.name}
@@ -126,7 +130,7 @@ const SubjectForm = ({
           className="flex flex-col gap-2 w-full md:w-1/2 relative"
           ref={teachersDropdownRef}
         >
-          <label className="text-xs text-gray-500">الاساتذة</label>
+          <label className="text-xs text-gray-500">{t("teachers")}</label>
           <Controller
             name="teachers"
             control={control}
@@ -139,7 +143,7 @@ const SubjectForm = ({
               );
               const getDisplayText = () => {
                 if (selectedTeacherObjects.length === 0)
-                  return "حدد استاذ (اساتذة)";
+                  return t("selectTeachers");
                 return selectedTeacherObjects
                   .map((t: any) => `${t.name} ${t.surname}`)
                   .join(", ");
@@ -173,7 +177,7 @@ const SubjectForm = ({
                       <div className="p-2 border-b border-gray-200">
                         <input
                           type="text"
-                          placeholder="ابحث عن استاذ..."
+                          placeholder={`${tCommon("search")}...`}
                           className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full"
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
@@ -231,14 +235,16 @@ const SubjectForm = ({
         </div>
         {/* === END: CUSTOM MULTI-SELECT DROPDOWN === */}
       </div>
-      {state?.error && !state.message && <span className="text-red-500">حدث خطأ ما!</span>}
-      <button 
+      {state?.error && !state.message && <span className="text-red-500">{tErrors("general")}</span>}
+      <Button 
         type="submit" 
+        variant="primary"
+        size="lg"
         disabled={isSubmitting}
-        className="text-xl font-semibold bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-md transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+        className="w-full"
       >
-        {isSubmitting ? (type === 'create' ? "قيد الإنشاء..." : "قيد التحديث...") : (type === 'create' ? "إنشاء" : "تحديث")}
-      </button>
+        {isSubmitting ? (type === 'create' ? t("submittingCreate") : t("submittingUpdate")) : (type === 'create' ? tCommon("create") : tCommon("edit"))}
+      </Button>
     </form>
   );
 };
