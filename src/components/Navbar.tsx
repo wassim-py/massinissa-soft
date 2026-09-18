@@ -3,6 +3,7 @@ import { currentUser } from "@/lib/auth";
 import { getTranslations } from "next-intl/server";
 import LanguageSwitcher from "./LanguageSwitcher";
 import BranchSwitcher from "./BranchSwitcher";
+import NavbarAnnouncementBadge from "./announcements/NavbarAnnouncementBadge";
 
 const Navbar = async ({
   mobileNav,
@@ -40,8 +41,9 @@ const Navbar = async ({
         <BranchSwitcher />
       </div>
 
-      {/* END: LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
+      {/* END: NOTIFICATION BELL, LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
       <div className="flex items-center gap-2.5 sm:gap-4 md:gap-6 justify-end shrink-0">
+        <NavbarAnnouncementBadge />
         <LanguageSwitcher />
 
         <div className="hidden sm:flex flex-col text-end">

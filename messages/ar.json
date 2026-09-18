@@ -143,7 +143,9 @@
     "noParentPhonesAdded": "لم تتم إضافة أي رقم ولي أمر (اختياري)",
     "parentPhonePlaceholder": "مثال: 0555123456",
     "remove": "حذف",
-    "cannotIdentifyStudent": "تعذر تحديد الطالب."
+    "cannotIdentifyStudent": "تعذر تحديد الطالب.",
+    "noStudents": "لا يوجد طلاب مسجلين",
+    "noStudentsDesc": "لم يتم العثور على أي طالب يطابق معايير البحث."
   },
   "teachers": {
     "title": "جميع الأساتذة",

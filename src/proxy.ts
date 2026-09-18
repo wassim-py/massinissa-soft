@@ -13,10 +13,11 @@ const matchers = Object.keys(routeAccessMap).map((route) => ({
 }));
 
 export default clerkMiddleware(async (auth, req) => {
-  // If request is for an API route, static manifest, sw, or icons, do not run i18n routing
+  // If request is for an API route, clerk proxy, static manifest, sw, or icons, do not run i18n routing
   if (
     req.nextUrl.pathname.startsWith("/api") ||
     req.nextUrl.pathname.startsWith("/trpc") ||
+    req.nextUrl.pathname.startsWith("/__clerk") ||
     req.nextUrl.pathname === "/sw.js" ||
     req.nextUrl.pathname === "/manifest.webmanifest" ||
     req.nextUrl.pathname === "/manifest.json" ||
@@ -42,9 +43,7 @@ export default clerkMiddleware(async (auth, req) => {
   if (userId && (!role || branchIds === undefined)) {
     try {
       const client = createClerkClient({
-        secretKey:
-          process.env.CLERK_SECRET_KEY ||
-          "sk_test_Kl9ipSmhibmv01RtA6iGMMBjrdfbtgUlvShsXlKRdo",
+        secretKey: process.env.CLERK_SECRET_KEY,
       });
       const user = await client.users.getUser(userId);
       if (!role) role = (user.publicMetadata as { role?: string })?.role;

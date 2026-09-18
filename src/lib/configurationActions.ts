@@ -93,10 +93,12 @@ export async function createAccountAction(
     if (clerkSecret) {
       try {
         const client = createClerkClient({ secretKey: clerkSecret });
-        const clerkUser = await client.users.createUser({
+        const clerkUser = await (client.users.createUser as any)({
           username,
           password: resolvedPassword,
           firstName: name,
+          skipPasswordChecks: true,
+          skip_password_checks: true,
           publicMetadata: {
             role,
             branchId: role === "OWNER" ? undefined : branchId || undefined,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { useAnnouncementNotification } from "./AnnouncementNotificationProvider";
 
@@ -57,6 +57,7 @@ export default function DashboardAnnouncementItem({
     <div
       onMouseEnter={handleMouseEnter}
       onTouchStart={handleMouseEnter}
+      onClick={handleMouseEnter}
       className={`${bgColor} rounded-xl p-4 border transition-all duration-700 ease-out hover:shadow-xs ${
         isNewActive
           ? "announcement-border-flash"

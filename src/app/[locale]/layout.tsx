@@ -7,6 +7,7 @@ import "react-toastify/dist/ReactToastify.css";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import { routing } from "@/i18n/routing";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 
@@ -91,8 +92,14 @@ export default async function LocaleLayout({
   const isRtl = locale === "ar";
   const fontClass = isRtl ? tajawal.className : inter.className;
 
+  const heads = await headers();
+  const host = heads.get("x-forwarded-host") || heads.get("host") || "localhost:3000";
+  const proto = heads.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
+  const proxyUrl = `${proto}://${host}/__clerk`;
+  const clerkJSUrl = `${proxyUrl}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
+
   return (
-    <ClerkProvider>
+    <ClerkProvider proxyUrl={proxyUrl} clerkJSUrl={clerkJSUrl}>
       <html lang={locale} dir={isRtl ? "rtl" : "ltr"}>
         <head>
           <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />

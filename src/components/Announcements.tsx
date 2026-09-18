@@ -52,7 +52,7 @@ const Announcements = async ({ branchId }: AnnouncementsProps = {}) => {
                a."authorBranchId", ab.name as "authorBranchName",
                a."branchId", tb.name as "targetBranchName",
                a."expiresAt",
-               (a."createdAt" > NOW() - INTERVAL '24 HOURS') as "isNew"
+               (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
         FROM "Announcement" a
         LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
         LEFT JOIN "Branch" tb ON tb.id = a."branchId"
@@ -80,7 +80,7 @@ const Announcements = async ({ branchId }: AnnouncementsProps = {}) => {
                a."authorBranchId", ab.name as "authorBranchName",
                a."branchId", tb.name as "targetBranchName",
                a."expiresAt",
-               (a."createdAt" > NOW() - INTERVAL '24 HOURS') as "isNew"
+               (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
         FROM "Announcement" a
         LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
         LEFT JOIN "Branch" tb ON tb.id = a."branchId"
@@ -109,7 +109,7 @@ const Announcements = async ({ branchId }: AnnouncementsProps = {}) => {
                a."authorBranchId", ab.name as "authorBranchName",
                a."branchId", tb.name as "targetBranchName",
                a."expiresAt",
-               (a."createdAt" > NOW() - INTERVAL '24 HOURS') as "isNew"
+               (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
         FROM "Announcement" a
         LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
         LEFT JOIN "Branch" tb ON tb.id = a."branchId"

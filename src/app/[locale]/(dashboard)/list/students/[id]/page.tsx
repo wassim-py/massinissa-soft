@@ -312,6 +312,7 @@ const SingleStudentPage = async (
     });
 
     const parentPhoneNumbers = (studentPaymentData?.parentPhoneNumbers || []).map((p: any) => p.phone);
+    const studentLevelId = studentPaymentData?.enrollments?.find((e: any) => e.class?.levelId)?.class?.levelId;
 
     const student = {
       id: s.id,
@@ -324,6 +325,7 @@ const SingleStudentPage = async (
       birthday: new Date(2008, 0, 1),
       parent: s.familyId ? { name: t("familyPrefix", { id: s.familyId }), surname: "" } : null,
       classes: sortedGroupSummaries.map((g) => ({ id: g.classId, name: g.className })),
+      gradeId: studentLevelId || undefined,
     };
 
     const upcomingLessonColumns: Column[] = [

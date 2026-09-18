@@ -6,6 +6,7 @@ import Image from "next/image";
 import { Link, usePathname } from "@/i18n/navigation";
 import { Menu as MenuIcon, X } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { useAnnouncementNotification } from "./announcements/AnnouncementNotificationProvider";
 
 interface MobileNavProps {
   children: React.ReactNode;
@@ -13,6 +14,7 @@ interface MobileNavProps {
 
 export default function MobileNav({ children }: MobileNavProps) {
   const t = useTranslations("common");
+  const { unreadCount } = useAnnouncementNotification();
   const [isOpen, setIsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const pathname = usePathname();
@@ -57,11 +59,17 @@ export default function MobileNav({ children }: MobileNavProps) {
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="lg:hidden p-2 rounded-lg text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors focus:outline-none shrink-0"
+        className="relative lg:hidden p-2 rounded-lg text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors focus:outline-none shrink-0"
         aria-label={t("openMenu")}
         title={t("openMenu")}
       >
         <MenuIcon className="w-6 h-6" />
+        {unreadCount > 0 && (
+          <span className="absolute top-1.5 right-1.5 rtl:right-auto rtl:left-1.5 flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-80" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-600 border border-white shadow-xs" />
+          </span>
+        )}
       </button>
 
       {/* PORTAL DRAWER INTO DOCUMENT BODY */}

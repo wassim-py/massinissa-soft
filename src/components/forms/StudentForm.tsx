@@ -227,9 +227,9 @@ const StudentForm = ({
             {...register("gradeId")}
           >
             <option value="">{tStudents("selectGrade")}</option>
-            {grades.map((grade: { id: number; level: string }) => (
+            {grades.map((grade: { id: number; level?: string; name?: string }) => (
               <option value={grade.id} key={grade.id}>
-                {grade.level}
+                {grade.level || grade.name}
               </option>
             ))}
           </select>

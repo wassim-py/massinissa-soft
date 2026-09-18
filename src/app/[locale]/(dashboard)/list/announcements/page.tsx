@@ -47,7 +47,7 @@ const AnnouncementListPage = async (
         rawAnnouncements = await prisma.$queryRaw<any[]>`
           SELECT a.id, a.title, a.description, a."createdAt", a."expiresAt", a."branchId", a."authorBranchId", a.pinned,
                  ab.name as "authorBranchName", tb.name as "targetBranchName",
-                 (a."createdAt" > NOW() - INTERVAL '24 HOURS') as "isNew"
+                 (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
           FROM "Announcement" a
           LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
           LEFT JOIN "Branch" tb ON tb.id = a."branchId"
@@ -66,7 +66,7 @@ const AnnouncementListPage = async (
         rawAnnouncements = await prisma.$queryRaw<any[]>`
           SELECT a.id, a.title, a.description, a."createdAt", a."expiresAt", a."branchId", a."authorBranchId", a.pinned,
                  ab.name as "authorBranchName", tb.name as "targetBranchName",
-                 (a."createdAt" > NOW() - INTERVAL '24 HOURS') as "isNew"
+                 (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
           FROM "Announcement" a
           LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
           LEFT JOIN "Branch" tb ON tb.id = a."branchId"
@@ -88,7 +88,7 @@ const AnnouncementListPage = async (
         rawAnnouncements = await prisma.$queryRaw<any[]>`
           SELECT a.id, a.title, a.description, a."createdAt", a."expiresAt", a."branchId", a."authorBranchId", a.pinned,
                  ab.name as "authorBranchName", tb.name as "targetBranchName",
-                 (a."createdAt" > NOW() - INTERVAL '24 HOURS') as "isNew"
+                 (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
           FROM "Announcement" a
           LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
           LEFT JOIN "Branch" tb ON tb.id = a."branchId"
@@ -109,7 +109,7 @@ const AnnouncementListPage = async (
         rawAnnouncements = await prisma.$queryRaw<any[]>`
           SELECT a.id, a.title, a.description, a."createdAt", a."expiresAt", a."branchId", a."authorBranchId", a.pinned,
                  ab.name as "authorBranchName", tb.name as "targetBranchName",
-                 (a."createdAt" > NOW() - INTERVAL '24 HOURS') as "isNew"
+                 (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
           FROM "Announcement" a
           LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
           LEFT JOIN "Branch" tb ON tb.id = a."branchId"

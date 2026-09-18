@@ -133,6 +133,19 @@ const DeleteButton = ({ table, id, data }: { table: string, id: number | string,
     if (state.success) {
       toast.success(state.message || `${table} has been deleted!`);
       setOpen(false);
+
+      if (table === "announcement") {
+        try {
+          const bc = new BroadcastChannel("massinissa_announcements_channel");
+          bc.postMessage({ type: "ANNOUNCEMENT_CHANGED" });
+          bc.close();
+        } catch {
+          // Ignore
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("massinissa:announcements_updated"));
+        }
+      }
     }
     if (state.error && state.message) {
       toast.error(state.message);

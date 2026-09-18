@@ -143,7 +143,9 @@
     "noParentPhonesAdded": "Aucun numéro de parent ajouté (facultatif)",
     "parentPhonePlaceholder": "Ex: 0555123456",
     "remove": "Supprimer",
-    "cannotIdentifyStudent": "Impossible d'identifier l'élève."
+    "cannotIdentifyStudent": "Impossible d'identifier l'élève.",
+    "noStudents": "Aucun élève enregistré",
+    "noStudentsDesc": "Aucun élève ne correspond aux critères de recherche."
   },
   "teachers": {
     "title": "Tous les enseignants",

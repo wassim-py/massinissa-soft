@@ -304,8 +304,8 @@ const StudentListPage = async (props: {
           columns={columns}
           data={data}
           renderRow={renderRow}
-          emptyTitle="لا يوجد طلاب مسجلين"
-          emptyDescription="لم يتم العثور على أي طالب يطابق معايير البحث."
+          emptyTitle={t("noStudents")}
+          emptyDescription={t("noStudentsDesc")}
           pagination={<Pagination count={count} />}
         />
       </CardContent>

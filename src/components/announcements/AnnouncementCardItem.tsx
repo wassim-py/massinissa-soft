@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { useAnnouncementNotification } from "./AnnouncementNotificationProvider";
@@ -57,19 +57,21 @@ export default function AnnouncementCardItem({
   const normalBorder = isPinned ? "border-accent/40" : "border-border/80";
 
   return (
-    <Card
-      onMouseEnter={handleMouseEnter}
-      onTouchStart={handleMouseEnter}
-      className={`flex flex-col border transition-all duration-700 ease-out ${
-        isPinned
-          ? "md:col-span-2 lg:col-span-3 bg-accent-light/60 shadow-xs"
-          : "bg-surface shadow-xs hover:shadow-sm"
-      } ${
-        isNewActive
-          ? "announcement-border-flash"
-          : normalBorder
-      }`}
-    >
+    <div className="h-full">
+      <Card
+        onMouseEnter={handleMouseEnter}
+        onTouchStart={handleMouseEnter}
+        onClick={handleMouseEnter}
+        className={`flex flex-col h-full border transition-all duration-700 ease-out ${
+          isPinned
+            ? "md:col-span-2 lg:col-span-3 bg-accent-light/60 shadow-xs"
+            : "bg-surface shadow-xs hover:shadow-sm"
+        } ${
+          isNewActive
+            ? "announcement-border-flash"
+            : normalBorder
+        }`}
+      >
       <CardContent className="p-5 sm:p-6 flex flex-col flex-grow justify-between gap-4">
         <div>
           <div className="flex justify-between items-start gap-3 mb-2 flex-wrap">
@@ -130,5 +132,6 @@ export default function AnnouncementCardItem({
         </div>
       </CardContent>
     </Card>
+  </div>
   );
 }

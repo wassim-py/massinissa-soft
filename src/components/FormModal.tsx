@@ -121,6 +121,9 @@ const DeleteConfirmation = ({
         } catch {
           // Ignore
         }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("massinissa:announcements_updated"));
+        }
       }
     }
     if (state.error && state.message) {
