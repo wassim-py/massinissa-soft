@@ -10,13 +10,14 @@ import { Users, X, Calendar, MapPin } from "lucide-react";
 export interface BranchTeacherData {
   id: string;
   name: string;
-  otherBranches: string[];
+  branches?: string[];
+  otherBranches?: string[];
   lessonsTodayCount: number;
 }
 
 export interface BranchTeacherModalProps {
   teachers: BranchTeacherData[];
-  branchName: string;
+  branchName?: string;
 }
 
 export default function BranchTeacherModal({
@@ -53,7 +54,7 @@ export default function BranchTeacherModal({
                   </div>
                   <div>
                     <CardTitle className="text-base font-bold text-gray-900">
-                      {t("title")} ({branchName})
+                      {t("title")}
                     </CardTitle>
                     <p className="text-xs text-muted mt-0.5">
                       {t("totalTeachers", { count: teachers.length })}
@@ -76,7 +77,7 @@ export default function BranchTeacherModal({
                   </p>
                 ) : (
                   teachers.map((teacher) => {
-                    const isShared = teacher.otherBranches.length > 0;
+                    const branchesList = teacher.branches || teacher.otherBranches || [];
                     return (
                       <div
                         key={teacher.id}
@@ -101,17 +102,14 @@ export default function BranchTeacherModal({
                         </div>
 
                         <div className="flex items-center gap-1.5 flex-wrap text-xs">
-                          {isShared ? (
-                            <Badge variant="warning" size="sm">
+                          {branchesList.length > 0 ? (
+                            <Badge variant="neutral" size="sm">
                               <MapPin className="w-3 h-3 mr-1 inline" />
-                              {t("sharedWith")}{" "}
-                              <span className="font-bold ml-1">
-                                {teacher.otherBranches.join(", ")}
-                              </span>
+                              {branchesList.join(", ")}
                             </Badge>
                           ) : (
                             <Badge variant="neutral" size="sm">
-                              {t("exclusive")}
+                              {t("noBranches")}
                             </Badge>
                           )}
                         </div>

@@ -22,6 +22,8 @@ type ClassItem = {
   inscriptionFee: number;
   gradeId: number;
   grade: { level: string };
+  levelId?: number | null;
+  levelName?: string | null;
   supervisor: null;
 };
 
@@ -138,6 +140,8 @@ const ClassListPage = async (
       teacherName: string | null;
       pricePerCycle: number | null;
       inscriptionFee: number;
+      levelId: number | null;
+      levelName: string | null;
     }>;
 
     if (search) {
@@ -151,10 +155,12 @@ const ClassListPage = async (
         SELECT c.id, c.name, c."branchId", b.name as "branchName",
                c."teacherId",
                COALESCE(t.name, lt.teacher_name) as "teacherName",
-               c."pricePerCycle", c."inscriptionFee"
+               c."pricePerCycle", c."inscriptionFee",
+               c."levelId", lvl.name as "levelName"
         FROM "Class" c
         LEFT JOIN "Branch" b ON b.id = c."branchId"
         LEFT JOIN "Teacher" t ON t.id = c."teacherId"
+        LEFT JOIN "Level" lvl ON lvl.id = c."levelId"
         LEFT JOIN LATERAL (
           SELECT t2.name as teacher_name
           FROM "Lesson" l
@@ -175,10 +181,12 @@ const ClassListPage = async (
         SELECT c.id, c.name, c."branchId", b.name as "branchName",
                c."teacherId",
                COALESCE(t.name, lt.teacher_name) as "teacherName",
-               c."pricePerCycle", c."inscriptionFee"
+               c."pricePerCycle", c."inscriptionFee",
+               c."levelId", lvl.name as "levelName"
         FROM "Class" c
         LEFT JOIN "Branch" b ON b.id = c."branchId"
         LEFT JOIN "Teacher" t ON t.id = c."teacherId"
+        LEFT JOIN "Level" lvl ON lvl.id = c."levelId"
         LEFT JOIN LATERAL (
           SELECT t2.name as teacher_name
           FROM "Lesson" l
@@ -206,8 +214,10 @@ const ClassListPage = async (
         price: priceNum || 0,
         pricePerCycle: priceNum,
         inscriptionFee: r.inscriptionFee != null ? Number(r.inscriptionFee) : 0,
-        gradeId: r.branchId,
-        grade: { level: r.branchName || t("branchFallback", { id: r.branchId }) },
+        gradeId: r.levelId || 0,
+        grade: { level: r.levelName || "" },
+        levelId: r.levelId,
+        levelName: r.levelName,
         supervisor: null,
       };
     });

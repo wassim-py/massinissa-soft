@@ -64,18 +64,17 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
         break;
       }
       case "teacher": {
-        // Teachers count: every teacher who teaches at least one group at this branch
-        // — including a teacher whose main branch is elsewhere, as long as they have a class here.
-        const teachersAtBranch = await prisma.teacher.findMany({
-          where: {
-            OR: [
-              { lessons: { some: { branchId: activeBranchId } } },
-              { TeacherBranch: { some: { branchId: activeBranchId } } },
-            ],
-          },
+        // Teachers count: all registered teachers in all the school (not restricted by branch)
+        const allTeachers = await prisma.teacher.findMany({
           include: {
             TeacherBranch: {
               include: { Branch: { select: { id: true, name: true } } },
+            },
+            classes: {
+              select: {
+                branchId: true,
+                branch: { select: { id: true, name: true } },
+              },
             },
             lessons: {
               select: {
@@ -85,31 +84,37 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
               },
             },
           },
+          orderBy: { name: "asc" },
         });
 
-        count = teachersAtBranch.length;
+        count = allTeachers.length;
 
-        teachersList = teachersAtBranch.map((t) => {
-          // Identify other branches this teacher teaches at
-          const otherBranchesSet = new Set<string>();
+        teachersList = allTeachers.map((t) => {
+          // Identify all branches this teacher is associated with
+          const branchesSet = new Set<string>();
 
           t.TeacherBranch.forEach((tb) => {
-            if (tb.branchId !== activeBranchId && tb.Branch?.name) {
-              otherBranchesSet.add(tb.Branch.name);
+            if (tb.Branch?.name) {
+              branchesSet.add(tb.Branch.name);
+            }
+          });
+
+          t.classes.forEach((c) => {
+            if (c.branch?.name) {
+              branchesSet.add(c.branch.name);
             }
           });
 
           t.lessons.forEach((l) => {
-            if (l.branchId !== activeBranchId && l.branch?.name) {
-              otherBranchesSet.add(l.branch.name);
+            if (l.branch?.name) {
+              branchesSet.add(l.branch.name);
             }
           });
 
-          // Count lessons today specifically at this branch
+          // Count lessons today across the school
           const todayLessons = t.lessons.filter((l) => {
             const lessonDate = new Date(l.startsAt);
             return (
-              l.branchId === activeBranchId &&
               lessonDate >= startOfToday &&
               lessonDate <= endOfToday
             );
@@ -119,10 +124,13 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
             teachersWithLessonsTodayCount++;
           }
 
+          const branchesArray = Array.from(branchesSet);
+
           return {
             id: t.id,
             name: t.name,
-            otherBranches: Array.from(otherBranchesSet),
+            branches: branchesArray,
+            otherBranches: branchesArray,
             lessonsTodayCount: todayLessons.length,
           };
         });

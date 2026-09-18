@@ -34,7 +34,11 @@ const ClassForm = ({
   } = useForm<ClassSchema>({
     resolver: zodResolver(classSchema),
     defaultValues: data
-      ? { ...data, supervisorId: data.teacherId || data.supervisorId || "" }
+      ? {
+          ...data,
+          supervisorId: data.teacherId || data.supervisorId || "",
+          gradeId: data.levelId || data.gradeId || "",
+        }
       : { price: 0 },
   });
 
@@ -130,9 +134,9 @@ const ClassForm = ({
             {...register("gradeId")}
           >
             <option value="">{tClasses("selectGrade")}</option>
-            {grades.map((grade: { id: number; level: number }) => (
+            {grades?.map((grade: { id: number; level?: string | number; name?: string }) => (
               <option value={grade.id} key={grade.id}>
-                {grade.level}
+                {grade.name || grade.level}
               </option>
             ))}
           </select>

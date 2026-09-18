@@ -194,9 +194,10 @@ export const createClass = async (
 
     const pricePerCycle = data.price || 0;
     const teacherId = (data as any).teacherId || data.supervisorId || null;
+    const levelId = data.gradeId ? Number(data.gradeId) : null;
     await prisma.$executeRaw`
-      INSERT INTO "Class" (name, "branchId", "pricePerCycle", "inscriptionFee", "hasBooks", "isFormation", "teacherId")
-      VALUES (${data.name}, ${branchId}, ${pricePerCycle}, 0, false, false, ${teacherId})
+      INSERT INTO "Class" (name, "branchId", "pricePerCycle", "inscriptionFee", "hasBooks", "isFormation", "teacherId", "levelId")
+      VALUES (${data.name}, ${branchId}, ${pricePerCycle}, 0, false, false, ${teacherId}, ${levelId})
     `;
 
     safeRevalidatePath("/list/classes");
@@ -219,8 +220,8 @@ export const updateClass = async (
 
     if (!data.id) return { success: false, error: true, message: "Identifiant manquant / لا يوجد معرف للفوج." };
 
-    const existing = await prisma.$queryRaw<Array<{ branchId: number; teacherId: string | null }>>`
-      SELECT "branchId", "teacherId" FROM "Class" WHERE id = ${data.id} LIMIT 1
+    const existing = await prisma.$queryRaw<Array<{ branchId: number; teacherId: string | null; levelId: number | null }>>`
+      SELECT "branchId", "teacherId", "levelId" FROM "Class" WHERE id = ${data.id} LIMIT 1
     `;
     if (existing.length === 0) {
       return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود." };
@@ -240,14 +241,18 @@ export const updateClass = async (
       : data.supervisorId !== undefined
       ? data.supervisorId
       : existing[0].teacherId;
+    const levelId = data.gradeId !== undefined
+      ? (data.gradeId ? Number(data.gradeId) : null)
+      : existing[0].levelId;
 
     await prisma.$executeRaw`
       UPDATE "Class"
-      SET name = ${data.name}, "branchId" = ${branchId}, "pricePerCycle" = ${pricePerCycle}, "teacherId" = ${teacherId}
+      SET name = ${data.name}, "branchId" = ${branchId}, "pricePerCycle" = ${pricePerCycle}, "teacherId" = ${teacherId}, "levelId" = ${levelId}
       WHERE id = ${data.id}
     `;
 
     safeRevalidatePath("/list/classes");
+    safeRevalidatePath(`/list/classes/${data.id}`);
     return { success: true, error: false, message: "Groupe mis à jour avec succès / تم تحديث الفوج بنجاح." };
   } catch (err) {
     console.error(err);

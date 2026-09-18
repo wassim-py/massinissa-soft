@@ -1793,12 +1793,13 @@
       "lessonsTodayCount": "{count} حصص مبرمجة اليوم"
     },
     "teachersDetail": {
-      "title": "أساتذة هذا الفرع",
-      "subtitle": "الأساتذة الذين يدرّسون فوجاً واحداً على الأقل في هذا الفرع",
+      "title": "أساتذة المدرسة",
+      "subtitle": "جميع الأساتذة المسجلين في المؤسسة",
       "lessonsToday": "{count} حصص اليوم",
       "noLessonsToday": "لا توجد حصص اليوم",
-      "sharedWith": "يدرّس أيضاً في:",
-      "exclusive": "هذا الفرع فقط",
+      "sharedWith": "الفروع:",
+      "exclusive": "كل الفروع",
+      "noBranches": "بدون فرع معين",
       "close": "إغلاق",
       "totalTeachers": "مجموع الأساتذة: {count}"
     },

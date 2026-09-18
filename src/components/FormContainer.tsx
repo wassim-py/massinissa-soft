@@ -51,12 +51,15 @@ const FormContainer = async ({
           break;
         }
         case "class": {
-          const [branches, teachers] = await Promise.all([
-            prisma.$queryRaw<Array<{ id: number; name: string }>>`SELECT id, name FROM "Branch" ORDER BY id ASC`,
+          const [levels, teachers] = await Promise.all([
+            prisma.level.findMany({
+              select: { id: true, name: true },
+              orderBy: { id: "asc" },
+            }),
             prisma.$queryRaw<Array<{ id: string; name: string }>>`SELECT id, name FROM "Teacher" ORDER BY name ASC`,
           ]);
           finalRelatedData = {
-            grades: branches.map((b) => ({ id: b.id, level: b.name })),
+            grades: levels.map((l) => ({ id: l.id, level: l.name, name: l.name })),
             teachers: teachers.map((t) => ({ id: t.id, name: t.name, surname: "" })),
           };
           break;

@@ -1793,12 +1793,13 @@
       "lessonsTodayCount": "{count} séances prévues aujourd'hui"
     },
     "teachersDetail": {
-      "title": "Enseignants de ce siège",
-      "subtitle": "Enseignants ayant au moins un groupe à ce siège",
+      "title": "Enseignants de l'école",
+      "subtitle": "Tous les enseignants enregistrés dans l'établissement",
       "lessonsToday": "{count} cours aujourd'hui",
       "noLessonsToday": "Aucun cours aujourd'hui",
-      "sharedWith": "Enseigne aussi à :",
-      "exclusive": "Ce siège uniquement",
+      "sharedWith": "Enseigne à :",
+      "exclusive": "Tous les sièges",
+      "noBranches": "Aucun siège assigné",
       "close": "Fermer",
       "totalTeachers": "Total enseignants : {count}"
     },
