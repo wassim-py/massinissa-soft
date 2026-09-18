@@ -4,7 +4,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { voucherSchema, VoucherSchema } from "@/lib/formValidationSchemas";
 import { issueVoucher, editVoucher } from "@/lib/actions";
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, startTransition } from "react";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "react-toastify";
 import { Voucher, Student, Class } from "@prisma/client";
@@ -36,6 +37,7 @@ const PaymentForm = ({
   sessionsForThisPayment?: number;
   amountOwedByStudent?: number;
 }) => {
+  const router = useRouter();
   const t = useTranslations("payments");
   const tCommon = useTranslations("common");
   const locale = useLocale();
@@ -126,7 +128,7 @@ const PaymentForm = ({
     }
   };
 
-  const [state, formAction] = useActionState(actionToRun, {
+  const [state, formAction, isPending] = useActionState(actionToRun, {
     success: false,
     error: false,
     message: "",
@@ -136,14 +138,19 @@ const PaymentForm = ({
     if (state?.success) {
       toast.success(state.message);
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
     if (state?.error) {
       toast.error(state.message);
     }
-  }, [state, setOpen]);
+  }, [state, setOpen, router]);
 
   const onSubmit = (formData: VoucherSchema) => {
-    formAction(formData as any);
+    startTransition(() => {
+      formAction(formData as any);
+    });
   };
 
   return (
@@ -280,6 +287,7 @@ const PaymentForm = ({
         type="submit"
         variant="primary"
         size="lg"
+        disabled={isPending}
         className="w-full"
       >
         {type === "create" ? t("confirmIssueVoucherBtn") : t("saveChangesBtn")}

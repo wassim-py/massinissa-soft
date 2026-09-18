@@ -5,7 +5,8 @@ import { useForm } from "react-hook-form";
 import { LessonSchema, lessonSchema } from "@/lib/formValidationSchemas";
 import { createLesson, updateLesson } from "@/lib/actions";
 
-import { useActionState, Dispatch, SetStateAction, useEffect, useState, useMemo } from "react";
+import { useActionState, Dispatch, SetStateAction, useEffect, useState, useMemo, startTransition } from "react";
+import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import { toast } from "react-toastify";
 import { Class, Teacher, Classroom } from "@prisma/client";
@@ -57,6 +58,7 @@ const LessonForm = ({
     subjects?: any[];
   };
 }) => {
+  const router = useRouter();
   const t = useTranslations("lessons");
   const tCommon = useTranslations("common");
   const locale = useLocale();
@@ -73,8 +75,6 @@ const LessonForm = ({
     };
     return t(keyMap[day] as any);
   };
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const formatTime = (date: Date | string | undefined) => {
     if (!date) return "";
     const d = new Date(date);
@@ -197,28 +197,29 @@ const LessonForm = ({
 
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createLesson : updateLesson;
-  const [state, formAction] = useActionState(actionToRun, initialState);
+  const [state, formAction, isPending] = useActionState(actionToRun, initialState);
 
   const onSubmit = handleSubmit((formData) => {
-    setIsSubmitting(true);
-    formAction(formData);
+    startTransition(() => {
+      formAction(formData);
+    });
   });
 
   useEffect(() => {
-    if (state.success || state.error) {
-      setIsSubmitting(false);
-    }
     if (state.success) {
       toast.success(
         state.message ||
           (type === "create" ? t("createdSuccessfully") : t("updatedSuccessfully"))
       );
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
     if (state.error && state.message) {
       toast.error(state.message);
     }
-  }, [state, type, setOpen, t]);
+  }, [state, type, setOpen, t, router]);
 
   return (
     <form className="flex flex-col gap-6" onSubmit={onSubmit}>
@@ -560,11 +561,11 @@ const LessonForm = ({
         type="submit"
         variant="primary"
         size="lg"
-        isLoading={isSubmitting}
-        disabled={isSubmitting}
+        isLoading={isPending}
+        disabled={isPending}
         className="w-full mt-2"
       >
-        {isSubmitting
+        {isPending
           ? type === "create"
             ? t("submittingCreate")
             : t("submittingUpdate")

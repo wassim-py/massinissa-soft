@@ -11,7 +11,9 @@ import {
   useState,
   useRef,
   useMemo,
+  startTransition,
 } from "react";
+import { useRouter } from "next/navigation";
 import { getStudentSchema, StudentSchema } from "@/lib/formValidationSchemas";
 import { createStudent, updateStudent } from "@/lib/actions";
 import { toast } from "react-toastify";
@@ -35,12 +37,11 @@ const StudentForm = ({
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
 }) => {
+  const router = useRouter();
   const t = useTranslations();
   const tCommon = useTranslations("common");
   const tStudents = useTranslations("students");
   const tErrors = useTranslations("errors");
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Localized Zod schema for real-time validation messages in active language
   const schema = useMemo(() => getStudentSchema((key) => t(key as any)), [t]);
@@ -111,17 +112,15 @@ const StudentForm = ({
 
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createStudent : updateStudent;
-  const [state, formAction] = useActionState(actionToRun, initialState);
+  const [state, formAction, isPending] = useActionState(actionToRun, initialState);
 
   const onSubmit = (formData: StudentSchema) => {
-    setIsSubmitting(true);
-    formAction(formData as any);
+    startTransition(() => {
+      formAction(formData as any);
+    });
   };
 
   useEffect(() => {
-    if (state.success || state.error) {
-      setIsSubmitting(false);
-    }
     if (state.success) {
       toast.success(
         state.message ||
@@ -130,11 +129,14 @@ const StudentForm = ({
             : tStudents("updatedSuccess"))
       );
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
     if (state.error && state.message) {
       toast.error(state.message || tErrors("general"));
     }
-  }, [state, type, setOpen, tStudents, tErrors]);
+  }, [state, type, setOpen, tStudents, tErrors, router]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -400,10 +402,10 @@ const StudentForm = ({
         type="submit"
         variant="primary"
         size="lg"
-        disabled={isSubmitting}
+        disabled={isPending}
         className="w-full mt-2"
       >
-        {isSubmitting
+        {isPending
           ? type === "create"
             ? tStudents("submittingCreate")
             : tStudents("submittingUpdate")

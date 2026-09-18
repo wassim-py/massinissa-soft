@@ -348,6 +348,7 @@ export const createTeacher = async (
     }
 
     safeRevalidatePath("/list/teachers");
+    safeRevalidatePath("/list/subjects");
     return { success: true, error: false, message: "Enseignant créé avec succès / تم إنشاء الأستاذ بنجاح." };
   } catch (err: any) {
     console.error("Error in createTeacher:", err);
@@ -386,26 +387,42 @@ export const updateTeacher = async (
       const allSettings = await prisma.setting.findMany({
         where: { id: { startsWith: "subject_teachers_" } },
       });
+      const processedSubIds = new Set<number>();
       for (const s of allSettings) {
         const subId = parseInt(s.id.replace("subject_teachers_", ""), 10);
-        try {
-          let list: string[] = JSON.parse(s.value);
-          if (!Array.isArray(list)) continue;
-          const shouldHave = data.subjects.includes(subId);
-          const has = list.includes(data.id);
-          if (shouldHave && !has) {
-            list.push(data.id);
-            await prisma.setting.update({ where: { id: s.id }, data: { value: JSON.stringify(list) } });
-          } else if (!shouldHave && has) {
-            list = list.filter((tid) => tid !== data.id);
-            await prisma.setting.update({ where: { id: s.id }, data: { value: JSON.stringify(list) } });
-          }
-        } catch {}
+        if (!isNaN(subId)) {
+          processedSubIds.add(subId);
+          try {
+            let list: string[] = JSON.parse(s.value);
+            if (!Array.isArray(list)) list = [];
+            const shouldHave = data.subjects.includes(subId);
+            const has = list.includes(data.id);
+            if (shouldHave && !has) {
+              list.push(data.id);
+              await prisma.setting.update({ where: { id: s.id }, data: { value: JSON.stringify(list) } });
+            } else if (!shouldHave && has) {
+              list = list.filter((tid) => tid !== data.id);
+              await prisma.setting.update({ where: { id: s.id }, data: { value: JSON.stringify(list) } });
+            }
+          } catch {}
+        }
+      }
+
+      for (const subId of data.subjects) {
+        if (!processedSubIds.has(subId)) {
+          const key = `subject_teachers_${subId}`;
+          await prisma.setting.upsert({
+            where: { id: key },
+            create: { id: key, value: JSON.stringify([data.id]) },
+            update: { value: JSON.stringify([data.id]) },
+          });
+        }
       }
     }
 
     safeRevalidatePath("/list/teachers");
     safeRevalidatePath(`/list/teachers/${data.id}`);
+    safeRevalidatePath("/list/subjects");
     return { success: true, error: false, message: "Enseignant mis à jour avec succès / تم تحديث بيانات الأستاذ بنجاح." };
   } catch (err: any) {
     console.error("Error in updateTeacher:", err);

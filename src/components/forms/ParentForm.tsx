@@ -4,11 +4,16 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, Controller } from "react-hook-form";
 import InputField from "../InputField";
 import Image from "next/image";
-import { useActionState, Dispatch,
+import {
+  useActionState,
+  Dispatch,
   SetStateAction,
   useEffect,
   useState,
-  useRef, } from "react";
+  useRef,
+  startTransition,
+} from "react";
+import { useRouter } from "next/navigation";
 import { parentSchema, ParentSchema } from "@/lib/formValidationSchemas";
 
 import { createParent, updateParent } from "@/lib/actions";
@@ -33,11 +38,10 @@ const ParentForm = ({
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
 }) => {
+  const router = useRouter();
   const tParents = useTranslations("parents");
   const tCommon = useTranslations("common");
   const tErrors = useTranslations("errors");
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const {
     register,
     handleSubmit,
@@ -71,28 +75,28 @@ const ParentForm = ({
 
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createParent : updateParent;
-  const [state, formAction] = useActionState(actionToRun, initialState);
+  const [state, formAction, isPending] = useActionState(actionToRun, initialState);
 
   const onSubmit = (formData: ParentSchema) => {
-    setIsSubmitting(true);
-    formAction(formData as any);
+    startTransition(() => {
+      formAction(formData as any);
+    });
   };
 
   useEffect(() => {
-    // When the action is complete (success or error), set pending back to false
-    if (state.success || state.error) {
-        setIsSubmitting(false);
-    }
     if (state.success) {
       toast.success(
         state.message || (type === "create" ? tParents("createdSuccessfully") : tParents("updatedSuccessfully"))
       );
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
     if (state.error && state.message) {
       toast.error(state.message);
     }
-  }, [state, type, setOpen, tParents]);
+  }, [state, type, setOpen, tParents, router]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -282,10 +286,10 @@ const ParentForm = ({
         type="submit" 
         variant="primary"
         size="lg"
-        disabled={isSubmitting}
+        disabled={isPending}
         className="w-full"
       >
-        {isSubmitting
+        {isPending
           ? type === 'create'
             ? tParents("submittingCreate")
             : tParents("submittingUpdate")

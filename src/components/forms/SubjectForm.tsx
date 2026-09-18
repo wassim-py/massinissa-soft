@@ -5,11 +5,16 @@ import { useForm, Controller } from "react-hook-form";
 import InputField from "../InputField";
 import { subjectSchema, SubjectSchema } from "@/lib/formValidationSchemas";
 import { createSubject, updateSubject } from "@/lib/actions";
-import { useActionState, Dispatch,
+import {
+  useActionState,
+  Dispatch,
   SetStateAction,
   useEffect,
   useState,
-  useRef, } from "react";
+  useRef,
+  startTransition,
+} from "react";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "react-toastify";
 import Image from "next/image";
@@ -26,10 +31,10 @@ const SubjectForm = ({
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
 }) => {
+  const router = useRouter();
   const t = useTranslations("subjects");
   const tCommon = useTranslations("common");
   const tErrors = useTranslations("errors");
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const {
     register,
     handleSubmit,
@@ -53,14 +58,15 @@ const SubjectForm = ({
     message: "",
   };
 
-  const [state, formAction] = useActionState(
+  const [state, formAction, isPending] = useActionState(
     type === "create" ? createSubject : updateSubject,
     initialState
   );
 
   const onSubmit = handleSubmit((formData) => {
-    setIsSubmitting(true);
-    formAction(formData);
+    startTransition(() => {
+      formAction(formData);
+    });
   });
 
   const [isTeachersOpen, setIsTeachersOpen] = useState(false);
@@ -68,20 +74,19 @@ const SubjectForm = ({
   const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
-    // When the action is complete (success or error), set pending back to false
-    if (state.success || state.error) {
-        setIsSubmitting(false);
-    }
     if (state.success) {
       toast.success(
         state.message || `Subject has been ${type}d successfully!`
       );
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
     if (state.error && state.message) {
       toast.error(state.message);
     }
-  }, [state, type, setOpen]);
+  }, [state, type, setOpen, router]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -240,10 +245,10 @@ const SubjectForm = ({
         type="submit" 
         variant="primary"
         size="lg"
-        disabled={isSubmitting}
+        disabled={isPending}
         className="w-full"
       >
-        {isSubmitting ? (type === 'create' ? t("submittingCreate") : t("submittingUpdate")) : (type === 'create' ? tCommon("create") : tCommon("edit"))}
+        {isPending ? (type === 'create' ? t("submittingCreate") : t("submittingUpdate")) : (type === 'create' ? tCommon("create") : tCommon("edit"))}
       </Button>
     </form>
   );

@@ -6,7 +6,8 @@ import InputField from "../InputField";
 import { workshopSchema, WorkshopSchema } from "@/lib/formValidationSchemas";
 import { createWorkshop, updateWorkshop } from "@/lib/actions";
 
-import { useActionState, Dispatch, SetStateAction, useEffect, useState, useRef } from "react";
+import { useActionState, Dispatch, SetStateAction, useEffect, useState, useRef, startTransition } from "react";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "react-toastify";
 import { Teacher, Student } from "@prisma/client";
@@ -33,8 +34,7 @@ const WorkshopForm = ({
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: { teachers: Teacher[], students: Student[] };
 }) => {
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const router = useRouter();
   const {
     register,
     handleSubmit,
@@ -58,14 +58,15 @@ const WorkshopForm = ({
     name: "sessions",
   });
 
-  const [state, formAction] = useActionState(
+  const [state, formAction, isPending] = useActionState(
     type === "create" ? createWorkshop : updateWorkshop,
     { success: false, error: false, message: "" }
   );
 
   const onSubmit = handleSubmit((formData) => {
-  setIsSubmitting(true); // Set loading state to true
-  formAction(formData);  // Call the server action
+    startTransition(() => {
+      formAction(formData);
+    });
   });
 
   const [isTeachersOpen, setIsTeachersOpen] = useState(false);
@@ -74,17 +75,17 @@ const WorkshopForm = ({
   const studentsDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (state.success || state.error) {
-      setIsSubmitting(false); // Reset loading state
-    }
     if (state?.success) {
       toast.success(state.message);
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
     if (state?.error) {
       toast.error(state.message);
     }
-  }, [state, setOpen]);
+  }, [state, setOpen, router]);
   
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -172,10 +173,10 @@ const WorkshopForm = ({
         type="submit" 
         variant="primary"
         size="lg"
-        disabled={isSubmitting}
+        disabled={isPending}
         className="w-full"
       >
-        {isSubmitting ? (type === 'create' ? t("submittingCreate") : t("submittingUpdate")) : (type === 'create' ? tCommon("create") : tCommon("update"))}
+        {isPending ? (type === 'create' ? t("submittingCreate") : t("submittingUpdate")) : (type === 'create' ? tCommon("create") : tCommon("update"))}
       </Button>
     </form>
   );

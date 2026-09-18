@@ -11,7 +11,9 @@ import {
   useEffect,
   useState,
   useRef,
+  startTransition,
 } from "react";
+import { useRouter } from "next/navigation";
 import { teacherSchema, TeacherSchema } from "@/lib/formValidationSchemas";
 import { createTeacher, updateTeacher } from "@/lib/actions";
 import { toast } from "react-toastify";
@@ -35,11 +37,10 @@ const TeacherForm = ({
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
 }) => {
+  const router = useRouter();
   const tTeachers = useTranslations("teachers");
   const tCommon = useTranslations("common");
   const tErrors = useTranslations("errors");
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const nameParts = data?.name ? data.name.trim().split(" ") : [];
   const defaultFirstName = data?.name
@@ -65,7 +66,17 @@ const TeacherForm = ({
           gender: data.gender || data.sex || "MALE",
           phone: data.phone ?? "",
           subjects: Array.isArray(data.subjects)
-            ? data.subjects.map((s: any) => (typeof s === "number" ? s : s.id)).filter(Boolean)
+            ? data.subjects
+                .map((s: any) =>
+                  typeof s === "number"
+                    ? s
+                    : typeof s === "string" && !isNaN(Number(s))
+                    ? Number(s)
+                    : s && typeof s.id === "number"
+                    ? s.id
+                    : Number(s?.id)
+                )
+                .filter((id: any): id is number => typeof id === "number" && !isNaN(id))
             : [],
         }
       : {
@@ -82,17 +93,15 @@ const TeacherForm = ({
 
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createTeacher : updateTeacher;
-  const [state, formAction] = useActionState<FormState, any>(actionToRun as any, initialState);
+  const [state, formAction, isPending] = useActionState<FormState, any>(actionToRun as any, initialState);
 
   const onSubmit = (formData: TeacherSchema) => {
-    setIsSubmitting(true);
-    formAction(formData as any);
+    startTransition(() => {
+      formAction(formData as any);
+    });
   };
 
   useEffect(() => {
-    if (state.success || state.error) {
-      setIsSubmitting(false);
-    }
     if (state.success) {
       toast.success(
         state.message ||
@@ -101,11 +110,14 @@ const TeacherForm = ({
             : tTeachers("updatedSuccessfully"))
       );
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
     if (state.error && state.message) {
       toast.error(state.message);
     }
-  }, [state, type, setOpen, tTeachers]);
+  }, [state, type, setOpen, tTeachers, router]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -271,10 +283,10 @@ const TeacherForm = ({
         type="submit"
         variant="primary"
         size="lg"
-        disabled={isSubmitting}
+        disabled={isPending}
         className="w-full mt-2"
       >
-        {isSubmitting
+        {isPending
           ? type === "create"
             ? tTeachers("submittingCreate")
             : tTeachers("submittingUpdate")

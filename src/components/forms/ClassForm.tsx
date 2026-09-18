@@ -5,7 +5,8 @@ import { useForm } from "react-hook-form";
 import InputField from "../InputField";
 import { classSchema, ClassSchema } from "@/lib/formValidationSchemas";
 import { createClass, updateClass } from "@/lib/actions";
-import { useActionState, Dispatch, SetStateAction, useEffect, useState } from "react";
+import { useActionState, Dispatch, SetStateAction, useEffect, useState, startTransition } from "react";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "react-toastify";
 import { Button } from "@/components/ui/Button";
@@ -21,12 +22,11 @@ const ClassForm = ({
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
 }) => {
-
+  const router = useRouter();
   const tClasses = useTranslations("classes");
   const tCommon = useTranslations("common");
   const tErrors = useTranslations("errors");
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const {
     register,
     handleSubmit,
@@ -44,31 +44,31 @@ const ClassForm = ({
     message: "",
   };
 
-  const [state, formAction] = useActionState(
+  const [state, formAction, isPending] = useActionState(
     type === "create" ? createClass : updateClass,
     initialState
   );
 
   const onSubmit = handleSubmit((formData) => {
-    setIsSubmitting(true);
-    formAction(formData);
+    startTransition(() => {
+      formAction(formData);
+    });
   });
 
   useEffect(() => {
-    // When the action is complete (success or error), set pending back to false
-    if (state.success || state.error) {
-        setIsSubmitting(false);
-    }
     if (state.success) {
       toast.success(
         state.message || (type === "create" ? tClasses("createdSuccessfully") : tClasses("updatedSuccessfully"))
       );
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
     if (state.error && state.message) {
       toast.error(state.message);
     }
-  }, [state, type, setOpen, tClasses]);
+  }, [state, type, setOpen, tClasses, router]);
 
   const { teachers, grades } = relatedData;
 
@@ -150,10 +150,10 @@ const ClassForm = ({
         type="submit" 
         variant="primary"
         size="lg"
-        disabled={isSubmitting}
+        disabled={isPending}
         className="w-full"
       >
-        {isSubmitting
+        {isPending
           ? type === "create"
             ? tClasses("submittingCreate")
             : tClasses("submittingUpdate")

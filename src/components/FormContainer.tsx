@@ -62,12 +62,34 @@ const FormContainer = async ({
           break;
         }
         case "teacher": {
+          const targetTeacherId = (id || data?.id) as string | undefined;
+          let teacherSubjectIds: number[] = [];
+          if (targetTeacherId) {
+            const allSettings = await prisma.setting.findMany({
+              where: { id: { startsWith: "subject_teachers_" } },
+            });
+            for (const s of allSettings) {
+              try {
+                const list = JSON.parse(s.value);
+                if (Array.isArray(list) && list.includes(targetTeacherId)) {
+                  const subId = parseInt(s.id.replace("subject_teachers_", ""), 10);
+                  if (!isNaN(subId)) teacherSubjectIds.push(subId);
+                }
+              } catch {}
+            }
+          }
           const subjects = await prisma.$queryRaw<Array<{ id: number; name: string }>>`
             SELECT id, name FROM "Language" ORDER BY name ASC
           `;
           finalRelatedData = {
             subjects: subjects.map((s) => ({ id: s.id, name: s.name })),
           };
+          if (data && targetTeacherId) {
+            data = {
+              ...data,
+              subjects: teacherSubjectIds,
+            };
+          }
           break;
         }
         case "student": {

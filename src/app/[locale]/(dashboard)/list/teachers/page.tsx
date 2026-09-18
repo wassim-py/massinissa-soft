@@ -93,7 +93,7 @@ const TeacherListPage = async (
           SELECT id, name FROM "Level" ORDER BY id ASC
         `;
 
-    const [rawTeachers, totalCount, allLevels, branches] = await Promise.all([
+    const [rawTeachers, totalCount, allLevels, branches, subjectSettings, rawLanguages] = await Promise.all([
       prisma.teacher.findMany({
         where: whereClause,
         skip: ITEM_PER_PAGE * (p - 1),
@@ -123,6 +123,12 @@ const TeacherListPage = async (
       prisma.branch.findMany({
         select: { id: true, name: true },
       }),
+      prisma.setting.findMany({
+        where: { id: { startsWith: "subject_teachers_" } },
+      }),
+      prisma.$queryRaw<Array<{ id: number; name: string }>>`
+        SELECT id, name FROM "Language" ORDER BY name ASC
+      `,
     ]);
 
     count = totalCount;
@@ -130,6 +136,25 @@ const TeacherListPage = async (
 
     const currentBranch = branches.find((b) => b.id === activeBranchId);
     activeBranchName = currentBranch ? currentBranch.name : `الفرع ${activeBranchId}`;
+
+    const langMap = new Map(rawLanguages.map((l) => [l.id, l.name]));
+    const teacherAssignedSubjects = new Map<string, Array<{ id?: number; name: string }>>();
+    for (const s of subjectSettings) {
+      const subId = parseInt(s.id.replace("subject_teachers_", ""), 10);
+      const subName = langMap.get(subId);
+      if (!subName) continue;
+      try {
+        const list = JSON.parse(s.value);
+        if (Array.isArray(list)) {
+          for (const teacherId of list) {
+            if (!teacherAssignedSubjects.has(teacherId)) {
+              teacherAssignedSubjects.set(teacherId, []);
+            }
+            teacherAssignedSubjects.get(teacherId)!.push({ id: subId, name: subName });
+          }
+        }
+      } catch {}
+    }
 
     teachersData = rawTeachers.map((t) => {
       // Deduplicate classes from Class.teacherId and Lesson.teacherId
@@ -140,13 +165,18 @@ const TeacherListPage = async (
       });
       const classes = Array.from(classMap.entries()).map(([id, name]) => ({ id, name }));
 
-      // Derive subjects taught from classes or name split
-      const subjectSet = new Set<string>();
+      // Combine explicit assignments from subject_teachers_ and any derived from class names
+      const subjectMap = new Map<string, { id?: number; name: string }>();
+      const explicitSubjects = teacherAssignedSubjects.get(t.id) || [];
+      explicitSubjects.forEach((sub) => subjectMap.set(sub.name, sub));
+
       classes.forEach((c) => {
         const subj = c.name.split(" - ")[0]?.trim();
-        if (subj) subjectSet.add(subj);
+        if (subj && !subjectMap.has(subj)) {
+          subjectMap.set(subj, { name: subj });
+        }
       });
-      const subjects = Array.from(subjectSet).map((name) => ({ name }));
+      const subjects = Array.from(subjectMap.values());
 
       return {
         id: t.id,
