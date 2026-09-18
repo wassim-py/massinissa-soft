@@ -2,7 +2,7 @@ import { clerkMiddleware, createRouteMatcher, createClerkClient } from "@clerk/n
 import createIntlMiddleware from "next-intl/middleware";
 import { routing } from "./i18n/routing";
 import { routeAccessMap } from "./lib/settings";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
 
 const handleI18nRouting = createIntlMiddleware(routing);
 
@@ -12,7 +12,8 @@ const matchers = Object.keys(routeAccessMap).map((route) => ({
   allowedRoles: routeAccessMap[route],
 }));
 
-export default clerkMiddleware(async (auth, req) => {
+const clerkAuth = clerkMiddleware(
+  async (auth, req) => {
   // If request is for an API route, clerk proxy, static manifest, sw, or icons, do not run i18n routing
   if (
     req.nextUrl.pathname.startsWith("/api") ||
@@ -114,7 +115,33 @@ export default clerkMiddleware(async (auth, req) => {
 
   // Delegate remaining requests to next-intl for localization routing and rewrites
   return handleI18nRouting(req);
-});
+}, (req: NextRequest) => ({
+  proxyUrl: `${req.nextUrl.origin}/__clerk`,
+}));
+
+export default async function middleware(req: NextRequest, event: NextFetchEvent) {
+  // If request is for an internal clerk proxy, bypass middleware entirely
+  if (req.nextUrl.pathname.startsWith("/__clerk")) {
+    return NextResponse.next();
+  }
+
+  const res = await clerkAuth(req, event);
+
+  // Safeguard: Ensure no handshake or auth redirect ever goes to unconfigured CNAME domain
+  if (res && res.headers) {
+    const location = res.headers.get("location");
+    if (location && location.includes("clerk.classty-massinissa-school.vercel.app")) {
+      const origin = req.nextUrl.origin;
+      const fixedLocation = location.replace(
+        "https://clerk.classty-massinissa-school.vercel.app",
+        `${origin}/__clerk`
+      );
+      res.headers.set("location", fixedLocation);
+    }
+  }
+
+  return res;
+}
 
 export const config = {
   matcher: [

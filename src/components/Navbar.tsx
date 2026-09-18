@@ -42,7 +42,7 @@ const Navbar = async ({
       </div>
 
       {/* END: NOTIFICATION BELL, LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
-      <div className="flex items-center gap-2.5 sm:gap-4 md:gap-6 justify-end shrink-0">
+      <div className="flex items-center gap-2 sm:gap-4 md:gap-6 justify-end shrink-0">
         <NavbarAnnouncementBadge />
         <LanguageSwitcher />
 

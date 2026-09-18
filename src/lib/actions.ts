@@ -800,7 +800,10 @@ const getLessonDateTime = (day: string, time: string): Date => {
   // September 6, 2026 = Sunday (getDay() === 0)
   // ...
   // September 11, 2026 = Friday (getDay() === 5)
-  return new Date(2026, 8, dayOffset, hours || 0, minutes || 0, 0, 0);
+  // School timezone is UTC+1 (Africa/Algiers, constant without DST).
+  // Database timestamps are stored in UTC; subtracting 1 hour from local time
+  // guarantees the saved UTC time exactly matches the entered local hour when read back.
+  return new Date(Date.UTC(2026, 8, dayOffset, (hours || 0) - 1, minutes || 0, 0, 0));
 };
 
 const checkForConflicts = async ({

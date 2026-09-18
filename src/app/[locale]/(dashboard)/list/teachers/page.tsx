@@ -165,17 +165,10 @@ const TeacherListPage = async (
       });
       const classes = Array.from(classMap.entries()).map(([id, name]) => ({ id, name }));
 
-      // Combine explicit assignments from subject_teachers_ and any derived from class names
+      // Only explicit subject assignments from subject_teachers_ (classes/groups belong strictly in the Groups column)
       const subjectMap = new Map<string, { id?: number; name: string }>();
       const explicitSubjects = teacherAssignedSubjects.get(t.id) || [];
       explicitSubjects.forEach((sub) => subjectMap.set(sub.name, sub));
-
-      classes.forEach((c) => {
-        const subj = c.name.split(" - ")[0]?.trim();
-        if (subj && !subjectMap.has(subj)) {
-          subjectMap.set(subj, { name: subj });
-        }
-      });
       const subjects = Array.from(subjectMap.values());
 
       return {

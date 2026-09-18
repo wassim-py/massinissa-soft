@@ -8,6 +8,15 @@ async function handler(req: NextRequest) {
   const subpath = req.nextUrl.pathname.replace(/^\/__clerk/, "");
   const targetUrl = new URL(subpath + req.nextUrl.search, CLERK_FAPI_HOST);
 
+  // If redirect_url is passed (e.g. handshake), ensure it matches allowed production domain for Clerk
+  const redirectUrl = targetUrl.searchParams.get("redirect_url");
+  if (redirectUrl && (redirectUrl.includes("localhost") || redirectUrl.includes("127.0.0.1"))) {
+    try {
+      const parsedRedirect = new URL(redirectUrl);
+      targetUrl.searchParams.set("redirect_url", `${PROD_ORIGIN}${parsedRedirect.pathname}${parsedRedirect.search}`);
+    } catch {}
+  }
+
   const forwardHeaders = new Headers();
   for (const [key, value] of req.headers.entries()) {
     const lower = key.toLowerCase();
@@ -66,10 +75,15 @@ async function handler(req: NextRequest) {
     const location = clerkResponse.headers.get("location");
     if (location) {
       let newLocation = location
+        .replace("https://clerk.classty-massinissa-school.vercel.app", `${clientOrigin}/__clerk`)
         .replace(PROD_PROXY_URL, `${clientOrigin}/__clerk`)
         .replace(CLERK_FAPI_HOST, `${clientOrigin}/__clerk`);
       if (newLocation.startsWith("/")) {
         newLocation = `${clientOrigin}/__clerk${newLocation}`;
+      }
+      // If clerk redirected to production root on a local request, bring it back to clientOrigin
+      if (newLocation.startsWith(PROD_ORIGIN) && !newLocation.startsWith(PROD_PROXY_URL)) {
+        newLocation = newLocation.replace(PROD_ORIGIN, clientOrigin);
       }
       resHeaders.set("location", newLocation);
     }
