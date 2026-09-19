@@ -88,6 +88,17 @@ export async function createBookAction(formData: {
       },
     });
 
+    // When admin adds a book version for a teacher, all his groups in that level get books
+    await prisma.class.updateMany({
+      where: {
+        teacherId: formData.teacherId,
+        levelId: Number(formData.levelId),
+      },
+      data: {
+        hasBooks: true,
+      },
+    });
+
     // Revalidate affected routes
     safeRevalidatePath("/list/classes");
     if (formData.classId) {
@@ -160,9 +171,10 @@ export async function toggleBookReceiptAction(data: {
       };
     }
 
-    // Entitlement check: Student must have a valid BOOK voucher for this trimester & teacher+level
+    // Check whether student has paid the book voucher for this trimester & teacher+level
+    let hasPaid = false;
     if (book.trimesterId) {
-      const hasPaid = await prisma.voucher.findFirst({
+      const voucher = await prisma.voucher.findFirst({
         where: {
           studentId,
           paymentType: "BOOK",
@@ -179,15 +191,7 @@ export async function toggleBookReceiptAction(data: {
           ],
         },
       });
-
-      if (!hasPaid) {
-        return {
-          success: false,
-          error: true,
-          message:
-            "L'élève n'a pas réglé les frais de livres pour ce trimestre / التلميذ لم يدفع معاليم الكتب لهذا الفصل بعد.",
-        };
-      }
+      hasPaid = !!voucher;
     }
 
     if (received) {
@@ -231,13 +235,17 @@ export async function toggleBookReceiptAction(data: {
     safeRevalidatePath("/list/classes");
     safeRevalidatePath("/list/classes", "layout");
 
+    const successMessage = received
+      ? hasPaid
+        ? `Livre "${book.title}" marqué comme remis / تم تأكيد استلام كتاب "${book.title}".`
+        : `Livre "${book.title}" remis (Frais non encore réglés) / تم تسليم كتاب "${book.title}" (تنبيه: الرسوم غير مسددة بعد).`
+      : `Remise du livre "${book.title}" annulée / تم إلغاء استلام كتاب "${book.title}".`;
+
     return {
       success: true,
       error: false,
-      message: received
-        ? `Livre "${book.title}" marqué comme remis / تم تأكيد استلام كتاب "${book.title}".`
-        : `Remise du livre "${book.title}" annulée / تم إلغاء استلام كتاب "${book.title}".`,
-      data: { studentId, bookId: book.id, received },
+      message: successMessage,
+      data: { studentId, bookId: book.id, received, hasPaid },
     };
   } catch (error: any) {
     console.error("Error in toggleBookReceiptAction:", error);
@@ -299,6 +307,26 @@ export async function getGroupBooksData(classId: number) {
     createdAt: Date;
   }> = [];
 
+  let allStudents: Array<{
+    id: string;
+    name: string;
+    phone: string | null;
+    parentPhone: string | null;
+    globalNumber: number;
+    hasPaidBook: boolean;
+    voucherNumber: number | null;
+    voucherDate: Date | null;
+    receipts: Record<number, { received: boolean; receivedAt: Date | null }>;
+    receivedCount: number;
+    totalBooks: number;
+    status:
+      | "PAID_AND_RECEIVED"
+      | "PAID_NOT_RECEIVED"
+      | "PARTIALLY_RECEIVED"
+      | "UNPAID_RECEIVED"
+      | "UNPAID_NOT_RECEIVED";
+  }> = [];
+
   let feePaidStudents: Array<{
     id: string;
     name: string;
@@ -321,8 +349,18 @@ export async function getGroupBooksData(classId: number) {
       orderBy: { createdAt: "asc" },
     });
 
-    // 2. Fetch live fee-paid students for THIS class & THIS active trimester
-    const enrolledStudentIds = classData.enrollments.map((e) => e.studentId);
+    // If teacher has books for this level, make sure class.hasBooks is true
+    if (books.length > 0 && !classData.hasBooks) {
+      await prisma.class.update({
+        where: { id: classData.id },
+        data: { hasBooks: true },
+      });
+      classData.hasBooks = true;
+    }
+
+    // 2. Fetch live fee-paid vouchers for students of THIS class & THIS active trimester
+    const enrolledStudents = classData.enrollments.map((e) => e.student);
+    const enrolledStudentIds = enrolledStudents.map((s) => s.id);
 
     const paidVouchers = await prisma.voucher.findMany({
       where: {
@@ -340,17 +378,10 @@ export async function getGroupBooksData(classId: number) {
           },
         ],
       },
-      include: {
-        student: {
-          include: {
-            parentPhoneNumbers: true,
-          },
-        },
-      },
-      orderBy: { issuedAt: "asc" },
+      orderBy: { issuedAt: "desc" },
     });
 
-    // Deduplicate in case a student has multiple book vouchers for the group
+    // Deduplicate in case a student has multiple book vouchers
     const studentVoucherMap = new Map<string, typeof paidVouchers[0]>();
     for (const v of paidVouchers) {
       if (!studentVoucherMap.has(v.studentId)) {
@@ -358,16 +389,14 @@ export async function getGroupBooksData(classId: number) {
       }
     }
 
-    const paidStudentsList = Array.from(studentVoucherMap.values());
-    const paidStudentIds = paidStudentsList.map((v) => v.studentId);
     const bookIds = books.map((b) => b.id);
 
-    // 3. Fetch BookReceipt records for (paidStudentIds × bookIds)
+    // 3. Fetch BookReceipt records for ALL enrolled students and this group's books
     const receipts =
-      paidStudentIds.length > 0 && bookIds.length > 0
+      enrolledStudentIds.length > 0 && bookIds.length > 0
         ? await prisma.bookReceipt.findMany({
             where: {
-              studentId: { in: paidStudentIds },
+              studentId: { in: enrolledStudentIds },
               bookId: { in: bookIds },
             },
           })
@@ -378,18 +407,44 @@ export async function getGroupBooksData(classId: number) {
       receiptLookup.set(`${r.studentId}_${r.bookId}`, r.receivedAt);
     }
 
-    // Build student rows
-    feePaidStudents = paidStudentsList.map((v) => {
-      const s = v.student;
+    // 4. Build student rows for ALL enrolled students
+    allStudents = enrolledStudents.map((s) => {
+      const voucher = studentVoucherMap.get(s.id);
+      const hasPaidBook = Boolean(voucher);
       const studentReceipts: Record<number, { received: boolean; receivedAt: Date | null }> = {};
+      let receivedCount = 0;
 
       for (const b of books) {
         const key = `${s.id}_${b.id}`;
         const hasReceipt = receiptLookup.has(key);
+        if (hasReceipt) receivedCount++;
         studentReceipts[b.id] = {
           received: hasReceipt,
           receivedAt: hasReceipt ? receiptLookup.get(key)! : null,
         };
+      }
+
+      let status:
+        | "PAID_AND_RECEIVED"
+        | "PAID_NOT_RECEIVED"
+        | "PARTIALLY_RECEIVED"
+        | "UNPAID_RECEIVED"
+        | "UNPAID_NOT_RECEIVED" = "UNPAID_NOT_RECEIVED";
+
+      if (hasPaidBook) {
+        if (books.length > 0 && receivedCount === books.length) {
+          status = "PAID_AND_RECEIVED";
+        } else if (receivedCount > 0) {
+          status = "PARTIALLY_RECEIVED";
+        } else {
+          status = "PAID_NOT_RECEIVED";
+        }
+      } else {
+        if (receivedCount > 0) {
+          status = "UNPAID_RECEIVED";
+        } else {
+          status = "UNPAID_NOT_RECEIVED";
+        }
       }
 
       return {
@@ -398,14 +453,32 @@ export async function getGroupBooksData(classId: number) {
         phone: s.phone || null,
         parentPhone: s.parentPhoneNumbers?.[0]?.phone || null,
         globalNumber: s.globalNumber,
-        voucherNumber: v.number,
-        voucherDate: v.issuedAt,
+        hasPaidBook,
+        voucherNumber: voucher ? voucher.number : null,
+        voucherDate: voucher ? voucher.issuedAt : null,
         receipts: studentReceipts,
+        receivedCount,
+        totalBooks: books.length,
+        status,
       };
     });
 
     // Sort alphabetically by student name
-    feePaidStudents.sort((a, b) => a.name.localeCompare(b.name, "ar"));
+    allStudents.sort((a, b) => a.name.localeCompare(b.name, "ar"));
+
+    // Legacy feePaidStudents list for backwards compatibility
+    feePaidStudents = allStudents
+      .filter((s) => s.hasPaidBook && s.voucherNumber !== null && s.voucherDate !== null)
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        phone: s.phone,
+        parentPhone: s.parentPhone,
+        globalNumber: s.globalNumber,
+        voucherNumber: s.voucherNumber!,
+        voucherDate: s.voucherDate!,
+        receipts: s.receipts,
+      }));
   }
 
   // Fetch all levels for the "Add Book" modal level selector
@@ -424,7 +497,7 @@ export async function getGroupBooksData(classId: number) {
       teacherName: classData.teacher?.name || null,
       levelId: classData.levelId,
       levelName: classData.level?.name || null,
-      hasBooks: classData.hasBooks,
+      hasBooks: classData.hasBooks || books.length > 0,
       bookFee: classData.bookFee ? Number(classData.bookFee) : null,
       enrollmentsCount: classData.enrollments.length,
     },
@@ -451,6 +524,19 @@ export async function getGroupBooksData(classId: number) {
       levelId: b.levelId,
       trimesterId: b.trimesterId,
       createdAt: b.createdAt.toISOString(),
+    })),
+    allStudents: allStudents.map((s) => ({
+      ...s,
+      voucherDate: s.voucherDate ? s.voucherDate.toISOString() : null,
+      receipts: Object.fromEntries(
+        Object.entries(s.receipts).map(([bId, r]) => [
+          bId,
+          {
+            received: r.received,
+            receivedAt: r.receivedAt ? r.receivedAt.toISOString() : null,
+          },
+        ])
+      ),
     })),
     feePaidStudents: feePaidStudents.map((s) => ({
       ...s,

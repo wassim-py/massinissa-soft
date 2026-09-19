@@ -113,6 +113,7 @@ export default async function ClassGroupDetailPage(props: PageProps) {
           activeTrimester={serializeForClient(activeTrimester)}
           allTrimesters={serializeForClient(allTrimesters)}
           books={serializeForClient(books)}
+          allStudents={serializeForClient(groupData.allStudents)}
           feePaidStudents={serializeForClient(feePaidStudents)}
           allLevels={serializeForClient(allLevels)}
         />

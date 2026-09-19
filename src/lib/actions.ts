@@ -195,9 +195,17 @@ export const createClass = async (
     const pricePerCycle = data.price || 0;
     const teacherId = (data as any).teacherId || data.supervisorId || null;
     const levelId = data.gradeId ? Number(data.gradeId) : null;
+
+    const bookCount = teacherId && levelId
+      ? await prisma.book.count({
+          where: { teacherId, levelId },
+        })
+      : 0;
+    const hasBooks = bookCount > 0;
+
     await prisma.$executeRaw`
       INSERT INTO "Class" (name, "branchId", "pricePerCycle", "inscriptionFee", "hasBooks", "isFormation", "teacherId", "levelId")
-      VALUES (${data.name}, ${branchId}, ${pricePerCycle}, 0, false, false, ${teacherId}, ${levelId})
+      VALUES (${data.name}, ${branchId}, ${pricePerCycle}, 0, ${hasBooks}, false, ${teacherId}, ${levelId})
     `;
 
     safeRevalidatePath("/list/classes");
@@ -245,9 +253,16 @@ export const updateClass = async (
       ? (data.gradeId ? Number(data.gradeId) : null)
       : existing[0].levelId;
 
+    const bookCount = teacherId && levelId
+      ? await prisma.book.count({
+          where: { teacherId, levelId },
+        })
+      : 0;
+    const hasBooks = bookCount > 0;
+
     await prisma.$executeRaw`
       UPDATE "Class"
-      SET name = ${data.name}, "branchId" = ${branchId}, "pricePerCycle" = ${pricePerCycle}, "teacherId" = ${teacherId}, "levelId" = ${levelId}
+      SET name = ${data.name}, "branchId" = ${branchId}, "pricePerCycle" = ${pricePerCycle}, "teacherId" = ${teacherId}, "levelId" = ${levelId}, "hasBooks" = "hasBooks" OR ${hasBooks}
       WHERE id = ${data.id}
     `;
 
@@ -4532,8 +4547,21 @@ export async function recordBookDropAction(formData: {
       },
     });
 
+    if (drop.book.levelId) {
+      await prisma.class.updateMany({
+        where: {
+          teacherId: formData.teacherId,
+          levelId: drop.book.levelId,
+        },
+        data: {
+          hasBooks: true,
+        },
+      });
+    }
+
     safeRevalidatePath("/list/teachers");
     safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
+    safeRevalidatePath("/list/classes");
 
     return {
       success: true,

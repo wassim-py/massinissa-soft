@@ -15,6 +15,7 @@ import CatchUpVisitorModal from "./CatchUpVisitorModal";
 import { BookOpen, Check, X, Minus, ChevronDown } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
+import BookStatusBadge, { computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
 
 const SubmitButton = () => {
   const { pending } = useFormStatus();
@@ -57,8 +58,10 @@ type FullStudent = Student & {
   attendances: Attendance[];
   family?: { payerStudentId: string | null } | null;
   isBookEligible?: boolean;
+  hasPaidBook?: boolean;
   receivedBookIds?: number[];
   outstandingBooks?: Array<{ id: number; title: string }>;
+  bookDetails?: Array<{ id: number; title: string; received: boolean; receivedAt?: string | Date | null }>;
 };
 
 type FullLesson = Lesson & {
@@ -152,11 +155,12 @@ const AttendanceRoster = ({
     };
   }, [activeChecklistStudentId]);
 
-  const handleQuickHandout = async (studentId: string, bookId: number) => {
+  const handleToggleBookHandout = async (studentId: string, bookId: number, isCurrentlyReceived: boolean) => {
     const currentReceived = studentReceivedBooks[studentId] || [];
-    if (currentReceived.includes(bookId)) return;
-
-    const nextReceived = [...currentReceived, bookId];
+    const nextVal = !isCurrentlyReceived;
+    const nextReceived = nextVal
+      ? [...currentReceived, bookId]
+      : currentReceived.filter((id) => id !== bookId);
 
     // Optimistic update
     setStudentReceivedBooks((prev) => ({
@@ -164,22 +168,12 @@ const AttendanceRoster = ({
       [studentId]: nextReceived,
     }));
 
-    // Auto-close checklist if all books have been received
-    const allGroupBooks =
-      groupBooks && groupBooks.length > 0
-        ? groupBooks
-        : booksWithDrops.map((b) => ({ id: b.id, title: b.title }));
-    const remainingCount = allGroupBooks.filter((b) => !nextReceived.includes(b.id)).length;
-    if (remainingCount === 0) {
-      setActiveChecklistStudentId(null);
-    }
-
     try {
       const res = await executeWithRetry(() =>
         toggleBookReceiptAction({
           studentId,
           bookId,
-          received: true,
+          received: nextVal,
           classId: lesson.class.id,
         })
       );
@@ -189,14 +183,14 @@ const AttendanceRoster = ({
       } else {
         setStudentReceivedBooks((prev) => ({
           ...prev,
-          [studentId]: (prev[studentId] || []).filter((id) => id !== bookId),
+          [studentId]: currentReceived,
         }));
         toast.error(res.message);
       }
     } catch (err: any) {
       setStudentReceivedBooks((prev) => ({
         ...prev,
-        [studentId]: (prev[studentId] || []).filter((id) => id !== bookId),
+        [studentId]: currentReceived,
       }));
       toast.error(err?.message || "Erreur de remise du livre");
     }
@@ -514,9 +508,18 @@ const AttendanceRoster = ({
               groupBooks && groupBooks.length > 0
                 ? groupBooks
                 : booksWithDrops.map((b) => ({ id: b.id, title: b.title }));
-            const outstandingBooks = student.isBookEligible
-              ? allGroupBooks.filter((b) => !currentReceivedSet.has(b.id))
-              : [];
+            const studentReceivedCount = allGroupBooks.filter((b) => currentReceivedSet.has(b.id)).length;
+            const studentBookDetails: BookDetailItem[] = allGroupBooks.map((b) => ({
+              id: b.id,
+              title: b.title,
+              received: currentReceivedSet.has(b.id),
+              receivedAt: student.bookDetails?.find((d) => d.id === b.id)?.receivedAt,
+            }));
+            const computedBookStatus = computeBookStatus(
+              !!student.hasPaidBook,
+              studentReceivedCount,
+              allGroupBooks.length
+            );
 
             return (
               <div
@@ -626,90 +629,134 @@ const AttendanceRoster = ({
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Quick Book Handout Indicator (§7.19 & §7.20 / Phase 35/36) */}
-                      {/* Only shown when student is entitled AND has at least one outstanding book */}
-                      {outstandingBooks.length === 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleQuickHandout(student.id, outstandingBooks[0].id)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50/80 text-indigo-900 border border-indigo-200/80 hover:bg-indigo-100 hover:border-indigo-300 transition-colors shadow-2xs cursor-pointer active:scale-[0.98]"
-                          title={
-                            locale === "ar"
-                              ? `انقر لتسليم كتاب: ${outstandingBooks[0].title}`
-                              : `Cliquer pour remettre : ${outstandingBooks[0].title}`
-                          }
-                        >
-                          <BookOpen className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                          <span className="truncate max-w-[120px] sm:max-w-[170px] font-medium">
-                            {outstandingBooks[0].title}
-                          </span>
-                          <span className="text-[10px] font-bold bg-indigo-600 text-white px-1.5 py-0.5 rounded shrink-0">
-                            {locale === "ar" ? "تسليم" : "Remettre"}
-                          </span>
-                        </button>
-                      )}
+                      {/* Book Status Badge and Toggle Controls */}
+                      {allGroupBooks.length > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <BookStatusBadge
+                            status={computedBookStatus}
+                            receivedCount={studentReceivedCount}
+                            totalBooks={allGroupBooks.length}
+                            details={studentBookDetails}
+                            size="sm"
+                          />
 
-                      {outstandingBooks.length > 1 && (
-                        <div className="relative" ref={activeChecklistStudentId === student.id ? checklistRef : null}>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setActiveChecklistStudentId((prev) =>
-                                prev === student.id ? null : student.id
-                              )
-                            }
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50/80 text-indigo-900 border border-indigo-200/80 hover:bg-indigo-100 hover:border-indigo-300 transition-colors shadow-2xs cursor-pointer active:scale-[0.98]"
-                            title={
-                              locale === "ar"
-                                ? "عرض قائمة الكتب غير المسلّمة"
-                                : "Ouvrir la liste des livres à remettre"
-                            }
-                          >
-                            <BookOpen className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                            <span>
-                              {locale === "ar"
-                                ? `كتب للتسليم (${outstandingBooks.length})`
-                                : `Livres (${outstandingBooks.length})`}
-                            </span>
-                            <ChevronDown
-                              className={`w-3 h-3 text-indigo-500 transition-transform ${
-                                activeChecklistStudentId === student.id ? "rotate-180" : ""
+                          {/* When exactly 1 book version in group: quick toggle button */}
+                          {allGroupBooks.length === 1 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleToggleBookHandout(
+                                  student.id,
+                                  allGroupBooks[0].id,
+                                  currentReceivedSet.has(allGroupBooks[0].id)
+                                )
+                              }
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer active:scale-[0.98] ${
+                                currentReceivedSet.has(allGroupBooks[0].id)
+                                  ? "bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-rose-50 hover:text-rose-800 hover:border-rose-300 group"
+                                  : "bg-indigo-50/80 text-indigo-900 border-indigo-200/80 hover:bg-indigo-100 hover:border-indigo-300 shadow-2xs"
                               }`}
-                            />
-                          </button>
-
-                          {activeChecklistStudentId === student.id && (
-                            <div className="absolute z-30 end-0 mt-1.5 w-72 bg-white border border-border rounded-xl shadow-xl p-2.5 space-y-2 animate-in fade-in zoom-in-95">
-                              <div className="flex items-center justify-between text-xs font-bold text-gray-800 px-1 pb-1.5 border-b border-border/70">
-                                <span className="flex items-center gap-1.5">
-                                  <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
-                                  <span>{locale === "ar" ? "اختر الكتاب المسلّم:" : "Livres à remettre :"}</span>
+                              title={
+                                currentReceivedSet.has(allGroupBooks[0].id)
+                                  ? (locale === "ar" ? `مُسلَّم: ${allGroupBooks[0].title} (انقر للإلغاء)` : `Remis : ${allGroupBooks[0].title} (Cliquer pour annuler)`)
+                                  : (locale === "ar" ? `تسليم كتاب: ${allGroupBooks[0].title}` : `Remettre : ${allGroupBooks[0].title}`)
+                              }
+                            >
+                              <BookOpen className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                              <span className="truncate max-w-[120px] sm:max-w-[170px] font-medium">
+                                {allGroupBooks[0].title}
+                              </span>
+                              {currentReceivedSet.has(allGroupBooks[0].id) ? (
+                                <span className="text-[10px] font-bold bg-emerald-600 group-hover:bg-rose-600 text-white px-1.5 py-0.5 rounded shrink-0 transition-colors">
+                                  <span className="group-hover:hidden">{locale === "ar" ? "تم التسليم" : "Reçu"}</span>
+                                  <span className="hidden group-hover:inline">{locale === "ar" ? "إلغاء" : "Annuler"}</span>
                                 </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setActiveChecklistStudentId(null)}
-                                  className="text-gray-400 hover:text-gray-700 p-0.5 rounded-md hover:bg-gray-100 cursor-pointer"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                              <div className="space-y-1 max-h-48 overflow-y-auto">
-                                {outstandingBooks.map((b) => (
-                                  <button
-                                    key={b.id}
-                                    type="button"
-                                    onClick={() => handleQuickHandout(student.id, b.id)}
-                                    className="w-full text-start p-2 rounded-lg text-xs bg-gray-50/70 hover:bg-indigo-50 hover:text-indigo-950 border border-transparent hover:border-indigo-200 flex items-center justify-between gap-2 transition-all cursor-pointer group"
-                                  >
-                                    <span className="font-medium truncate text-gray-800 group-hover:text-indigo-950">
-                                      {b.title}
+                              ) : (
+                                <span className="text-[10px] font-bold bg-indigo-600 text-white px-1.5 py-0.5 rounded shrink-0">
+                                  {locale === "ar" ? "تسليم" : "Remettre"}
+                                </span>
+                              )}
+                            </button>
+                          )}
+
+                          {/* When > 1 book versions: dropdown checklist allowing toggling each book */}
+                          {allGroupBooks.length > 1 && (
+                            <div className="relative" ref={activeChecklistStudentId === student.id ? checklistRef : null}>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setActiveChecklistStudentId((prev) =>
+                                    prev === student.id ? null : student.id
+                                  )
+                                }
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50/80 text-indigo-900 border border-indigo-200/80 hover:bg-indigo-100 hover:border-indigo-300 transition-colors shadow-2xs cursor-pointer active:scale-[0.98]"
+                                title={
+                                  locale === "ar"
+                                    ? "عرض قائمة الكتب للتسليم"
+                                    : "Ouvrir la liste des livres"
+                                }
+                              >
+                                <BookOpen className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                <span>
+                                  {locale === "ar"
+                                    ? `الكتب (${studentReceivedCount}/${allGroupBooks.length})`
+                                    : `Livres (${studentReceivedCount}/${allGroupBooks.length})`}
+                                </span>
+                                <ChevronDown
+                                  className={`w-3 h-3 text-indigo-500 transition-transform ${
+                                    activeChecklistStudentId === student.id ? "rotate-180" : ""
+                                  }`}
+                                />
+                              </button>
+
+                              {activeChecklistStudentId === student.id && (
+                                <div className="absolute z-30 end-0 mt-1.5 w-72 bg-white border border-border rounded-xl shadow-xl p-2.5 space-y-2 animate-in fade-in zoom-in-95">
+                                  <div className="flex items-center justify-between text-xs font-bold text-gray-800 px-1 pb-1.5 border-b border-border/70">
+                                    <span className="flex items-center gap-1.5">
+                                      <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+                                      <span>{locale === "ar" ? "قائمة الكتب :" : "Liste des livres :"}</span>
                                     </span>
-                                    <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 group-hover:bg-indigo-600 group-hover:text-white px-2 py-0.5 rounded-md shrink-0 transition-colors">
-                                      {locale === "ar" ? "تسليم" : "Remettre"}
-                                    </span>
-                                  </button>
-                                ))}
-                              </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveChecklistStudentId(null)}
+                                      className="text-gray-400 hover:text-gray-700 p-0.5 rounded-md hover:bg-gray-100 cursor-pointer"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                                    {allGroupBooks.map((b) => {
+                                      const isReceived = currentReceivedSet.has(b.id);
+                                      return (
+                                        <button
+                                          key={b.id}
+                                          type="button"
+                                          onClick={() => handleToggleBookHandout(student.id, b.id, isReceived)}
+                                          className={`w-full text-start p-2 rounded-lg text-xs flex items-center justify-between gap-2 transition-all cursor-pointer border ${
+                                            isReceived
+                                              ? "bg-emerald-50/70 text-emerald-950 border-emerald-200 hover:bg-rose-50 hover:text-rose-950 hover:border-rose-200 group"
+                                              : "bg-gray-50/70 hover:bg-indigo-50 hover:text-indigo-950 border-transparent hover:border-indigo-200"
+                                          }`}
+                                        >
+                                          <span className="font-medium truncate text-gray-800">
+                                            {b.title}
+                                          </span>
+                                          {isReceived ? (
+                                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 group-hover:bg-rose-600 group-hover:text-white px-2 py-0.5 rounded-md shrink-0 transition-colors">
+                                              <span className="group-hover:hidden">{locale === "ar" ? "تم التسليم" : "Reçu"}</span>
+                                              <span className="hidden group-hover:inline">{locale === "ar" ? "إلغاء" : "Annuler"}</span>
+                                            </span>
+                                          ) : (
+                                            <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 hover:bg-indigo-600 hover:text-white px-2 py-0.5 rounded-md shrink-0 transition-colors">
+                                              {locale === "ar" ? "تسليم" : "Remettre"}
+                                            </span>
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

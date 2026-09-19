@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { FormField, Input, Select } from "@/components/ui/FormField";
 import { ArrowRightLeft, X } from "lucide-react";
+import BookStatusBadge, { BookStudentStatus, computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
 
 export type ExtendedEnrollment = Enrollment & {
   student: Student & {
@@ -72,10 +73,14 @@ export default function PaymentGrid({
   classData,
   availableClassesForTransfer,
   activeTrimester,
+  classBooks = [],
+  classBookReceipts = [],
 }: {
   classData: ExtendedClass;
   availableClassesForTransfer: { id: number; name: string; branch: { name: string } }[];
   activeTrimester?: { id: number; name: string; label: string; status: string } | null;
+  classBooks?: Array<{ id: number; title: string }>;
+  classBookReceipts?: Array<{ studentId: string; bookId: number; receivedAt: string | Date }>;
 }) {
   const t = useTranslations("payments");
   const tCommon = useTranslations("common");
@@ -302,6 +307,33 @@ export default function PaymentGrid({
           )[0]
         : null;
 
+    // Book status and copy receipts calculation
+    const studentReceiptMap = new Map<number, string | Date>();
+    classBookReceipts.forEach((r) => {
+      if (r.studentId === student.id) {
+        studentReceiptMap.set(r.bookId, r.receivedAt);
+      }
+    });
+
+    let bookReceivedCount = 0;
+    const bookDetails: BookDetailItem[] = classBooks.map((b) => {
+      const hasReceipt = studentReceiptMap.has(b.id);
+      if (hasReceipt) bookReceivedCount++;
+      return {
+        id: b.id,
+        title: b.title,
+        received: hasReceipt,
+        receivedAt: studentReceiptMap.get(b.id) || null,
+      };
+    });
+
+    const hasPaidBook = Boolean(bookVoucher);
+    const bookStatus: BookStudentStatus = computeBookStatus(
+      hasPaidBook,
+      bookReceivedCount,
+      classBooks.length
+    );
+
     return {
       enrollment,
       student,
@@ -320,6 +352,10 @@ export default function PaymentGrid({
       attendedSessions,
       netSessions,
       status,
+      bookReceivedCount,
+      totalBooks: classBooks.length,
+      bookStatus,
+      bookDetails,
     };
   });
 
@@ -567,7 +603,7 @@ export default function PaymentGrid({
       align: "center",
       className: "min-w-[140px] text-center",
     },
-    ...(classData.hasBooks
+    ...(classData.hasBooks || classBooks.length > 0
       ? [
           {
             header: activeTrimester?.label
@@ -575,7 +611,7 @@ export default function PaymentGrid({
               : t("bookFee"),
             accessor: "bookFee",
             align: "center" as const,
-            className: "min-w-[110px] text-center",
+            className: "min-w-[130px] text-center",
           },
         ]
       : []),
@@ -663,17 +699,14 @@ export default function PaymentGrid({
         </td>
 
         {/* 5. Book Fee (if applicable) */}
-        {classData.hasBooks && (
+        {(classData.hasBooks || classBooks.length > 0) && (
           <td className="py-3 px-3 text-center">
-            {item.bookVoucher ? (
-              <Badge variant="success" size="sm" withDot>
-                {t("settled")}
-              </Badge>
-            ) : (
-              <Badge variant="warning" size="sm" withDot>
-                {t("unpaidBookFee", { fee: Number(classData.bookFee || 0).toLocaleString() })}
-              </Badge>
-            )}
+            <BookStatusBadge
+              status={item.bookStatus}
+              receivedCount={item.bookReceivedCount}
+              totalBooks={item.totalBooks}
+              details={item.bookDetails}
+            />
           </td>
         )}
 
@@ -959,10 +992,13 @@ export default function PaymentGrid({
                     <Badge variant="neutral" size="sm">
                       {s.registeredBranch?.name || classData.branch.name}
                     </Badge>
-                    {classData.hasBooks && (
-                      <Badge variant={item.bookVoucher ? "success" : "warning"} size="sm" withDot>
-                        {t("booksLabel")} {item.bookVoucher ? t("settled") : t("unpaid")}
-                      </Badge>
+                    {(classData.hasBooks || classBooks.length > 0) && (
+                      <BookStatusBadge
+                        status={item.bookStatus}
+                        receivedCount={item.bookReceivedCount}
+                        totalBooks={item.totalBooks}
+                        details={item.bookDetails}
+                      />
                     )}
                   </div>
 

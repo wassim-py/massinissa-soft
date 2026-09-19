@@ -254,12 +254,16 @@ const TakeAttendancePage = async (
 
   const studentsWithHistory = rawStudents.map((s) => {
     const details = detailsMap.get(s.id);
-    const isBookEligible = bookPaidStudentIds.has(s.id);
+    const hasPaidBook = bookPaidStudentIds.has(s.id);
     const receivedSet = studentReceivedMap.get(s.id) || new Set<number>();
     const receivedBookIds = Array.from(receivedSet);
-    const outstandingBooks = isBookEligible
-      ? groupBooks.filter((b) => !receivedSet.has(b.id))
-      : [];
+    const outstandingBooks = groupBooks.filter((b) => !receivedSet.has(b.id));
+
+    const bookDetails = groupBooks.map((b) => ({
+      id: b.id,
+      title: b.title,
+      received: receivedSet.has(b.id),
+    }));
 
     return {
       id: s.id,
@@ -270,9 +274,11 @@ const TakeAttendancePage = async (
       vouchers: details?.vouchers || [],
       attendances: details?.attendances || [],
       family: details?.family || null,
-      isBookEligible,
+      isBookEligible: hasPaidBook,
+      hasPaidBook,
       receivedBookIds,
       outstandingBooks,
+      bookDetails,
     };
   });
 

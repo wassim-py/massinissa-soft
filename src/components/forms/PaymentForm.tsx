@@ -46,7 +46,6 @@ const PaymentForm = ({
     { value: "TUITION_4SESSION", label: t("typeTuition4Session") },
     { value: "INSCRIPTION", label: t("typeInscription") },
     { value: "BOOK", label: t("typeBook") },
-    { value: "CATCHUP", label: t("typeCatchup") },
   ] as const;
 
   const isSiblingWaived = Boolean(

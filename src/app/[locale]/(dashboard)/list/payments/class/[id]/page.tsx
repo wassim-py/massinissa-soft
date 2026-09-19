@@ -154,6 +154,35 @@ const ClassPaymentHistoryPage = async (
     getActiveTrimester(),
   ]);
 
+  const teacherId = classData.teacherId;
+  const levelId = classData.levelId;
+
+  // Query books belonging to teacher + level
+  const classBooks =
+    teacherId && levelId && activeTrimester
+      ? await prisma.book.findMany({
+          where: {
+            teacherId,
+            levelId,
+            trimesterId: activeTrimester.id,
+          },
+          orderBy: { createdAt: "asc" },
+        })
+      : [];
+
+  const enrolledStudentIds = classData.enrollments.map((e) => e.studentId);
+  const classBookReceipts =
+    classBooks.length > 0 && enrolledStudentIds.length > 0
+      ? await prisma.bookReceipt.findMany({
+          where: {
+            studentId: { in: enrolledStudentIds },
+            bookId: { in: classBooks.map((b) => b.id) },
+          },
+        })
+      : [];
+
+  const hasBooks = classData.hasBooks || classBooks.length > 0;
+
   return (
     <Card className="flex-1 w-full border-border/80 shadow-xs font-sans">
       <CardContent className="p-4 sm:p-5 md:p-6">
@@ -186,14 +215,16 @@ const ClassPaymentHistoryPage = async (
         <GroupTabs
           classId={classData.id}
           activeTab="payments"
-          hasBooks={classData.hasBooks}
+          hasBooks={hasBooks}
         />
 
         {/* Excel-Style Interactive Payment Grid */}
         <PaymentGrid
-          classData={serializeForClient(classData) as any}
+          classData={serializeForClient({ ...classData, hasBooks }) as any}
           availableClassesForTransfer={serializeForClient(availableClasses) as any}
           activeTrimester={serializeForClient(activeTrimester) as any}
+          classBooks={serializeForClient(classBooks) as any}
+          classBookReceipts={serializeForClient(classBookReceipts) as any}
         />
       </CardContent>
     </Card>
