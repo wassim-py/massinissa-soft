@@ -476,7 +476,20 @@ const AttendanceRoster = ({
             const activeTuitionVouchers = (student.vouchers || []).filter(
               (v) => !v.isVoided && v.paymentType === "TUITION_4SESSION"
             );
-            const sessionsPurchased = activeTuitionVouchers.length * 4;
+            const cyclePrice = Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0);
+            const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+            let sessionsPurchased = 0;
+            if (isSiblingWaived) {
+              sessionsPurchased = 16;
+            } else if (lessonPrice > 0) {
+              const totalPaidTuition = activeTuitionVouchers.reduce(
+                (sum, v) => sum + Math.max(0, Number(v.amount || 0)),
+                0
+              );
+              sessionsPurchased = Math.floor(totalPaidTuition / lessonPrice);
+            } else {
+              sessionsPurchased = activeTuitionVouchers.length * 4;
+            }
             const sessionsConsumed = (student.attendances || []).filter((a) => a.status === "PRESENT").length;
             const sessionsRemaining = sessionsPurchased - sessionsConsumed;
 

@@ -244,8 +244,19 @@ export default function PaymentGrid({
     // Tuition cycles & sessions
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
     let purchasedSessions = 0;
+    const cyclePrice = Number(classData.pricePerCycle || 0);
+    const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+
     if (isWaivedSibling) {
       purchasedSessions = 16;
+    } else if (lessonPrice > 0) {
+      let totalPaidTuition = 0;
+      tuitionVouchers.forEach((v) => {
+        const vAmount = Number(v.amount || 0);
+        const vRefunded = v.refunds?.reduce((sum, r) => sum + Number(r.amount || 0), 0) || 0;
+        totalPaidTuition += Math.max(0, vAmount - vRefunded);
+      });
+      purchasedSessions = Math.floor(totalPaidTuition / lessonPrice);
     } else {
       tuitionVouchers.forEach((v) => {
         const vAmount = Number(v.amount);
@@ -679,7 +690,7 @@ export default function PaymentGrid({
             size="sm"
           >
             {t("sessionsCount", {
-              count: item.netSessions > 0 ? `+${item.netSessions}` : item.netSessions,
+              count: item.netSessions,
             })}
           </Badge>
         </td>

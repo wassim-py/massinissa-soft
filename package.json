@@ -7,7 +7,13 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint .",
-    "seed": "ts-node --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed.ts"
+    "seed": "ts-node --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed.ts",
+    "import:excel": "npx tsx scripts/import-excel.ts",
+    "import:excel:dry": "npx tsx scripts/import-excel.ts --dry-run",
+    "import:attendance": "npx tsx scripts/import-attendance.ts",
+    "import:attendance:dry": "npx tsx scripts/import-attendance.ts --dry-run",
+    "import:template": "npx tsx scripts/generate-attendance-template.ts",
+    "db:check": "node scripts/check-db.js"
   },
   "prisma": {
     "seed": "ts-node --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed.ts"
@@ -49,12 +55,15 @@
     "@types/pg": "^8.23.1",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
+    "decimal.js": "^10.6.0",
+    "dotenv": "^16.6.1",
     "eslint": "^9.39.5",
     "eslint-config-next": "16.3.4",
     "postcss": "^8",
     "puppeteer-core": "^25.10.0",
     "tailwindcss": "^3.4.19",
     "ts-node": "^10.9.2",
+    "tsx": "^4.23.13",
     "typescript": "^5"
   },
   "overrides": {

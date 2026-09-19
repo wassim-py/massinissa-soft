@@ -220,7 +220,20 @@ const AdminPage = async () => {
           student.family.payerStudentId !== student.id
       );
 
-      const purchasedSessions = isWaivedSibling ? 16 : tuitionVouchers.length * 4;
+      const cyclePrice = Number(cls.pricePerCycle || 0);
+      const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+      let purchasedSessions = 0;
+      if (isWaivedSibling) {
+        purchasedSessions = 16;
+      } else if (lessonPrice > 0) {
+        const totalPaidTuition = tuitionVouchers.reduce(
+          (sum, v) => sum + Math.max(0, Number(v.amount || 0)),
+          0
+        );
+        purchasedSessions = Math.floor(totalPaidTuition / lessonPrice);
+      } else {
+        purchasedSessions = tuitionVouchers.length * 4;
+      }
       const transferredOut = enr.transfersFrom.reduce(
         (sum, t) => sum + t.transferredSessions,
         0

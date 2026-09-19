@@ -175,7 +175,22 @@ const SingleStudentPage = async (
         (v) => !v.isVoided && (v.classId === c.id || v.class?.id === c.id)
       );
       const tuitionVouchers = classVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
-      const purchasedSessions = isSiblingWaived ? 16 : tuitionVouchers.length * 4;
+      const cyclePrice = Number(c?.pricePerCycle || 0);
+      const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+      let purchasedSessions = 0;
+      if (isSiblingWaived) {
+        purchasedSessions = 16;
+      } else if (lessonPrice > 0) {
+        let totalPaidTuition = 0;
+        tuitionVouchers.forEach((v) => {
+          const vAmount = Number(v.amount || 0);
+          const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+          totalPaidTuition += Math.max(0, vAmount - vRefunded);
+        });
+        purchasedSessions = Math.floor(totalPaidTuition / lessonPrice);
+      } else {
+        purchasedSessions = tuitionVouchers.length * 4;
+      }
       const transferredOut = (enr.transfersFrom || []).reduce(
         (sum, t) => sum + t.transferredSessions,
         0

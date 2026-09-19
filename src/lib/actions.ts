@@ -3525,9 +3525,19 @@ export const exportToExcel = async (
             // Tuition vouchers calculation
             const tuitionVouchers = studentVouchers.filter(v => v.paymentType === "TUITION_4SESSION");
             
+            const cyclePrice = Number(classTarget.pricePerCycle || 0);
+            const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
             let totalTuitionSessions = 0;
             if (isWaivedSibling) {
               totalTuitionSessions = 16; // sibling has 100% tuition waiver
+            } else if (lessonPrice > 0) {
+              let totalPaidTuition = 0;
+              tuitionVouchers.forEach((v) => {
+                const vAmount = Number(v.amount || 0);
+                const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+                totalPaidTuition += Math.max(0, vAmount - vRefunded);
+              });
+              totalTuitionSessions = Math.floor(totalPaidTuition / lessonPrice);
             } else {
               tuitionVouchers.forEach(() => {
                 totalTuitionSessions += 4;
