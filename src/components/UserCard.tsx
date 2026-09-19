@@ -80,6 +80,10 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
               select: {
                 branchId: true,
                 startsAt: true,
+                isExtra: true,
+                isCatchUp: true,
+                isFree: true,
+                class: { select: { isFormation: true } },
                 branch: { select: { id: true, name: true } },
               },
             },
@@ -112,12 +116,19 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
           });
 
           // Count lessons today across the school
+          const todayDow = startOfToday.getDay();
           const todayLessons = t.lessons.filter((l) => {
-            const lessonDate = new Date(l.startsAt);
-            return (
-              lessonDate >= startOfToday &&
-              lessonDate <= endOfToday
+            const isOneOff = Boolean(
+              l.isExtra || l.isCatchUp || l.isFree || l.class?.isFormation
             );
+            if (isOneOff) {
+              const lessonDate = new Date(l.startsAt);
+              return (
+                lessonDate >= startOfToday &&
+                lessonDate <= endOfToday
+              );
+            }
+            return new Date(l.startsAt).getDay() === todayDow;
           });
 
           if (todayLessons.length > 0) {

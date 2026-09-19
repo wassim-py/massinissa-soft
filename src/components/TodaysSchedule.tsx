@@ -25,28 +25,40 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
 
   const endOfDay = new Date();
   endOfDay.setHours(23, 59, 59, 999);
+  const todayDow = startOfDay.getDay();
 
-  const whereClause: Prisma.LessonWhereInput = {
-    startsAt: {
-      gte: startOfDay,
-      lte: endOfDay,
-    },
-  };
-
-  if (studentId) {
-    whereClause.class = {
-      enrollments: {
-        some: {
-          studentId: studentId,
+  const userCondition: Prisma.LessonWhereInput = studentId
+    ? {
+        class: {
+          enrollments: {
+            some: {
+              studentId: studentId,
+            },
+          },
         },
-      },
-    };
-  } else {
-    whereClause.teacherId = targetUserId;
-  }
+      }
+    : { teacherId: targetUserId };
 
-  const todaysLessons = await prisma.lesson.findMany({
-    where: whereClause,
+  const candidateLessons = await prisma.lesson.findMany({
+    where: {
+      ...userCondition,
+      OR: [
+        {
+          startsAt: {
+            gte: startOfDay,
+            lte: endOfDay,
+          },
+        },
+        {
+          isExtra: false,
+          isCatchUp: false,
+          isFree: false,
+          class: {
+            isFormation: false,
+          },
+        },
+      ],
+    },
     include: {
       class: true,
       classroom: true,
@@ -56,6 +68,46 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
       startsAt: "asc",
     },
   });
+
+  const todaysLessons = candidateLessons
+    .filter((l) => {
+      const isOneOff = Boolean(
+        l.isExtra || l.isCatchUp || l.isFree || l.class?.isFormation
+      );
+      if (isOneOff) {
+        const d = new Date(l.startsAt);
+        return d >= startOfDay && d <= endOfDay;
+      }
+      return new Date(l.startsAt).getDay() === todayDow;
+    })
+    .map((l) => {
+      const isOneOff = Boolean(
+        l.isExtra || l.isCatchUp || l.isFree || l.class?.isFormation
+      );
+      if (!isOneOff) {
+        const durationMs =
+          new Date(l.endsAt).getTime() - new Date(l.startsAt).getTime();
+        const projectedStartsAt = new Date(l.startsAt);
+        projectedStartsAt.setFullYear(
+          startOfDay.getFullYear(),
+          startOfDay.getMonth(),
+          startOfDay.getDate()
+        );
+        const projectedEndsAt = new Date(
+          projectedStartsAt.getTime() + durationMs
+        );
+        return {
+          ...l,
+          startsAt: projectedStartsAt,
+          endsAt: projectedEndsAt,
+        };
+      }
+      return l;
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+    );
 
   return (
     <Card className="p-6 h-full font-sans">

@@ -44,8 +44,11 @@ export default function UpcomingLessons({
 }: UpcomingLessonsProps) {
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [viewMode, setViewMode] = useState<"upcoming" | "all">("upcoming");
+  const hasMyBranchLessons = initialLessons.some(
+    (l) => l.branchId === activeBranchId
+  );
   const [branchFilter, setBranchFilter] = useState<"my_branch" | "all">(
-    "my_branch"
+    hasMyBranchLessons ? "my_branch" : "all"
   );
   const t = useTranslations("dashboard.upcomingLessons");
   const locale = useLocale();
@@ -64,9 +67,9 @@ export default function UpcomingLessons({
     branchFilter === "my_branch" ? l.branchId === activeBranchId : true
   );
 
-  // Filter lessons that have not started yet (startsAt > currentTime)
+  // Filter lessons that have not ended yet (endsAt > currentTime)
   const upcomingLessons = branchFilteredLessons.filter(
-    (l) => new Date(l.startsAt).getTime() > currentTime
+    (l) => currentTime === 0 || new Date(l.endsAt).getTime() > currentTime
   );
 
   const displayedLessons =
@@ -74,6 +77,7 @@ export default function UpcomingLessons({
 
   // Relative time helper
   const getRelativeTime = (startsAtStr: string) => {
+    if (!currentTime) return "";
     const diffMs = new Date(startsAtStr).getTime() - currentTime;
     if (diffMs <= 0) return t("inProgress");
     const diffMins = Math.floor(diffMs / 60000);
@@ -186,8 +190,11 @@ export default function UpcomingLessons({
         ) : (
           displayedLessons.map((lesson) => {
             const hasStarted =
+              currentTime > 0 &&
               new Date(lesson.startsAt).getTime() <= currentTime;
-            const hasEnded = new Date(lesson.endsAt).getTime() <= currentTime;
+            const hasEnded =
+              currentTime > 0 &&
+              new Date(lesson.endsAt).getTime() <= currentTime;
             const isDifferentBranch = lesson.branchId !== activeBranchId;
 
             return (

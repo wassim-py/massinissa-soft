@@ -30,13 +30,29 @@ const AdminPage = async () => {
   const endOfToday = new Date();
   endOfToday.setHours(23, 59, 59, 999);
 
-  // Fetch today's lessons across all branches for catalog schedule visibility
-  const allTodaysLessons = await prisma.lesson.findMany({
+  const todayDow = startOfToday.getDay();
+
+  // Fetch today's lessons across all branches for catalog schedule visibility:
+  // - One-off lessons occurring specifically today
+  // - Weekly recurring lessons that fall on today's day-of-week
+  const candidateLessons = await prisma.lesson.findMany({
     where: {
-      startsAt: {
-        gte: startOfToday,
-        lte: endOfToday,
-      },
+      OR: [
+        {
+          startsAt: {
+            gte: startOfToday,
+            lte: endOfToday,
+          },
+        },
+        {
+          isExtra: false,
+          isCatchUp: false,
+          isFree: false,
+          class: {
+            isFormation: false,
+          },
+        },
+      ],
     },
     include: {
       branch: {
@@ -90,6 +106,46 @@ const AdminPage = async () => {
       startsAt: "asc",
     },
   });
+
+  const allTodaysLessons = candidateLessons
+    .filter((l) => {
+      const isOneOff = Boolean(
+        l.isExtra || l.isCatchUp || l.isFree || l.class.isFormation
+      );
+      if (isOneOff) {
+        const lessonDate = new Date(l.startsAt);
+        return lessonDate >= startOfToday && lessonDate <= endOfToday;
+      }
+      return new Date(l.startsAt).getDay() === todayDow;
+    })
+    .map((l) => {
+      const isOneOff = Boolean(
+        l.isExtra || l.isCatchUp || l.isFree || l.class.isFormation
+      );
+      if (!isOneOff) {
+        const durationMs =
+          new Date(l.endsAt).getTime() - new Date(l.startsAt).getTime();
+        const projectedStartsAt = new Date(l.startsAt);
+        projectedStartsAt.setFullYear(
+          startOfToday.getFullYear(),
+          startOfToday.getMonth(),
+          startOfToday.getDate()
+        );
+        const projectedEndsAt = new Date(
+          projectedStartsAt.getTime() + durationMs
+        );
+        return {
+          ...l,
+          startsAt: projectedStartsAt,
+          endsAt: projectedEndsAt,
+        };
+      }
+      return l;
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+    );
 
   // Today's lessons strictly for THIS branch
   const thisBranchTodaysLessons = allTodaysLessons.filter(
