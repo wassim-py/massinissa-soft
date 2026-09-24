@@ -1014,18 +1014,14 @@ export const createLesson = async (
     const isCatchUp = Boolean(data.isCatchUp);
     const isFree = Boolean(data.isFree);
 
-    await prisma.$executeRaw`
+    const inserted = await prisma.$queryRaw<Array<{ id: number }>>`
       INSERT INTO "Lesson" ("classId", "teacherId", "classroomId", "branchId", "startsAt", "endsAt", "isExtra", "isCatchUp", "isFree", "extraFee")
       VALUES (${classId}, ${teacherId}, ${classroomId}, ${branchId}, ${startsAt}, ${endsAt}, ${isExtra}, ${isCatchUp}, ${isFree}, ${null})
+      RETURNING id
     `;
+    const createdLessonId = inserted[0]?.id;
 
-    // Automatically create school-wide Arabic announcement expiring when lesson ends
-    const createdLesson = await prisma.lesson.findFirst({
-      where: { classId, teacherId, startsAt, endsAt },
-      orderBy: { id: "desc" },
-    });
-
-    if (createdLesson) {
+    if (createdLessonId) {
       try {
         const branchRecord = await prisma.branch.findUnique({ where: { id: branchId } });
         const classroomRecord = classroomId ? await prisma.classroom.findUnique({ where: { id: classroomId } }) : null;
@@ -1046,7 +1042,7 @@ export const createLesson = async (
             description: desc,
             classId,
             branchId: null, // school-wide
-            lessonId: createdLesson.id,
+            lessonId: createdLessonId,
             createdBy: session.userId || "admin",
             pinned: true,
             expiresAt: endsAt,

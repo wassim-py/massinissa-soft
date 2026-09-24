@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState } from "react";
-import { Plus, Trash2, Edit2, Calendar, Building2, Tag, DollarSign, Loader2 } from "lucide-react";
+import { Plus, Trash2, Edit2, DollarSign, Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { createDailyExpenseAction, updateDailyExpenseAction, deleteDailyExpenseAction } from "@/lib/financeActions";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
+import { useTranslations, useLocale } from "next-intl";
 
 export interface ExpenseItem {
   id: number;
@@ -24,18 +25,23 @@ interface DailyExpensesSectionProps {
   locale?: string;
 }
 
-const CATEGORIES = [
-  { value: "GENERAL", label: "Général / عام" },
-  { value: "SUPPLIES", label: "Fournitures & Matériel / لوازم ومعدات" },
-  { value: "UTILITIES", label: "Factures (Électricité, Eau, Internet) / فواتير" },
-  { value: "RENT", label: "Loyer & Charges / كراء" },
-  { value: "MAINTENANCE", label: "Entretien & Réparations / صيانة" },
-  { value: "REFRESHMENT", label: "Collation & Réception / ضيافة" },
-  { value: "OTHER", label: "Autre / أخرى" },
-];
-
-export default function DailyExpensesSection({ expenses, branches }: DailyExpensesSectionProps) {
+export default function DailyExpensesSection({ expenses, branches, locale: propLocale }: DailyExpensesSectionProps) {
   const router = useRouter();
+  const t = useTranslations("finance");
+  const hookLocale = useLocale();
+  const locale = propLocale || hookLocale || "fr";
+  const numLocale = locale === "ar" ? "ar-DZ" : "fr-DZ";
+
+  const categories = [
+    { value: "GENERAL", label: locale === "ar" ? "عام" : "Général" },
+    { value: "SUPPLIES", label: locale === "ar" ? "لوازم ومعدات" : "Fournitures & Matériel" },
+    { value: "UTILITIES", label: locale === "ar" ? "فواتير (كهرباء، ماء، إنترنت)" : "Factures (Électricité, Eau, Internet)" },
+    { value: "RENT", label: locale === "ar" ? "كراء ومصاريف إيجار" : "Loyer & Charges" },
+    { value: "MAINTENANCE", label: locale === "ar" ? "صيانة وتصليح" : "Entretien & Réparations" },
+    { value: "REFRESHMENT", label: locale === "ar" ? "ضيافة واستقبال" : "Collation & Réception" },
+    { value: "OTHER", label: locale === "ar" ? "أخرى" : "Autre" },
+  ];
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
@@ -71,7 +77,7 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amount || Number(amount) <= 0 || !description.trim()) {
-      toast.error("Veuillez renseigner le montant et la description.");
+      toast.error(locale === "ar" ? "يرجى تحديد المبلغ والبيان." : "Veuillez renseigner le montant et la description.");
       return;
     }
 
@@ -109,14 +115,14 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
         }
       }
     } catch {
-      toast.error("Une erreur est survenue.");
+      toast.error(locale === "ar" ? "حدث خطأ غير متوقع." : "Une erreur est survenue.");
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Voulez-vous vraiment supprimer cette dépense ?")) return;
+    if (!confirm(t("confirmDeleteExpense"))) return;
 
     try {
       const res = await deleteDailyExpenseAction(id);
@@ -127,7 +133,7 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
         toast.error(res.message);
       }
     } catch {
-      toast.error("Erreur lors de la suppression.");
+      toast.error(t("deleteExpenseError"));
     }
   };
 
@@ -150,13 +156,16 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
         <div className="flex items-center gap-3">
           <input
             type="text"
-            placeholder="Rechercher une dépense..."
+            placeholder={t("searchExpense")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="px-3.5 py-2 text-xs border border-border rounded-lg bg-surface text-gray-900 focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary w-full sm:w-64"
           />
           <span className="text-xs font-semibold text-muted hidden sm:inline">
-            Total filtré : <strong className="text-danger font-mono text-sm">{totalFilteredAmount.toLocaleString("fr-FR")} DZD</strong>
+            {t("filteredTotal")}{" "}
+            <strong className="text-danger font-mono text-sm">
+              {totalFilteredAmount.toLocaleString(numLocale)} {t("currency")}
+            </strong>
           </span>
         </div>
 
@@ -165,7 +174,7 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
           className="flex items-center justify-center gap-2 bg-primary hover:bg-primary-hover text-white px-4 py-2.5 rounded-lg text-xs font-semibold shadow-xs cursor-pointer transition-all active:scale-95 shrink-0"
         >
           <Plus className="w-4 h-4" />
-          <span>Nouvelle Dépense</span>
+          <span>{t("addExpense")}</span>
         </button>
       </Card>
 
@@ -173,54 +182,56 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
       <Card className="border-border/80 shadow-xs bg-surface overflow-hidden">
         {filteredExpenses.length === 0 ? (
           <div className="p-8 text-center text-muted text-sm">
-            Aucune dépense quotidienne enregistrée pour le moment.
+            {t("noExpensesFound")}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-surface-muted border-b border-border text-xs font-semibold text-muted uppercase tracking-wider">
                 <tr>
-                  <th className="py-3 px-4">Date</th>
-                  <th className="py-3 px-4">Description</th>
-                  <th className="py-3 px-4">Catégorie</th>
-                  <th className="py-3 px-4">Branche</th>
-                  <th className="py-3 px-4 text-right">Montant</th>
-                  <th className="py-3 px-4 text-center">Actions</th>
+                  <th className="py-3 px-4">{t("date")}</th>
+                  <th className="py-3 px-4">{t("expenseDescription")}</th>
+                  <th className="py-3 px-4">{t("expenseCategory")}</th>
+                  <th className="py-3 px-4">{t("expenseBranch")}</th>
+                  <th className="py-3 px-4 text-right">{t("expenseAmount")}</th>
+                  <th className="py-3 px-4 text-center">{t("actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
                 {filteredExpenses.map((exp) => (
                   <tr key={exp.id} className="hover:bg-surface-subtle/80 transition-colors">
                     <td className="py-3 px-4 text-muted font-mono text-xs whitespace-nowrap">
-                      {new Date(exp.date).toLocaleDateString("fr-FR")}
+                      {new Date(exp.date).toLocaleDateString(numLocale)}
                     </td>
                     <td className="py-3 px-4 font-medium text-gray-900">
                       {exp.description}
-                      <span className="block text-2xs text-muted font-normal">Par : {exp.recordedBy}</span>
-                    </td>
-                    <td className="py-3 px-4 text-xs text-muted">
-                      <span className="inline-block px-2.5 py-0.5 rounded-full bg-surface-muted text-gray-700 font-medium border border-border">
-                        {CATEGORIES.find((c) => c.value === exp.category)?.label || exp.category}
+                      <span className="block text-2xs text-muted font-normal">
+                        {locale === "ar" ? `بواسطة: ${exp.recordedBy}` : `Par : ${exp.recordedBy}`}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-xs text-muted">
-                      {exp.branchName || "Toutes / Siège"}
+                      <span className="inline-block px-2.5 py-0.5 rounded-full bg-surface-muted text-gray-700 font-medium border border-border">
+                        {categories.find((c) => c.value === exp.category)?.label || exp.category}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-xs text-muted">
+                      {exp.branchName || t("allBranchesOpt")}
                     </td>
                     <td className="py-3 px-4 text-right font-mono font-bold text-danger whitespace-nowrap">
-                      - {exp.amount.toLocaleString("fr-FR")} DZD
+                      - {exp.amount.toLocaleString(numLocale)} {t("currency")}
                     </td>
                     <td className="py-3 px-4 text-center">
                       <div className="flex items-center justify-center gap-1.5">
                         <button
                           onClick={() => handleOpenEdit(exp)}
-                          title="Modifier"
+                          title={t("editExpense")}
                           className="p-1.5 text-muted hover:text-primary rounded-md hover:bg-surface-muted transition-colors cursor-pointer"
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(exp.id)}
-                          title="Supprimer"
+                          title={locale === "ar" ? "حذف" : "Supprimer"}
                           className="p-1.5 text-muted hover:text-danger rounded-md hover:bg-danger-light transition-colors cursor-pointer"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -241,12 +252,14 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in zoom-in-95 duration-150">
             <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
               <DollarSign className="w-5 h-5 text-red-600" />
-              <span>{editingId ? "Modifier la dépense" : "Nouvelle dépense quotidienne"}</span>
+              <span>{editingId ? t("editExpense") : t("recordExpense")}</span>
             </h3>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Montant (DZD) *</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  {t("expenseAmount")} ({t("currency")}) *
+                </label>
                 <input
                   type="number"
                   step="0.01"
@@ -259,26 +272,30 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Description / Motif *</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  {t("expenseDescription")} *
+                </label>
                 <input
                   type="text"
                   required
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="ex: Achat papier ramettes pour cours"
+                  placeholder={locale === "ar" ? "مثال: شراء أوراق وأقلام للدروس" : "ex: Achat papier ramettes pour cours"}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Catégorie</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    {t("expenseCategory")}
+                  </label>
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
                   >
-                    {CATEGORIES.map((c) => (
+                    {categories.map((c) => (
                       <option key={c.value} value={c.value}>
                         {c.label}
                       </option>
@@ -287,13 +304,15 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Succursale</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    {t("expenseBranch")}
+                  </label>
                   <select
                     value={branchId}
                     onChange={(e) => setBranchId(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
                   >
-                    <option value="all">Toutes / Siège</option>
+                    <option value="all">{t("allBranchesOpt")}</option>
                     {branches.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name}
@@ -304,7 +323,9 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Date</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  {t("date")}
+                </label>
                 <input
                   type="date"
                   value={date}
@@ -319,7 +340,7 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
                   onClick={() => setIsModalOpen(false)}
                   className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg font-medium cursor-pointer"
                 >
-                  Annuler
+                  {t("cancelBtn")}
                 </button>
                 <button
                   type="submit"
@@ -327,7 +348,7 @@ export default function DailyExpensesSection({ expenses, branches }: DailyExpens
                   className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow-xs cursor-pointer disabled:opacity-50"
                 >
                   {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  <span>{editingId ? "Mettre à jour" : "Enregistrer"}</span>
+                  <span>{editingId ? (locale === "ar" ? "تحديث" : "Mettre à jour") : (locale === "ar" ? "حفظ" : "Enregistrer")}</span>
                 </button>
               </div>
             </form>

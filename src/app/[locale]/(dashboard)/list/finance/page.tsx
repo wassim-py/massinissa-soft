@@ -449,7 +449,7 @@ export default async function FinancePage(props: PageProps) {
             }`}
           >
             <TrendingUp className="w-4 h-4 shrink-0" />
-            <span>Recettes</span>
+            <span>{t("revenueTab")}</span>
           </Link>
           <Link
             href={`/list/finance?section=expenses`}
@@ -460,7 +460,7 @@ export default async function FinancePage(props: PageProps) {
             }`}
           >
             <Receipt className="w-4 h-4 shrink-0" />
-            <span>Dépenses Quotidiennes</span>
+            <span>{t("expensesTab")}</span>
           </Link>
           <Link
             href={`/list/finance?section=payroll&tab=overview`}
@@ -471,7 +471,7 @@ export default async function FinancePage(props: PageProps) {
             }`}
           >
             <GraduationCap className="w-4 h-4 shrink-0" />
-            <span>Paie Enseignants</span>
+            <span>{t("payrollTab")}</span>
           </Link>
           <Link
             href={`/list/finance?section=staff`}
@@ -482,7 +482,7 @@ export default async function FinancePage(props: PageProps) {
             }`}
           >
             <Users className="w-4 h-4 shrink-0" />
-            <span>Personnel & Salaires</span>
+            <span>{t("staffPayrollTab")}</span>
           </Link>
           <Link
             href={`/list/finance?section=caisseNoire`}
@@ -493,18 +493,18 @@ export default async function FinancePage(props: PageProps) {
             }`}
           >
             <Wallet className="w-4 h-4 shrink-0" />
-            <span>Caisse Noire</span>
+            <span>{t("caisseNoireTab")}</span>
           </Link>
         </div>
       </Card>
 
-      {/* Top 4 KPI Cards (Uniform Layout Consistent with the Entire Application) */}
+      {/* Top 4 KPI Cards (Bilingual Layout) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Chiffre d'Affaires */}
         <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-muted uppercase tracking-wider">
-              Chiffre d&apos;Affaires
+              {t("turnover")}
             </span>
             <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center">
               <TrendingUp className="w-5 h-5" />
@@ -512,9 +512,10 @@ export default async function FinancePage(props: PageProps) {
           </div>
           <div className="mt-4">
             <div className="text-2xl font-bold font-mono text-gray-900 truncate">
-              {totalRevenueSum.toLocaleString("fr-FR")} <span className="text-xs font-normal text-muted">DZD</span>
+              {totalRevenueSum.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
+              <span className="text-xs font-normal text-muted">{t("currency")}</span>
             </div>
-            <p className="text-form-helper text-muted mt-1">Recettes totales de l&apos;école</p>
+            <p className="text-form-helper text-muted mt-1">{t("turnoverDesc")}</p>
           </div>
         </Card>
 
@@ -522,7 +523,7 @@ export default async function FinancePage(props: PageProps) {
         <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-muted uppercase tracking-wider">
-              Dépenses Totales
+              {t("totalExpensesLabel")}
             </span>
             <div className="w-9 h-9 rounded-xl bg-danger-light/50 text-danger flex items-center justify-center">
               <TrendingDown className="w-5 h-5" />
@@ -530,17 +531,18 @@ export default async function FinancePage(props: PageProps) {
           </div>
           <div className="mt-4">
             <div className="text-2xl font-bold font-mono text-danger truncate">
-              - {totalAllDecaissed.toLocaleString("fr-FR")} <span className="text-xs font-normal text-danger-soft">DZD</span>
+              - {totalAllDecaissed.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
+              <span className="text-xs font-normal text-danger-soft">{t("currency")}</span>
             </div>
-            <p className="text-form-helper text-muted mt-1">Charges quotidiennes et salaires</p>
+            <p className="text-form-helper text-muted mt-1">{t("totalExpensesDesc")}</p>
           </div>
         </Card>
 
-        {/* Card 3: Marge Nette (Bénéfice) */}
+        {/* Card 3: Bénéfice Net */}
         <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-muted uppercase tracking-wider">
-              Bénéfice Net
+              {t("netProfit")}
             </span>
             <div className="w-9 h-9 rounded-xl bg-success-light/50 text-success flex items-center justify-center">
               <Coins className="w-5 h-5" />
@@ -548,9 +550,10 @@ export default async function FinancePage(props: PageProps) {
           </div>
           <div className="mt-4">
             <div className={`text-2xl font-bold font-mono truncate ${netProfitSum >= 0 ? "text-success-text" : "text-danger"}`}>
-              {netProfitSum.toLocaleString("fr-FR")} <span className="text-xs font-normal text-muted">DZD</span>
+              {netProfitSum.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
+              <span className="text-xs font-normal text-muted">{t("currency")}</span>
             </div>
-            <p className="text-form-helper text-muted mt-1">Marge d&apos;exploitation nette</p>
+            <p className="text-form-helper text-muted mt-1">{t("netProfitDesc")}</p>
           </div>
         </Card>
 
@@ -558,7 +561,7 @@ export default async function FinancePage(props: PageProps) {
         <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-muted uppercase tracking-wider">
-              Caisse Noire Privée
+              {t("caisseNoireBalance")}
             </span>
             <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
               <Wallet className="w-5 h-5" />
@@ -566,9 +569,10 @@ export default async function FinancePage(props: PageProps) {
           </div>
           <div className="mt-4">
             <div className="text-2xl font-bold font-mono text-gray-900 truncate">
-              {caisseNoireData.balance.toLocaleString("fr-FR")} <span className="text-xs font-normal text-muted">DZD</span>
+              {caisseNoireData.balance.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
+              <span className="text-xs font-normal text-muted">{t("currency")}</span>
             </div>
-            <p className="text-form-helper text-muted mt-1">Fonds personnel du propriétaire</p>
+            <p className="text-form-helper text-muted mt-1">{t("caisseNoireDesc")}</p>
           </div>
         </Card>
       </div>
@@ -707,8 +711,8 @@ export default async function FinancePage(props: PageProps) {
                 <DataTable
                   columns={[
                     { header: t("discrepancyTypeCol"), accessor: "type" },
-                    { header: "Date", accessor: "date" },
-                    { header: "Branche", accessor: "branch" },
+                    { header: t("discrepancyDateCol"), accessor: "date" },
+                    { header: t("discrepancyBranchCol"), accessor: "branch" },
                     { header: t("discrepancyAmountCol"), accessor: "amount", align: "end" },
                     { header: t("discrepancyReasonCol"), accessor: "reason" },
                     { header: t("discrepancyStatusCol"), accessor: "status", align: "center" },
@@ -723,7 +727,7 @@ export default async function FinancePage(props: PageProps) {
                           size="sm"
                           withDot
                         >
-                          {item.discrepancyType === "MISSING" ? "Manque" : "Surplus"}
+                          {item.discrepancyType === "MISSING" ? t("manque") : t("surplus")}
                         </Badge>
                       </td>
                       <td className="p-3.5 text-muted text-xs">
@@ -755,11 +759,11 @@ export default async function FinancePage(props: PageProps) {
                         >
                           {item.status === "CONFIRMED"
                             ? item.discrepancyType === "MISSING"
-                              ? "Confirmé (déduit)"
-                              : "Confirmé (ajouté)"
+                              ? t("statusConfirmedDeducted")
+                              : t("statusConfirmedAdded")
                             : item.status === "PENDING"
-                            ? "En attente"
-                            : "Rejeté"}
+                            ? t("statusPending")
+                            : t("statusRejected")}
                         </Badge>
                       </td>
                       <td className="p-3.5 text-end">
@@ -930,6 +934,7 @@ export default async function FinancePage(props: PageProps) {
         <DailyExpensesSection
           expenses={formattedExpenses}
           branches={allBranchesData}
+          locale={locale}
         />
       )}
 
@@ -940,6 +945,7 @@ export default async function FinancePage(props: PageProps) {
           totalDeposited={caisseNoireData.totalDeposited}
           totalWithdrawn={caisseNoireData.totalWithdrawn}
           transactions={caisseNoireData.recentTransactions}
+          locale={locale}
         />
       )}
 
@@ -949,6 +955,7 @@ export default async function FinancePage(props: PageProps) {
           staffMembers={formattedStaff}
           payrollLogs={formattedStaffPayrolls}
           branches={allBranchesData}
+          locale={locale}
         />
       )}
     </div>

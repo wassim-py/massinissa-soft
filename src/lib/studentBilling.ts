@@ -161,8 +161,8 @@ export interface StudentAttendanceHistoryItem {
  * 2. NOT_DEFINED: Justified absence (0 credit deducted, 0 teacher pay).
  * 3. PRE_START_ABSENCE: Absences in brand new group before student's first presence (0 credit, 0 teacher pay).
  * 4. INTERLEAVED_ABSENCE: Absence followed by subsequent presence (consumed credit, teacher paid, non-refundable).
- * 5. TRAILING_ABSENCE_HELD: Absence at the end with <=4 missed lessons and <30 days elapsed (held pending, 0 teacher pay this month, refundable if student leaves).
- * 6. FORFEITED_DROPOUT: Student missed >4 lessons or >=30 days without attending (money retained 100% by school, 0 teacher pay, non-refundable).
+ * 5. TRAILING_ABSENCE_HELD: Absence at the end with <60 calendar days elapsed (held pending, 0 teacher pay this month, refundable if student leaves).
+ * 6. FORFEITED_DROPOUT: Student missed >=60 calendar days (2 months) without attending (money retained 100% by school, 0 teacher pay, non-refundable).
  */
 export function classifyStudentAttendanceHistory({
   lessons,
@@ -217,7 +217,8 @@ export function classifyStudentAttendanceHistory({
     ? Math.floor((referenceDate.getTime() - lastPresenceDate.getTime()) / (1000 * 60 * 60 * 24))
     : 0;
 
-  const isForfeitedDropout = trailingAbsenceCount > 4 || (lastPresenceDate !== null && daysSinceLastPresence >= 30);
+  // Forfeited dropout is triggered strictly on 2 calendar months (60 calendar days) of absence since last presence:
+  const isForfeitedDropout = lastPresenceDate !== null && daysSinceLastPresence >= 60;
 
   const history: StudentAttendanceHistoryItem[] = [];
 

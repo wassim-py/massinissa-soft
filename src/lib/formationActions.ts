@@ -1900,6 +1900,40 @@ export async function addFormationSession(data: {
       },
     });
 
+    // Automatically create school-wide Arabic announcement expiring when lesson ends
+    try {
+      const branchRecord = await prisma.branch.findUnique({ where: { id: targetClass.branchId } });
+      const classroomRecord = await prisma.classroom.findUnique({ where: { id: classroomId } });
+      const startsDate = new Date(data.startsAt);
+      const endsDate = new Date(data.endsAt);
+      const startsDateStr = startsDate.toLocaleDateString("ar-DZ", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      const startTimeStr = startsDate.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      const endTimeStr = endsDate.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+
+      const desc = `حصة تكوينية جديدة لفوج ${targetClass.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`;
+
+      await prisma.announcement.create({
+        data: {
+          title: "حصة تكوينية جديدة",
+          description: desc,
+          classId: data.classId,
+          branchId: null, // school-wide
+          lessonId: lesson.id,
+          createdBy: session.userId || "admin",
+          pinned: true,
+          expiresAt: endsDate,
+        },
+      });
+      safeRevalidatePath("/list/announcements");
+    } catch (annErr) {
+      console.warn("Could not create automatic formation session announcement:", annErr);
+    }
+
     safeRevalidatePath(`/list/formations/${data.classId}`);
     return { success: true, error: false, message: "Séance ajoutée avec succès / تمت إضافة الحصة بنجاح", data: serializeForClient(lesson) };
   } catch (err: any) {

@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { createStaffMemberAction, recordStaffPayrollAction } from "@/lib/financeActions";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
+import { useTranslations, useLocale } from "next-intl";
 
 export interface StaffItem {
   id: number;
@@ -35,19 +36,31 @@ interface StaffPayrollSectionProps {
   staffMembers: StaffItem[];
   payrollLogs: StaffPayrollItem[];
   branches: Array<{ id: number; name: string }>;
+  locale?: string;
 }
 
-const MONTH_NAMES = [
+const MONTH_NAMES_FR = [
   "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+];
+
+const MONTH_NAMES_AR = [
+  "جانفي", "فيفري", "مارس", "أفريل", "ماي", "جوان",
+  "جويلية", "أوت", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"
 ];
 
 export default function StaffPayrollSection({
   staffMembers,
   payrollLogs,
   branches,
+  locale: propLocale,
 }: StaffPayrollSectionProps) {
   const router = useRouter();
+  const t = useTranslations("finance");
+  const hookLocale = useLocale();
+  const locale = propLocale || hookLocale || "fr";
+  const numLocale = locale === "ar" ? "ar-DZ" : "fr-DZ";
+  const monthNames = locale === "ar" ? MONTH_NAMES_AR : MONTH_NAMES_FR;
 
   // Modals
   const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
@@ -96,7 +109,7 @@ export default function StaffPayrollSection({
   const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!staffName.trim() || !roleTitle.trim()) {
-      toast.error("Veuillez renseigner le nom et le poste.");
+      toast.error(locale === "ar" ? "يرجى ملء الاسم الكامل والوظيفة." : "Veuillez renseigner le nom et le poste.");
       return;
     }
 
@@ -122,7 +135,7 @@ export default function StaffPayrollSection({
         toast.error(res.message);
       }
     } catch {
-      toast.error("Une erreur est survenue.");
+      toast.error(locale === "ar" ? "حدث خطأ غير متوقع." : "Une erreur est survenue.");
     } finally {
       setIsLoading(false);
     }
@@ -131,7 +144,7 @@ export default function StaffPayrollSection({
   const handleRecordPayroll = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedStaffId || !payrollAmount || Number(payrollAmount) <= 0) {
-      toast.error("Veuillez sélectionner un employé et renseigner le montant.");
+      toast.error(locale === "ar" ? "يرجى اختيار الموظف وتحديد المبلغ." : "Veuillez sélectionner un employé et renseigner le montant.");
       return;
     }
 
@@ -154,7 +167,7 @@ export default function StaffPayrollSection({
         toast.error(res.message);
       }
     } catch {
-      toast.error("Une erreur est survenue.");
+      toast.error(locale === "ar" ? "حدث خطأ غير متوقع." : "Une erreur est survenue.");
     } finally {
       setIsLoading(false);
     }
@@ -171,10 +184,13 @@ export default function StaffPayrollSection({
         <div>
           <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
             <Users className="w-4 h-4 text-primary" />
-            <span>Gestion du Personnel & Salaires</span>
+            <span>{t("staffManagement")}</span>
           </h3>
           <p className="text-form-helper text-muted">
-            Total salaires décaissés enregistrés : <strong className="text-primary font-mono">{totalMonthlyStaffPayroll.toLocaleString("fr-FR")} DZD</strong>
+            {t("totalStaffSalariesPaid")}{" "}
+            <strong className="text-primary font-mono">
+              {totalMonthlyStaffPayroll.toLocaleString(numLocale)} {t("currency")}
+            </strong>
           </p>
         </div>
 
@@ -184,14 +200,14 @@ export default function StaffPayrollSection({
             className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-surface hover:bg-surface-muted text-gray-700 border border-border px-3.5 py-2 rounded-lg text-xs font-semibold shadow-xs cursor-pointer transition-all active:scale-95"
           >
             <Plus className="w-4 h-4" />
-            <span>Nouveau Personnel</span>
+            <span>{t("newStaffMember")}</span>
           </button>
           <button
             onClick={() => handleOpenPayModal()}
             className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-primary hover:bg-primary-hover text-white px-3.5 py-2 rounded-lg text-xs font-semibold shadow-xs cursor-pointer transition-all active:scale-95"
           >
             <DollarSign className="w-4 h-4" />
-            <span>Enregistrer un Salaire</span>
+            <span>{t("recordSalary")}</span>
           </button>
         </div>
       </Card>
@@ -199,12 +215,12 @@ export default function StaffPayrollSection({
       {/* Staff Members List */}
       <Card className="p-5 border-border/80 shadow-xs bg-surface">
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted mb-3">
-          Membres du Personnel Actifs ({staffMembers.length})
+          {t("staffMembersCount", { count: staffMembers.length })}
         </h4>
 
         {staffMembers.length === 0 ? (
           <div className="p-6 text-center text-muted text-sm">
-            Aucun membre du personnel enregistré. Cliquez sur &quot;Nouveau Personnel&quot; pour en ajouter.
+            {t("noStaffMembers")}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
@@ -227,10 +243,13 @@ export default function StaffPayrollSection({
                     </p>
                   )}
                   <p className="text-xs text-muted mt-2 font-mono">
-                    Salaire de base : <strong className="text-gray-900">{s.baseSalary.toLocaleString("fr-FR")} DZD</strong>
+                    {t("baseSalary")} :{" "}
+                    <strong className="text-gray-900">
+                      {s.baseSalary.toLocaleString(numLocale)} {t("currency")}
+                    </strong>
                   </p>
                   <p className="text-2xs text-muted mt-0.5">
-                    Succursale : {s.branchName || "Toutes / Siège"}
+                    {t("expenseBranch")} : {s.branchName || t("allBranchesOpt")}
                   </p>
                 </div>
 
@@ -238,7 +257,7 @@ export default function StaffPayrollSection({
                   onClick={() => handleOpenPayModal(s)}
                   className="mt-3 w-full py-1.5 px-3 bg-surface hover:bg-primary/5 text-primary border border-primary/20 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
                 >
-                  Payer ce mois
+                  {t("payStaffSalary")}
                 </button>
               </div>
             ))}
@@ -250,32 +269,32 @@ export default function StaffPayrollSection({
       <Card className="border-border/80 shadow-xs bg-surface overflow-hidden">
         <div className="p-4 border-b border-border">
           <h4 className="text-xs font-semibold uppercase tracking-wider text-muted">
-            Historique des Salaires du Personnel
+            {t("payrollHistory")}
           </h4>
         </div>
 
         {payrollLogs.length === 0 ? (
           <div className="p-8 text-center text-muted text-sm">
-            Aucun historique de paiement pour le personnel pour le moment.
+            {t("noStaffPayrollLogs")}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-surface-muted border-b border-border text-xs font-semibold text-muted uppercase tracking-wider">
                 <tr>
-                  <th className="py-3 px-4">Période</th>
-                  <th className="py-3 px-4">Employé(e)</th>
-                  <th className="py-3 px-4">Fonction</th>
-                  <th className="py-3 px-4 text-right">Montant</th>
-                  <th className="py-3 px-4 text-center">Statut</th>
-                  <th className="py-3 px-4">Date de versement</th>
+                  <th className="py-3 px-4">{t("monthLabel")}</th>
+                  <th className="py-3 px-4">{t("columns.teacher")}</th>
+                  <th className="py-3 px-4">{t("staffRole")}</th>
+                  <th className="py-3 px-4 text-right">{t("amount")}</th>
+                  <th className="py-3 px-4 text-center">{t("statusCol")}</th>
+                  <th className="py-3 px-4">{t("date")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
                 {payrollLogs.map((p) => (
                   <tr key={p.id} className="hover:bg-surface-subtle/80 transition-colors">
                     <td className="py-3 px-4 font-mono font-medium text-gray-900 whitespace-nowrap">
-                      {MONTH_NAMES[p.month - 1]} {p.year}
+                      {monthNames[p.month - 1]} {p.year}
                     </td>
                     <td className="py-3 px-4 font-semibold text-gray-900">
                       {p.staffName}
@@ -283,23 +302,23 @@ export default function StaffPayrollSection({
                     </td>
                     <td className="py-3 px-4 text-xs text-muted">{p.roleTitle}</td>
                     <td className="py-3 px-4 text-right font-mono font-bold text-gray-900 whitespace-nowrap">
-                      {p.amount.toLocaleString("fr-FR")} DZD
+                      {p.amount.toLocaleString(numLocale)} {t("currency")}
                     </td>
                     <td className="py-3 px-4 text-center">
                       {p.status === "PAID" ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-success-light text-success border border-success-soft">
                           <CheckCircle2 className="w-3 h-3" />
-                          <span>Payé</span>
+                          <span>{t("statusPaid")}</span>
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-surface-muted text-muted border border-border">
                           <Clock className="w-3 h-3" />
-                          <span>En attente</span>
+                          <span>{t("statusPendingLabel")}</span>
                         </span>
                       )}
                     </td>
                     <td className="py-3 px-4 text-xs text-muted font-mono">
-                      {p.paidAt ? new Date(p.paidAt).toLocaleDateString("fr-FR") : "-"}
+                      {p.paidAt ? new Date(p.paidAt).toLocaleDateString(numLocale) : "-"}
                     </td>
                   </tr>
                 ))}
@@ -315,37 +334,37 @@ export default function StaffPayrollSection({
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in zoom-in-95 duration-150">
             <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
               <UserCheck className="w-5 h-5 text-primary" />
-              <span>Nouveau membre du personnel</span>
+              <span>{t("addStaffMember")}</span>
             </h3>
 
             <form onSubmit={handleCreateStaff} className="flex flex-col gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Nom complet *</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">{t("fullName")} *</label>
                 <input
                   type="text"
                   required
                   value={staffName}
                   onChange={(e) => setStaffName(e.target.value)}
-                  placeholder="ex: Amina Benali"
+                  placeholder={t("staffNamePlaceholder")}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Poste / Fonction *</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">{t("staffRole")} *</label>
                 <input
                   type="text"
                   required
                   value={roleTitle}
                   onChange={(e) => setRoleTitle(e.target.value)}
-                  placeholder="ex: Secrétaire d'accueil, Agent d'entretien"
+                  placeholder={t("roleTitlePlaceholder")}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Téléphone</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">{t("phoneOptional")}</label>
                   <input
                     type="text"
                     value={phone}
@@ -356,13 +375,13 @@ export default function StaffPayrollSection({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Succursale</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">{t("expenseBranch")}</label>
                   <select
                     value={staffBranchId}
                     onChange={(e) => setStaffBranchId(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   >
-                    <option value="all">Toutes / Siège</option>
+                    <option value="all">{t("allBranchesOpt")}</option>
                     {branches.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name}
@@ -373,7 +392,7 @@ export default function StaffPayrollSection({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Salaire mensuel de base (DZD)</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">{t("baseSalary")} ({t("currency")})</label>
                 <input
                   type="number"
                   step="0.01"
@@ -390,7 +409,7 @@ export default function StaffPayrollSection({
                   onClick={() => setIsStaffModalOpen(false)}
                   className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg font-medium cursor-pointer"
                 >
-                  Annuler
+                  {t("cancelBtn")}
                 </button>
                 <button
                   type="submit"
@@ -398,7 +417,7 @@ export default function StaffPayrollSection({
                   className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow-xs cursor-pointer disabled:opacity-50"
                 >
                   {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  <span>Enregistrer</span>
+                  <span>{t("saveMember")}</span>
                 </button>
               </div>
             </form>
@@ -412,19 +431,19 @@ export default function StaffPayrollSection({
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in zoom-in-95 duration-150">
             <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
               <DollarSign className="w-5 h-5 text-emerald-600" />
-              <span>Enregistrer un versement de salaire</span>
+              <span>{t("payStaffSalary")}</span>
             </h3>
 
             <form onSubmit={handleRecordPayroll} className="flex flex-col gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Employé(e) *</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">{t("selectStaffMember")} *</label>
                 <select
                   required
                   value={selectedStaffId}
                   onChange={(e) => handleStaffChangeInPayModal(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 >
-                  <option value="">Sélectionner un employé...</option>
+                  <option value="">{t("selectStaffMember")}...</option>
                   {staffMembers.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.roleTitle})
@@ -435,13 +454,13 @@ export default function StaffPayrollSection({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Mois</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">{t("monthLabel")}</label>
                   <select
                     value={selectedMonth}
                     onChange={(e) => setSelectedMonth(Number(e.target.value))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   >
-                    {MONTH_NAMES.map((name, idx) => (
+                    {monthNames.map((name, idx) => (
                       <option key={idx + 1} value={idx + 1}>
                         {name}
                       </option>
@@ -450,7 +469,7 @@ export default function StaffPayrollSection({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Année</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">{t("yearLabel")}</label>
                   <input
                     type="number"
                     value={selectedYear}
@@ -461,7 +480,7 @@ export default function StaffPayrollSection({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Montant à verser (DZD) *</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">{t("amount")} ({t("currency")}) *</label>
                 <input
                   type="number"
                   step="0.01"
@@ -475,19 +494,19 @@ export default function StaffPayrollSection({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Statut</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">{t("statusCol")}</label>
                   <select
                     value={payrollStatus}
                     onChange={(e) => setPayrollStatus(e.target.value as any)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   >
-                    <option value="PAID">Payé (PAID)</option>
-                    <option value="PENDING">En attente (PENDING)</option>
+                    <option value="PAID">{t("statusPaid")}</option>
+                    <option value="PENDING">{t("statusPendingLabel")}</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Notes (Optionnel)</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">{t("paymentNotes")}</label>
                   <input
                     type="text"
                     value={payrollNotes}
@@ -504,7 +523,7 @@ export default function StaffPayrollSection({
                   onClick={() => setIsPayrollModalOpen(false)}
                   className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg font-medium cursor-pointer"
                 >
-                  Annuler
+                  {t("cancelBtn")}
                 </button>
                 <button
                   type="submit"
@@ -512,7 +531,7 @@ export default function StaffPayrollSection({
                   className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow-xs cursor-pointer disabled:opacity-50"
                 >
                   {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  <span>Enregistrer le versement</span>
+                  <span>{t("confirmPayment")}</span>
                 </button>
               </div>
             </form>

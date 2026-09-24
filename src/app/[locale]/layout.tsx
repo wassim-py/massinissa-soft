@@ -15,11 +15,12 @@ const tajawal = Tajawal({
   subsets: ["arabic"],
   weight: ["400", "500", "700"],
   variable: "--font-tajawal",
+  display: "swap",
 });
 const inter = Inter({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
   variable: "--font-inter",
+  display: "swap",
 });
 
 export const viewport: Viewport = {
