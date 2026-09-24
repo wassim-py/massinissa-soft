@@ -99,12 +99,23 @@ const LessonListPage = async (props: {
   let branches: any[] = [];
 
   try {
-    const [rawTeachers, rawClasses, rawClassrooms, rawBranches] = await Promise.all([
-      prisma.$queryRaw<Array<{ id: string; name: string }>>`SELECT id, name FROM "Teacher" ORDER BY name ASC`,
-      prisma.$queryRaw<Array<{ id: number; name: string; teacherId: string | null; branchId: number }>>`SELECT id, name, "teacherId", "branchId" FROM "Class" ORDER BY name ASC`,
-      prisma.$queryRaw<Array<{ id: number; name: string; branchId: number }>>`SELECT id, name, "branchId" FROM "Classroom" ORDER BY name ASC`,
-      prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { id: "asc" } }),
-    ]);
+    const rawTeachers = await prisma.teacher.findMany({
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    });
+    const rawClasses = await prisma.class.findMany({
+      select: { id: true, name: true, teacherId: true, branchId: true },
+      orderBy: { name: "asc" },
+    });
+    const rawClassrooms = await prisma.classroom.findMany({
+      select: { id: true, name: true, branchId: true },
+      orderBy: { name: "asc" },
+    });
+    const rawBranches = await prisma.branch.findMany({
+      select: { id: true, name: true },
+      orderBy: { id: "asc" },
+    });
+
     teachers = Array.isArray(rawTeachers) ? rawTeachers.map((item) => ({ id: item.id, name: item.name, surname: "" })) : [];
     classes = Array.isArray(rawClasses) ? rawClasses : [];
     classrooms = Array.isArray(rawClassrooms) ? rawClassrooms : [];

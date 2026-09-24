@@ -113,7 +113,7 @@ const DeleteConfirmation = ({
       startTransition(() => {
         router.refresh();
       });
-      if (table === "announcement") {
+      if (table === "announcement" || table === "lesson") {
         try {
           const bc = new BroadcastChannel("massinissa_announcements_channel");
           bc.postMessage({ type: "ANNOUNCEMENT_CHANGED" });

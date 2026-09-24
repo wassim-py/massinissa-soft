@@ -14,6 +14,20 @@ import { useTranslations } from "next-intl";
 import { useRouter, usePathname } from "@/i18n/navigation";
 import { Megaphone, ArrowRight, X } from "lucide-react";
 
+export interface DashboardAnnouncementData {
+  id: number;
+  title: string;
+  description: string;
+  date: Date | string;
+  isPinned: boolean;
+  authorBranchId: number | null;
+  authorBranchName: string | null;
+  branchId: number | null;
+  targetBranchName: string | null;
+  expiresAt: Date | string | null;
+  isNew: boolean;
+}
+
 interface AnnouncementNotificationContextType {
   unreadCount: number;
   markAllAsRead: () => void;
@@ -22,6 +36,7 @@ interface AnnouncementNotificationContextType {
   markAsViewed: (id: number) => void;
   isViewed: (id: number) => boolean;
   refreshAnnouncements: () => void;
+  dashboardAnnouncements: DashboardAnnouncementData[];
 }
 
 const AnnouncementNotificationContext =
@@ -33,6 +48,7 @@ const AnnouncementNotificationContext =
     markAsViewed: () => {},
     isViewed: () => false,
     refreshAnnouncements: () => {},
+    dashboardAnnouncements: [],
   });
 
 export const useAnnouncementNotification = () =>
@@ -155,6 +171,7 @@ export default function AnnouncementNotificationProvider({
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [latestId, setLatestId] = useState<number>(0);
   const [viewedIds, setViewedIds] = useState<number[]>([]);
+  const [dashboardAnnouncements, setDashboardAnnouncements] = useState<DashboardAnnouncementData[]>([]);
 
   const userIdRef = useRef<string | null>(null);
   const lastTopIdsRef = useRef<number[]>([]);
@@ -304,6 +321,7 @@ export default function AnnouncementNotificationProvider({
           authorBranchName: string | null;
           targetBranchName: string | null;
         }>;
+        dashboardAnnouncements?: DashboardAnnouncementData[];
         newAnnouncementIds: number[];
         topAnnouncementIds: number[];
         unreadCount: number;
@@ -316,6 +334,17 @@ export default function AnnouncementNotificationProvider({
       }
 
       setLatestId(data.latestId || 0);
+
+      if (Array.isArray(data.dashboardAnnouncements)) {
+        setDashboardAnnouncements(data.dashboardAnnouncements);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("massinissa:dashboard_announcements_updated", {
+              detail: data.dashboardAnnouncements,
+            })
+          );
+        }
+      }
 
       const newIds = data.newAnnouncementIds || [];
       newAnnouncementIdsRef.current = newIds;
@@ -533,6 +562,7 @@ export default function AnnouncementNotificationProvider({
         markAsViewed,
         isViewed,
         refreshAnnouncements: checkForNewAnnouncements,
+        dashboardAnnouncements,
       }}
     >
       {children}

@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(
         {
           recentNewAnnouncements: [],
+          dashboardAnnouncements: [],
           newAnnouncementIds: [],
           topAnnouncementIds: [],
           unreadCount: 0,
@@ -31,6 +32,12 @@ export async function GET(req: NextRequest) {
     }
 
     const activeBranchId = await getActiveBranchId().catch(() => null);
+    const branchParam = req.nextUrl.searchParams.get("branchId");
+    const parsedBranchParam = branchParam ? parseInt(branchParam, 10) : null;
+    const requestedBranchId =
+      parsedBranchParam !== null && !isNaN(parsedBranchParam)
+        ? parsedBranchParam
+        : null;
 
     let recentNewAnnouncements: Array<{
       id: number;
@@ -44,8 +51,21 @@ export async function GET(req: NextRequest) {
       targetBranchName: string | null;
     }> = [];
 
+    let rawTopAnnouncements: Array<{
+      id: number;
+      title: string;
+      description: string;
+      date: Date;
+      isPinned: boolean;
+      authorBranchId: number | null;
+      authorBranchName: string | null;
+      branchId: number | null;
+      targetBranchName: string | null;
+      expiresAt: Date | null;
+      isNew: boolean;
+    }> = [];
+
     let latestId = 0;
-    let topAnnouncementIds: number[] = [];
 
     if (session.isOwner) {
       const latest = await prisma.$queryRaw<Array<{ max_id: number | null }>>`
@@ -70,21 +90,44 @@ export async function GET(req: NextRequest) {
         LIMIT 50
       `.catch(() => []);
 
-      const topAnnouncements = await prisma.$queryRaw<Array<{ id: number }>>`
-        SELECT a.id
-        FROM "Announcement" a
-        WHERE (a."expiresAt" IS NULL OR a."expiresAt" > NOW())
-        ORDER BY a.pinned DESC, a."createdAt" DESC
-        LIMIT 10
-      `.catch(() => []);
-
-      topAnnouncementIds = topAnnouncements.map((item) => item.id);
+      // Top announcements for dashboard live syncing (filtered by requested branch if set)
+      if (requestedBranchId) {
+        rawTopAnnouncements = await prisma.$queryRaw<typeof rawTopAnnouncements>`
+          SELECT a.id, a.title, a.description, a."createdAt" as date, a.pinned as "isPinned",
+                 a."authorBranchId", ab.name as "authorBranchName",
+                 a."branchId", tb.name as "targetBranchName",
+                 a."expiresAt",
+                 (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
+          FROM "Announcement" a
+          LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
+          LEFT JOIN "Branch" tb ON tb.id = a."branchId"
+          WHERE (a."expiresAt" IS NULL OR a."expiresAt" > NOW())
+            AND (a."branchId" = ${requestedBranchId} OR a."branchId" IS NULL OR a."authorBranchId" = ${requestedBranchId})
+          ORDER BY a.pinned DESC, a."createdAt" DESC
+          LIMIT 5
+        `.catch(() => []);
+      } else {
+        rawTopAnnouncements = await prisma.$queryRaw<typeof rawTopAnnouncements>`
+          SELECT a.id, a.title, a.description, a."createdAt" as date, a.pinned as "isPinned",
+                 a."authorBranchId", ab.name as "authorBranchName",
+                 a."branchId", tb.name as "targetBranchName",
+                 a."expiresAt",
+                 (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
+          FROM "Announcement" a
+          LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
+          LEFT JOIN "Branch" tb ON tb.id = a."branchId"
+          WHERE (a."expiresAt" IS NULL OR a."expiresAt" > NOW())
+          ORDER BY a.pinned DESC, a."createdAt" DESC
+          LIMIT 5
+        `.catch(() => []);
+      }
     } else {
+      const targetBranchId = requestedBranchId || activeBranchId;
       const latest = await prisma.$queryRaw<Array<{ max_id: number | null }>>`
         SELECT MAX(id) as max_id
         FROM "Announcement"
         WHERE ("expiresAt" IS NULL OR "expiresAt" > NOW())
-          AND ("branchId" = ${activeBranchId} OR "branchId" IS NULL OR "authorBranchId" = ${activeBranchId})
+          AND ("branchId" = ${targetBranchId} OR "branchId" IS NULL OR "authorBranchId" = ${targetBranchId})
       `.catch(() => [{ max_id: null }]);
 
       latestId = latest[0]?.max_id || 0;
@@ -99,28 +142,35 @@ export async function GET(req: NextRequest) {
         LEFT JOIN "Branch" tb ON tb.id = a."branchId"
         WHERE (a."expiresAt" IS NULL OR a."expiresAt" > NOW())
           AND a."createdAt" > NOW() - INTERVAL '72 HOURS'
-          AND ("branchId" = ${activeBranchId} OR "branchId" IS NULL OR "authorBranchId" = ${activeBranchId})
+          AND ("branchId" = ${targetBranchId} OR "branchId" IS NULL OR "authorBranchId" = ${targetBranchId})
         ORDER BY a.pinned DESC, a."createdAt" DESC
         LIMIT 50
       `.catch(() => []);
 
-      const topAnnouncements = await prisma.$queryRaw<Array<{ id: number }>>`
-        SELECT a.id
+      rawTopAnnouncements = await prisma.$queryRaw<typeof rawTopAnnouncements>`
+        SELECT a.id, a.title, a.description, a."createdAt" as date, a.pinned as "isPinned",
+               a."authorBranchId", ab.name as "authorBranchName",
+               a."branchId", tb.name as "targetBranchName",
+               a."expiresAt",
+               (a."createdAt" > NOW() - INTERVAL '72 HOURS') as "isNew"
         FROM "Announcement" a
+        LEFT JOIN "Branch" ab ON ab.id = a."authorBranchId"
+        LEFT JOIN "Branch" tb ON tb.id = a."branchId"
         WHERE (a."expiresAt" IS NULL OR a."expiresAt" > NOW())
-          AND (a."branchId" = ${activeBranchId} OR "branchId" IS NULL OR "authorBranchId" = ${activeBranchId})
+          AND ("branchId" = ${targetBranchId} OR "branchId" IS NULL OR "authorBranchId" = ${targetBranchId})
         ORDER BY a.pinned DESC, a."createdAt" DESC
-        LIMIT 10
+        LIMIT 5
       `.catch(() => []);
-
-      topAnnouncementIds = topAnnouncements.map((item) => item.id);
     }
 
     const newAnnouncementIds = recentNewAnnouncements.map((a) => a.id);
+    const topAnnouncementIds = rawTopAnnouncements.map((item) => item.id);
+    const dashboardAnnouncements = rawTopAnnouncements.slice(0, 3);
 
     return NextResponse.json(
       {
         recentNewAnnouncements,
+        dashboardAnnouncements,
         newAnnouncementIds,
         topAnnouncementIds,
         unreadCount: newAnnouncementIds.length,
@@ -135,6 +185,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         recentNewAnnouncements: [],
+        dashboardAnnouncements: [],
         newAnnouncementIds: [],
         topAnnouncementIds: [],
         unreadCount: 0,

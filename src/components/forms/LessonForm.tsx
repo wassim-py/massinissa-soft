@@ -13,7 +13,7 @@ import { Class, Teacher, Classroom } from "@prisma/client";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { FormField, Input, Select } from "@/components/ui/FormField";
-import { Sparkles, User, CheckCircle2 } from "lucide-react";
+import { Sparkles, User, CheckCircle2, Calendar } from "lucide-react";
 
 export type Day = "SATURDAY" | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY";
 
@@ -83,6 +83,16 @@ const LessonForm = ({
     return `${hours}:${minutes}`;
   };
 
+  const formatDate = (date: Date | string | undefined | null) => {
+    if (!date) return "";
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return "";
+    const year = d.getFullYear();
+    const month = (d.getMonth() + 1).toString().padStart(2, "0");
+    const day = d.getDate().toString().padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
   const isOwner = Boolean(relatedData?.isOwner);
   const userBranchId = relatedData?.userBranchId ?? 1;
   const classes = relatedData?.classes || [];
@@ -112,6 +122,7 @@ const LessonForm = ({
     defaultValues: data
       ? {
           ...data,
+          date: formatDate(data.startsAt),
           startTime: formatTime(data.startTime),
           endTime: formatTime(data.endTime),
           branchId: data.branchId ?? (isOwner ? undefined : userBranchId),
@@ -186,6 +197,29 @@ const LessonForm = ({
     }
   }, [selectedClass, setValue, isOwner, selectedBranchId]);
 
+  const watchedDate = watch("date");
+  const selectedDay = watch("day");
+
+  // EFFECT: Automatically derive day of the week when date is selected for special lessons
+  useEffect(() => {
+    if (lessonType !== "normal" && watchedDate) {
+      const d = new Date(watchedDate + "T12:00:00Z");
+      if (!isNaN(d.getTime())) {
+        const dayMap: Day[] = [
+          "SUNDAY",
+          "MONDAY",
+          "TUESDAY",
+          "WEDNESDAY",
+          "THURSDAY",
+          "FRIDAY",
+          "SATURDAY",
+        ];
+        const derivedDay = dayMap[d.getUTCDay()];
+        setValue("day", derivedDay, { shouldValidate: true });
+      }
+    }
+  }, [lessonType, watchedDate, setValue]);
+
   // Single lesson type change handler
   const handleTypeSelect = (typeVal: LessonType) => {
     setLessonType(typeVal);
@@ -212,6 +246,19 @@ const LessonForm = ({
           (type === "create" ? t("createdSuccessfully") : t("updatedSuccessfully"))
       );
       setOpen(false);
+
+      // Instantly notify AnnouncementNotificationProvider across all open tabs
+      try {
+        const bc = new BroadcastChannel("massinissa_announcements_channel");
+        bc.postMessage({ type: "ANNOUNCEMENT_CHANGED" });
+        bc.close();
+      } catch {
+        // Ignore
+      }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("massinissa:announcements_updated"));
+      }
+
       startTransition(() => {
         router.refresh();
       });
@@ -348,24 +395,65 @@ const LessonForm = ({
           </Select>
         </FormField>
 
-        {/* Day of Week */}
-        <FormField
-          label={t("dayLabel")}
-          required
-          error={errors.day?.message?.toString()}
-        >
-          <Select
-            hasError={!!errors.day}
-            {...register("day")}
+        {/* Date for Special Lessons */}
+        {lessonType !== "normal" && (
+          <FormField
+            label={t("lessonDate")}
+            required
+            error={errors.date?.message?.toString()}
           >
-            <option value="">{t("selectDay")}</option>
-            {daysOfWeek.map((day) => (
-              <option value={day} key={day}>
-                {getDayTranslation(day)}
-              </option>
-            ))}
-          </Select>
-        </FormField>
+            <Input
+              type="date"
+              hasError={!!errors.date}
+              {...register("date")}
+            />
+          </FormField>
+        )}
+
+        {/* Day of Week: Auto-derived for Special Lessons (Read-Only), Manual Dropdown for Normal Lessons */}
+        {lessonType !== "normal" ? (
+          <FormField
+            label={t("dayLabel")}
+            error={errors.day?.message?.toString()}
+          >
+            <input type="hidden" {...register("day")} />
+            <div className="w-full px-3 py-2 text-table-body rounded-lg border border-border bg-surface-subtle text-gray-800 shadow-xs flex items-center justify-between min-h-[42px]">
+              {selectedDay ? (
+                <div className="flex items-center gap-2 font-medium text-gray-900">
+                  <Calendar className="w-4 h-4 text-primary shrink-0" />
+                  <span>{getDayTranslation(selectedDay)}</span>
+                </div>
+              ) : (
+                <span className="text-xs text-muted italic">
+                  {t("autoFetchedFromDate")}
+                </span>
+              )}
+              {selectedDay && (
+                <Badge variant="primary" size="sm">
+                  {t("autoDerivedBadge")}
+                </Badge>
+              )}
+            </div>
+          </FormField>
+        ) : (
+          <FormField
+            label={t("dayLabel")}
+            required
+            error={errors.day?.message?.toString()}
+          >
+            <Select
+              hasError={!!errors.day}
+              {...register("day")}
+            >
+              <option value="">{t("selectDay")}</option>
+              {daysOfWeek.map((day) => (
+                <option value={day} key={day}>
+                  {getDayTranslation(day)}
+                </option>
+              ))}
+            </Select>
+          </FormField>
+        )}
 
         {/* Start Time */}
         <FormField
@@ -543,6 +631,14 @@ const LessonForm = ({
           <div className="mt-1 p-3 rounded-xl bg-success-light text-success-text text-xs border border-success-soft flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 shrink-0 text-success" />
             <span>{t("freeNote")}</span>
+          </div>
+        )}
+
+        {/* Informative note when a special lesson is active */}
+        {lessonType !== "normal" && (
+          <div className="mt-1 p-3 rounded-xl bg-secondary-light/60 text-secondary-hover text-xs border border-secondary/30 flex items-center gap-2">
+            <Calendar className="w-4 h-4 shrink-0 text-secondary" />
+            <span>{t("specialDateNote")}</span>
           </div>
         )}
 

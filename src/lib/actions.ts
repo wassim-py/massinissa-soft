@@ -798,28 +798,67 @@ export const deleteParent = async (
 // =================================================================
 
 // Helper function to map weekday and time string to reference DateTime
-const dayToOffset: Record<string, number> = {
-  SATURDAY: 5,
-  SUNDAY: 6,
-  MONDAY: 7,
-  TUESDAY: 8,
-  WEDNESDAY: 9,
-  THURSDAY: 10,
-  FRIDAY: 11,
+const dayToSaturdayOffset: Record<string, number> = {
+  SATURDAY: 0,
+  SUNDAY: 1,
+  MONDAY: 2,
+  TUESDAY: 3,
+  WEDNESDAY: 4,
+  THURSDAY: 5,
+  FRIDAY: 6,
 };
 
-const getLessonDateTime = (day: string, time: string): Date => {
+function getNextWeekSaturday(referenceDate: Date = new Date()): Date {
+  const d = new Date(referenceDate);
+  const dayOfWeek = d.getDay(); // 0 is Sun, ..., 6 is Sat
+  const diffToSaturday = (dayOfWeek + 1) % 7; // Sat -> 0, Sun -> 1, ..., Fri -> 6
+  const currentSaturday = new Date(d);
+  currentSaturday.setDate(d.getDate() - diffToSaturday);
+  currentSaturday.setHours(0, 0, 0, 0);
+
+  // Next week's Saturday (+7 days)
+  const nextSaturday = new Date(currentSaturday);
+  nextSaturday.setDate(currentSaturday.getDate() + 7);
+  return nextSaturday;
+}
+
+const getLessonDateTime = (day: string, time: string, dateStr?: string | null): Date => {
   const [hours, minutes] = (time || "00:00").split(":").map(Number);
-  const dayOffset = dayToOffset[(day || "").toUpperCase()] ?? 5;
-  // Year 2026, Month 8 (September, 0-indexed)
-  // September 5, 2026 = Saturday (getDay() === 6)
-  // September 6, 2026 = Sunday (getDay() === 0)
-  // ...
-  // September 11, 2026 = Friday (getDay() === 5)
+
+  let year: number;
+  let month: number;
+  let dayNum: number;
+
+  if (dateStr && dateStr.trim().length > 0) {
+    const parts = dateStr.trim().split("-").map(Number);
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+      year = parts[0];
+      month = parts[1] - 1; // 0-indexed in JS Date
+      dayNum = parts[2];
+    } else {
+      const targetSaturday = getNextWeekSaturday(new Date());
+      const offset = dayToSaturdayOffset[(day || "").toUpperCase()] ?? 0;
+      const targetDate = new Date(targetSaturday);
+      targetDate.setDate(targetSaturday.getDate() + offset);
+      year = targetDate.getFullYear();
+      month = targetDate.getMonth();
+      dayNum = targetDate.getDate();
+    }
+  } else {
+    // Normal lesson: use next week's corresponding day as base reference
+    const targetSaturday = getNextWeekSaturday(new Date());
+    const offset = dayToSaturdayOffset[(day || "").toUpperCase()] ?? 0;
+    const targetDate = new Date(targetSaturday);
+    targetDate.setDate(targetSaturday.getDate() + offset);
+    year = targetDate.getFullYear();
+    month = targetDate.getMonth();
+    dayNum = targetDate.getDate();
+  }
+
   // School timezone is UTC+1 (Africa/Algiers, constant without DST).
   // Database timestamps are stored in UTC; subtracting 1 hour from local time
   // guarantees the saved UTC time exactly matches the entered local hour when read back.
-  return new Date(Date.UTC(2026, 8, dayOffset, (hours || 0) - 1, minutes || 0, 0, 0));
+  return new Date(Date.UTC(year, month, dayNum, (hours || 0) - 1, minutes || 0, 0, 0));
 };
 
 const checkForConflicts = async ({
@@ -830,6 +869,8 @@ const checkForConflicts = async ({
   startTime,
   endTime,
   excludeId = -1,
+  startsAt: explicitStartsAt,
+  endsAt: explicitEndsAt,
 }: {
   classId: number;
   teacherId: string;
@@ -838,10 +879,12 @@ const checkForConflicts = async ({
   startTime: string;
   endTime: string;
   excludeId?: number;
+  startsAt?: Date;
+  endsAt?: Date;
 }) => {
   try {
-    const startsAt = getLessonDateTime(day, startTime);
-    const endsAt = getLessonDateTime(day, endTime);
+    const startsAt = explicitStartsAt || getLessonDateTime(day, startTime);
+    const endsAt = explicitEndsAt || getLessonDateTime(day, endTime);
 
     // 1. Teacher conflict check:
     // Full start-end time range comparison. Flag overlapping-but-offset lessons:
@@ -955,7 +998,7 @@ export const createLesson = async (
       return { success: false, error: true, message: "Aucun enseignant principal assigné à cette classe / هذا الفوج ليس لديه أستاذ رئيسي معين." };
     }
 
-    const classroomId = data.classroomId ? Number(data.classroomId) : null;
+    const classroomId = Number(data.classroomId);
 
     // 3. Branch lock: branch admins are locked to their own branch; owner can choose (docs/architecture.md §7.5)
     const session = await getAuthSession();
@@ -995,6 +1038,29 @@ export const createLesson = async (
       }
     }
 
+    if (data.date) {
+      const parts = data.date.trim().split("-").map(Number);
+      if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+        const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12, 0, 0));
+        const dayNames = [
+          "SUNDAY",
+          "MONDAY",
+          "TUESDAY",
+          "WEDNESDAY",
+          "THURSDAY",
+          "FRIDAY",
+          "SATURDAY",
+        ] as const;
+        data.day = dayNames[d.getUTCDay()];
+      }
+    }
+
+    const startsAt = getLessonDateTime(data.day, data.startTime, data.date);
+    const endsAt = getLessonDateTime(data.day, data.endTime, data.date);
+    const isExtra = Boolean(data.isExtra);
+    const isCatchUp = Boolean(data.isCatchUp);
+    const isFree = Boolean(data.isFree);
+
     // 4. Time-conflict check with full start-end range comparison
     const conflict = await checkForConflicts({
       classId,
@@ -1003,28 +1069,35 @@ export const createLesson = async (
       day: data.day,
       startTime: data.startTime,
       endTime: data.endTime,
+      startsAt,
+      endsAt,
     });
     if (conflict) {
       return { success: false, error: true, message: conflict };
     }
 
-    const startsAt = getLessonDateTime(data.day, data.startTime);
-    const endsAt = getLessonDateTime(data.day, data.endTime);
-    const isExtra = Boolean(data.isExtra);
-    const isCatchUp = Boolean(data.isCatchUp);
-    const isFree = Boolean(data.isFree);
+    const newLesson = await prisma.lesson.create({
+      data: {
+        classId,
+        teacherId,
+        classroomId,
+        branchId,
+        startsAt,
+        endsAt,
+        isExtra,
+        isCatchUp,
+        isFree,
+        extraFee: null,
+      },
+      include: {
+        branch: { select: { id: true, name: true } },
+        classroom: { select: { id: true, name: true } },
+        class: { select: { id: true, name: true } },
+      },
+    });
 
-    const inserted = await prisma.$queryRaw<Array<{ id: number }>>`
-      INSERT INTO "Lesson" ("classId", "teacherId", "classroomId", "branchId", "startsAt", "endsAt", "isExtra", "isCatchUp", "isFree", "extraFee")
-      VALUES (${classId}, ${teacherId}, ${classroomId}, ${branchId}, ${startsAt}, ${endsAt}, ${isExtra}, ${isCatchUp}, ${isFree}, ${null})
-      RETURNING id
-    `;
-    const createdLessonId = inserted[0]?.id;
-
-    if (createdLessonId) {
+    if (newLesson?.id) {
       try {
-        const branchRecord = await prisma.branch.findUnique({ where: { id: branchId } });
-        const classroomRecord = classroomId ? await prisma.classroom.findUnique({ where: { id: classroomId } }) : null;
         const startsDateStr = startsAt.toLocaleDateString("ar-DZ", {
           weekday: "long",
           year: "numeric",
@@ -1034,21 +1107,42 @@ export const createLesson = async (
         const startTimeStr = data.startTime || "";
         const endTimeStr = data.endTime || "";
 
-        const desc = `حصة جديدة لفوج ${classRecord.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`;
+        let annTitle = "حصة جديدة";
+        let typePrefix = "حصة جديدة";
+        if (isExtra) {
+          annTitle = "حصة إضافية جديدة";
+          typePrefix = "حصة إضافية";
+        } else if (isCatchUp) {
+          annTitle = "حصة استدراكية جديدة";
+          typePrefix = "حصة استدراكية";
+        } else if (isFree) {
+          annTitle = "حصة مجانية جديدة";
+          typePrefix = "حصة مجانية";
+        }
+
+        const bName = (newLesson as any).branch?.name || "";
+        const crName = (newLesson as any).classroom?.name ? `- قاعة ${(newLesson as any).classroom.name}` : "";
+        const cName = (newLesson as any).class?.name || classRecord.name;
+        const desc = `${typePrefix} لفوج ${cName} في ${bName} ${crName} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`.trim();
 
         await prisma.announcement.create({
           data: {
-            title: "حصة جديدة",
+            title: annTitle,
             description: desc,
             classId,
             branchId: null, // school-wide
-            lessonId: createdLessonId,
+            authorBranchId: branchId,
+            lessonId: newLesson.id,
             createdBy: session.userId || "admin",
             pinned: true,
             expiresAt: endsAt,
           },
         });
         safeRevalidatePath("/list/announcements");
+        safeRevalidatePath("/admin");
+        safeRevalidatePath("/teacher");
+        safeRevalidatePath("/student");
+        safeRevalidatePath("/parent");
       } catch (annErr) {
         console.warn("Could not create automatic timetable announcement:", annErr);
       }
@@ -1116,7 +1210,7 @@ export const updateLesson = async (
       return { success: false, error: true, message: "Aucun enseignant principal assigné à cette classe / هذا الفوج ليس لديه أستاذ رئيسي معين." };
     }
 
-    const classroomId = data.classroomId ? Number(data.classroomId) : null;
+    const classroomId = Number(data.classroomId);
 
     // 4. Branch lock enforcement on update
     let branchId: number;
@@ -1143,6 +1237,29 @@ export const updateLesson = async (
       }
     }
 
+    if (data.date) {
+      const parts = data.date.trim().split("-").map(Number);
+      if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+        const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12, 0, 0));
+        const dayNames = [
+          "SUNDAY",
+          "MONDAY",
+          "TUESDAY",
+          "WEDNESDAY",
+          "THURSDAY",
+          "FRIDAY",
+          "SATURDAY",
+        ] as const;
+        data.day = dayNames[d.getUTCDay()];
+      }
+    }
+
+    const startsAt = getLessonDateTime(data.day, data.startTime, data.date);
+    const endsAt = getLessonDateTime(data.day, data.endTime, data.date);
+    const isExtra = Boolean(data.isExtra);
+    const isCatchUp = Boolean(data.isCatchUp);
+    const isFree = Boolean(data.isFree);
+
     // 5. Conflict check with excludeId = lessonId
     const conflict = await checkForConflicts({
       classId,
@@ -1152,36 +1269,36 @@ export const updateLesson = async (
       startTime: data.startTime,
       endTime: data.endTime,
       excludeId: lessonId,
+      startsAt,
+      endsAt,
     });
     if (conflict) {
       return { success: false, error: true, message: conflict };
     }
 
-    const startsAt = getLessonDateTime(data.day, data.startTime);
-    const endsAt = getLessonDateTime(data.day, data.endTime);
-    const isExtra = Boolean(data.isExtra);
-    const isCatchUp = Boolean(data.isCatchUp);
-    const isFree = Boolean(data.isFree);
+    const updatedLesson = await prisma.lesson.update({
+      where: { id: lessonId },
+      data: {
+        classId,
+        teacherId,
+        classroomId,
+        branchId,
+        startsAt,
+        endsAt,
+        isExtra,
+        isCatchUp,
+        isFree,
+        extraFee: null,
+      },
+      include: {
+        branch: { select: { id: true, name: true } },
+        classroom: { select: { id: true, name: true } },
+        class: { select: { id: true, name: true } },
+      },
+    });
 
-    await prisma.$executeRaw`
-      UPDATE "Lesson"
-      SET "classId" = ${classId},
-          "teacherId" = ${teacherId},
-          "classroomId" = ${classroomId},
-          "branchId" = ${branchId},
-          "startsAt" = ${startsAt},
-          "endsAt" = ${endsAt},
-          "isExtra" = ${isExtra},
-          "isCatchUp" = ${isCatchUp},
-          "isFree" = ${isFree},
-          "extraFee" = ${null}
-      WHERE id = ${lessonId}
-    `;
-
-    // Sync automatic announcement if exists
+    // Sync automatic announcement if exists, or create if missing
     try {
-      const branchRecord = await prisma.branch.findUnique({ where: { id: branchId } });
-      const classroomRecord = classroomId ? await prisma.classroom.findUnique({ where: { id: classroomId } }) : null;
       const startsDateStr = startsAt.toLocaleDateString("ar-DZ", {
         weekday: "long",
         year: "numeric",
@@ -1190,7 +1307,24 @@ export const updateLesson = async (
       });
       const startTimeStr = data.startTime || "";
       const endTimeStr = data.endTime || "";
-      const desc = `حصة جديدة لفوج ${classRecord.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`;
+
+      let annTitle = "حصة جديدة";
+      let typePrefix = "حصة جديدة";
+      if (isExtra) {
+        annTitle = "حصة إضافية جديدة";
+        typePrefix = "حصة إضافية";
+      } else if (isCatchUp) {
+        annTitle = "حصة استدراكية جديدة";
+        typePrefix = "حصة استدراكية";
+      } else if (isFree) {
+        annTitle = "حصة مجانية جديدة";
+        typePrefix = "حصة مجانية";
+      }
+
+      const bName = (updatedLesson as any).branch?.name || "";
+      const crName = (updatedLesson as any).classroom?.name ? `- قاعة ${(updatedLesson as any).classroom.name}` : "";
+      const cName = (updatedLesson as any).class?.name || classRecord.name;
+      const desc = `${typePrefix} لفوج ${cName} في ${bName} ${crName} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`.trim();
 
       const existingAnnouncement = await prisma.announcement.findFirst({
         where: { lessonId },
@@ -1200,12 +1334,33 @@ export const updateLesson = async (
         await prisma.announcement.update({
           where: { id: existingAnnouncement.id },
           data: {
+            title: annTitle,
             description: desc,
+            classId,
+            authorBranchId: branchId,
+            expiresAt: endsAt,
+          },
+        });
+      } else {
+        await prisma.announcement.create({
+          data: {
+            title: annTitle,
+            description: desc,
+            classId,
+            branchId: null,
+            authorBranchId: branchId,
+            lessonId,
+            createdBy: session.userId || "admin",
+            pinned: true,
             expiresAt: endsAt,
           },
         });
       }
       safeRevalidatePath("/list/announcements");
+      safeRevalidatePath("/admin");
+      safeRevalidatePath("/teacher");
+      safeRevalidatePath("/student");
+      safeRevalidatePath("/parent");
     } catch (annErr) {
       console.warn("Could not sync announcement on lesson update:", annErr);
     }
@@ -1235,22 +1390,28 @@ export const deleteLesson = async (
 
   try {
     const session = await getAuthSession();
-    const existing = await prisma.$queryRaw<Array<{ branchId: number }>>`
-      SELECT "branchId" FROM "Lesson" WHERE id = ${id} LIMIT 1
-    `;
-    if (existing.length === 0) {
+    const existing = await prisma.lesson.findUnique({
+      where: { id },
+      select: { branchId: true },
+    });
+    if (!existing) {
       return { success: false, error: true, message: "Leçon introuvable / الحصة غير موجودة." };
     }
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, existing[0].branchId)) {
+    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, existing.branchId)) {
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بحذف حصة في هذا الفرع." };
     }
 
-    // Automatically delete associated announcement
+    // Automatically delete associated announcement, attendances, and lesson
     await prisma.announcement.deleteMany({ where: { lessonId: id } });
-    await prisma.$executeRaw`DELETE FROM "Attendance" WHERE "lessonId" = ${id}`;
-    await prisma.$executeRaw`DELETE FROM "Lesson" WHERE id = ${id}`;
+    await prisma.catchUpAttendance.deleteMany({ where: { OR: [{ missedLessonId: id }, { catchUpLessonId: id }] } });
+    await prisma.attendance.deleteMany({ where: { lessonId: id } });
+    await prisma.lesson.delete({ where: { id } });
 
     safeRevalidatePath("/list/announcements");
+    safeRevalidatePath("/admin");
+    safeRevalidatePath("/teacher");
+    safeRevalidatePath("/student");
+    safeRevalidatePath("/parent");
     safeRevalidatePath("/list/lessons");
     return { success: true, error: false, message: "Leçon supprimée avec succès / تم حذف الحصة بنجاح." };
   } catch (err) {

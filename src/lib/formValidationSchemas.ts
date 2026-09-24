@@ -110,6 +110,7 @@ export const lessonSchema = z
     extraFee: z.coerce.number().optional().nullable(),
     isCatchUp: z.boolean().optional(),
     isFree: z.boolean().optional(),
+    date: z.string().optional().nullable(),
   })
   .refine((data) => data.endTime > data.startTime, {
     message: "وقت الانتهاء يجب أن يكون بعد وقت البدء",
@@ -123,6 +124,19 @@ export const lessonSchema = z
     {
       message: "يمكن للحصة أن تكون من نوع واحد فقط (عادية، إضافية، استدراكية، أو مجانية)",
       path: ["isExtra"],
+    }
+  )
+  .refine(
+    (data) => {
+      const isSpecial = Boolean(data.isExtra || data.isCatchUp || data.isFree);
+      if (isSpecial) {
+        return Boolean(data.date && data.date.trim().length > 0);
+      }
+      return true;
+    },
+    {
+      message: "يرجى تحديد تاريخ الحصة الخاصة / Veuillez spécifier la date de la séance spéciale",
+      path: ["date"],
     }
   );
 
