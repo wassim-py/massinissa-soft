@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { recordBookDropAction } from "@/lib/actions";
 import { toast } from "react-toastify";
-import { BookOpen, Plus, Filter, X } from "lucide-react";
+import { BookOpen, Plus, Filter, X, GraduationCap, Building2 } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
 export interface BookDropItem {
@@ -234,7 +234,7 @@ export default function TeacherBooksSection({
                 <option value="all">{t("allBranches")}</option>
                 {branches.map((b) => (
                   <option key={b.id} value={String(b.id)}>
-                    🏢 {b.name}
+                    {b.name}
                   </option>
                 ))}
               </select>
@@ -254,7 +254,7 @@ export default function TeacherBooksSection({
                 <option value="all">{t("allLevels")}</option>
                 {levels.map((lvl) => (
                   <option key={lvl.id} value={String(lvl.id)}>
-                    🎓 {lvl.name}
+                    {lvl.name}
                   </option>
                 ))}
               </select>
@@ -296,11 +296,15 @@ export default function TeacherBooksSection({
               className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
             >
               <td className="p-3.5 font-bold text-gray-900">
-                📖 {drop.bookTitle}
+                <span className="flex items-center gap-1.5">
+                  <BookOpen className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span>{drop.bookTitle}</span>
+                </span>
               </td>
               <td className="p-3.5">
                 <Badge variant="neutral" size="sm">
-                  🎓 {drop.levelName}
+                  <GraduationCap className="w-3 h-3 inline me-1 text-muted" />
+                  {drop.levelName}
                 </Badge>
               </td>
               <td className="p-3.5 text-center font-bold text-primary">
@@ -308,7 +312,8 @@ export default function TeacherBooksSection({
               </td>
               <td className="p-3.5">
                 <Badge variant="secondary" size="sm">
-                  🏢 {drop.branchName}
+                  <Building2 className="w-3 h-3 inline me-1" />
+                  {drop.branchName}
                 </Badge>
               </td>
               <td className="p-3.5 text-gray-700">
@@ -424,7 +429,7 @@ export default function TeacherBooksSection({
                     >
                       {levels.map((lvl) => (
                         <option key={lvl.id} value={String(lvl.id)}>
-                          🎓 {lvl.name}
+                          {lvl.name}
                         </option>
                       ))}
                     </select>

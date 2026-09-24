@@ -67,6 +67,13 @@ const COL_NAME_KEYWORDS = ['الاسم', 'اللقب'];
 const COL_PHONE_KEYWORDS = ['الهاتف', 'هاتف'];
 const COL_INSCRIPTION_KEYWORDS = ['التسجيل', 'تسجيل', 'حقوق'];
 const COL_MONTH_KEYWORDS = ['شهر', 'الشهر'];
+const COL_BOOK_KEYWORDS = ['كتاب', 'كتب', 'كـتاب'];
+
+const TRIMESTER_IDS: Record<1 | 2 | 3, number> = {
+  1: 24, // T1
+  2: 25, // T2
+  3: 26, // T3
+};
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -75,6 +82,7 @@ interface ColMap {
   phoneCol: number;
   inscriptionCol: number;
   monthCols: number[];  // ordered list of month column indices
+  bookCols: Array<{ col: number; trimNum: 1 | 2 | 3 }>;
 }
 
 interface ParsedStudent {
@@ -82,6 +90,7 @@ interface ParsedStudent {
   phones: string[];
   inscriptionVouchers: ParsedVoucher[];
   tuitionVouchers: ParsedVoucher[];
+  bookVouchers: Array<{ trimNum: 1 | 2 | 3; voucher: ParsedVoucher }>;
   rowIndex: number;
 }
 
@@ -89,6 +98,7 @@ interface ParsedGroup {
   groupName: string;      // raw header from Excel
   levelName: string;      // from sheet name
   branchId: number;
+  hasBooks: boolean;
   students: ParsedStudent[];
 }
 
@@ -112,9 +122,9 @@ async function main() {
     return;
   }
 
-  // Collect Excel files
+  // Collect Excel files (ignore Excel temp lock files starting with ~$)
   const allFiles = fs.readdirSync(DATA_DIR).filter((f) =>
-    /\.(xlsx|xls)$/i.test(f)
+    /\.(xlsx|xls)$/i.test(f) && !f.startsWith('~$')
   );
   const files = fileFilter
     ? allFiles.filter((f) => f.toLowerCase().includes(fileFilter.toLowerCase()))
@@ -167,10 +177,18 @@ async function main() {
 
   // ── Build report ──────────────────────────────────────────────────
   const totalStudentsFound = allGroups.reduce((s, g) => s + g.students.length, 0);
+  let totalBookVouchersFound = 0;
+  for (const g of allGroups) {
+    for (const s of g.students) {
+      totalBookVouchersFound += s.bookVouchers.length;
+    }
+  }
+
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`PARSE SUMMARY`);
-  console.log(`  Groups found:   ${allGroups.length}`);
-  console.log(`  Students found: ${totalStudentsFound}`);
+  console.log(`  Groups found:         ${allGroups.length}`);
+  console.log(`  Students found:       ${totalStudentsFound}`);
+  console.log(`  Book payments found:  ${totalBookVouchersFound}`);
   if (parseErrors.length > 0) {
     console.log(`\n⚠  PARSE WARNINGS (${parseErrors.length}):`);
     parseErrors.forEach((e) => console.log(`   - ${e}`));
@@ -232,6 +250,7 @@ async function main() {
   let createdStudents = 0;
   let createdEnrollments = 0;
   let createdVouchers = 0;
+  let createdBookVouchers = 0;
   let skippedGroups = 0;
 
   for (const group of allGroups) {
@@ -239,6 +258,16 @@ async function main() {
     if (!cls) {
       skippedGroups++;
       continue;
+    }
+
+    // Ensure class hasBooks flag is updated if group has books
+    if (group.hasBooks && !cls.hasBooks) {
+      await prisma.class.update({
+        where: { id: cls.id },
+        data: { hasBooks: true },
+      });
+      cls.hasBooks = true;
+      console.log(`    📚 Class "${cls.name}" updated → hasBooks = true`);
     }
 
     console.log(`  → Group: "${group.groupName}" → Class "${cls.name}" (id=${cls.id}, levelId=${cls.levelId})`);
@@ -341,8 +370,38 @@ async function main() {
             targetBranchId: cls.branchId,
             issuedAt: v.date,
           });
+        }
+      }
+
+      // Book vouchers
+      for (const bv of student.bookVouchers) {
+        const trimId = TRIMESTER_IDS[bv.trimNum];
+        const exists = await prisma.voucher.findFirst({
+          where: {
+            studentId,
+            classId: cls.id,
+            paymentType: 'BOOK',
+            number: bv.voucher.number,
+            seriesId,
+            trimesterId: trimId,
+          },
+        });
+        if (!exists) {
+          await createVoucher({
+            studentId,
+            classId: cls.id,
+            seriesId,
+            number: bv.voucher.number,
+            amount: bv.voucher.amount,
+            paymentType: 'BOOK',
+            issuingBranchId: group.branchId,
+            targetBranchId: cls.branchId,
+            issuedAt: bv.voucher.date,
+            trimesterId: trimId,
+          });
+          createdBookVouchers++;
           createdVouchers++;
-          updateSeriesMax(seriesMaxNumber, seriesKey, v.number);
+          updateSeriesMax(seriesMaxNumber, seriesKey, bv.voucher.number);
         }
       }
     }
@@ -361,10 +420,11 @@ async function main() {
 
   console.log(`\n${'═'.repeat(60)}`);
   console.log('IMPORT COMPLETE');
-  console.log(`  Students created:    ${createdStudents}`);
-  console.log(`  Enrollments created: ${createdEnrollments}`);
-  console.log(`  Vouchers created:    ${createdVouchers}`);
-  console.log(`  Groups skipped:      ${skippedGroups} (no class match)`);
+  console.log(`  Students created:       ${createdStudents}`);
+  console.log(`  Enrollments created:    ${createdEnrollments}`);
+  console.log(`  Total vouchers created: ${createdVouchers}`);
+  console.log(`    - Book vouchers:      ${createdBookVouchers}`);
+  console.log(`  Groups skipped:         ${skippedGroups} (no class match)`);
   console.log(`${'═'.repeat(60)}\n`);
 
   await prisma.$disconnect();
@@ -475,6 +535,7 @@ function buildColMap(headerRow: Array<string | null>): ColMap | null {
   let phoneCol = -1;
   let inscriptionCol = -1;
   const monthCols: number[] = [];
+  const bookCols: Array<{ col: number; trimNum: 1 | 2 | 3 }> = [];
 
   for (let c = 0; c < headerRow.length; c++) {
     const text = (headerRow[c] ?? '').trim();
@@ -484,6 +545,11 @@ function buildColMap(headerRow: Array<string | null>): ColMap | null {
       phoneCol = c;
     } else if (inscriptionCol < 0 && COL_INSCRIPTION_KEYWORDS.some((kw) => text.includes(kw))) {
       inscriptionCol = c;
+    } else if (COL_BOOK_KEYWORDS.some((kw) => text.includes(kw))) {
+      let trimNum: 1 | 2 | 3 = 1;
+      if (text.includes('3') || text.includes('ت3') || text.includes('ت 3')) trimNum = 3;
+      else if (text.includes('2') || text.includes('ت2') || text.includes('ت 2')) trimNum = 2;
+      bookCols.push({ col: c, trimNum });
     } else if (COL_MONTH_KEYWORDS.some((kw) => text.includes(kw))) {
       monthCols.push(c);
     }
@@ -491,7 +557,7 @@ function buildColMap(headerRow: Array<string | null>): ColMap | null {
 
   if (nameCol < 0) return null;
 
-  return { nameCol, phoneCol, inscriptionCol, monthCols };
+  return { nameCol, phoneCol, inscriptionCol, monthCols, bookCols };
 }
 
 function parseStudentRows(
@@ -567,11 +633,29 @@ function parseStudentRows(
       tuitionVouchers.push(...parsed);
     }
 
+    // Parse book fee vouchers
+    const bookVouchers: Array<{ trimNum: 1 | 2 | 3; voucher: ParsedVoucher }> = [];
+    for (const b of colMap.bookCols) {
+      const amtRaw = topRow[b.col];
+      const bonRaw = bottomRow[b.col];
+      if (!amtRaw && !bonRaw) continue;
+      const parsed = parsePaymentCell(amtRaw, bonRaw);
+      if (parsed.length === 0 && (amtRaw || bonRaw)) {
+        errors.push(
+          `Sheet "${sheetName}", row ${i + 1}: Could not parse book cell amt="${amtRaw}" bon="${bonRaw}"`
+        );
+      }
+      for (const p of parsed) {
+        bookVouchers.push({ trimNum: b.trimNum, voucher: p });
+      }
+    }
+
     students.push({
       name: rawName,
       phones,
       inscriptionVouchers,
       tuitionVouchers,
+      bookVouchers,
       rowIndex: i,
     });
 
@@ -684,6 +768,7 @@ async function createVoucher(opts: {
   issuingBranchId: number;
   targetBranchId: number;
   issuedAt: Date;
+  trimesterId?: number;
 }) {
   const amount = new Decimal(opts.amount);
   await prisma.voucher.create({
@@ -701,6 +786,7 @@ async function createVoucher(opts: {
       issuedAt: opts.issuedAt,
       isVoided: false,
       status: 'ACTIVE',
+      trimesterId: opts.trimesterId ?? null,
     },
   });
 }

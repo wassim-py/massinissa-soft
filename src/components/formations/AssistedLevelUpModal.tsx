@@ -4,6 +4,7 @@ import { useState } from "react";
 import { levelUpStudent } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
+import { GraduationCap, TrendingUp, X, Building2 } from "lucide-react";
 
 export default function AssistedLevelUpModal({
   isOpen,
@@ -52,8 +53,8 @@ export default function AssistedLevelUpModal({
     return (
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 text-center animate-in fade-in zoom-in-95 duration-200">
-          <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl font-bold">
-            🎓
+          <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-3">
+            <GraduationCap className="w-7 h-7" />
           </div>
           <h2 className="text-xl font-bold text-gray-800 mb-1">{t("maxLevelReachedTitle")}</h2>
           <p className="text-sm text-gray-600 mb-6">
@@ -104,7 +105,9 @@ export default function AssistedLevelUpModal({
         {/* Header */}
         <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 px-6 py-4 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="text-3xl">🚀</span>
+            <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+              <TrendingUp className="w-6 h-6 text-white" />
+            </div>
             <div>
               <h2 className="text-lg font-bold">{t("assistedLevelUpHeader")}</h2>
               <p className="text-xs text-emerald-100">
@@ -114,9 +117,9 @@ export default function AssistedLevelUpModal({
           </div>
           <button
             onClick={onClose}
-            className="text-white/80 hover:text-white text-xl font-bold transition-colors"
+            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
           >
-            ✕
+            <X className="w-5 h-5" />
           </button>
         </div>
 
@@ -212,8 +215,9 @@ export default function AssistedLevelUpModal({
                               )}
                             </h4>
                             <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
-                              <span className="font-medium text-sky-800">
-                                🏢 {grp.branch?.name || (locale === "ar" ? "فرع" : "Branche")}
+                              <span className="font-medium text-sky-800 flex items-center gap-1">
+                                <Building2 className="w-3.5 h-3.5 inline" />
+                                {grp.branch?.name || (locale === "ar" ? "فرع" : "Branche")}
                               </span>
                               <span>•</span>
                               <span>

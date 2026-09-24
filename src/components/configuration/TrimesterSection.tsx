@@ -260,8 +260,8 @@ export default function TrimesterSection({
                 <CalendarDays className="w-6 h-6 text-primary" />
                 <span>
                   {locale === "ar"
-                    ? "إدارة الفصول الدراسية وتتبع الكتب (§7.20)"
-                    : "Gestion des Trimestres & Suivi des Livres (§7.20)"}
+                    ? "إدارة الفصول الدراسية وتتبع الكتب"
+                    : "Gestion des Trimestres & Suivi des Livres"}
                 </span>
               </CardTitle>
               <CardDescription className="text-form-helper text-muted mt-1">

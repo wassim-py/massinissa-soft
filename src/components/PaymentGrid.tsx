@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { FormField, Input, Select } from "@/components/ui/FormField";
-import { ArrowRightLeft, X } from "lucide-react";
+import { ArrowRightLeft, X, Phone } from "lucide-react";
 import BookStatusBadge, { BookStudentStatus, computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
 
 export type ExtendedEnrollment = Enrollment & {
@@ -922,8 +922,9 @@ export default function PaymentGrid({
                       </div>
                       <div className="text-xs text-muted font-mono mt-0.5">
                         {s.phone ? (
-                          <a href={`tel:${s.phone}`} className="text-primary hover:underline">
-                            📞 {s.phone}
+                          <a href={`tel:${s.phone}`} className="text-primary hover:underline inline-flex items-center gap-1">
+                            <Phone className="w-3 h-3 shrink-0" />
+                            <span>{s.phone}</span>
                           </a>
                         ) : (
                           t("noPhone")

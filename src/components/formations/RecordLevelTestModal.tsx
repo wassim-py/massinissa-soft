@@ -4,6 +4,7 @@ import { useState } from "react";
 import { recordLevelTest } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { useTranslations } from "next-intl";
+import { Check, X, TrendingUp, AlertTriangle } from "lucide-react";
 
 export default function RecordLevelTestModal({
   isOpen,
@@ -77,9 +78,9 @@ export default function RecordLevelTestModal({
           </div>
           <button
             onClick={onClose}
-            className="text-white/80 hover:text-white text-xl font-bold transition-colors"
+            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
           >
-            ✕
+            <X className="w-5 h-5" />
           </button>
         </div>
 
@@ -144,7 +145,8 @@ export default function RecordLevelTestModal({
                     : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
                 }`}
               >
-                <span>✓</span> {t("passed")}
+                <Check className="w-4 h-4" />
+                <span>{t("passed")}</span>
               </button>
               <button
                 type="button"
@@ -155,7 +157,8 @@ export default function RecordLevelTestModal({
                     : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
                 }`}
               >
-                <span>✗</span> {t("failed")}
+                <X className="w-4 h-4" />
+                <span>{t("failed")}</span>
               </button>
             </div>
           </div>
@@ -182,12 +185,14 @@ export default function RecordLevelTestModal({
             }`}
           >
             {passed ? (
-              <p>
-                🚀 <strong>{t("passed")}:</strong> {t("testPassedAlert")}
+              <p className="flex items-center gap-1.5">
+                <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span><strong>{t("passed")}:</strong> {t("testPassedAlert")}</span>
               </p>
             ) : (
-              <p>
-                ⚠️ <strong>{t("failed")}:</strong> {t("testFailedAlert")}
+              <p className="flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span><strong>{t("failed")}:</strong> {t("testFailedAlert")}</span>
               </p>
             )}
           </div>

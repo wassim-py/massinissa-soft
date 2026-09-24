@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useTransition } from "react";
 import { useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { setBranchAction } from "@/lib/actions";
+import { Building2, School, Landmark } from "lucide-react";
 
 interface Branch {
   id: number;
@@ -17,19 +18,12 @@ interface Props {
   isOwner: boolean;
 }
 
-const branchIcons: Record<string, string> = {
-  ECOLE: "🏫",
-  ANNEX: "🏢",
-  AMPHI: "🏛️",
-};
-
 const getBranchIcon = (name?: string) => {
-  if (!name) return "🏢";
+  if (!name) return Building2;
   const upper = name.trim().toUpperCase();
-  if (upper.includes("ECOLE") || upper.includes("ÉCOLE")) return "🏫";
-  if (upper.includes("ANNEX")) return "🏢";
-  if (upper.includes("AMPHI")) return "🏛️";
-  return branchIcons[upper] || "🏢";
+  if (upper.includes("ECOLE") || upper.includes("ÉCOLE")) return School;
+  if (upper.includes("AMPHI")) return Landmark;
+  return Building2;
 };
 
 export default function BranchSwitcherDropdown({
@@ -91,7 +85,7 @@ export default function BranchSwitcherDropdown({
     });
   };
 
-  const icon = getBranchIcon(currentBranch.name);
+  const BranchIcon = getBranchIcon(currentBranch.name);
 
   // If user is not the owner, render a static badge showing their assigned branch
   if (!isOwner) {
@@ -100,7 +94,7 @@ export default function BranchSwitcherDropdown({
         className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200/80 shadow-xs max-w-[130px] sm:max-w-none shrink-0"
         title={`${t("currentBranch")}: ${currentBranch.name}`}
       >
-        <span className="text-base sm:text-lg leading-none shrink-0">{icon}</span>
+        <BranchIcon className="w-4 h-4 text-blue-700 shrink-0" />
         <div className="flex flex-col min-w-0">
           <span className="hidden sm:block text-[10px] text-blue-600 font-semibold uppercase tracking-wider">
             {t("currentBranch")}
@@ -124,9 +118,7 @@ export default function BranchSwitcherDropdown({
         aria-expanded={isOpen}
         aria-haspopup="listbox"
       >
-        <span className="text-base sm:text-lg leading-none shrink-0" role="img" aria-label={currentBranch.name}>
-          {icon}
-        </span>
+        <BranchIcon className="w-4 h-4 text-primary shrink-0" />
         <div className="flex flex-col text-start min-w-0">
           <span className="hidden sm:block text-[10px] text-gray-400 font-semibold tracking-wider uppercase">
             {t("currentBranch")}
@@ -177,7 +169,7 @@ export default function BranchSwitcherDropdown({
             <div className="p-1 space-y-0.5 max-h-64 overflow-y-auto">
               {branches.map((branch) => {
                 const isSelected = branch.id === currentBranch.id;
-                const bIcon = getBranchIcon(branch.name);
+                const BIcon = getBranchIcon(branch.name);
 
                 return (
                   <button
@@ -191,7 +183,7 @@ export default function BranchSwitcherDropdown({
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="text-base shrink-0">{bIcon}</span>
+                      <BIcon className="w-4 h-4 text-primary shrink-0" />
                       <div className="flex flex-col text-start min-w-0">
                         <span className="font-semibold truncate">{branch.name}</span>
                         {branch.address && (

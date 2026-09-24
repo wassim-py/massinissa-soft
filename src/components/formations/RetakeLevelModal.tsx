@@ -5,6 +5,7 @@ import { recordFormationLumpSumPayment } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { Button } from "@/components/ui/Button";
 import { useTranslations, useLocale } from "next-intl";
+import { X, AlertTriangle } from "lucide-react";
 
 export default function RetakeLevelModal({
   isOpen,
@@ -101,9 +102,9 @@ export default function RetakeLevelModal({
           <button
             type="button"
             onClick={onClose}
-            className="text-white/80 hover:text-white text-xl font-bold transition-colors"
+            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
           >
-            ✕
+            <X className="w-5 h-5" />
           </button>
         </div>
 
@@ -112,7 +113,7 @@ export default function RetakeLevelModal({
           {/* NOTICE ALERT */}
           <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl text-amber-900 text-xs leading-relaxed space-y-1.5">
             <div className="flex items-center gap-1.5 font-bold text-amber-950 text-sm">
-              <span>⚠️</span>
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
               <span>{t("retakeRuleAlert", { level: formationLevel.name, price: levelPrice.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ") })}</span>
             </div>
           </div>

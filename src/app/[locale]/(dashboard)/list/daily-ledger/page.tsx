@@ -286,7 +286,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
             <span>Détail par type de frais ({formattedToday})</span>
           </h2>
           <span className="text-xs text-muted font-medium">
-            Source : Grand Livre Journalier (§1.1)
+            Source : Grand Livre Journalier
           </span>
         </div>
 

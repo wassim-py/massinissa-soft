@@ -9,6 +9,7 @@ import { DataTable, Column } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations } from "next-intl/server";
 import Link from "next/link";
+import { Building2 } from "lucide-react";
 
 type ClassItem = {
   id: number;
@@ -88,7 +89,8 @@ const ClassListPage = async (
       </td>
       <td className="hidden md:table-cell p-3.5">
         <Badge variant="primary" size="sm">
-          🏢 {item.branchName || t("branchFallback", { id: item.branchId })}
+          <Building2 className="w-3 h-3 inline me-1" />
+          {item.branchName || t("branchFallback", { id: item.branchId })}
         </Badge>
       </td>
       <td className="hidden md:table-cell p-3.5 font-semibold text-gray-900 font-mono">

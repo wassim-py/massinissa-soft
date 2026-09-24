@@ -4,6 +4,7 @@ import { Class, Lesson, Teacher, Classroom } from "@prisma/client";
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations, useLocale } from "next-intl";
+import { ClipboardList } from "lucide-react";
 
 type TimetableLesson = {
   id: number;
@@ -89,7 +90,7 @@ const LessonDetailModal = ({
           <div className="flex justify-between">
             <span className="font-semibold text-gray-600">{t("branch")}:</span>
             <span className="text-gray-800 font-medium">
-              🏢 {lesson.branchName || t("unspecified")}
+              {lesson.branchName || t("unspecified")}
             </span>
           </div>
           <div className="flex justify-between">
@@ -162,9 +163,9 @@ const LessonDetailModal = ({
           {isToday ? (
             <Link
               href={getTakeAttendanceHref()}
-              className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg shadow-xs transition-colors"
+              className="inline-flex items-center gap-1.5 bg-primary hover:bg-primary-hover text-white text-xs font-bold py-2 px-3.5 rounded-lg shadow-xs transition-colors"
             >
-              <span>📋</span>
+              <ClipboardList className="w-4 h-4" />
               <span>{t("takeAttendanceToday")}</span>
             </Link>
           ) : (

@@ -13,6 +13,15 @@ import { ITEM_PER_PAGE } from "@/lib/settings";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable, Column } from "@/components/ui/DataTable";
+import {
+  TrendingUp,
+  TrendingDown,
+  Receipt,
+  GraduationCap,
+  Users,
+  Wallet,
+  Coins,
+} from "lucide-react";
 
 const DailyRevenueDashboard = dynamic(() => import("@/components/revenue/DailyRevenueDashboard"), {
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement du tableau de bord...</div>,
@@ -21,14 +30,28 @@ const DailyRevenueDashboard = dynamic(() => import("@/components/revenue/DailyRe
 const PayrollClientTabs = dynamic(() => import("../payroll/PayrollClientTabs"), {
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement de la paie...</div>,
 });
+
+const DailyExpensesSection = dynamic(() => import("@/components/finance/DailyExpensesSection"), {
+  loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement des dépenses...</div>,
+});
+
+const CaisseNoireSection = dynamic(() => import("@/components/finance/CaisseNoireSection"), {
+  loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement de la Caisse Noire...</div>,
+});
+
+const StaffPayrollSection = dynamic(() => import("@/components/finance/StaffPayrollSection"), {
+  loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement du personnel...</div>,
+});
+
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { getTranslations, getLocale } from "next-intl/server";
+import { getCaisseNoireSummary } from "@/lib/financeActions";
 import MissingMoneyActions from "@/components/finance/MissingMoneyActions";
 import SurplusMoneyActions from "@/components/finance/SurplusMoneyActions";
 
 interface PageProps {
   searchParams: Promise<{
-    section?: "revenue" | "payroll";
+    section?: "revenue" | "expenses" | "caisseNoire" | "payroll" | "staff";
     tab?: "revenue" | "transactions" | "discrepancies" | "missing" | "surplus" | "overview" | "runs" | "payslips" | "photocopy" | "advances" | "rates";
     dateFrom?: string;
     dateTo?: string;
@@ -71,9 +94,15 @@ export default async function FinancePage(props: PageProps) {
     selectedBranchParam = activeBranchId;
   }
 
-  // Active Section: "revenue" (Daily Revenue Dashboard & Refunds) vs "payroll" (Consolidated Payroll & Compensation)
-  let activeSection: "revenue" | "payroll" = "revenue";
-  if (searchParams.section === "payroll" || searchParams.section === "revenue") {
+  // Active Section: revenue | expenses | caisseNoire | payroll | staff
+  let activeSection: "revenue" | "expenses" | "caisseNoire" | "payroll" | "staff" = "revenue";
+  if (
+    searchParams.section === "payroll" ||
+    searchParams.section === "revenue" ||
+    searchParams.section === "expenses" ||
+    searchParams.section === "caisseNoire" ||
+    searchParams.section === "staff"
+  ) {
     activeSection = searchParams.section;
   } else if (
     searchParams.tab === "overview" ||
@@ -87,6 +116,73 @@ export default async function FinancePage(props: PageProps) {
   }
 
   const currentTab = searchParams.tab || (activeSection === "payroll" ? "overview" : "revenue");
+
+  // Fetch Common Data: Daily Expenses, Caisse Noire, Staff Members, Staff Payrolls, Branches
+  const [
+    rawDailyExpenses,
+    caisseNoireData,
+    rawStaffMembers,
+    rawStaffPayrolls,
+    allBranchesData,
+  ] = await Promise.all([
+    prisma.dailyExpense.findMany({
+      include: { branch: { select: { id: true, name: true } } },
+      orderBy: { date: "desc" },
+    }),
+    getCaisseNoireSummary(),
+    prisma.staffMember.findMany({
+      include: { branch: { select: { id: true, name: true } } },
+      orderBy: { name: "asc" },
+    }),
+    prisma.staffPayroll.findMany({
+      include: { staffMember: { select: { name: true, roleTitle: true } } },
+      orderBy: [{ year: "desc" }, { month: "desc" }],
+    }),
+    prisma.branch.findMany({
+      select: { id: true, name: true },
+      orderBy: { id: "asc" },
+    }),
+  ]);
+
+  const formattedExpenses = rawDailyExpenses.map((e) => ({
+    id: e.id,
+    branchId: e.branchId,
+    branchName: e.branch?.name,
+    amount: Number(e.amount),
+    description: e.description,
+    category: e.category,
+    date: e.date,
+    recordedBy: e.recordedBy,
+  }));
+
+  const formattedStaff = rawStaffMembers.map((s) => ({
+    id: s.id,
+    name: s.name,
+    roleTitle: s.roleTitle,
+    phone: s.phone,
+    branchId: s.branchId,
+    branchName: s.branch?.name,
+    baseSalary: Number(s.baseSalary),
+    isActive: s.isActive,
+  }));
+
+  const formattedStaffPayrolls = rawStaffPayrolls.map((p) => ({
+    id: p.id,
+    staffMemberId: p.staffMemberId,
+    staffName: p.staffMember.name,
+    roleTitle: p.staffMember.roleTitle,
+    month: p.month,
+    year: p.year,
+    amount: Number(p.amount),
+    status: p.status,
+    paidAt: p.paidAt,
+    notes: p.notes,
+  }));
+
+  const totalDailyExpensesSum = formattedExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const totalStaffPayrollSum = formattedStaffPayrolls
+    .filter((p) => p.status === "PAID")
+    .reduce((sum, p) => sum + p.amount, 0);
 
   // Fetch data conditionally based on active section
   let dashboardData: any = null;
@@ -109,14 +205,15 @@ export default async function FinancePage(props: PageProps) {
   let teachersCount = 0;
   const teacherMap = new Map<string, string>();
 
-  if (activeSection === "revenue") {
-    dashboardData = await getDailyRevenueDashboardData({
-      branchId: selectedBranchParam,
-      dateFrom: searchParams.dateFrom,
-      dateTo: searchParams.dateTo,
-      periodMode: searchParams.periodMode || "daily",
-    });
+  // Always ensure dashboardData is available for top KPIs
+  dashboardData = await getDailyRevenueDashboardData({
+    branchId: selectedBranchParam,
+    dateFrom: searchParams.dateFrom,
+    dateTo: searchParams.dateTo,
+    periodMode: searchParams.periodMode || "daily",
+  });
 
+  if (activeSection === "revenue") {
     if (currentTab === "transactions") {
       const p = searchParams.page ? parseInt(searchParams.page, 10) : 1;
       const startOfRange = new Date(dashboardData.dateFrom + "T00:00:00.000Z");
@@ -313,6 +410,13 @@ export default async function FinancePage(props: PageProps) {
     ...surplusRecords.map((s) => ({ ...s, discrepancyType: "SURPLUS" as const })),
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+  const totalRevenueSum = Number(dashboardData?.summary?.totalRevenue || 0);
+  const totalTeacherPayrollSum = overviewData?.totalGrossPayroll
+    ? Number(overviewData.totalGrossPayroll)
+    : 0;
+  const totalAllDecaissed = totalDailyExpensesSum + totalStaffPayrollSum + totalTeacherPayrollSum;
+  const netProfitSum = totalRevenueSum - totalAllDecaissed;
+
   return (
     <div className="flex flex-col gap-6">
       {/* Top Header Card */}
@@ -324,9 +428,6 @@ export default async function FinancePage(props: PageProps) {
               <h1 className="text-page-title text-gray-900">
                 {t("financeTitle")}
               </h1>
-              <Badge variant="primary" size="sm">
-                Consolidated Finance & Payroll
-              </Badge>
               <Badge variant="danger" size="sm" withDot>
                 {t("ownerOnlyBadge")}
               </Badge>
@@ -338,31 +439,139 @@ export default async function FinancePage(props: PageProps) {
         </div>
 
         {/* Primary Section Switcher */}
-        <div className="flex items-center bg-surface-muted border border-border p-1 rounded-xl shadow-xs text-xs font-semibold shrink-0">
+        <div className="flex items-center bg-surface-muted border border-border p-1 rounded-xl shadow-xs text-xs font-semibold overflow-x-auto scrollbar-none w-full sm:w-auto">
           <Link
-            href={`/list/finance?section=revenue${selectedBranchParam !== "all" ? `&branchId=${selectedBranchParam}` : ""}${dashboardData?.dateFrom ? `&dateFrom=${dashboardData.dateFrom}` : ""}${dashboardData?.dateTo ? `&dateTo=${dashboardData.dateTo}` : ""}`}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg transition-all ${
+            href={`/list/finance?section=revenue`}
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
               activeSection === "revenue"
                 ? "bg-primary text-white shadow-xs"
                 : "text-muted hover:text-gray-900 hover:bg-surface"
             }`}
           >
-            <span>📊 {t("revenueTab")}</span>
-            <span className="text-[10px] opacity-80">(Revenue)</span>
+            <TrendingUp className="w-4 h-4 shrink-0" />
+            <span>Recettes</span>
+          </Link>
+          <Link
+            href={`/list/finance?section=expenses`}
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+              activeSection === "expenses"
+                ? "bg-primary text-white shadow-xs"
+                : "text-muted hover:text-gray-900 hover:bg-surface"
+            }`}
+          >
+            <Receipt className="w-4 h-4 shrink-0" />
+            <span>Dépenses Quotidiennes</span>
           </Link>
           <Link
             href={`/list/finance?section=payroll&tab=overview`}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg transition-all ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
               activeSection === "payroll"
                 ? "bg-primary text-white shadow-xs"
                 : "text-muted hover:text-gray-900 hover:bg-surface"
             }`}
           >
-            <span>💼 {t("payrollTab")}</span>
-            <span className="text-[10px] opacity-80">(Payroll)</span>
+            <GraduationCap className="w-4 h-4 shrink-0" />
+            <span>Paie Enseignants</span>
+          </Link>
+          <Link
+            href={`/list/finance?section=staff`}
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+              activeSection === "staff"
+                ? "bg-primary text-white shadow-xs"
+                : "text-muted hover:text-gray-900 hover:bg-surface"
+            }`}
+          >
+            <Users className="w-4 h-4 shrink-0" />
+            <span>Personnel & Salaires</span>
+          </Link>
+          <Link
+            href={`/list/finance?section=caisseNoire`}
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+              activeSection === "caisseNoire"
+                ? "bg-primary text-white shadow-xs"
+                : "text-muted hover:text-gray-900 hover:bg-surface"
+            }`}
+          >
+            <Wallet className="w-4 h-4 shrink-0" />
+            <span>Caisse Noire</span>
           </Link>
         </div>
       </Card>
+
+      {/* Top 4 KPI Cards (Uniform Layout Consistent with the Entire Application) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Card 1: Chiffre d'Affaires */}
+        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted uppercase tracking-wider">
+              Chiffre d&apos;Affaires
+            </span>
+            <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <div className="text-2xl font-bold font-mono text-gray-900 truncate">
+              {totalRevenueSum.toLocaleString("fr-FR")} <span className="text-xs font-normal text-muted">DZD</span>
+            </div>
+            <p className="text-form-helper text-muted mt-1">Recettes totales de l&apos;école</p>
+          </div>
+        </Card>
+
+        {/* Card 2: Dépenses Totales */}
+        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted uppercase tracking-wider">
+              Dépenses Totales
+            </span>
+            <div className="w-9 h-9 rounded-xl bg-danger-light/50 text-danger flex items-center justify-center">
+              <TrendingDown className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <div className="text-2xl font-bold font-mono text-danger truncate">
+              - {totalAllDecaissed.toLocaleString("fr-FR")} <span className="text-xs font-normal text-danger-soft">DZD</span>
+            </div>
+            <p className="text-form-helper text-muted mt-1">Charges quotidiennes et salaires</p>
+          </div>
+        </Card>
+
+        {/* Card 3: Marge Nette (Bénéfice) */}
+        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted uppercase tracking-wider">
+              Bénéfice Net
+            </span>
+            <div className="w-9 h-9 rounded-xl bg-success-light/50 text-success flex items-center justify-center">
+              <Coins className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <div className={`text-2xl font-bold font-mono truncate ${netProfitSum >= 0 ? "text-success-text" : "text-danger"}`}>
+              {netProfitSum.toLocaleString("fr-FR")} <span className="text-xs font-normal text-muted">DZD</span>
+            </div>
+            <p className="text-form-helper text-muted mt-1">Marge d&apos;exploitation nette</p>
+          </div>
+        </Card>
+
+        {/* Card 4: Caisse Noire */}
+        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted uppercase tracking-wider">
+              Caisse Noire Privée
+            </span>
+            <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
+              <Wallet className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <div className="text-2xl font-bold font-mono text-gray-900 truncate">
+              {caisseNoireData.balance.toLocaleString("fr-FR")} <span className="text-xs font-normal text-muted">DZD</span>
+            </div>
+            <p className="text-form-helper text-muted mt-1">Fonds personnel du propriétaire</p>
+          </div>
+        </Card>
+      </div>
 
       {/* SECTION 1: REVENUE DASHBOARD & REPORTS */}
       {activeSection === "revenue" && dashboardData && (
@@ -425,19 +634,6 @@ export default async function FinancePage(props: PageProps) {
                       classId: searchParams.classId ? parseInt(searchParams.classId, 10) : undefined,
                     }}
                   />
-                </div>
-
-                {/* Architecture note banner (§1.2 & §2.3) */}
-                <div className="p-4 bg-surface-muted border border-border/80 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-                  <p className="text-muted leading-relaxed">
-                    <strong className="text-gray-900 font-semibold">{t("architectureNoteTitle")}</strong> {t("architectureNoteDesc")}
-                  </p>
-                  <Link
-                    href="/list/payments"
-                    className="px-3.5 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 font-semibold shrink-0 transition-colors"
-                  >
-                    {t("groupPaymentTables")}
-                  </Link>
                 </div>
 
                 {/* Refunds Table */}
@@ -727,6 +923,33 @@ export default async function FinancePage(props: PageProps) {
             branches={branches}
           />
         </div>
+      )}
+
+      {/* SECTION 3: DAILY EXPENSES */}
+      {activeSection === "expenses" && (
+        <DailyExpensesSection
+          expenses={formattedExpenses}
+          branches={allBranchesData}
+        />
+      )}
+
+      {/* SECTION 4: CAISSE NOIRE */}
+      {activeSection === "caisseNoire" && (
+        <CaisseNoireSection
+          balance={caisseNoireData.balance}
+          totalDeposited={caisseNoireData.totalDeposited}
+          totalWithdrawn={caisseNoireData.totalWithdrawn}
+          transactions={caisseNoireData.recentTransactions}
+        />
+      )}
+
+      {/* SECTION 5: STAFF PAYROLL */}
+      {activeSection === "staff" && (
+        <StaffPayrollSection
+          staffMembers={formattedStaff}
+          payrollLogs={formattedStaffPayrolls}
+          branches={allBranchesData}
+        />
       )}
     </div>
   );

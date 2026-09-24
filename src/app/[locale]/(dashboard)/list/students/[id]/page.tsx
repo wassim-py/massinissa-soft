@@ -28,6 +28,8 @@ import {
   CheckCircle2,
   Sparkles,
   ShieldAlert,
+  MapPin,
+  User,
 } from "lucide-react";
 
 function formatLessonDate(date: Date | string, locale: string) {
@@ -550,7 +552,8 @@ const SingleStudentPage = async (
                             <div className="flex items-center gap-1.5">
                               <span className="font-bold text-gray-900">{g.className}</span>
                               <Badge variant="secondary" size="sm">
-                                🏢 {g.branchName}
+                                <Building2 className="w-3 h-3 inline me-1" />
+                                {g.branchName}
                               </Badge>
                               {g.levelName && (
                                 <Badge variant="neutral" size="sm">
@@ -663,14 +666,21 @@ const SingleStudentPage = async (
                   </td>
                   <td className="p-3.5">
                     <Badge variant="secondary" size="sm">
-                      🏢 {lesson.branch.name}
+                      <Building2 className="w-3 h-3 inline me-1" />
+                      {lesson.branch.name}
                     </Badge>
                   </td>
                   <td className="p-3.5 text-gray-700">
-                    📍 {lesson.classroom?.name || t("noClassroom")}
+                    <span className="flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-muted shrink-0" />
+                      {lesson.classroom?.name || t("noClassroom")}
+                    </span>
                   </td>
                   <td className="p-3.5 text-gray-700">
-                    👨‍🏫 {lesson.teacher?.name || t("unspecified")}
+                    <span className="flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-muted shrink-0" />
+                      {lesson.teacher?.name || t("unspecified")}
+                    </span>
                   </td>
                   <td className="p-3.5 text-center">
                     {lesson.isFree ? (

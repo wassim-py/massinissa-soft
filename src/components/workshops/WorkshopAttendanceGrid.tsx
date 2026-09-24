@@ -7,7 +7,7 @@ import { useTranslations, useLocale } from "next-intl";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import WorkshopAttendanceForm from "@/components/forms/WorkshopAttendanceForm";
-import { ClipboardCheck, CheckCircle2, XCircle, HelpCircle, Search, Users } from "lucide-react";
+import { ClipboardCheck, CheckCircle2, XCircle, HelpCircle, Search, Users, Check, X } from "lucide-react";
 
 export type WorkshopSessionItem = {
   id: number;
@@ -248,7 +248,7 @@ export default function WorkshopAttendanceGrid({
                             className="w-5 h-5 mx-auto rounded-full bg-success shadow-2xs flex items-center justify-center text-white"
                             title={tAtt("legendPresent")}
                           >
-                            <span className="text-[10px] font-bold">✓</span>
+                            <Check className="w-3 h-3 stroke-[3]" />
                           </div>
                         </td>
                       );
@@ -261,7 +261,7 @@ export default function WorkshopAttendanceGrid({
                             className="w-5 h-5 mx-auto rounded-full bg-danger shadow-2xs flex items-center justify-center text-white"
                             title={tAtt("legendAbsent")}
                           >
-                            <span className="text-[10px] font-bold">✕</span>
+                            <X className="w-3 h-3 stroke-[3]" />
                           </div>
                         </td>
                       );

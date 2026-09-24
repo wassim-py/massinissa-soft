@@ -491,11 +491,15 @@ const SingleTeacherPage = async (
                 </td>
                 <td className="p-3.5">
                   <Badge variant="secondary" size="sm">
-                    🏢 {lesson.branch.name}
+                    <Building2 className="w-3 h-3 inline me-1" />
+                    {lesson.branch.name}
                   </Badge>
                 </td>
                 <td className="p-3.5 text-gray-700">
-                  📍 {lesson.classroom.name}
+                  <span className="flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-muted shrink-0" />
+                    {lesson.classroom.name}
+                  </span>
                 </td>
                 <td className="p-3.5 text-center">
                   {lesson.isFree ? (

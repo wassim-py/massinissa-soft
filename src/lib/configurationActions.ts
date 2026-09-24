@@ -1713,3 +1713,65 @@ export async function deleteFormationLevelConfigAction(
   }
 }
 
+// =================================================================
+// 8. FIXED INSCRIPTION FEE CONFIGURATION (OWNER-ONLY)
+// =================================================================
+
+export async function getFixedInscriptionFeeAction(): Promise<number> {
+  try {
+    const setting = await prisma.setting.findUnique({
+      where: { id: "DEFAULT_INSCRIPTION_FEE" },
+    });
+    return setting?.value ? Number(setting.value) : 1000;
+  } catch {
+    return 1000;
+  }
+}
+
+export async function updateFixedInscriptionFeeAction(
+  currentState: CurrentState,
+  data: FormData
+): Promise<CurrentState> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط.",
+      };
+    }
+
+    const amountStr = data.get("amount") as string;
+    const amount = Number(amountStr);
+    if (isNaN(amount) || amount < 0) {
+      return {
+        success: false,
+        error: true,
+        message: "Montant invalide / المبلغ غير صالح.",
+      };
+    }
+
+    await prisma.setting.upsert({
+      where: { id: "DEFAULT_INSCRIPTION_FEE" },
+      create: { id: "DEFAULT_INSCRIPTION_FEE", value: String(amount) },
+      update: { value: String(amount) },
+    });
+
+    safeRevalidatePath("/admin/configuration");
+    safeRevalidatePath("/list/finance");
+    return {
+      success: true,
+      error: false,
+      message: "Frais d'inscription fixes mis à jour avec succès / تم تحديث حقوق التسجيل بنجاح.",
+    };
+  } catch (err: any) {
+    console.error("updateFixedInscriptionFeeAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "Erreur lors de la mise à jour des frais d'inscription.",
+    };
+  }
+}
+

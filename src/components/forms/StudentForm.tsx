@@ -19,6 +19,7 @@ import { createStudent, updateStudent } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
+import { X } from "lucide-react";
 
 type FormState = {
   success: boolean;
@@ -384,7 +385,7 @@ const StudentForm = ({
                   onClick={() => handleRemoveParentPhone(index)}
                   title={tStudents("remove")}
                 >
-                  ✕
+                  <X className="w-3.5 h-3.5" />
                 </Button>
               </div>
             ))}

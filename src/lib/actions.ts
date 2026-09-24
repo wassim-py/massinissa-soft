@@ -38,6 +38,7 @@ import { canUserAccessBranch } from "./settings";
 import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from "./ledger";
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
+import { classifyStudentAttendanceHistory } from "./studentBilling";
 
 type CurrentState = { success: boolean; error: boolean; message?: string };
 
@@ -1018,6 +1019,45 @@ export const createLesson = async (
       VALUES (${classId}, ${teacherId}, ${classroomId}, ${branchId}, ${startsAt}, ${endsAt}, ${isExtra}, ${isCatchUp}, ${isFree}, ${null})
     `;
 
+    // Automatically create school-wide Arabic announcement expiring when lesson ends
+    const createdLesson = await prisma.lesson.findFirst({
+      where: { classId, teacherId, startsAt, endsAt },
+      orderBy: { id: "desc" },
+    });
+
+    if (createdLesson) {
+      try {
+        const branchRecord = await prisma.branch.findUnique({ where: { id: branchId } });
+        const classroomRecord = classroomId ? await prisma.classroom.findUnique({ where: { id: classroomId } }) : null;
+        const startsDateStr = startsAt.toLocaleDateString("ar-DZ", {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        });
+        const startTimeStr = data.startTime || "";
+        const endTimeStr = data.endTime || "";
+
+        const desc = `حصة جديدة لفوج ${classRecord.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`;
+
+        await prisma.announcement.create({
+          data: {
+            title: "حصة جديدة",
+            description: desc,
+            classId,
+            branchId: null, // school-wide
+            lessonId: createdLesson.id,
+            createdBy: session.userId || "admin",
+            pinned: true,
+            expiresAt: endsAt,
+          },
+        });
+        safeRevalidatePath("/list/announcements");
+      } catch (annErr) {
+        console.warn("Could not create automatic timetable announcement:", annErr);
+      }
+    }
+
     safeRevalidatePath("/list/lessons");
     return { success: true, error: false, message: "Séance programmée avec succès / تم برمجة الحصة بنجاح." };
   } catch (err) {
@@ -1142,6 +1182,38 @@ export const updateLesson = async (
       WHERE id = ${lessonId}
     `;
 
+    // Sync automatic announcement if exists
+    try {
+      const branchRecord = await prisma.branch.findUnique({ where: { id: branchId } });
+      const classroomRecord = classroomId ? await prisma.classroom.findUnique({ where: { id: classroomId } }) : null;
+      const startsDateStr = startsAt.toLocaleDateString("ar-DZ", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      const startTimeStr = data.startTime || "";
+      const endTimeStr = data.endTime || "";
+      const desc = `حصة جديدة لفوج ${classRecord.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`;
+
+      const existingAnnouncement = await prisma.announcement.findFirst({
+        where: { lessonId },
+      });
+
+      if (existingAnnouncement) {
+        await prisma.announcement.update({
+          where: { id: existingAnnouncement.id },
+          data: {
+            description: desc,
+            expiresAt: endsAt,
+          },
+        });
+      }
+      safeRevalidatePath("/list/announcements");
+    } catch (annErr) {
+      console.warn("Could not sync announcement on lesson update:", annErr);
+    }
+
     safeRevalidatePath("/list/lessons");
     return { success: true, error: false, message: "Séance mise à jour avec succès / تم تحديث الحصة بنجاح." };
   } catch (err) {
@@ -1177,9 +1249,12 @@ export const deleteLesson = async (
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بحذف حصة في هذا الفرع." };
     }
 
+    // Automatically delete associated announcement
+    await prisma.announcement.deleteMany({ where: { lessonId: id } });
     await prisma.$executeRaw`DELETE FROM "Attendance" WHERE "lessonId" = ${id}`;
     await prisma.$executeRaw`DELETE FROM "Lesson" WHERE id = ${id}`;
 
+    safeRevalidatePath("/list/announcements");
     safeRevalidatePath("/list/lessons");
     return { success: true, error: false, message: "Leçon supprimée avec succès / تم حذف الحصة بنجاح." };
   } catch (err) {
@@ -2652,18 +2727,43 @@ export const createRefund = async (
         };
       }
 
-      // Calculate attended sessions (non-free lessons where student was present)
-      const attendances = await prisma.attendance.findMany({
-        where: {
-          studentId: voucher.studentId,
-          status: "PRESENT",
-          lesson: {
+      // Calculate consumed sessions using Massinissa School rules:
+      // Consumed: PRESENT + INTERLEAVED_ABSENCE + FORFEITED_DROPOUT
+      // Refundable/Unconsumed: PRE_START_ABSENCE + TRAILING_ABSENCE_HELD + NOT_DEFINED
+      const [classLessons, studentAttendances, studentCatchUps] = await Promise.all([
+        prisma.lesson.findMany({
+          where: {
             classId: voucher.classId,
             isFree: false,
+            attendances: { some: {} },
           },
-        },
+          select: { id: true, startsAt: true, isFree: true },
+          orderBy: { startsAt: "asc" },
+        }),
+        prisma.attendance.findMany({
+          where: {
+            studentId: voucher.studentId,
+            lesson: { classId: voucher.classId },
+          },
+          select: { lessonId: true, status: true },
+        }),
+        prisma.catchUpAttendance.findMany({
+          where: {
+            studentId: voucher.studentId,
+            missedLesson: { classId: voucher.classId },
+          },
+          select: { missedLessonId: true, recordedAt: true },
+        }),
+      ]);
+
+      const classifiedHistory = classifyStudentAttendanceHistory({
+        lessons: classLessons,
+        attendances: studentAttendances,
+        catchUps: studentCatchUps,
+        referenceDate: new Date(),
       });
-      const attendedSessions = attendances.length;
+
+      const attendedSessions = classifiedHistory.filter((h) => h.isConsumedCredit).length;
 
       // Transfers
       const enrollment = await prisma.enrollment.findFirst({

@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/Button";
 import { FormField, Input, Select } from "@/components/ui/FormField";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { useTranslations, useLocale } from "next-intl";
+import { Info } from "lucide-react";
 
 interface Props {
   currentTab: string;
@@ -605,7 +606,7 @@ export default function PayrollClientTabs({
                   <td className="p-3.5 font-mono font-bold">#{p.id}</td>
                   <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
                   <td className="p-3.5 text-muted text-xs">
-                    {formatDate(p.periodStart)} ➜ {formatDate(p.periodEnd)}
+                    {formatDate(p.periodStart)} → {formatDate(p.periodEnd)}
                   </td>
                   <td className="p-3.5 text-center font-mono font-bold">{p.sessionsCount}</td>
                   <td className="p-3.5">
@@ -664,7 +665,10 @@ export default function PayrollClientTabs({
         <div className="flex flex-col gap-6">
           {/* Isolation Notice */}
           <div className="bg-amber-500/10 border-r-4 border-amber-500 p-4 rounded-xl text-amber-950 dark:text-amber-200 text-xs leading-relaxed shadow-xs">
-            <span className="font-bold block mb-1">📌 {t("photocopyNoticeTitle")}</span>
+            <span className="font-bold flex items-center gap-1.5 mb-1">
+              <Info className="w-4 h-4 shrink-0" />
+              {t("photocopyNoticeTitle")}
+            </span>
             {t("photocopyNoticeDesc")}
           </div>
 

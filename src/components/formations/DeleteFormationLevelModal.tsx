@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import { toast } from "react-toastify";
 import { deleteFormationLevel } from "@/lib/formationActions";
+import { AlertTriangle } from "lucide-react";
 
 interface DeleteFormationLevelModalProps {
   levelId: number;
@@ -101,7 +102,7 @@ export default function DeleteFormationLevelModal({
               {hasEnrolledStudents ? (
                 <div className="space-y-3">
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs flex items-start gap-2">
-                    <span className="text-base leading-none">⚠️</span>
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
                     <div>
                       <p className="font-semibold mb-1">
                         {locale === "ar"
@@ -128,10 +129,13 @@ export default function DeleteFormationLevelModal({
                       ? `هل أنت متأكد من رغبتك في حذف المستوى « ${levelName} » نهائياً؟`
                       : `Êtes-vous sûr de vouloir supprimer définitivement le niveau « ${levelName} » ?`}
                   </p>
-                  <p className="text-xs text-red-600 bg-red-50 p-2.5 rounded-lg border border-red-100">
-                    {locale === "ar"
-                      ? "⚠️ هذا الإجراء لا يمكن التراجع عنه وسيتم حذف المستوى وأي فوج فارغ مرتبط به."
-                      : "⚠️ Cette action est irréversible et supprimera le niveau ainsi que ses groupes vides associés."}
+                  <p className="text-xs text-red-600 bg-red-50 p-2.5 rounded-lg border border-red-100 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-red-600" />
+                    <span>
+                      {locale === "ar"
+                        ? "هذا الإجراء لا يمكن التراجع عنه وسيتم حذف المستوى وأي فوج فارغ مرتبط به."
+                        : "Cette action est irréversible et supprimera le niveau ainsi que ses groupes vides associés."}
+                    </span>
                   </p>
                 </div>
               )}

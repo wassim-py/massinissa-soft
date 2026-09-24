@@ -22,6 +22,7 @@ import {
   Search,
   Filter,
   Calendar,
+  AlertTriangle,
 } from "lucide-react";
 
 export interface ClassroomItem {
@@ -385,8 +386,9 @@ export default function ClassroomSection({
                 ({deleteTarget.branchName || `Branch #${deleteTarget.branchId}`})
               </span>
               {deleteTarget.lessonsCount && deleteTarget.lessonsCount > 0 && (
-                <div className="text-danger text-xs mt-2 font-medium">
-                  ⚠️ {deleteTarget.lessonsCount} cours sont programmés dans cette salle.
+                <div className="text-danger text-xs mt-2 font-medium flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{deleteTarget.lessonsCount} cours sont programmés dans cette salle.</span>
                 </div>
               )}
             </div>

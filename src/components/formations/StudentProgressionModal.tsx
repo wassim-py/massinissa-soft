@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getStudentLanguageProgression } from "@/lib/formationActions";
 import { useTranslations, useLocale } from "next-intl";
+import { X, History, GraduationCap, Building2, CheckCircle2, XCircle } from "lucide-react";
 
 export default function StudentProgressionModal({
   isOpen,
@@ -50,9 +51,9 @@ export default function StudentProgressionModal({
           </div>
           <button
             onClick={onClose}
-            className="text-white/80 hover:text-white text-xl font-bold transition-colors"
+            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
           >
-            ✕
+            <X className="w-5 h-5" />
           </button>
         </div>
 
@@ -86,7 +87,8 @@ export default function StudentProgressionModal({
               {/* Combined Timeline: Enrollments & Tests */}
               <div>
                 <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-4 flex items-center gap-2">
-                  <span>📜</span> {t("progressionTimeline")}
+                  <History className="w-4 h-4 text-primary" />
+                  <span>{t("progressionTimeline")}</span>
                 </h4>
 
                 <div className="relative border-s-2 border-blue-200 ms-4 ps-6 space-y-6">
@@ -109,7 +111,8 @@ export default function StudentProgressionModal({
                         <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:border-blue-300 transition">
                           <div className="flex items-center justify-between">
                             <span className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
-                              🎓 {t("levelRegistration", { level: lvlNum, name: lvlName })}
+                              <GraduationCap className="w-3.5 h-3.5" />
+                              <span>{t("levelRegistration", { level: lvlNum, name: lvlName })}</span>
                             </span>
                             <span className="text-xs text-gray-400 font-medium">{enrDate}</span>
                           </div>
@@ -119,7 +122,10 @@ export default function StudentProgressionModal({
                           </div>
 
                           <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
-                            <span>🏢 {enr.class.branch?.name || t("branch")}</span>
+                            <span className="flex items-center gap-1">
+                              <Building2 className="w-3 h-3 text-muted shrink-0" />
+                              <span>{enr.class.branch?.name || t("branch")}</span>
+                            </span>
                             <span>•</span>
                             <span>{enr.academicYear?.label || t("currentYear")}</span>
                             <span>•</span>
@@ -145,7 +151,11 @@ export default function StudentProgressionModal({
                                     }`}
                                   >
                                     <div className="flex items-center gap-2">
-                                      <span className="text-base">{tst.passed ? "✅" : "❌"}</span>
+                                      {tst.passed ? (
+                                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                      ) : (
+                                        <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                                      )}
                                       <div>
                                         <p className="font-bold">
                                           {t("levelTest")}: {tst.passed ? t("passed") : t("failed")}

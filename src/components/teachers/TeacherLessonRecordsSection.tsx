@@ -181,7 +181,7 @@ export default function TeacherLessonRecordsSection({
                 {lesson.className}
               </td>
               <td className="p-3.5 text-gray-600">
-                <span>🏢 {lesson.branchName}</span>
+                <span>{lesson.branchName}</span>
                 <span className="text-muted text-xs ms-1">({lesson.classroomName})</span>
               </td>
               <td className="p-3.5 text-center">

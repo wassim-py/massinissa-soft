@@ -9,6 +9,7 @@ import {
   deleteStudentFromFormationLevel,
   deleteMultipleStudentsFromFormationLevel,
 } from "@/lib/formationActions";
+import { AlertTriangle, Info } from "lucide-react";
 
 interface StudentToDelete {
   enrollmentId: number;
@@ -143,7 +144,7 @@ export default function DeleteStudentFromFormationModal({
 
           {totalPaidSum > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 flex items-start gap-2">
-              <span className="text-base leading-none">⚠️</span>
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
               <p className="leading-relaxed">
                 {t("deleteStudentHasPaymentWarning", {
                   amount: totalPaidSum.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
@@ -153,7 +154,7 @@ export default function DeleteStudentFromFormationModal({
           )}
 
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800 flex items-start gap-2">
-            <span className="text-base leading-none">ℹ️</span>
+            <Info className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />
             <p className="leading-relaxed">
               {locale === "ar"
                 ? "تنبيه: هذا الإجراء يلغي تسجيل التلميذ من هذا المستوى التكويني فقط. سيبقى ملف وحساب التلميذ محفوظاً بالكامل في قاعدة بيانات المؤسسة ولن يتم حذفه."

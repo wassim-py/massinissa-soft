@@ -14,6 +14,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { serializeForClient } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
+import { GraduationCap } from "lucide-react";
 
 export default async function FormationDetailsPage(props: {
   params: Promise<{ id: string; locale?: string }>;
@@ -480,8 +481,8 @@ export default async function FormationDetailsPage(props: {
       {isFinalLevel && formationGroup.isCompleted && (
         <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-emerald-900 shadow-sm animate-in fade-in duration-200">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-xl shrink-0">
-              🎓
+            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+              <GraduationCap className="w-5 h-5 text-emerald-700" />
             </div>
             <div>
               <h4 className="font-bold text-sm">

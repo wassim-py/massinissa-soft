@@ -7,7 +7,7 @@ import { enrollGraduatedStudentsInNewFormation } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, GraduationCap, Check, Users } from "lucide-react";
+import { CheckCircle2, GraduationCap, Check, Users, X } from "lucide-react";
 
 interface FinalLevelEnrollmentModalProps {
   isOpen: boolean;
@@ -103,8 +103,8 @@ export default function FinalLevelEnrollmentModal({
         {/* Header */}
         <div className="bg-gradient-to-r from-emerald-600 to-teal-700 px-6 py-4 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-xl">
-              🎓
+            <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
+              <GraduationCap className="w-5 h-5 text-white" />
             </div>
             <div>
               <h2 className="text-base font-bold">
@@ -117,9 +117,9 @@ export default function FinalLevelEnrollmentModal({
           </div>
           <button
             onClick={onClose}
-            className="text-white/80 hover:text-white text-xl font-bold transition-colors"
+            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
           >
-            ✕
+            <X className="w-5 h-5" />
           </button>
         </div>
 

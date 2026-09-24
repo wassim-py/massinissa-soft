@@ -87,8 +87,8 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
               <span>{isAr ? "نوع الوصل:" : "Type :"}</span>
               <span>
                 {isAr
-                  ? `عبر الفروع (فرع مصدر ${voucher.issuingBranchId} ➜ فرع دراسة ${voucher.targetBranchId})`
-                  : `Inter-branches (Émetteur ${voucher.issuingBranchId} ➜ Étude ${voucher.targetBranchId})`}
+                  ? `عبر الفروع (فرع مصدر ${voucher.issuingBranchId} → فرع دراسة ${voucher.targetBranchId})`
+                  : `Inter-branches (Émetteur ${voucher.issuingBranchId} → Étude ${voucher.targetBranchId})`}
               </span>
             </div>
           )}

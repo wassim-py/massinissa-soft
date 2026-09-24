@@ -721,7 +721,7 @@ const AttendanceRoster = ({
                                       onClick={() => setActiveChecklistStudentId(null)}
                                       className="text-gray-400 hover:text-gray-700 p-0.5 rounded-md hover:bg-gray-100 cursor-pointer"
                                     >
-                                      ✕
+                                      <X className="w-3.5 h-3.5" />
                                     </button>
                                   </div>
                                   <div className="space-y-1 max-h-48 overflow-y-auto">

@@ -15,6 +15,9 @@ import {
   AlertTriangle,
   ChevronRight,
   Users,
+  GraduationCap,
+  X,
+  Check,
 } from "lucide-react";
 
 interface CloseLevelProgressionModalProps {
@@ -151,8 +154,8 @@ export default function CloseLevelProgressionModal({
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-primary px-6 py-4 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-xl">
-              🎓
+            <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
+              <GraduationCap className="w-5 h-5 text-white" />
             </div>
             <div>
               <h2 className="text-base font-bold">
@@ -165,9 +168,9 @@ export default function CloseLevelProgressionModal({
           </div>
           <button
             onClick={onClose}
-            className="text-white/80 hover:text-white text-xl font-bold transition-colors"
+            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
           >
-            ✕
+            <X className="w-5 h-5" />
           </button>
         </div>
 
@@ -227,9 +230,10 @@ export default function CloseLevelProgressionModal({
                       {succeededStudents.map((s: any) => (
                         <span
                           key={s.id}
-                          className="inline-flex items-center px-2 py-0.5 rounded-md bg-white border border-emerald-300 text-emerald-900 font-medium text-[11px]"
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-emerald-300 text-emerald-900 font-medium text-[11px]"
                         >
-                          ✓ {s.name}
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          <span>{s.name}</span>
                           {s.score !== null && ` (${s.score}/100)`}
                         </span>
                       ))}

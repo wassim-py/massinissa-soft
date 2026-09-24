@@ -26,6 +26,7 @@ const ClassroomSection = dynamic(() => import("./ClassroomSection"), { loading: 
 const TrimesterSection = dynamic(() => import("./TrimesterSection"), { loading: SectionLoading });
 const LevelSection = dynamic(() => import("./LevelSection"), { loading: SectionLoading });
 const FormationLanguageSection = dynamic(() => import("./FormationLanguageSection"), { loading: SectionLoading });
+const InscriptionFeeSection = dynamic(() => import("./InscriptionFeeSection"), { loading: SectionLoading });
 import {
   KeyRound,
   Building2,
@@ -34,6 +35,7 @@ import {
   Settings,
   GraduationCap,
   Languages,
+  Tag,
 } from "lucide-react";
 
 interface ConfigurationClientProps {
@@ -47,6 +49,7 @@ interface ConfigurationClientProps {
   academicYears?: any[];
   levels?: LevelItem[];
   formationLanguages?: FormationLanguageItem[];
+  fixedInscriptionFee?: number;
   initialTab?: string;
 }
 
@@ -61,6 +64,7 @@ export default function ConfigurationClient({
   academicYears = [],
   levels = [],
   formationLanguages = [],
+  fixedInscriptionFee = 1000,
   initialTab = "accounts",
 }: ConfigurationClientProps) {
   const t = useTranslations("configuration");
@@ -68,7 +72,7 @@ export default function ConfigurationClient({
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const validTabs = ["accounts", "branches", "classrooms", "levels", "formationLanguages", "trimesters"];
+  const validTabs = ["accounts", "branches", "classrooms", "levels", "formationLanguages", "trimesters", "inscriptionFee"];
   const rawTab = searchParams.get("tab") || initialTab || "accounts";
   const currentTab = validTabs.includes(rawTab) ? rawTab : "accounts";
 
@@ -120,6 +124,13 @@ export default function ConfigurationClient({
       icon: CalendarDays,
       count: trimesters.length,
       color: "text-emerald-700 bg-emerald-50",
+    },
+    {
+      key: "inscriptionFee",
+      label: "Frais d'inscription / حقوق التسجيل",
+      icon: Tag,
+      count: `${fixedInscriptionFee} DZD`,
+      color: "text-blue-700 bg-blue-50",
     },
   ];
 
@@ -206,6 +217,9 @@ export default function ConfigurationClient({
             academicYear={academicYear}
             academicYears={academicYears}
           />
+        )}
+        {currentTab === "inscriptionFee" && (
+          <InscriptionFeeSection initialFee={fixedInscriptionFee} />
         )}
       </div>
     </div>

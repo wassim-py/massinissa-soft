@@ -178,7 +178,7 @@ export default function TeacherPhotocopySection({
                 <option value="all">{t("allBranches")}</option>
                 {branches.map((b) => (
                   <option key={b.id} value={String(b.id)}>
-                    🏢 {b.name}
+                    {b.name}
                   </option>
                 ))}
               </select>
@@ -198,7 +198,7 @@ export default function TeacherPhotocopySection({
                 <option value="all">{t("allGroups")}</option>
                 {groups.map((g) => (
                   <option key={g.id} value={String(g.id)}>
-                    👥 {g.name}
+                    {g.name}
                   </option>
                 ))}
               </select>
@@ -252,13 +252,13 @@ export default function TeacherPhotocopySection({
               </td>
               <td className="p-3.5">
                 <Badge variant="secondary" size="sm">
-                  🏢 {charge.branchName}
+                  {charge.branchName}
                 </Badge>
               </td>
               <td className="p-3.5">
                 {charge.className ? (
                   <Badge variant="primary" size="sm">
-                    👥 {charge.className}
+                    {charge.className}
                   </Badge>
                 ) : (
                   <span className="text-muted text-xs">{t("generalNotAssigned")}</span>
@@ -310,7 +310,7 @@ export default function TeacherPhotocopySection({
                     >
                       {branches.map((b) => (
                         <option key={b.id} value={String(b.id)}>
-                          🏢 {b.name}
+                          {b.name}
                         </option>
                       ))}
                     </select>
@@ -328,7 +328,7 @@ export default function TeacherPhotocopySection({
                       <option value="">{t("noGroupGeneral")}</option>
                       {groups.map((g) => (
                         <option key={g.id} value={String(g.id)}>
-                          👥 {g.name}
+                          {g.name}
                         </option>
                       ))}
                     </select>

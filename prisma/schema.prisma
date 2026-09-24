@@ -28,6 +28,8 @@ model Branch {
   bookDrops                                           BookDrop[]
   missingMoney                                        MissingMoney[]
   surplusMoney                                        SurplusMoney[]
+  dailyExpenses                                       DailyExpense[]
+  staffMembers                                        StaffMember[]
 }
 
 model Student {
@@ -184,6 +186,7 @@ model Announcement {
   branchId       Int?
   authorBranchId Int?
   classId        Int?
+  lessonId       Int?
   createdAt      DateTime  @default(now())
   createdBy      String
   pinned         Boolean   @default(false)
@@ -191,6 +194,7 @@ model Announcement {
 
   @@index([branchId, createdAt])
   @@index([authorBranchId])
+  @@index([lessonId])
   @@index([pinned, createdAt])
   @@index([expiresAt])
 }
@@ -668,4 +672,68 @@ model SurplusMoney {
 
   @@index([branchId, date])
   @@index([status])
+}
+
+model DailyExpense {
+  id          Int      @id @default(autoincrement())
+  branchId    Int?
+  amount      Decimal
+  description String
+  category    String   @default("GENERAL") // GENERAL, SUPPLIES, UTILITIES, RENT, MAINTENANCE, OTHER
+  date        DateTime @default(now())
+  recordedBy  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  branch      Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@index([branchId, date])
+  @@index([date])
+}
+
+model CaisseNoireTransaction {
+  id          Int      @id @default(autoincrement())
+  type        String   // "DEPOSIT" | "WITHDRAWAL"
+  amount      Decimal
+  description String
+  date        DateTime @default(now())
+  recordedBy  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date])
+  @@index([type])
+}
+
+model StaffMember {
+  id          Int            @id @default(autoincrement())
+  name        String
+  roleTitle   String
+  phone       String?
+  branchId    Int?
+  baseSalary  Decimal        @default(0)
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  branch      Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  payrollLogs StaffPayroll[]
+
+  @@index([branchId])
+  @@index([isActive])
+}
+
+model StaffPayroll {
+  id            Int         @id @default(autoincrement())
+  staffMemberId Int
+  month         Int         // 1-12
+  year          Int         // e.g. 2026
+  amount        Decimal
+  status        String      @default("PAID") // "PAID" | "PENDING"
+  paidAt        DateTime?   @default(now())
+  notes         String?
+  recordedBy    String
+  createdAt     DateTime    @default(now())
+  staffMember   StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+
+  @@unique([staffMemberId, month, year])
+  @@index([year, month])
 }

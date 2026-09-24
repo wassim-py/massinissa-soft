@@ -547,7 +547,8 @@ export default function StudentPaymentDetails({
                           <div className="flex items-center gap-2">
                             <h4 className="font-bold text-gray-900 text-sm">{cm.class.name}</h4>
                             <Badge variant="primary" size="sm">
-                              🏢 {cm.class.branch.name}
+                              <Building2 className="w-3 h-3 inline me-1" />
+                              {cm.class.branch.name}
                             </Badge>
                             {cm.class.level && (
                               <Badge variant="secondary" size="sm">
@@ -698,7 +699,7 @@ export default function StudentPaymentDetails({
                               variant="outline"
                               onClick={() => handleOpenTransfer(cm.enrollment, cm.netSessions)}
                             >
-                              {t("transferCredit")} (§2.6)
+                              {t("transferCredit")}
                             </Button>
                           )}
                         </div>

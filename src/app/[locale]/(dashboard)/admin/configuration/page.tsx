@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations } from "next-intl/server";
 import { serializeForClient } from "@/lib/utils";
+import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 
 const ConfigurationClient = dynamic(() => import("@/components/configuration/ConfigurationClient"), {
   loading: () => (
@@ -234,6 +235,8 @@ export default async function ConfigurationPage(props: PageProps) {
     })),
   }));
 
+  const fixedInscriptionFee = await getFixedInscriptionFeeAction();
+
   return (
     <ConfigurationClient
       accounts={serializeForClient(accounts)}
@@ -244,6 +247,7 @@ export default async function ConfigurationPage(props: PageProps) {
       academicYears={serializeForClient(academicYears)}
       levels={serializeForClient(levels)}
       formationLanguages={serializeForClient(formationLanguages)}
+      fixedInscriptionFee={fixedInscriptionFee}
       initialTab={searchParams.tab || "accounts"}
     />
   );

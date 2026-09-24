@@ -355,8 +355,8 @@ export default function FormationPaymentModal({
                   </span>
                   <p className="text-[11px] text-purple-700 mt-0.5">
                     {locale === "ar"
-                      ? "سيتم استخراج وصل منفصل للكتب المدرسية وفقاً للترقيم التسلسلي (§1.2 / §2.11)."
-                      : "Un reçu spécifique aux livres sera émis selon la série séquentielle (§1.2 / §2.11)."}
+                      ? "سيتم استخراج وصل منفصل للكتب المدرسية وفقاً للترقيم التسلسلي."
+                      : "Un reçu spécifique aux livres sera émis selon la série séquentielle."}
                   </p>
                 </div>
               </label>
