@@ -14,6 +14,8 @@ import { format } from "date-fns";
 import { arDZ } from "date-fns/locale";
 import { getTranslations, getLocale } from "next-intl/server";
 import { AlertCircle, ArrowDownRight, ArrowUpRight, Banknote, Calendar, CheckCircle2, Clock, Coins, PlusCircle, ShieldAlert, Sparkles, Store, Wallet } from "lucide-react";
+import MissingMoneyActions from "@/components/finance/MissingMoneyActions";
+import SurplusMoneyActions from "@/components/finance/SurplusMoneyActions";
 
 interface PageProps {
   searchParams: Promise<{
@@ -381,6 +383,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
               { header: t("colAmount"), accessor: "amount", align: "end" },
               { header: t("colReason"), accessor: "reason" },
               { header: t("colStatus"), accessor: "status", align: "center" },
+              ...(isOwner ? [{ header: "Actions", accessor: "actions", align: "end" as const }] : []),
             ]}
             data={discrepancies}
             renderRow={(item) => (
@@ -427,6 +430,15 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                       : t("statusRejected")}
                   </Badge>
                 </td>
+                {isOwner && (
+                  <td className="p-3.5 text-end">
+                    {item.type === "MISSING" ? (
+                      <MissingMoneyActions id={item.id} status={item.status} />
+                    ) : (
+                      <SurplusMoneyActions id={item.id} status={item.status} />
+                    )}
+                  </td>
+                )}
               </tr>
             )}
             emptyTitle={t("noDiscrepanciesToday")}

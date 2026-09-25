@@ -78,19 +78,25 @@ const LessonForm = ({
   const formatTime = (date: Date | string | undefined) => {
     if (!date) return "";
     const d = new Date(date);
-    const hours = d.getHours().toString().padStart(2, "0");
-    const minutes = d.getMinutes().toString().padStart(2, "0");
-    return `${hours}:${minutes}`;
+    if (isNaN(d.getTime())) return "";
+    return new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "Africa/Algiers",
+    }).format(d);
   };
 
   const formatDate = (date: Date | string | undefined | null) => {
     if (!date) return "";
     const d = new Date(date);
     if (isNaN(d.getTime())) return "";
-    const year = d.getFullYear();
-    const month = (d.getMonth() + 1).toString().padStart(2, "0");
-    const day = d.getDate().toString().padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    return new Intl.DateTimeFormat("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      timeZone: "Africa/Algiers",
+    }).format(d);
   };
 
   const isOwner = Boolean(relatedData?.isOwner);
@@ -132,7 +138,7 @@ const LessonForm = ({
           isFree: Boolean(data.isFree),
         }
       : {
-          branchId: isOwner ? undefined : userBranchId,
+          branchId: userBranchId || (branches[0]?.id ?? 1),
           isExtra: false,
           isCatchUp: false,
           isFree: false,

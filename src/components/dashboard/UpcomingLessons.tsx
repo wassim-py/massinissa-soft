@@ -62,10 +62,14 @@ export default function UpcomingLessons({
     return () => clearInterval(interval);
   }, []);
 
+
   // Filter lessons by branch if selected
   const branchFilteredLessons = initialLessons.filter((l) =>
     branchFilter === "my_branch" ? l.branchId === activeBranchId : true
   );
+
+  // All lessons passed from admin dashboard are strictly for TODAY
+  const allTodayLessons = branchFilteredLessons;
 
   // Filter lessons that have not ended yet (endsAt > currentTime)
   const upcomingLessons = branchFilteredLessons.filter(
@@ -73,7 +77,7 @@ export default function UpcomingLessons({
   );
 
   const displayedLessons =
-    viewMode === "upcoming" ? upcomingLessons : branchFilteredLessons;
+    viewMode === "upcoming" ? upcomingLessons : allTodayLessons;
 
   // Relative time helper
   const getRelativeTime = (startsAtStr: string) => {
@@ -98,6 +102,7 @@ export default function UpcomingLessons({
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
+      timeZone: "Africa/Algiers",
     };
     return `${start.toLocaleTimeString("en-GB", timeOptions)} - ${end.toLocaleTimeString("en-GB", timeOptions)}`;
   };
@@ -141,7 +146,7 @@ export default function UpcomingLessons({
                   : "text-muted hover:text-gray-900"
               }`}
             >
-              {t("allToday")} ({branchFilteredLessons.length})
+              {t("allToday")} ({allTodayLessons.length})
             </button>
           </div>
         </div>

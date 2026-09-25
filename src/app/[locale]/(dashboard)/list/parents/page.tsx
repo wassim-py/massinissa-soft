@@ -90,7 +90,7 @@ const ParentListPage = async (
         />
         <div className="flex flex-col min-w-0">
           <h4 className="text-table-body font-semibold text-gray-900 truncate">
-            {item.name} {item.surname}
+            {item.surname ? `${item.surname} ${item.name}` : item.name}
           </h4>
           <span className="text-form-helper text-muted truncate">{item?.email}</span>
         </div>
@@ -100,7 +100,7 @@ const ParentListPage = async (
           <div className="flex flex-wrap gap-1">
             {item.students.map((student) => (
               <Badge key={student.id} variant="secondary" size="sm">
-                {student.name} {student.surname}
+                {student.surname ? `${student.surname} ${student.name}` : student.name}
               </Badge>
             ))}
           </div>

@@ -1,7 +1,9 @@
 "use client";
 
 import { Student, Attendance, Voucher, Lesson, Class, Teacher } from "@prisma/client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, startTransition } from "react";
+import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
@@ -12,10 +14,12 @@ import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
 import CatchUpVisitorModal from "./CatchUpVisitorModal";
-import { BookOpen, Check, X, Minus, ChevronDown } from "lucide-react";
+import { BookOpen, Check, X, Minus, ChevronDown, UserPlus } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
 import BookStatusBadge, { computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
+
+const StudentForm = dynamic(() => import("./StudentForm"), { ssr: false });
 
 const SubmitButton = () => {
   const { pending } = useFormStatus();
@@ -65,9 +69,10 @@ type FullStudent = Student & {
 };
 
 type FullLesson = Lesson & {
-  class: Class & { price?: number };
+  class: Class & { price?: number; levelId?: number | null; branchId?: number | null };
   teacher: Teacher & { surname?: string };
   subject?: { id: number; name: string };
+  branchId?: number | null;
 };
 
 const AttendanceRoster = ({
@@ -78,6 +83,8 @@ const AttendanceRoster = ({
   groupBooks = [],
   catchUpVisitors = [],
   initialSearch = "",
+  studentRelatedData = { grades: [], classes: [] },
+  canCreateStudent = true,
 }: {
   lesson: FullLesson;
   students: FullStudent[];
@@ -86,7 +93,13 @@ const AttendanceRoster = ({
   groupBooks?: Array<{ id: number; title: string }>;
   catchUpVisitors?: CatchUpVisitor[];
   initialSearch?: string;
+  studentRelatedData?: {
+    grades: Array<{ id: number; level?: string; name?: string }>;
+    classes: Array<{ id: number; name: string }>;
+  };
+  canCreateStudent?: boolean;
 }) => {
+  const router = useRouter();
   const t = useTranslations("attendance");
   const tSearch = useTranslations("search");
   const tCommon = useTranslations("common");
@@ -94,6 +107,16 @@ const AttendanceRoster = ({
 
   const [searchTerm, setSearchTerm] = useState(initialSearch || "");
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch || "");
+  const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+
+  const resolvedStudentRelatedData = useMemo(() => {
+    const grades = studentRelatedData?.grades || [];
+    let classesList = studentRelatedData?.classes ? [...studentRelatedData.classes] : [];
+    if (!classesList.some((c) => c.id === lesson.class.id)) {
+      classesList.push({ id: lesson.class.id, name: lesson.class.name });
+    }
+    return { grades, classes: classesList };
+  }, [studentRelatedData, lesson.class.id, lesson.class.name]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -223,6 +246,43 @@ const AttendanceRoster = ({
     return initial;
   });
 
+  // Synchronize attendance state when students prop changes (e.g. newly registered student)
+  useEffect(() => {
+    setAttendance((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      students.forEach((student) => {
+        if (next[student.id] === undefined) {
+          const record = existingRecords.find((r) => r.studentId === student.id);
+          if (record?.status === "PRESENT") {
+            next[student.id] = "PRESENT";
+          } else if (record?.status === "NOT_DEFINED") {
+            next[student.id] = "NOT_DEFINED";
+          } else {
+            next[student.id] = "ABSENT";
+          }
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [students, existingRecords]);
+
+  // Synchronize studentReceivedBooks state when students prop changes
+  useEffect(() => {
+    setStudentReceivedBooks((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      students.forEach((s) => {
+        if (next[s.id] === undefined) {
+          next[s.id] = s.receivedBookIds ? [...s.receivedBookIds] : [];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [students]);
+
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<FullStudent | null>(null);
   const [isCatchUpModalOpen, setIsCatchUpModalOpen] = useState(false);
@@ -349,7 +409,7 @@ const AttendanceRoster = ({
               </Badge>
             )}
             <Badge variant="neutral" size="md">
-              {t("teacher")}: {lesson.teacher.name}
+              {t("teacher")}: {lesson.teacher.surname ? `${lesson.teacher.surname} ${lesson.teacher.name}` : lesson.teacher.name}
             </Badge>
             <span className="text-form-helper text-muted ms-1">
               {new Date().toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
@@ -415,7 +475,7 @@ const AttendanceRoster = ({
         </div>
       )}
 
-      {/* Top action bar: Summary and Catch-Up Visitor entry point (§2.12) */}
+      {/* Top action bar: Summary, Student Registration, and Catch-Up Visitor entry points */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-3 bg-gray-50 border border-gray-200 rounded-xl font-sans">
         <div className="flex items-center gap-2 text-xs text-gray-600 flex-wrap">
           <span>{t("totalGroupStudents", { count: students.length })}</span>
@@ -432,30 +492,58 @@ const AttendanceRoster = ({
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => setIsCatchUpModalOpen(true)}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors shadow-xs cursor-pointer"
-        >
-          <span>{t("addCatchUpStudentBtn")}</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {canCreateStudent && (
+            <button
+              type="button"
+              onClick={() => setIsRegisterModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-xs cursor-pointer active:scale-95"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>{t("registerStudentBtn")}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setIsCatchUpModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors shadow-xs cursor-pointer active:scale-95"
+          >
+            <span>{t("addCatchUpStudentBtn")}</span>
+          </button>
+        </div>
       </div>
 
       <div className="space-y-3 font-sans">
         {filteredStudents.length === 0 ? (
           <div className="p-8 text-center bg-gray-50/50 rounded-xl border border-dashed border-gray-300 font-sans">
             <p className="text-sm font-medium text-gray-600">
-              {locale === "ar"
-                ? `لم يتم العثور على أي تلميذ يطابق "${searchTerm}".`
-                : `Aucun élève ne correspond à "${searchTerm}".`}
+              {searchTerm
+                ? (locale === "ar"
+                    ? `لم يتم العثور على أي تلميذ يطابق "${searchTerm}".`
+                    : `Aucun élève ne correspond à "${searchTerm}".`)
+                : t("noStudents")}
             </p>
-            <button
-              type="button"
-              onClick={() => setSearchTerm("")}
-              className="mt-2 text-xs font-semibold text-blue-600 hover:text-blue-800 underline cursor-pointer"
-            >
-              {locale === "ar" ? "مسح البحث" : "Effacer la recherche"}
-            </button>
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm("")}
+                className="mt-2 text-xs font-semibold text-blue-600 hover:text-blue-800 underline cursor-pointer"
+              >
+                {locale === "ar" ? "مسح البحث" : "Effacer la recherche"}
+              </button>
+            )}
+            {canCreateStudent && !searchTerm && (
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsRegisterModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-xs cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>{t("registerStudentBtn")}</span>
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           filteredStudents.map((student) => {
@@ -959,6 +1047,40 @@ const AttendanceRoster = ({
               >
                 {t("continueBtn")}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rapid Student Registration Modal */}
+      {isRegisterModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-surface p-6 rounded-xl border border-border shadow-xl relative w-[90%] md:w-[70%] lg:w-[60%] xl:w-[50%] 2xl:w-[40%] max-h-[90vh] overflow-y-auto">
+            <button
+              type="button"
+              className="absolute top-4 end-4 cursor-pointer p-1.5 rounded-lg text-muted hover:text-gray-900 hover:bg-surface-subtle transition-colors"
+              onClick={() => setIsRegisterModalOpen(false)}
+            >
+              <Image src="/close.png" alt={tCommon("cancel")} width={14} height={14} />
+            </button>
+            <div className="p-1">
+              <StudentForm
+                type="create"
+                setOpen={setIsRegisterModalOpen}
+                data={{
+                  classes: [lesson.class.id],
+                  gradeId: lesson.class.levelId || undefined,
+                  registeredBranchId: lesson.branchId || undefined,
+                  targetClassName: lesson.class.name,
+                }}
+                relatedData={resolvedStudentRelatedData}
+                onSuccess={() => {
+                  setSearchTerm("");
+                  startTransition(() => {
+                    router.refresh();
+                  });
+                }}
+              />
             </div>
           </div>
         </div>

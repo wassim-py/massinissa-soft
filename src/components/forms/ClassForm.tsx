@@ -116,7 +116,7 @@ const ClassForm = ({
             {teachers.map(
               (teacher: { id: string; name: string; surname: string }) => (
                 <option value={teacher.id} key={teacher.id}>
-                  {teacher.name + " " + teacher.surname}
+                  {teacher.surname ? `${teacher.surname} ${teacher.name}` : teacher.name}
                 </option>
               )
             )}

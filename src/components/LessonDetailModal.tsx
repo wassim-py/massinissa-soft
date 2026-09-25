@@ -84,7 +84,7 @@ const LessonDetailModal = ({
           <div className="flex justify-between">
             <span className="font-semibold text-gray-600">{t("teacher")}:</span>
             <span className="text-gray-800 font-medium">
-              {lesson.teacher?.name || t("unspecified")}
+              {(lesson.teacher?.surname ? `${lesson.teacher.surname} ${lesson.teacher.name}` : lesson.teacher?.name) || t("unspecified")}
             </span>
           </div>
           <div className="flex justify-between">

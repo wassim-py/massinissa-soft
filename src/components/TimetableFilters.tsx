@@ -104,7 +104,7 @@ const TimetableFilters = ({
 
   // Filter teachers based on the search term
   const filteredTeachers = safeTeachers.filter((teacher) =>
-    `${teacher.name} ${teacher.surname}`
+    `${teacher.surname ? `${teacher.surname} ${teacher.name}` : teacher.name}`
       .toLowerCase()
       .includes(searchTerm.toLowerCase())
   );
@@ -156,7 +156,7 @@ const TimetableFilters = ({
           className="ring-[1.5px] ring-gray-300 px-3 py-2 rounded-full text-sm w-48 flex items-center justify-between bg-white text-gray-800"
         >
           <span className="truncate">
-            {selectedTeacher ? `${selectedTeacher.name} ${selectedTeacher.surname}` : t("filterByTeacher")}
+            {selectedTeacher ? (selectedTeacher.surname ? `${selectedTeacher.surname} ${selectedTeacher.name}` : selectedTeacher.name) : t("filterByTeacher")}
           </span>
           <svg
             className={`w-4 h-4 transition-transform shrink-0 ${
@@ -205,7 +205,7 @@ const TimetableFilters = ({
                   }}
                   className="p-2 hover:bg-gray-100 cursor-pointer text-sm"
                 >
-                  {teacher.name} {teacher.surname}
+                  {teacher.surname ? `${teacher.surname} ${teacher.name}` : teacher.name}
                 </li>
               ))}
             </ul>

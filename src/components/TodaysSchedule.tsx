@@ -52,7 +52,6 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
         {
           isExtra: false,
           isCatchUp: false,
-          isFree: false,
           class: {
             isFormation: false,
           },
@@ -72,7 +71,7 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
   const todaysLessons = candidateLessons
     .filter((l) => {
       const isOneOff = Boolean(
-        l.isExtra || l.isCatchUp || l.isFree || l.class?.isFormation
+        l.isExtra || l.isCatchUp || l.class?.isFormation
       );
       if (isOneOff) {
         const d = new Date(l.startsAt);
@@ -82,7 +81,7 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
     })
     .map((l) => {
       const isOneOff = Boolean(
-        l.isExtra || l.isCatchUp || l.isFree || l.class?.isFormation
+        l.isExtra || l.isCatchUp || l.class?.isFormation
       );
       if (!isOneOff) {
         const durationMs =

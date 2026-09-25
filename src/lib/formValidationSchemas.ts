@@ -62,6 +62,7 @@ export const studentSchema = z.object({
   gradeId: z.coerce.number().min(1, { message: "المستوى مطلوب!" }),
   classes: z.array(z.number()).optional(),
   parentPhoneNumbers: z.array(z.string()).optional(),
+  registeredBranchId: z.coerce.number().optional(),
 });
 
 export type StudentSchema = z.infer<typeof studentSchema>;
@@ -79,6 +80,7 @@ export const getStudentSchema = (t?: (key: string) => string) => {
     gradeId: z.coerce.number().min(1, { message: t("errors.gradeRequired") }),
     classes: z.array(z.number()).optional(),
     parentPhoneNumbers: z.array(z.string()).optional(),
+    registeredBranchId: z.coerce.number().optional(),
   });
 };
 

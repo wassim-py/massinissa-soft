@@ -75,7 +75,13 @@ const TakeAttendancePage = async (
   const lesson = {
     id: l.id,
     name: l.className || (locale === "ar" ? "درس" : "Séance"),
-    class: { id: l.classId, name: l.className || (locale === "ar" ? "قسم" : "Groupe"), price: Number(l.classPrice || 0) },
+    class: {
+      id: l.classId,
+      name: l.className || (locale === "ar" ? "قسم" : "Groupe"),
+      price: Number(l.classPrice || 0),
+      levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
+      branchId: l.branchId != null ? Number(l.branchId) : null,
+    },
     subject: { id: l.classId, name: l.className || (locale === "ar" ? "مادة" : "Matière") },
     teacher: { id: l.teacherId, name: l.teacherName || (locale === "ar" ? "أستاذ" : "Enseignant"), surname: "" },
     startTime: l.startsAt,
@@ -84,6 +90,7 @@ const TakeAttendancePage = async (
     isCatchUp: Boolean(l.isCatchUp),
     isFree: Boolean(l.isFree),
     extraFee: l.extraFee != null ? Number(l.extraFee) : null,
+    branchId: l.branchId != null ? Number(l.branchId) : null,
   };
 
   // Resolve active trimester (§7.20)
@@ -290,6 +297,33 @@ const TakeAttendancePage = async (
     date: new Date(),
   }));
 
+  // Fetch grades and classes for rapid student registration to this group
+  let studentRelatedData = { grades: [] as any[], classes: [] as any[] };
+  const canCreateStudent = session.can("create", "student");
+
+  if (canCreateStudent) {
+    try {
+      const [levels, classes] = await Promise.all([
+        prisma.level.findMany({
+          select: { id: true, name: true },
+          orderBy: { id: "asc" },
+        }),
+        prisma.class.findMany({
+          where: session.isOwner ? {} : { OR: [{ branchId: l.branchId }, { id: l.classId }] },
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        }),
+      ]);
+
+      studentRelatedData = {
+        grades: levels.map((lvl) => ({ id: lvl.id, level: lvl.name, name: lvl.name })),
+        classes: classes.map((c) => ({ id: c.id, name: c.name })),
+      };
+    } catch (e) {
+      console.error("Error fetching student registration relatedData:", e);
+    }
+  }
+
   return (
     <Card className="flex-1 w-full border-border/80 shadow-xs">
       <CardContent className="p-4 sm:p-5 md:p-6">
@@ -301,6 +335,8 @@ const TakeAttendancePage = async (
           groupBooks={serializeForClient(groupBooks) as any}
           catchUpVisitors={serializeForClient(formattedCatchUpVisitors) as any}
           initialSearch={searchQuery}
+          studentRelatedData={serializeForClient(studentRelatedData) as any}
+          canCreateStudent={canCreateStudent}
         />
       </CardContent>
     </Card>

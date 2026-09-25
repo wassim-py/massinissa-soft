@@ -48,7 +48,7 @@ const Navbar = async ({
 
         <div className="hidden sm:flex flex-col text-end">
           <span className="text-xs font-semibold text-gray-800 truncate max-w-[120px] md:max-w-none">
-            {user?.firstName} {user?.lastName}
+            {user?.lastName ? `${user.lastName} ${user.firstName || ""}`.trim() : user?.firstName}
           </span>
           <span className="text-[11px] text-muted font-normal">
             {translatedRole}

@@ -107,7 +107,7 @@ const SubjectForm = ({
 
   const filteredTeachers = teachers.filter(
     (teacher: { name: string; surname: string }) =>
-      `${teacher.name} ${teacher.surname}`
+      `${teacher.surname ? `${teacher.surname} ${teacher.name}` : teacher.name}`
         .toLowerCase()
         .includes(searchTerm.toLowerCase())
   );
@@ -150,7 +150,7 @@ const SubjectForm = ({
                 if (selectedTeacherObjects.length === 0)
                   return t("selectTeachers");
                 return selectedTeacherObjects
-                  .map((t: any) => `${t.name} ${t.surname}`)
+                  .map((t: any) => t.surname ? `${t.surname} ${t.name}` : t.name)
                   .join(", ");
               };
               return (
@@ -220,7 +220,7 @@ const SubjectForm = ({
                                 }}
                               />
                               <span className="text-sm">
-                                {teacher.name} {teacher.surname}
+                                {teacher.surname ? `${teacher.surname} ${teacher.name}` : teacher.name}
                               </span>
                             </label>
                           )

@@ -119,7 +119,7 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
           const todayDow = startOfToday.getDay();
           const todayLessons = t.lessons.filter((l) => {
             const isOneOff = Boolean(
-              l.isExtra || l.isCatchUp || l.isFree || l.class?.isFormation
+              l.isExtra || l.isCatchUp || l.class?.isFormation
             );
             if (isOneOff) {
               const lessonDate = new Date(l.startsAt);

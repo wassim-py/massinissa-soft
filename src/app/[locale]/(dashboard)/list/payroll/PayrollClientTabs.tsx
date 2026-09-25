@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   generatePayrollRunAction,
   setPayrollRunStatusAction,
+  deletePayrollRunAction,
   recordPhotocopyChargeAction,
   recordSalaryAdvanceAction,
   saveTeacherPayRateAction,
@@ -14,9 +15,9 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { FormField, Input, Select } from "@/components/ui/FormField";
-import { DataTable, Column } from "@/components/ui/DataTable";
+import { DataTable } from "@/components/ui/DataTable";
 import { useTranslations, useLocale } from "next-intl";
-import { Info } from "lucide-react";
+import { Info, Trash2, ArrowDownLeft, Receipt } from "lucide-react";
 
 interface Props {
   currentTab: string;
@@ -119,6 +120,23 @@ export default function PayrollClientTabs({
   const [isPending, startTransition] = useTransition();
   const [feedbackMessage, setFeedbackMessage] = useState<{ text: string; isError: boolean } | null>(null);
 
+  // Tab mapping: 3 clear views
+  const isRunsTab =
+    currentTab === "runs" ||
+    currentTab === "overview" ||
+    currentTab === "payslips" ||
+    !currentTab;
+  const isDeductionsTab =
+    currentTab === "deductions" ||
+    currentTab === "advances" ||
+    currentTab === "photocopy";
+  const isRatesTab = currentTab === "rates";
+
+  // Sub-toggle for Deductions (Advances vs Photocopy)
+  const [deductionSubTab, setDeductionSubTab] = useState<"advances" | "photocopy">(
+    currentTab === "photocopy" ? "photocopy" : "advances"
+  );
+
   // Form states
   // 1. Generate Run form
   const [periodStart, setPeriodStart] = useState("2026-09-01");
@@ -128,7 +146,7 @@ export default function PayrollClientTabs({
   const [pcTeacherId, setPcTeacherId] = useState(teachers[0]?.id || "");
   const [pcBranchId, setPcBranchId] = useState(branches[0]?.id || 1);
   const [pcPages, setPcPages] = useState(20);
-  const [pcRatePerPage, setPcRatePerPage] = useState(5); // Default 5 DZD / page
+  const [pcRatePerPage] = useState(5); // Default 5 DZD / page
   const [pcCostAmount, setPcCostAmount] = useState(100);
   const [pcDate, setPcDate] = useState(new Date().toISOString().split("T")[0]);
 
@@ -144,7 +162,10 @@ export default function PayrollClientTabs({
   const [branchRateOverrides, setBranchRateOverrides] = useState<Record<number, string>>({});
 
   // Formatters
-  const formatDZD = (num: number) => Number(num || 0).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ") + (locale === "ar" ? " دج" : " DZD");
+  const formatDZD = (num: number) =>
+    Number(num || 0).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ") +
+    (locale === "ar" ? " دج" : " DZD");
+
   const formatDate = (iso: string) => {
     try {
       return new Date(iso).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
@@ -175,6 +196,24 @@ export default function PayrollClientTabs({
     setFeedbackMessage(null);
     startTransition(async () => {
       const res = await setPayrollRunStatusAction({ payrollRunId: runId, status });
+      if (res.success) {
+        setFeedbackMessage({ text: res.message, isError: false });
+      } else {
+        setFeedbackMessage({ text: res.message, isError: true });
+      }
+    });
+  };
+
+  const handleDeleteRun = (runId: number) => {
+    const msg =
+      locale === "ar"
+        ? "هل أنت متأكد من رغبتك في إلغاء وحذف دورة الرواتب هذه؟ سيتم حذف جميع كشوف الرواتب المرتبطة بها وتراجع القيود المالية."
+        : "Êtes-vous sûr de vouloir annuler et supprimer ce cycle de paie ? Toutes les fiches de paie générées seront supprimées.";
+    if (!window.confirm(msg)) return;
+
+    setFeedbackMessage(null);
+    startTransition(async () => {
+      const res = await deletePayrollRunAction(runId);
       if (res.success) {
         setFeedbackMessage({ text: res.message, isError: false });
       } else {
@@ -273,159 +312,11 @@ export default function PayrollClientTabs({
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 1: OWNER FINANCIAL OVERVIEW                                           */}
+      {/* VIEW 1: CYCLES DE PAIE & FICHES DE PAIE CONSOLIDÉES                       */}
       {/* ========================================================================= */}
-      {currentTab === "overview" && (
+      {isRunsTab && (
         <div className="flex flex-col gap-6">
-          {/* Primary View: School-Wide Revenue vs Payroll */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card className="p-5 border-border shadow-xs bg-surface">
-              <span className="text-form-label font-bold text-muted">{t("schoolRevenueTotal")}</span>
-              <p className="text-2xl font-black text-success mt-1 font-mono">
-                {formatDZD(overviewData.totalRevenue)}
-              </p>
-              <span className="text-form-helper text-muted mt-1 block">{t("allBranchesRevenueHelper")}</span>
-            </Card>
-
-            <Card className="p-5 border-border shadow-xs bg-surface">
-              <span className="text-form-label font-bold text-muted">{t("grossPayrollTotal")}</span>
-              <p className="text-2xl font-black text-danger mt-1 font-mono">
-                {formatDZD(overviewData.totalGrossPayroll)}
-              </p>
-              <span className="text-form-helper text-muted mt-1 block">{t("teacherSessionsDuesHelper")}</span>
-            </Card>
-
-            <Card className="p-5 border-border shadow-xs bg-surface">
-              <span className="text-form-label font-bold text-muted">{t("totalDeductions")}</span>
-              <p className="text-2xl font-black text-warning-text mt-1 font-mono">
-                {formatDZD(overviewData.totalAdvances + overviewData.totalPhotocopyDeductions)}
-              </p>
-              <span className="text-form-helper text-muted mt-1 block">
-                {t("advancesCol")}: {formatDZD(overviewData.totalAdvances)} | {t("photocopyCol")}: {formatDZD(overviewData.totalPhotocopyDeductions)}
-              </span>
-            </Card>
-
-            <Card className="p-5 border-border shadow-xs bg-surface">
-              <span className="text-form-label font-bold text-muted">{t("operatingMargin")}</span>
-              <p
-                className={`text-2xl font-black mt-1 font-mono ${
-                  overviewData.operatingMargin >= 0 ? "text-primary" : "text-danger"
-                }`}
-              >
-                {formatDZD(overviewData.operatingMargin)}
-              </p>
-              <span className="text-form-helper text-muted mt-1 block">{t("schoolFinancialEfficiency")}</span>
-            </Card>
-          </div>
-
-          {/* Teacher Liabilities - What is owed to each teacher total */}
-          <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle className="text-section-title font-bold text-gray-900">
-                {t("teacherLiabilitiesTitle")}
-              </CardTitle>
-              <CardDescription className="text-form-helper text-muted">
-                {t("teacherLiabilitiesDesc")}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5">
-              <DataTable
-                columns={[
-                  { header: t("teacher"), accessor: "teacherName" },
-                  { header: t("totalSessionsCol"), accessor: "sessionsCount", align: "center" },
-                  { header: t("grossAmountCol"), accessor: "grossAmount", align: "end" },
-                  { header: t("advancesDeductedCol"), accessor: "advances", align: "end" },
-                  { header: t("photocopyDeductedCol"), accessor: "photocopyDeductions", align: "end" },
-                  { header: t("netDueCol"), accessor: "netAmount", align: "end" },
-                  { header: t("payslipActionCol"), accessor: "action", align: "center" },
-                ]}
-                data={payslips}
-                renderRow={(p) => (
-                  <tr key={p.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                    <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
-                    <td className="p-3.5 text-center font-mono">
-                      {p.sessionsCount} {locale === "ar" ? "حصة" : "séance(s)"}
-                    </td>
-                    <td className="p-3.5 text-end font-mono font-bold text-gray-800">
-                      {formatDZD(p.grossAmount)}
-                    </td>
-                    <td className="p-3.5 text-end font-mono text-danger font-semibold">
-                      - {formatDZD(p.advances)}
-                    </td>
-                    <td className="p-3.5 text-end font-mono text-warning-text font-semibold">
-                      - {formatDZD(p.photocopyDeductions)}
-                    </td>
-                    <td className="p-3.5 text-end font-mono font-black text-primary text-sm">
-                      {formatDZD(p.netAmount)}
-                    </td>
-                    <td className="p-3.5 text-center">
-                      <Link
-                        href={`/list/finance/payslips/${p.id}`}
-                        className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-xs"
-                      >
-                        {t("viewAndPrint")}
-                      </Link>
-                    </td>
-                  </tr>
-                )}
-                emptyTitle={t("noPayslipsYetTitle")}
-                emptyDescription={t("noPayslipsYetDesc")}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Secondary View: Per-Branch Breakdown */}
-          <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle className="text-section-title font-bold text-gray-900">
-                {t("branchComparisonTitle")}
-              </CardTitle>
-              <CardDescription className="text-form-helper text-muted">
-                {t("branchComparisonDesc")}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {overviewData.branchBreakdown.map((b) => (
-                  <div key={b.branchId} className="border border-border rounded-xl p-4 bg-surface-subtle/60 shadow-xs">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="font-bold text-gray-900 text-table-body">{b.branchName}</span>
-                      <Badge variant="neutral" size="sm">{t("branchNumberBadge", { id: b.branchId })}</Badge>
-                    </div>
-                    <div className="space-y-2 text-table-body text-xs">
-                      <div className="flex justify-between">
-                        <span className="text-muted">{t("branchRevenueLabel")}</span>
-                        <span className="font-mono font-bold text-success-text">{formatDZD(b.revenue)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted">{t("branchPayrollCostLabel")}</span>
-                        <span className="font-mono font-bold text-danger">{formatDZD(b.payrollCost)}</span>
-                      </div>
-                      <div className="border-t border-border pt-1.5 flex justify-between font-bold">
-                        <span className="text-gray-800">{t("netOperatingLabel")}</span>
-                        <span
-                          className={`font-mono ${
-                            b.margin >= 0 ? "text-primary font-black" : "text-danger font-black"
-                          }`}
-                        >
-                          {formatDZD(b.margin)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* TAB 2: PAYROLL RUNS                                                       */}
-      {/* ========================================================================= */}
-      {currentTab === "runs" && (
-        <div className="flex flex-col gap-6">
-          {/* Create Run Form */}
+          {/* Card 1: Generate Run Form */}
           <Card className="border-border shadow-xs bg-surface">
             <CardHeader className="p-5 border-b border-border">
               <CardTitle className="text-section-title font-bold text-gray-900">
@@ -475,12 +366,17 @@ export default function PayrollClientTabs({
             </CardContent>
           </Card>
 
-          {/* Runs Table */}
+          {/* Card 2: Recorded Payroll Runs Table */}
           <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle className="text-section-title font-bold text-gray-900">
-                {t("recordedPayrollRunsTitle")}
-              </CardTitle>
+            <CardHeader className="p-5 border-b border-border flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-section-title font-bold text-gray-900">
+                  {t("recordedPayrollRunsTitle")}
+                </CardTitle>
+                <CardDescription className="text-form-helper text-muted">
+                  {payrollRuns.length} {locale === "ar" ? "دورات مسجلة" : "cycle(s) enregistré(s)"}
+                </CardDescription>
+              </div>
             </CardHeader>
             <CardContent className="p-5">
               <DataTable
@@ -532,7 +428,7 @@ export default function PayrollClientTabs({
                     <td className="p-3.5 text-end font-mono text-warning-text font-semibold">- {formatDZD(r.totalPhotocopy)}</td>
                     <td className="p-3.5 text-end font-mono font-black text-primary text-sm">{formatDZD(r.totalNet)}</td>
                     <td className="p-3.5 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
+                      <div className="flex items-center justify-center gap-1.5 flex-wrap">
                         {r.status === "DRAFT" && (
                           <Button
                             type="button"
@@ -561,6 +457,17 @@ export default function PayrollClientTabs({
                             {t("disbursedInCashbox")}
                           </Badge>
                         )}
+                        <Button
+                          type="button"
+                          variant="danger"
+                          size="sm"
+                          disabled={isPending}
+                          onClick={() => handleDeleteRun(r.id)}
+                          title={t("undoRunBtn")}
+                          className="!px-2.5"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                        </Button>
                       </div>
                     </td>
                   </tr>
@@ -570,335 +477,415 @@ export default function PayrollClientTabs({
               />
             </CardContent>
           </Card>
+
+          {/* Card 3: Generated Payslips Table */}
+          <Card className="border-border shadow-xs bg-surface">
+            <CardHeader className="p-5 border-b border-border flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-section-title font-bold text-gray-900">
+                  {t("consolidatedPayslipsTitle")}
+                </CardTitle>
+                <CardDescription className="text-form-helper text-muted">
+                  {t("consolidatedPayslipsDesc")}
+                </CardDescription>
+              </div>
+              <Badge variant="primary" size="sm">
+                {payslips.length} {locale === "ar" ? "قسيمة" : "fiche(s)"}
+              </Badge>
+            </CardHeader>
+            <CardContent className="p-5">
+              <DataTable
+                columns={[
+                  { header: t("payslipIdCol"), accessor: "id" },
+                  { header: t("teacher"), accessor: "teacherName" },
+                  { header: t("periodCol"), accessor: "period" },
+                  { header: t("totalSessionsCol"), accessor: "sessionsCount", align: "center" },
+                  { header: t("branchesDetailCol"), accessor: "branches" },
+                  { header: t("grossAmountCol"), accessor: "grossAmount", align: "end" },
+                  { header: t("advancesCol"), accessor: "advances", align: "end" },
+                  { header: t("photocopyCol"), accessor: "photocopy", align: "end" },
+                  { header: t("netDueCol"), accessor: "netAmount", align: "end" },
+                  { header: t("printCol"), accessor: "actions", align: "center" },
+                ]}
+                data={payslips}
+                renderRow={(p) => (
+                  <tr key={p.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
+                    <td className="p-3.5 font-mono font-bold">#{p.id}</td>
+                    <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
+                    <td className="p-3.5 text-muted text-xs">
+                      {formatDate(p.periodStart)} → {formatDate(p.periodEnd)}
+                    </td>
+                    <td className="p-3.5 text-center font-mono font-bold">{p.sessionsCount}</td>
+                    <td className="p-3.5">
+                      <div className="flex flex-col gap-0.5">
+                        {p.branchLines.map((bl) => (
+                          <span key={bl.branchId} className="text-xs text-muted">
+                            • <span className="font-semibold text-gray-800">{bl.branchName}</span>: {bl.sessionsCount} {locale === "ar" ? "حصة" : "séance(s)"} ({formatDZD(bl.amount)})
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="p-3.5 text-end font-mono font-bold text-gray-800">{formatDZD(p.grossAmount)}</td>
+                    <td className="p-3.5 text-end font-mono text-danger font-semibold">- {formatDZD(p.advances)}</td>
+                    <td className="p-3.5 text-end font-mono text-warning-text font-semibold">- {formatDZD(p.photocopyDeductions)}</td>
+                    <td className="p-3.5 text-end font-mono font-black text-primary text-sm">{formatDZD(p.netAmount)}</td>
+                    <td className="p-3.5 text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <Link
+                          href={`/list/finance/payslips/${p.id}`}
+                          className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-xs"
+                        >
+                          {t("previewBtn")}
+                        </Link>
+                        <PrintPayslipButton
+                          label={t("printBtn")}
+                          className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs"
+                          data={{
+                            id: p.id,
+                            periodStart: p.periodStart,
+                            periodEnd: p.periodEnd,
+                            status: p.status,
+                            teacher: { id: p.personId, name: p.teacherName },
+                            sessionsCount: p.sessionsCount,
+                            grossAmount: p.grossAmount,
+                            advances: p.advances,
+                            photocopyDeductions: p.photocopyDeductions,
+                            netAmount: p.netAmount,
+                            branchLines: p.branchLines,
+                          }}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                emptyTitle={t("noPayslipsYetTitle")}
+                emptyDescription={t("noPayslipsYetDesc")}
+              />
+            </CardContent>
+          </Card>
+
+          {/* Card 4: Per-Branch Comparison */}
+          {overviewData.branchBreakdown.length > 0 && (
+            <Card className="border-border shadow-xs bg-surface">
+              <CardHeader className="p-5 border-b border-border">
+                <CardTitle className="text-section-title font-bold text-gray-900">
+                  {t("branchComparisonTitle")}
+                </CardTitle>
+                <CardDescription className="text-form-helper text-muted">
+                  {t("branchComparisonDesc")}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {overviewData.branchBreakdown.map((b) => (
+                    <div key={b.branchId} className="border border-border rounded-xl p-4 bg-surface-subtle/60 shadow-xs">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="font-bold text-gray-900 text-table-body">{b.branchName}</span>
+                        <Badge variant="neutral" size="sm">{t("branchNumberBadge", { id: b.branchId })}</Badge>
+                      </div>
+                      <div className="space-y-2 text-table-body text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-muted">{t("branchRevenueLabel")}</span>
+                          <span className="font-mono font-bold text-success-text">{formatDZD(b.revenue)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted">{t("branchPayrollCostLabel")}</span>
+                          <span className="font-mono font-bold text-danger">{formatDZD(b.payrollCost)}</span>
+                        </div>
+                        <div className="border-t border-border pt-1.5 flex justify-between font-bold">
+                          <span className="text-gray-800">{t("netOperatingLabel")}</span>
+                          <span
+                            className={`font-mono ${
+                              b.margin >= 0 ? "text-primary font-black" : "text-danger font-black"
+                            }`}
+                          >
+                            {formatDZD(b.margin)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 3: CONSOLIDATED PAYSLIPS                                              */}
+      {/* VIEW 2: AVANCES & FRAIS DE PHOTOCOPIE (DEDUCTIONS)                        */}
       {/* ========================================================================= */}
-      {currentTab === "payslips" && (
-        <Card className="border-border shadow-xs bg-surface">
-          <CardHeader className="p-5 border-b border-border">
-            <CardTitle className="text-section-title font-bold text-gray-900">
-              {t("consolidatedPayslipsTitle")}
-            </CardTitle>
-            <CardDescription className="text-form-helper text-muted">
-              {t("consolidatedPayslipsDesc")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-5">
-            <DataTable
-              columns={[
-                { header: t("payslipIdCol"), accessor: "id" },
-                { header: t("teacher"), accessor: "teacherName" },
-                { header: t("periodCol"), accessor: "period" },
-                { header: t("totalSessionsCol"), accessor: "sessionsCount", align: "center" },
-                { header: t("branchesDetailCol"), accessor: "branches" },
-                { header: t("grossAmountCol"), accessor: "grossAmount", align: "end" },
-                { header: t("advancesCol"), accessor: "advances", align: "end" },
-                { header: t("photocopyCol"), accessor: "photocopy", align: "end" },
-                { header: t("netDueCol"), accessor: "netAmount", align: "end" },
-                { header: t("printCol"), accessor: "actions", align: "center" },
-              ]}
-              data={payslips}
-              renderRow={(p) => (
-                <tr key={p.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                  <td className="p-3.5 font-mono font-bold">#{p.id}</td>
-                  <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
-                  <td className="p-3.5 text-muted text-xs">
-                    {formatDate(p.periodStart)} → {formatDate(p.periodEnd)}
-                  </td>
-                  <td className="p-3.5 text-center font-mono font-bold">{p.sessionsCount}</td>
-                  <td className="p-3.5">
-                    <div className="flex flex-col gap-0.5">
-                      {p.branchLines.map((bl) => (
-                        <span key={bl.branchId} className="text-xs text-muted">
-                          • <span className="font-semibold text-gray-800">{bl.branchName}</span>: {bl.sessionsCount} {locale === "ar" ? "حصة" : "séance(s)"} ({formatDZD(bl.amount)})
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="p-3.5 text-end font-mono font-bold text-gray-800">{formatDZD(p.grossAmount)}</td>
-                  <td className="p-3.5 text-end font-mono text-danger font-semibold">- {formatDZD(p.advances)}</td>
-                  <td className="p-3.5 text-end font-mono text-warning-text font-semibold">- {formatDZD(p.photocopyDeductions)}</td>
-                  <td className="p-3.5 text-end font-mono font-black text-primary text-sm">{formatDZD(p.netAmount)}</td>
-                  <td className="p-3.5 text-center">
-                    <div className="flex items-center justify-center gap-2">
-                      <Link
-                        href={`/list/finance/payslips/${p.id}`}
-                        className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-xs"
-                      >
-                        {t("previewBtn")}
-                      </Link>
-                      <PrintPayslipButton
-                        label={t("printBtn")}
-                        className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs"
-                        data={{
-                          id: p.id,
-                          periodStart: p.periodStart,
-                          periodEnd: p.periodEnd,
-                          status: p.status,
-                          teacher: { id: p.personId, name: p.teacherName },
-                          sessionsCount: p.sessionsCount,
-                          grossAmount: p.grossAmount,
-                          advances: p.advances,
-                          photocopyDeductions: p.photocopyDeductions,
-                          netAmount: p.netAmount,
-                          branchLines: p.branchLines,
-                        }}
-                      />
-                    </div>
-                  </td>
-                </tr>
-              )}
-              emptyTitle={t("noPayslipsYetTitle")}
-              emptyDescription={t("noPayslipsYetDesc")}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ========================================================================= */}
-      {/* TAB 4: PHOTOCOPY CHARGES TRACKING (§2.5)                                  */}
-      {/* ========================================================================= */}
-      {currentTab === "photocopy" && (
+      {isDeductionsTab && (
         <div className="flex flex-col gap-6">
-          {/* Isolation Notice */}
-          <div className="bg-amber-500/10 border-r-4 border-amber-500 p-4 rounded-xl text-amber-950 dark:text-amber-200 text-xs leading-relaxed shadow-xs">
-            <span className="font-bold flex items-center gap-1.5 mb-1">
-              <Info className="w-4 h-4 shrink-0" />
-              {t("photocopyNoticeTitle")}
-            </span>
-            {t("photocopyNoticeDesc")}
+          {/* Sub-Switch: Avances vs Photocopies */}
+          <div className="flex items-center bg-surface border border-border p-1 rounded-xl shadow-xs text-xs font-semibold w-fit">
+            <button
+              type="button"
+              onClick={() => setDeductionSubTab("advances")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all cursor-pointer ${
+                deductionSubTab === "advances"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900 hover:bg-surface-subtle"
+              }`}
+            >
+              <ArrowDownLeft className="w-3.5 h-3.5" />
+              <span>{t("advancesSubTab")}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeductionSubTab("photocopy")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all cursor-pointer ${
+                deductionSubTab === "photocopy"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900 hover:bg-surface-subtle"
+              }`}
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>{t("photocopySubTab")}</span>
+            </button>
           </div>
 
-          {/* Form */}
-          <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle className="text-section-title font-bold text-gray-900">
-                {t("recordNewPhotocopyTitle")}
-              </CardTitle>
-              <CardDescription className="text-form-helper text-muted">
-                {t("recordNewPhotocopyDesc")}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5">
-              <form onSubmit={handleCreatePhotocopyCharge} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-                <FormField label={`${t("teacher")}:`}>
-                  <Select
-                    value={pcTeacherId}
-                    onChange={(e) => setPcTeacherId(e.target.value)}
-                    className="text-xs"
-                  >
-                    {teachers.map((tItem) => (
-                      <option key={tItem.id} value={tItem.id}>
-                        {tItem.name}
-                      </option>
-                    ))}
-                  </Select>
-                </FormField>
+          {deductionSubTab === "advances" ? (
+            <div className="flex flex-col gap-6">
+              {/* Form */}
+              <Card className="border-border shadow-xs bg-surface">
+                <CardHeader className="p-5 border-b border-border">
+                  <CardTitle className="text-section-title font-bold text-gray-900">
+                    {t("recordSalaryAdvanceTitle")}
+                  </CardTitle>
+                  <CardDescription className="text-form-helper text-muted">
+                    {t("recordSalaryAdvanceDesc")}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-5">
+                  <form onSubmit={handleCreateSalaryAdvance} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                    <FormField label={`${t("teacher")}:`}>
+                      <Select
+                        value={saTeacherId}
+                        onChange={(e) => setSaTeacherId(e.target.value)}
+                        className="text-xs"
+                      >
+                        {teachers.map((tItem) => (
+                          <option key={tItem.id} value={tItem.id}>
+                            {tItem.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </FormField>
 
-                <FormField label={t("executingBranchLabel")}>
-                  <Select
-                    value={pcBranchId}
-                    onChange={(e) => setPcBranchId(Number(e.target.value))}
-                    className="text-xs"
-                  >
-                    {branches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </Select>
-                </FormField>
+                    <FormField label={t("advanceAmountLabel")}>
+                      <Input
+                        type="number"
+                        min="100"
+                        step="100"
+                        value={saAmount}
+                        onChange={(e) => setSaAmount(Number(e.target.value))}
+                        className="font-mono text-xs font-bold text-danger"
+                        required
+                      />
+                    </FormField>
 
-                <FormField label={`${t("pageCount")}:`}>
-                  <Input
-                    type="number"
-                    min="1"
-                    value={pcPages}
-                    onChange={(e) => {
-                      const pages = Number(e.target.value);
-                      setPcPages(pages);
-                      setPcCostAmount(pages * pcRatePerPage);
-                    }}
-                    className="font-mono text-xs"
-                    required
+                    <FormField label={t("disbursementDateLabel")}>
+                      <Input
+                        type="date"
+                        value={saDate}
+                        onChange={(e) => setSaDate(e.target.value)}
+                        className="font-mono text-xs"
+                        required
+                      />
+                    </FormField>
+
+                    <Button
+                      type="submit"
+                      variant="danger"
+                      size="md"
+                      disabled={isPending}
+                      isLoading={isPending}
+                      className="w-full h-[38px]"
+                    >
+                      {isPending ? t("saving") : t("recordAdvanceSubmitBtn")}
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              {/* Table */}
+              <Card className="border-border shadow-xs bg-surface">
+                <CardHeader className="p-5 border-b border-border flex flex-row items-center justify-between">
+                  <CardTitle className="text-section-title font-bold text-gray-900">
+                    {t("salaryAdvancesLogTitle")}
+                  </CardTitle>
+                  <Badge variant="danger" size="sm">
+                    {salaryAdvances.length} {locale === "ar" ? "تسبيق" : "avance(s)"}
+                  </Badge>
+                </CardHeader>
+                <CardContent className="p-5">
+                  <DataTable
+                    columns={[
+                      { header: t("idCol"), accessor: "id" },
+                      { header: t("teacher"), accessor: "teacherName" },
+                      { header: t("advanceAmount"), accessor: "amount", align: "end" },
+                      { header: t("date"), accessor: "date", align: "center" },
+                    ]}
+                    data={salaryAdvances}
+                    renderRow={(a) => (
+                      <tr key={a.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
+                        <td className="p-3.5 font-mono font-bold">#{a.id}</td>
+                        <td className="p-3.5 font-bold text-gray-900">{a.teacherName}</td>
+                        <td className="p-3.5 text-end font-mono font-bold text-danger">
+                          - {formatDZD(a.amount)}
+                        </td>
+                        <td className="p-3.5 text-center font-mono text-muted">{formatDate(a.date)}</td>
+                      </tr>
+                    )}
+                    emptyTitle={t("noAdvancesTitle")}
+                    emptyDescription={t("noAdvancesDesc")}
                   />
-                </FormField>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-6">
+              {/* Isolation Notice */}
+              <div className="bg-amber-500/10 border-r-4 border-amber-500 p-4 rounded-xl text-amber-950 dark:text-amber-200 text-xs leading-relaxed shadow-xs">
+                <span className="font-bold flex items-center gap-1.5 mb-1">
+                  <Info className="w-4 h-4 shrink-0" />
+                  {t("photocopyNoticeTitle")}
+                </span>
+                {t("photocopyNoticeDesc")}
+              </div>
 
-                <FormField label={t("chargedAmountLabel")}>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={pcCostAmount}
-                    onChange={(e) => setPcCostAmount(Number(e.target.value))}
-                    className="font-mono text-xs font-bold text-danger"
-                    required
+              {/* Form */}
+              <Card className="border-border shadow-xs bg-surface">
+                <CardHeader className="p-5 border-b border-border">
+                  <CardTitle className="text-section-title font-bold text-gray-900">
+                    {t("recordNewPhotocopyTitle")}
+                  </CardTitle>
+                  <CardDescription className="text-form-helper text-muted">
+                    {t("recordNewPhotocopyDesc")}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-5">
+                  <form onSubmit={handleCreatePhotocopyCharge} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+                    <FormField label={`${t("teacher")}:`}>
+                      <Select
+                        value={pcTeacherId}
+                        onChange={(e) => setPcTeacherId(e.target.value)}
+                        className="text-xs"
+                      >
+                        {teachers.map((tItem) => (
+                          <option key={tItem.id} value={tItem.id}>
+                            {tItem.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </FormField>
+
+                    <FormField label={t("executingBranchLabel")}>
+                      <Select
+                        value={pcBranchId}
+                        onChange={(e) => setPcBranchId(Number(e.target.value))}
+                        className="text-xs"
+                      >
+                        {branches.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </FormField>
+
+                    <FormField label={`${t("pageCount")}:`}>
+                      <Input
+                        type="number"
+                        min="1"
+                        value={pcPages}
+                        onChange={(e) => {
+                          const pages = Number(e.target.value);
+                          setPcPages(pages);
+                          setPcCostAmount(pages * pcRatePerPage);
+                        }}
+                        className="font-mono text-xs"
+                        required
+                      />
+                    </FormField>
+
+                    <FormField label={t("chargedAmountLabel")}>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={pcCostAmount}
+                        onChange={(e) => setPcCostAmount(Number(e.target.value))}
+                        className="font-mono text-xs font-bold text-danger"
+                        required
+                      />
+                    </FormField>
+
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="md"
+                      disabled={isPending}
+                      isLoading={isPending}
+                      className="w-full bg-amber-600 hover:bg-amber-700 h-[38px]"
+                    >
+                      {isPending ? t("saving") : t("recordCopyBtn")}
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              {/* Table */}
+              <Card className="border-border shadow-xs bg-surface">
+                <CardHeader className="p-5 border-b border-border flex flex-row items-center justify-between">
+                  <CardTitle className="text-section-title font-bold text-gray-900">
+                    {t("photocopyLogTitle")}
+                  </CardTitle>
+                  <Badge variant="warning" size="sm">
+                    {photocopyCharges.length} {locale === "ar" ? "عملية" : "opération(s)"}
+                  </Badge>
+                </CardHeader>
+                <CardContent className="p-5">
+                  <DataTable
+                    columns={[
+                      { header: t("idCol"), accessor: "id" },
+                      { header: t("teacher"), accessor: "teacherName" },
+                      { header: t("branch"), accessor: "branchName" },
+                      { header: t("pageCount"), accessor: "pages", align: "center" },
+                      { header: t("totalAmount"), accessor: "costAmount", align: "end" },
+                      { header: t("date"), accessor: "date", align: "center" },
+                      { header: t("recordedByCol"), accessor: "recordedBy" },
+                    ]}
+                    data={photocopyCharges}
+                    renderRow={(c) => (
+                      <tr key={c.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
+                        <td className="p-3.5 font-mono font-bold">#{c.id}</td>
+                        <td className="p-3.5 font-bold text-gray-900">{c.teacherName}</td>
+                        <td className="p-3.5 text-gray-700">{c.branchName}</td>
+                        <td className="p-3.5 text-center font-mono">
+                          {c.pages} {locale === "ar" ? "صفحة" : "pages"}
+                        </td>
+                        <td className="p-3.5 text-end font-mono font-bold text-danger">
+                          - {formatDZD(c.costAmount)}
+                        </td>
+                        <td className="p-3.5 text-center font-mono text-muted">{formatDate(c.date)}</td>
+                        <td className="p-3.5 text-muted">{c.recordedBy}</td>
+                      </tr>
+                    )}
+                    emptyTitle={t("noPhotocopyTitle")}
+                    emptyDescription={t("noPhotocopyDesc")}
                   />
-                </FormField>
-
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="md"
-                  disabled={isPending}
-                  isLoading={isPending}
-                  className="w-full bg-amber-600 hover:bg-amber-700 h-[38px]"
-                >
-                  {isPending ? t("saving") : t("recordCopyBtn")}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
-          {/* Table */}
-          <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle className="text-section-title font-bold text-gray-900">
-                {t("photocopyLogTitle")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-5">
-              <DataTable
-                columns={[
-                  { header: t("idCol"), accessor: "id" },
-                  { header: t("teacher"), accessor: "teacherName" },
-                  { header: t("branch"), accessor: "branchName" },
-                  { header: t("pageCount"), accessor: "pages", align: "center" },
-                  { header: t("totalAmount"), accessor: "costAmount", align: "end" },
-                  { header: t("date"), accessor: "date", align: "center" },
-                  { header: t("recordedByCol"), accessor: "recordedBy" },
-                ]}
-                data={photocopyCharges}
-                renderRow={(c) => (
-                  <tr key={c.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                    <td className="p-3.5 font-mono font-bold">#{c.id}</td>
-                    <td className="p-3.5 font-bold text-gray-900">{c.teacherName}</td>
-                    <td className="p-3.5 text-gray-700">{c.branchName}</td>
-                    <td className="p-3.5 text-center font-mono">
-                      {c.pages} {locale === "ar" ? "صفحة" : "pages"}
-                    </td>
-                    <td className="p-3.5 text-end font-mono font-bold text-danger">
-                      - {formatDZD(c.costAmount)}
-                    </td>
-                    <td className="p-3.5 text-center font-mono text-muted">{formatDate(c.date)}</td>
-                    <td className="p-3.5 text-muted">{c.recordedBy}</td>
-                  </tr>
-                )}
-                emptyTitle={t("noPhotocopyTitle")}
-                emptyDescription={t("noPhotocopyDesc")}
-              />
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 5: SALARY ADVANCES                                                    */}
+      {/* VIEW 3: TEACHER PAY RATES CONFIGURATION                                   */}
       {/* ========================================================================= */}
-      {currentTab === "advances" && (
-        <div className="flex flex-col gap-6">
-          {/* Form */}
-          <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle className="text-section-title font-bold text-gray-900">
-                {t("recordSalaryAdvanceTitle")}
-              </CardTitle>
-              <CardDescription className="text-form-helper text-muted">
-                {t("recordSalaryAdvanceDesc")}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5">
-              <form onSubmit={handleCreateSalaryAdvance} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-                <FormField label={`${t("teacher")}:`}>
-                  <Select
-                    value={saTeacherId}
-                    onChange={(e) => setSaTeacherId(e.target.value)}
-                    className="text-xs"
-                  >
-                    {teachers.map((tItem) => (
-                      <option key={tItem.id} value={tItem.id}>
-                        {tItem.name}
-                      </option>
-                    ))}
-                  </Select>
-                </FormField>
-
-                <FormField label={t("advanceAmountLabel")}>
-                  <Input
-                    type="number"
-                    min="100"
-                    step="100"
-                    value={saAmount}
-                    onChange={(e) => setSaAmount(Number(e.target.value))}
-                    className="font-mono text-xs font-bold text-danger"
-                    required
-                  />
-                </FormField>
-
-                <FormField label={t("disbursementDateLabel")}>
-                  <Input
-                    type="date"
-                    value={saDate}
-                    onChange={(e) => setSaDate(e.target.value)}
-                    className="font-mono text-xs"
-                    required
-                  />
-                </FormField>
-
-                <Button
-                  type="submit"
-                  variant="danger"
-                  size="md"
-                  disabled={isPending}
-                  isLoading={isPending}
-                  className="w-full h-[38px]"
-                >
-                  {isPending ? t("saving") : t("recordAdvanceSubmitBtn")}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
-          {/* Table */}
-          <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle className="text-section-title font-bold text-gray-900">
-                {t("salaryAdvancesLogTitle")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-5">
-              <DataTable
-                columns={[
-                  { header: t("idCol"), accessor: "id" },
-                  { header: t("teacher"), accessor: "teacherName" },
-                  { header: t("advanceAmount"), accessor: "amount", align: "end" },
-                  { header: t("date"), accessor: "date", align: "center" },
-                ]}
-                data={salaryAdvances}
-                renderRow={(a) => (
-                  <tr key={a.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                    <td className="p-3.5 font-mono font-bold">#{a.id}</td>
-                    <td className="p-3.5 font-bold text-gray-900">{a.teacherName}</td>
-                    <td className="p-3.5 text-end font-mono font-bold text-danger">
-                      - {formatDZD(a.amount)}
-                    </td>
-                    <td className="p-3.5 text-center font-mono text-muted">{formatDate(a.date)}</td>
-                  </tr>
-                )}
-                emptyTitle={t("noAdvancesTitle")}
-                emptyDescription={t("noAdvancesDesc")}
-              />
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* TAB 6: TEACHER PAY RATES CONFIGURATION                                    */}
-      {/* ========================================================================= */}
-      {currentTab === "rates" && (
+      {isRatesTab && (
         <div className="flex flex-col gap-6">
           {/* Form */}
           <Card className="border-border shadow-xs bg-surface">

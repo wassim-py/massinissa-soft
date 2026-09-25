@@ -60,7 +60,7 @@ const TeacherListPage = async (
 
   // Exactly these 4 columns: Full name, Subjects taught, Groups/classes taught, Actions
   const columns: Column<TeacherRow>[] = [
-    { header: locale === "ar" ? "الاسم الكامل" : "Nom complet", accessor: "name" },
+    { header: locale === "ar" ? "اللقب والاسم" : "Nom et prénom", accessor: "name" },
     { header: t("subjects"), accessor: "subjects", className: "hidden md:table-cell" },
     { header: t("classes"), accessor: "classes", className: "hidden md:table-cell" },
     { header: t("actions"), accessor: "action" as const, align: "end" as const },

@@ -388,7 +388,7 @@ const SingleStudentPage = async (
             <div className="shrink-0">
               <Image
                 src="/noAvatar.png"
-                alt={`${student.name} ${student.surname}`}
+                alt={`${student.surname ? `${student.surname} ${student.name}` : student.name}`}
                 width={100}
                 height={100}
                 className="rounded-full object-cover border-4 border-surface shadow-md"
@@ -397,7 +397,7 @@ const SingleStudentPage = async (
             <div className="grow text-center md:text-start">
               <div className="flex items-center justify-center md:justify-start gap-4 mb-2">
                 <h1 className="text-page-title font-bold text-gray-900">
-                  {student.name} {student.surname}
+                  {student.surname ? `${student.surname} ${student.name}` : student.name}
                 </h1>
                 <FormContainer table="student" type="update" data={student} />
               </div>
@@ -463,7 +463,7 @@ const SingleStudentPage = async (
                 <div className="flex items-center gap-2 bg-surface-subtle p-2.5 rounded-lg border border-border sm:col-span-2">
                   <Users className="w-4 h-4 text-muted shrink-0" />
                   <span className="text-gray-700 text-xs">
-                    {student.parent ? `${student.parent.name} ${student.parent.surname}` : t("unassigned")}
+                    {student.parent ? (student.parent.surname ? `${student.parent.surname} ${student.parent.name}` : student.parent.name) : t("unassigned")}
                   </span>
                 </div>
               </div>

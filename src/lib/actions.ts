@@ -5,6 +5,10 @@ import { revalidatePath } from "next/cache";
 const safeRevalidatePath = (path: string) => {
   try {
     revalidatePath(path);
+    revalidatePath(`/[locale]${path}`, "page");
+    revalidatePath(`/ar${path}`);
+    revalidatePath(`/fr${path}`);
+    revalidatePath("/", "layout");
   } catch {
     // Ignore outside Next.js request contexts (e.g., CLI / test scripts)
   }
@@ -329,7 +333,7 @@ export const createTeacher = async (
     }
 
     const id = crypto.randomUUID();
-    const fullName = [data.name, data.surname].filter(Boolean).join(" ").trim();
+    const fullName = [data.surname, data.name].filter(Boolean).join(" ").trim();
     const phone = data.phone ? data.phone.trim() : null;
     const gender = data.gender || data.sex || null;
 
@@ -390,7 +394,7 @@ export const updateTeacher = async (
       return { success: false, error: true, message: "Action réservée au propriétaire / تعديل الأستاذ متاح للمالك فقط." };
     }
 
-    const fullName = [data.name, data.surname].filter(Boolean).join(" ").trim();
+    const fullName = [data.surname, data.name].filter(Boolean).join(" ").trim();
     const updateData: any = { name: fullName };
     if (data.phone !== undefined) {
       updateData.phone = data.phone ? data.phone.trim() : null;
@@ -537,7 +541,7 @@ export const createStudent = async (
     }
 
     const id = crypto.randomUUID();
-    const fullName = `${data.name} ${data.surname || ""}`.trim();
+    const fullName = [data.surname, data.name].filter(Boolean).join(" ").trim();
     const phone = data.phone?.trim() || null;
     const globalNumber = await getNextGlobalStudentNumber(prisma);
 
@@ -577,6 +581,12 @@ export const createStudent = async (
 
     try {
       safeRevalidatePath("/list/students");
+      safeRevalidatePath("/list/attendance");
+      if (data.classes && data.classes.length > 0) {
+        for (const classId of data.classes) {
+          safeRevalidatePath(`/list/attendance/class/${classId}`);
+        }
+      }
     } catch {
       // Intentionally tolerated outside Next.js request context
     }
@@ -603,7 +613,7 @@ export const updateStudent = async (
       return { success: false, error: true, message: "Non autorisé à modifier cet élève / غير مصرح لك بتعديل بيانات تلميذ في هذا الفرع." };
     }
 
-    const fullName = `${data.name} ${data.surname || ""}`.trim();
+    const fullName = [data.surname, data.name].filter(Boolean).join(" ").trim();
     const phone = data.phone?.trim() || null;
     const branchId = (data as any).registeredBranchId || (existing.length > 0 ? existing[0].registeredBranchId : 1);
 
@@ -899,7 +909,8 @@ const checkForConflicts = async ({
             ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
             OR
             (
-              EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
+              "isExtra" = false AND "isCatchUp" = false
+              AND EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
               AND "startsAt"::time < ${endsAt}::time
               AND "endsAt"::time > ${startsAt}::time
             )
@@ -921,7 +932,8 @@ const checkForConflicts = async ({
             ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
             OR
             (
-              EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
+              "isExtra" = false AND "isCatchUp" = false
+              AND EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
               AND "startsAt"::time < ${endsAt}::time
               AND "endsAt"::time > ${startsAt}::time
             )
@@ -943,7 +955,8 @@ const checkForConflicts = async ({
             ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
             OR
             (
-              EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
+              "isExtra" = false AND "isCatchUp" = false
+              AND EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
               AND "startsAt"::time < ${endsAt}::time
               AND "endsAt"::time > ${startsAt}::time
             )
@@ -4510,6 +4523,7 @@ export const exportToExcel = async (
 import {
   generatePayrollRun,
   updatePayrollRunStatus,
+  deletePayrollRun,
 } from "./payroll";
 
 /**
@@ -4731,6 +4745,37 @@ export async function setPayrollRunStatusAction(formData: {
   } catch (error: any) {
     console.error("Error in setPayrollRunStatusAction:", error);
     return { success: false, error: true, message: error.message || "فشل تحديث حالة الدورة" };
+  }
+}
+
+/**
+ * Delete / undo a PayrollRun and its generated payslips.
+ */
+export async function deletePayrollRunAction(payrollRunId: number) {
+  try {
+    const session = await getAuthSession();
+    if (!session.can("manage", "payroll") && !session.isOwner) {
+      return { success: false, error: true, message: "غير مصرح لك بإلغاء دورة الرواتب." };
+    }
+
+    await deletePayrollRun(payrollRunId);
+
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+    safeRevalidatePath(`/list/payroll/payslips`);
+
+    return {
+      success: true,
+      error: false,
+      message: "تم إلغاء وحذف دورة الرواتب بنجاح.",
+    };
+  } catch (error: any) {
+    console.error("Error in deletePayrollRunAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "فشل إلغاء دورة الرواتب.",
+    };
   }
 }
 

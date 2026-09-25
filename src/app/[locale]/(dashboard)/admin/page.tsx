@@ -24,17 +24,14 @@ const AdminPage = async () => {
   const branchName = branch?.name || `Siège #${activeBranchId}`;
 
   // Time boundary for today
-  const startOfToday = new Date();
+  const now = new Date();
+  const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
 
-  const endOfToday = new Date();
+  const endOfToday = new Date(now);
   endOfToday.setHours(23, 59, 59, 999);
 
-  const todayDow = startOfToday.getDay();
-
-  // Fetch today's lessons across all branches for catalog schedule visibility:
-  // - One-off lessons occurring specifically today
-  // - Weekly recurring lessons that fall on today's day-of-week
+  // Fetch today's lessons: dated one-offs occurring today + recurring normal lessons across all branches
   const candidateLessons = await prisma.lesson.findMany({
     where: {
       OR: [
@@ -47,7 +44,6 @@ const AdminPage = async () => {
         {
           isExtra: false,
           isCatchUp: false,
-          isFree: false,
           class: {
             isFormation: false,
           },
@@ -107,29 +103,57 @@ const AdminPage = async () => {
     },
   });
 
+  // Helper to extract date and weekday information in Africa/Algiers timezone
+  const getAlgiersDateInfo = (date: Date) => {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Algiers",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      weekday: "long",
+    }).formatToParts(date);
+    const m: Record<string, string> = {};
+    parts.forEach((p) => {
+      m[p.type] = p.value;
+    });
+    return {
+      year: parseInt(m.year, 10),
+      month: parseInt(m.month, 10),
+      day: parseInt(m.day, 10),
+      hour: parseInt(m.hour, 10),
+      minute: parseInt(m.minute, 10),
+      weekday: (m.weekday || "").toUpperCase(),
+      dateStr: `${m.year}-${m.month}-${m.day}`,
+    };
+  };
+
+  const todayInfo = getAlgiersDateInfo(now);
+
   const allTodaysLessons = candidateLessons
     .filter((l) => {
       const isOneOff = Boolean(
-        l.isExtra || l.isCatchUp || l.isFree || l.class.isFormation
+        l.isExtra || l.isCatchUp || l.class.isFormation
       );
+      const lInfo = getAlgiersDateInfo(new Date(l.startsAt));
       if (isOneOff) {
-        const lessonDate = new Date(l.startsAt);
-        return lessonDate >= startOfToday && lessonDate <= endOfToday;
+        return lInfo.dateStr === todayInfo.dateStr;
       }
-      return new Date(l.startsAt).getDay() === todayDow;
+      return lInfo.weekday === todayInfo.weekday;
     })
     .map((l) => {
       const isOneOff = Boolean(
-        l.isExtra || l.isCatchUp || l.isFree || l.class.isFormation
+        l.isExtra || l.isCatchUp || l.class.isFormation
       );
       if (!isOneOff) {
+        const lInfo = getAlgiersDateInfo(new Date(l.startsAt));
         const durationMs =
           new Date(l.endsAt).getTime() - new Date(l.startsAt).getTime();
-        const projectedStartsAt = new Date(l.startsAt);
-        projectedStartsAt.setFullYear(
-          startOfToday.getFullYear(),
-          startOfToday.getMonth(),
-          startOfToday.getDate()
+        // Project to today in Africa/Algiers (UTC hour = Algiers hour - 1)
+        const projectedStartsAt = new Date(
+          Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, lInfo.hour - 1, lInfo.minute, 0, 0)
         );
         const projectedEndsAt = new Date(
           projectedStartsAt.getTime() + durationMs
@@ -152,40 +176,41 @@ const AdminPage = async () => {
     (l) => l.branchId === activeBranchId
   );
 
-  // 1. Process Upcoming Lessons data
-  // Only lessons taking place AT the logged-in branch (or if user is owner) have canTakeAttendance = true
-  const upcomingLessonsData: DashboardLessonItem[] = allTodaysLessons.map((l) => {
-    const otherBranchesSet = new Set<string>();
-    l.teacher.TeacherBranch.forEach((tb) => {
-      if (tb.branchId !== l.branchId && tb.Branch?.name) {
-        otherBranchesSet.add(tb.Branch.name);
-      }
-    });
-    l.teacher.lessons.forEach((ol) => {
-      if (ol.branchId !== l.branchId && ol.branch?.name) {
-        otherBranchesSet.add(ol.branch.name);
-      }
-    });
+  // 1. Process Upcoming Lessons data (strictly today's lessons across branches)
+  const upcomingLessonsData: DashboardLessonItem[] = allTodaysLessons.map(
+    (l) => {
+      const otherBranchesSet = new Set<string>();
+      l.teacher.TeacherBranch.forEach((tb) => {
+        if (tb.branchId !== l.branchId && tb.Branch?.name) {
+          otherBranchesSet.add(tb.Branch.name);
+        }
+      });
+      l.teacher.lessons.forEach((ol) => {
+        if (ol.branchId !== l.branchId && ol.branch?.name) {
+          otherBranchesSet.add(ol.branch.name);
+        }
+      });
 
-    const canTakeAttendance =
-      session.isOwner || l.branchId === activeBranchId;
+      const canTakeAttendance =
+        session.isOwner || l.branchId === activeBranchId;
 
-    return {
-      id: l.id,
-      branchId: l.branchId,
-      branchName: l.branch?.name || `Siège #${l.branchId}`,
-      startsAt: l.startsAt.toISOString(),
-      endsAt: l.endsAt.toISOString(),
-      className: l.class.name,
-      teacherName: l.teacher.name,
-      classroomName: l.classroom?.name || "",
-      isExtra: Boolean(l.isExtra),
-      isCatchUp: Boolean(l.isCatchUp),
-      isFree: Boolean(l.isFree),
-      otherBranches: Array.from(otherBranchesSet),
-      canTakeAttendance,
-    };
-  });
+      return {
+        id: l.id,
+        branchId: l.branchId,
+        branchName: l.branch?.name || `Siège #${l.branchId}`,
+        startsAt: new Date(l.startsAt).toISOString(),
+        endsAt: new Date(l.endsAt).toISOString(),
+        className: l.class.name,
+        teacherName: l.teacher.name,
+        classroomName: l.classroom?.name || "",
+        isExtra: Boolean(l.isExtra),
+        isCatchUp: Boolean(l.isCatchUp),
+        isFree: Boolean(l.isFree),
+        otherBranches: Array.from(otherBranchesSet),
+        canTakeAttendance,
+      };
+    }
+  );
 
   // 2. Process Students to Watch data (payment-reminder nudge for students having a lesson today at THIS branch)
   const studentsToWatchMap = new Map<string, StudentToWatchItem>();
@@ -196,10 +221,12 @@ const AdminPage = async () => {
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
+      timeZone: "Africa/Algiers",
     })} - ${new Date(lesson.endsAt).toLocaleTimeString("en-GB", {
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
+      timeZone: "Africa/Algiers",
     })}`;
 
     for (const enr of cls.enrollments) {
@@ -312,6 +339,7 @@ const AdminPage = async () => {
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
+        timeZone: "Africa/Algiers",
       })}`;
 
       return {

@@ -1,7 +1,7 @@
 "use client";
 
 import { Lesson, Class, Teacher, Classroom } from "@prisma/client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import LessonDetailModal from "./LessonDetailModal";
 import Link from "next/link";
 import { useTranslations, useLocale } from "next-intl";
@@ -41,12 +41,67 @@ const daysOfWeek: Day[] = [
   "SATURDAY", "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY",
 ];
 
-const timeSlots = [
+const DEFAULT_TIME_SLOTS = [
   "08:00", "09:00", "10:00", "11:00", "12:00", 
-  "13:00", "14:00", "15:00", "16:00", "17:00"
+  "13:00", "14:00", "15:00", "16:00", "17:00",
+  "18:00", "19:00", "20:00"
 ];
 
-const today = new Date().toLocaleString('en-GB', { weekday: 'long' }).toUpperCase() as Day;
+const getLessonHourInAlgiers = (startsAt: Date | string): string => {
+  try {
+    const d = new Date(startsAt);
+    if (isNaN(d.getTime())) return "08";
+    return new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      hour12: false,
+      timeZone: "Africa/Algiers",
+    }).format(d);
+  } catch {
+    return "08";
+  }
+};
+
+const getAlgiersDateString = (date: Date | string): string => {
+  try {
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return "";
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Algiers",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  } catch {
+    return "";
+  }
+};
+
+const getTodayInAlgiers = (): Day => {
+  try {
+    const dayStr = new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      timeZone: "Africa/Algiers",
+    }).format(new Date()).toUpperCase() as Day;
+    return daysOfWeek.includes(dayStr) ? dayStr : "SATURDAY";
+  } catch {
+    return "SATURDAY";
+  }
+};
+
+const formatLessonTimeInAlgiers = (date: Date | string): string => {
+  try {
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return "--:--";
+    return new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "Africa/Algiers",
+    }).format(d);
+  } catch {
+    return "--:--";
+  }
+};
 
 const Timetable = ({
   lessons = [],
@@ -80,6 +135,19 @@ const Timetable = ({
     return t(keyMap[day] as any);
   };
 
+  const today = getTodayInAlgiers();
+
+  const timeSlots = useMemo(() => {
+    const slotSet = new Set(DEFAULT_TIME_SLOTS);
+    safeLessons.forEach((lesson) => {
+      const hourStr = getLessonHourInAlgiers(lesson.startsAt);
+      if (hourStr) {
+        slotSet.add(`${hourStr}:00`);
+      }
+    });
+    return Array.from(slotSet).sort((a, b) => a.localeCompare(b));
+  }, [safeLessons]);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedLesson, setSelectedLesson] = useState<TimetableLesson | null>(null);
   const [selectedDay, setSelectedDay] = useState<Day>(
@@ -101,16 +169,11 @@ const Timetable = ({
   const isLessonToday = (lesson: TimetableLesson): boolean => {
     if (!isCurrentWeek) return false;
 
-    const now = new Date();
-    const lessonDate = new Date(lesson.startsAt);
+    const nowDateStr = getAlgiersDateString(new Date());
+    const lessonDateStr = getAlgiersDateString(lesson.startsAt);
 
     // Exact calendar day match for one-off / dated sessions
-    const isSameDate =
-      lessonDate.getFullYear() === now.getFullYear() &&
-      lessonDate.getMonth() === now.getMonth() &&
-      lessonDate.getDate() === now.getDate();
-
-    if (isSameDate) return true;
+    if (nowDateStr && lessonDateStr && nowDateStr === lessonDateStr) return true;
 
     // Recurring normal lesson on today's weekday during current week
     const isOneOff = Boolean(
@@ -122,7 +185,7 @@ const Timetable = ({
     );
 
     if (!isOneOff) {
-      const todayDayName = now.toLocaleString("en-GB", { weekday: "long" }).toUpperCase();
+      const todayDayName = getTodayInAlgiers();
       if (getLessonDay(lesson) === todayDayName) {
         return true;
       }
@@ -148,12 +211,23 @@ const Timetable = ({
   }, [safeLessons, selectedLesson]);
 
   const getLessonDay = (lesson: TimetableLesson): Day => {
-    return new Date(lesson.startsAt).toLocaleString('en-GB', { weekday: 'long' }).toUpperCase() as Day;
+    if (lesson.day && daysOfWeek.includes(lesson.day)) {
+      return lesson.day;
+    }
+    try {
+      const dayName = new Intl.DateTimeFormat("en-US", {
+        weekday: "long",
+        timeZone: "Africa/Algiers",
+      }).format(new Date(lesson.startsAt)).toUpperCase() as Day;
+      return daysOfWeek.includes(dayName) ? dayName : "SATURDAY";
+    } catch {
+      return "SATURDAY";
+    }
   };
 
   const findLessonsForSlot = (day: Day, time: string): TimetableLesson[] => {
     return safeLessons.filter((lesson) => {
-      const lessonHour = new Date(lesson.startsAt).getHours().toString().padStart(2, '0');
+      const lessonHour = getLessonHourInAlgiers(lesson.startsAt);
       const lessonTime = `${lessonHour}:00`;
       return getLessonDay(lesson) === day && lessonTime === time;
     });
@@ -308,16 +382,8 @@ const Timetable = ({
               }
 
               return dayLessons.map((lesson) => {
-                const formattedStart = new Date(lesson.startsAt).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false,
-                });
-                const formattedEnd = new Date(lesson.endsAt).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false,
-                });
+                const formattedStart = formatLessonTimeInAlgiers(lesson.startsAt);
+                const formattedEnd = formatLessonTimeInAlgiers(lesson.endsAt);
                 const isClickable = userRole === "admin";
                 const clickHandler = isClickable ? () => handleLessonClick(lesson) : undefined;
 
@@ -391,7 +457,7 @@ const Timetable = ({
                       </span>
                       <span className="flex items-center gap-1">
                         <User className="w-3 h-3 text-muted shrink-0" />
-                        <span>{lesson.teacher?.name || t("unspecified")}</span>
+                        <span>{lesson.teacher?.surname ? `${lesson.teacher.surname} ${lesson.teacher.name}` : (lesson.teacher?.name || t("unspecified"))}</span>
                       </span>
                       <span className="flex items-center gap-1">
                         <School className="w-3 h-3 text-muted shrink-0" />
@@ -460,8 +526,8 @@ const Timetable = ({
                   return (
                     <div key={`${day}-${time}`} className={`p-1 border-b border-r border-gray-200 min-h-[100px] flex flex-col gap-1 relative ${rowBgClass}`}>
                       {lessonsInSlot.map((lesson) => {
-                        const formattedEndTime = new Date(lesson.endsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-                        const formattedStartTime = new Date(lesson.startsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+                        const formattedEndTime = formatLessonTimeInAlgiers(lesson.endsAt);
+                        const formattedStartTime = formatLessonTimeInAlgiers(lesson.startsAt);
                         
                         const lessonDay = getLessonDay(lesson);
                         const isClickable = userRole === 'admin';
@@ -521,7 +587,7 @@ const Timetable = ({
                                 <h4 className="font-bold">{lesson.class?.name || lesson.name}</h4>
                                 {(userRole === 'admin' || userRole === 'student' || userRole === 'parent') && (
                                     <p className="text-gray-600 italic mt-0.5">
-                                        {lesson.teacher?.name}
+                                        {lesson.teacher?.surname ? `${lesson.teacher.surname} ${lesson.teacher.name}` : lesson.teacher?.name}
                                     </p>
                                 )}
                                 <div className="flex flex-col mt-2 gap-0.5">

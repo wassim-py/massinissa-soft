@@ -115,10 +115,10 @@ const ParentForm = ({
 
   const { students } = relatedData;
 
-  // ADDED: Filter students based on the search term
+  // Filter students based on the search term (surname first)
   const filteredStudents = students.filter(
     (student: { name: string; surname: string }) =>
-      `${student.name} ${student.surname}`
+      `${student.surname ? `${student.surname} ${student.name}` : student.name}`
         .toLowerCase()
         .includes(searchTerm.toLowerCase())
   );
@@ -137,16 +137,16 @@ const ParentForm = ({
       </span>
       <div className="flex justify-between flex-wrap gap-4">
         <InputField
-          label={tParents("name")}
-          name="name"
-          register={register}
-          error={errors.name}
-        />
-        <InputField
           label={tParents("surname")}
           name="surname"
           register={register}
           error={errors.surname}
+        />
+        <InputField
+          label={tParents("name")}
+          name="name"
+          register={register}
+          error={errors.name}
         />
         <InputField
           label={tParents("phone")}
@@ -176,16 +176,17 @@ const ParentForm = ({
               const selectedStudentObjects = students.filter((student: any) =>
                 safeFieldValue.includes(student.id)
               );
+              const formatStudent = (s: any) => s.surname ? `${s.surname} ${s.name}` : s.name;
               const getDisplayText = () => {
                 if (selectedStudentObjects.length === 0)
                   return tParents("selectStudents");
                 if (selectedStudentObjects.length <= 2)
                   return selectedStudentObjects
-                    .map((s: any) => `${s.name} ${s.surname}`)
+                    .map(formatStudent)
                     .join(", ");
                 const firstTwoNames = selectedStudentObjects
                   .slice(0, 2)
-                  .map((s: any) => `${s.name} ${s.surname}`)
+                  .map(formatStudent)
                   .join(", ");
                 return `${firstTwoNames}, ${tParents("andXMore", { count: selectedStudentObjects.length - 2 })}`;
               };
@@ -257,7 +258,7 @@ const ParentForm = ({
                                   }}
                                 />
                                 <span className="text-sm">
-                                  {student.name} {student.surname}
+                                  {student.surname ? `${student.surname} ${student.name}` : student.name}
                                 </span>
                               </label>
                             )

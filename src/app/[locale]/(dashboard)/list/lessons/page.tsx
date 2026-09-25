@@ -84,9 +84,9 @@ const LessonListPage = async (props: {
   endOfWeek.setHours(23, 59, 59, 999);
 
   let selectedBranchId: number | null = null;
-  if (!branchId) {
+  if (!session.isOwner) {
     selectedBranchId = activeBranchId || null;
-  } else if (branchId !== "all") {
+  } else if (branchId && branchId !== "all") {
     const parsed = parseInt(branchId, 10);
     selectedBranchId = isNaN(parsed) ? null : parsed;
   }
@@ -129,7 +129,7 @@ const LessonListPage = async (props: {
   try {
     const whereConditions: Prisma.Sql[] = [
       // Only fetch normal recurring lessons, or one-off lessons occurring in the requested week
-      Prisma.sql`((l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false AND (c."isFormation" = false OR c."isFormation" IS NULL)) OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek}))`,
+      Prisma.sql`((l."isExtra" = false AND l."isCatchUp" = false AND (c."isFormation" = false OR c."isFormation" IS NULL)) OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek}))`,
     ];
 
     if (search) {
@@ -167,9 +167,9 @@ const LessonListPage = async (props: {
 
     // DISPLAY RULE (§7.13):
     // Normal recurring lessons display every week.
-    // Extra, catch-up, free, and formation lessons display ONLY for the week (Saturday-Friday) they actually occur in.
+    // Extra, catch-up, and formation lessons display ONLY for the week (Saturday-Friday) they actually occur in.
     const displayedRawLessons = rawLessons.filter((r) => {
-      const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFree || r.isFormation);
+      const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFormation);
       if (!isOneOff) {
         return true;
       }
@@ -179,8 +179,10 @@ const LessonListPage = async (props: {
 
     lessons = displayedRawLessons.map((r) => {
       const d = new Date(r.startsAt);
-      const dayIndex = isNaN(d.getDay()) ? 0 : d.getDay();
-      const day = dayNames[dayIndex];
+      const day = new Intl.DateTimeFormat("en-US", {
+        weekday: "long",
+        timeZone: "Africa/Algiers",
+      }).format(d).toUpperCase() as Day;
       return {
         id: r.id,
         name: r.className || t("group"),
@@ -258,8 +260,10 @@ const LessonListPage = async (props: {
 
         const workshopLessons: TimetableLesson[] = displayedWorkshopSessions.map((ws) => {
           const d = new Date(ws.startsAt);
-          const dayIndex = isNaN(d.getDay()) ? 0 : d.getDay();
-          const day = dayNames[dayIndex];
+          const day = new Intl.DateTimeFormat("en-US", {
+            weekday: "long",
+            timeZone: "Africa/Algiers",
+          }).format(d).toUpperCase() as Day;
           return {
             id: -ws.id, // Negative integer ID to avoid collision with Lesson table IDs
             name: ws.workshopTitle || t("workshopBadge"),
@@ -301,6 +305,7 @@ const LessonListPage = async (props: {
   }
 
   const fallbackBranchId = activeBranchId || session.branchIds[0] || branches[0]?.id || 1;
+  const effectiveBranchId = selectedBranchId || fallbackBranchId;
 
   const relatedDataForForms = {
     teachers,
@@ -308,7 +313,7 @@ const LessonListPage = async (props: {
     classrooms,
     branches,
     isOwner: session.isOwner,
-    userBranchId: fallbackBranchId,
+    userBranchId: effectiveBranchId,
     subjects: classes.map((c) => ({ id: c.id, name: c.name })),
   };
 
@@ -372,7 +377,7 @@ const LessonListPage = async (props: {
             <TimetableFilters
               teachers={teachers}
               branches={branches}
-              defaultBranchId={activeBranchId}
+              defaultBranchId={session.isOwner ? (selectedBranchId ?? undefined) : (activeBranchId || undefined)}
               currentWeekRange={{
                 start: startOfWeek,
                 end: endOfWeek,

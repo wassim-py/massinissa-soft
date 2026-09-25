@@ -72,3 +72,36 @@ export function serializeForClient<T>(val: T): T {
   }
   return val;
 }
+
+/**
+ * Splits an Algerian full name into surname (اللقب) and name (الاسم).
+ * In Algeria, full names are written with Family Name first.
+ */
+export function splitFullName(fullName?: string | null): { surname: string; name: string } {
+  if (!fullName) return { surname: "", name: "" };
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { surname: "", name: "" };
+  if (parts.length === 1) return { surname: parts[0], name: "" };
+
+  const compoundPrefixes = [
+    "بن", "أيت", "ايت", "آيت", "بو", "ولد", "بل", "عبد",
+    "ben", "ait", "bou", "ould", "bel", "el", "ibn", "abd"
+  ];
+  if (parts.length >= 3 && compoundPrefixes.includes(parts[0].toLowerCase())) {
+    return {
+      surname: parts.slice(0, 2).join(" "),
+      name: parts.slice(2).join(" "),
+    };
+  }
+  return {
+    surname: parts[0],
+    name: parts.slice(1).join(" "),
+  };
+}
+
+/**
+ * Combines surname (اللقب) and name (الاسم) in Algerian order (Family Name first).
+ */
+export function formatFullName(surname?: string | null, name?: string | null): string {
+  return [surname?.trim(), name?.trim()].filter(Boolean).join(" ");
+}

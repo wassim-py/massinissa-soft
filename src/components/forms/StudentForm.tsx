@@ -17,9 +17,10 @@ import { useRouter } from "next/navigation";
 import { getStudentSchema, StudentSchema } from "@/lib/formValidationSchemas";
 import { createStudent, updateStudent } from "@/lib/actions";
 import { toast } from "react-toastify";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { X } from "lucide-react";
+import { splitFullName } from "@/lib/utils";
 
 type FormState = {
   success: boolean;
@@ -32,13 +33,16 @@ const StudentForm = ({
   data,
   setOpen,
   relatedData,
+  onSuccess,
 }: {
   type: "create" | "update";
   data?: any;
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
+  onSuccess?: (result?: any) => void;
 }) => {
   const router = useRouter();
+  const locale = useLocale();
   const t = useTranslations();
   const tCommon = useTranslations("common");
   const tStudents = useTranslations("students");
@@ -47,14 +51,9 @@ const StudentForm = ({
   // Localized Zod schema for real-time validation messages in active language
   const schema = useMemo(() => getStudentSchema((key) => t(key as any)), [t]);
 
-  const nameParts = data?.name ? data.name.trim().split(" ") : [];
-  const defaultFirstName = data?.surname
-    ? data.name
-    : nameParts.length > 1
-    ? nameParts.slice(0, -1).join(" ")
-    : data?.name || "";
-  const defaultLastName =
-    data?.surname || (nameParts.length > 1 ? nameParts[nameParts.length - 1] : "");
+  const splitResult = splitFullName(data?.name);
+  const defaultLastName = data?.surname || splitResult.surname;
+  const defaultFirstName = data?.surname ? (data?.name || "") : splitResult.name;
 
   const {
     register,
@@ -67,12 +66,15 @@ const StudentForm = ({
     resolver: zodResolver(schema),
     defaultValues: data
       ? {
+          sex: data.sex || "MALE",
+          gradeId: data.gradeId ? Number(data.gradeId) : undefined,
+          registeredBranchId: data.registeredBranchId ? Number(data.registeredBranchId) : undefined,
           ...data,
           name: defaultFirstName,
           surname: defaultLastName,
           phone: data.phone ?? "",
           address: data.address ?? "",
-          classes: data.classes?.map((c: any) => (typeof c === "object" ? c.id : c)) || [],
+          classes: data.classes?.map((c: any) => (typeof c === "object" ? c.id : Number(c))) || [],
           parentPhoneNumbers: Array.isArray(data.parentPhoneNumbers)
             ? data.parentPhoneNumbers.map((p: any) => (typeof p === "string" ? p : p.phone))
             : [],
@@ -85,6 +87,7 @@ const StudentForm = ({
           surname: "",
           phone: "",
           address: "",
+          sex: "MALE",
           parentPhoneNumbers: [],
           classes: [],
           birthday: undefined,
@@ -130,6 +133,7 @@ const StudentForm = ({
             : tStudents("updatedSuccess"))
       );
       setOpen(false);
+      onSuccess?.(state);
       startTransition(() => {
         router.refresh();
       });
@@ -137,7 +141,7 @@ const StudentForm = ({
     if (state.error && state.message) {
       toast.error(state.message || tErrors("general"));
     }
-  }, [state, type, setOpen, tStudents, tErrors, router]);
+  }, [state, type, setOpen, onSuccess, tStudents, tErrors, router]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -161,12 +165,32 @@ const StudentForm = ({
       {type === "update" && (
         <input type="hidden" {...register("id")} defaultValue={data?.id} />
       )}
+      {data?.registeredBranchId && (
+        <input
+          type="hidden"
+          {...register("registeredBranchId")}
+          defaultValue={data.registeredBranchId}
+        />
+      )}
 
-      <h1 className="text-section-title font-bold text-start text-gray-900">
-        {type === "create"
-          ? tStudents("createTitle")
-          : tStudents("updateTitle")}
-      </h1>
+      <div className="flex flex-col gap-1">
+        <h1 className="text-section-title font-bold text-start text-gray-900">
+          {type === "create"
+            ? data?.targetClassName
+              ? (locale === "ar"
+                  ? `تسجيل تلميذ في فوج ${data.targetClassName}`
+                  : `Inscrire un élève dans ${data.targetClassName}`)
+              : tStudents("createTitle")
+            : tStudents("updateTitle")}
+        </h1>
+        {data?.targetClassName && (
+          <p className="text-xs text-muted">
+            {locale === "ar"
+              ? `سيتم تسجيل التلميذ وإضافته مباشرة إلى هذا الفوج`
+              : `L'élève sera inscrit et ajouté directement à ce groupe`}
+          </p>
+        )}
+      </div>
 
       {/* PERSONAL INFO SECTION */}
       <span className="text-xs text-gray-400 font-semibold uppercase tracking-wider">
@@ -174,16 +198,16 @@ const StudentForm = ({
       </span>
       <div className="flex justify-between flex-wrap gap-4">
         <InputField
-          label={tStudents("name")}
-          name="name"
-          register={register}
-          error={errors.name}
-        />
-        <InputField
           label={tStudents("surname")}
           name="surname"
           register={register}
           error={errors.surname}
+        />
+        <InputField
+          label={tStudents("name")}
+          name="name"
+          register={register}
+          error={errors.name}
         />
         <InputField
           label={tStudents("phone")}

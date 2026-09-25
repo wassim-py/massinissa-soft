@@ -658,6 +658,53 @@ export async function updatePayrollRunStatus(
 }
 
 /**
+ * Deletes a PayrollRun and safely rolls back all its associated records:
+ * 1. PayslipBranchLine entries
+ * 2. Payslip entries
+ * 3. Any DailyLedger PAYROLL_OUT entries posted if the run was marked PAID
+ * 4. The PayrollRun itself
+ */
+export async function deletePayrollRun(payrollRunId: number) {
+  return await prisma.$transaction(async (tx) => {
+    const run = await tx.payrollRun.findUnique({
+      where: { id: payrollRunId },
+      include: {
+        Payslip: {
+          select: { id: true },
+        },
+      },
+    });
+
+    if (!run) {
+      throw new Error(`Payroll run #${payrollRunId} not found`);
+    }
+
+    const payslipIds = run.Payslip.map((p) => p.id);
+
+    if (payslipIds.length > 0) {
+      await tx.payslipBranchLine.deleteMany({
+        where: { payslipId: { in: payslipIds } },
+      });
+      await tx.payslip.deleteMany({
+        where: { id: { in: payslipIds } },
+      });
+    }
+
+    // Delete any PAYROLL_OUT ledger entries written for this run period
+    await tx.dailyLedger.deleteMany({
+      where: {
+        type: "PAYROLL_OUT" as any,
+        date: run.periodEnd,
+      },
+    });
+
+    return await tx.payrollRun.delete({
+      where: { id: payrollRunId },
+    });
+  });
+}
+
+/**
  * Aggregates Owner View data: Total School Revenue vs. Total Payroll Cost.
  * Primary view is school-wide; secondary view breaks down by branch.
  */

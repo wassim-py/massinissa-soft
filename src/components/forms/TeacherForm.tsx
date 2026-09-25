@@ -19,6 +19,7 @@ import { createTeacher, updateTeacher } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { Button } from "@/components/ui/Button";
 import { useTranslations } from "next-intl";
+import { splitFullName } from "@/lib/utils";
 
 type FormState = {
   success: boolean;
@@ -42,14 +43,9 @@ const TeacherForm = ({
   const tCommon = useTranslations("common");
   const tErrors = useTranslations("errors");
 
-  const nameParts = data?.name ? data.name.trim().split(" ") : [];
-  const defaultFirstName = data?.name
-    ? nameParts.length > 1
-      ? nameParts.slice(0, -1).join(" ")
-      : data.name
-    : "";
-  const defaultLastName =
-    data?.surname || (nameParts.length > 1 ? nameParts[nameParts.length - 1] : "");
+  const splitResult = splitFullName(data?.name);
+  const defaultLastName = data?.surname || splitResult.surname;
+  const defaultFirstName = data?.surname ? (data?.name || "") : splitResult.name;
 
   const {
     register,
@@ -146,23 +142,23 @@ const TeacherForm = ({
       </h2>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* First Name */}
-        <InputField
-          label={tTeachers("name")}
-          name="name"
-          register={register}
-          error={errors.name}
-          placeholder={tTeachers("firstNamePlaceholder")}
-          className="w-full"
-        />
-
-        {/* Last Name */}
+        {/* Last Name / Family Name (اللقب) */}
         <InputField
           label={tTeachers("surname")}
           name="surname"
           register={register}
           error={errors.surname}
           placeholder={tTeachers("lastNamePlaceholder")}
+          className="w-full"
+        />
+
+        {/* First Name / Name (الاسم) */}
+        <InputField
+          label={tTeachers("name")}
+          name="name"
+          register={register}
+          error={errors.name}
+          placeholder={tTeachers("firstNamePlaceholder")}
           className="w-full"
         />
 
