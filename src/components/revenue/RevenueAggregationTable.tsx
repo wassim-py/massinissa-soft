@@ -1,9 +1,9 @@
-"use client";
-
 import { useTranslations, useLocale } from "next-intl";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { TimelineBucket } from "@/lib/revenue";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Calendar, ChevronRight } from "lucide-react";
 
 interface RevenueAggregationTableProps {
   timeline: TimelineBucket[];
@@ -16,6 +16,22 @@ export default function RevenueAggregationTable({
 }: RevenueAggregationTableProps) {
   const t = useTranslations("finance");
   const locale = useLocale();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const currentDateFrom = searchParams.get("dateFrom");
+  const currentDateTo = searchParams.get("dateTo");
+
+  const handleRowClick = (row: TimelineBucket) => {
+    const current = new URLSearchParams(Array.from(searchParams.entries()));
+    current.set("dateFrom", row.dateStart);
+    current.set("dateTo", row.dateEnd);
+    if (periodMode !== "daily") {
+      current.set("periodMode", "daily");
+    }
+    router.push(`${pathname}?${current.toString()}`);
+  };
 
   const formatDZD = (num: number) =>
     locale === "ar"
@@ -63,16 +79,34 @@ export default function RevenueAggregationTable({
           </thead>
           <tbody className="divide-y divide-border/60 text-table-body text-gray-700">
             {timeline.length > 0 ? (
-              timeline.map((row) => (
-                <tr key={row.key} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                  <td className="p-3.5 font-semibold text-gray-900">
-                    <div>{row.label}</div>
-                    {periodMode !== "daily" && (
-                      <div className="text-[11px] text-muted font-mono">
-                        {row.dateStart} {t("periodTo")} {row.dateEnd}
+              timeline.map((row) => {
+                const isSelected =
+                  periodMode === "daily" &&
+                  currentDateFrom === row.dateStart &&
+                  currentDateTo === row.dateEnd;
+
+                return (
+                  <tr
+                    key={row.key}
+                    onClick={() => handleRowClick(row)}
+                    title={t("filterDayBtn") || "Inspecter ce jour"}
+                    className={`border-b border-border/60 transition-colors text-table-body cursor-pointer group ${
+                      isSelected
+                        ? "bg-primary-light/50 border-s-4 border-s-primary font-semibold"
+                        : "hover:bg-primary-light/20"
+                    }`}
+                  >
+                    <td className="p-3.5 font-semibold text-gray-900">
+                      <div className="flex items-center gap-1.5">
+                        <span>{row.label}</span>
+                        <ChevronRight className="w-3.5 h-3.5 text-primary opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                       </div>
-                    )}
-                  </td>
+                      {periodMode !== "daily" && (
+                        <div className="text-[11px] text-muted font-mono">
+                          {row.dateStart} {t("periodTo")} {row.dateEnd}
+                        </div>
+                      )}
+                    </td>
                   <td className="p-3.5 text-end text-gray-700 font-mono">{row.inscription > 0 ? formatDZD(row.inscription) : "-"}</td>
                   <td className="p-3.5 text-end text-gray-700 font-mono">{row.tuition > 0 ? formatDZD(row.tuition) : "-"}</td>
                   <td className="p-3.5 text-end text-gray-700 font-mono">{row.book > 0 ? formatDZD(row.book) : "-"}</td>
@@ -87,7 +121,8 @@ export default function RevenueAggregationTable({
                     {formatDZD(row.netRevenue)}
                   </td>
                 </tr>
-              ))
+              );
+            })
             ) : (
               <tr>
                 <td colSpan={8} className="py-16 px-4 text-center text-muted">

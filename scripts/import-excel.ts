@@ -370,6 +370,8 @@ async function main() {
             targetBranchId: cls.branchId,
             issuedAt: v.date,
           });
+          createdVouchers++;
+          updateSeriesMax(seriesMaxNumber, seriesKey, v.number);
         }
       }
 
@@ -418,6 +420,26 @@ async function main() {
     console.log(`    Series ${seriesId} (${key}): currentNumber → ${maxNum}`);
   }
 
+  // Also ensure any existing vouchers in series have currentNumber >= MAX(number)
+  const allDBSumm = await prisma.voucherSeries.findMany({ select: { id: true, currentNumber: true } });
+  for (const s of allDBSumm) {
+    const agg = await prisma.voucher.aggregate({
+      where: { seriesId: s.id },
+      _max: { number: true },
+    });
+    const maxNum = agg._max.number ?? 0;
+    if (maxNum > s.currentNumber) {
+      await prisma.voucherSeries.update({
+        where: { id: s.id },
+        data: { currentNumber: maxNum },
+      });
+    }
+  }
+
+  // ── 6. Synchronize DailyLedger from all vouchers ────────────────
+  console.log('\n  Synchronizing DailyLedger from vouchers...');
+  await syncImportedDailyLedger();
+
   console.log(`\n${'═'.repeat(60)}`);
   console.log('IMPORT COMPLETE');
   console.log(`  Students created:       ${createdStudents}`);
@@ -428,6 +450,61 @@ async function main() {
   console.log(`${'═'.repeat(60)}\n`);
 
   await prisma.$disconnect();
+}
+
+async function syncImportedDailyLedger() {
+  const vouchers = await prisma.voucher.findMany({
+    where: { isVoided: false },
+    include: { class: true },
+  });
+
+  const ledgerMap = new Map<string, { branchId: number; date: Date; type: string; amount: number }>();
+
+  for (const v of vouchers) {
+    const amount = Number(v.amount);
+    if (amount <= 0) continue;
+
+    const d = new Date(v.issuedAt);
+    const normalizedDate = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+    const dateKey = normalizedDate.toISOString();
+
+    let type = 'TUITION';
+    if (v.class?.isFormation || v.paymentType === 'WORKSHOP') {
+      type = 'ATELIER_FORMATION';
+    } else if (v.paymentType === 'INSCRIPTION') {
+      type = 'INSCRIPTION';
+    } else if (v.paymentType === 'BOOK') {
+      type = 'BOOK';
+    }
+
+    const branchId = v.targetBranchId;
+    const mapKey = `${branchId}|${dateKey}|${type}`;
+
+    const current = ledgerMap.get(mapKey);
+    if (current) {
+      current.amount += amount;
+    } else {
+      ledgerMap.set(mapKey, { branchId, date: normalizedDate, type, amount });
+    }
+  }
+
+  const items = Array.from(ledgerMap.values()).map((item) => ({
+    branchId: item.branchId,
+    date: item.date,
+    type: item.type,
+    amount: new Decimal(item.amount).toString() as any,
+  }));
+
+  await prisma.$transaction(async (tx) => {
+    await tx.dailyLedger.deleteMany({});
+    if (items.length > 0) {
+      await tx.dailyLedger.createMany({
+        data: items,
+      });
+    }
+  });
+
+  console.log(`    Synchronized ${items.length} DailyLedger entries.`);
 }
 
 // ── Excel parsing ───────────────────────────────────────────────────

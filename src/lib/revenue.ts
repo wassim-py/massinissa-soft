@@ -28,6 +28,26 @@ export interface TimelineBucket extends RevenueSummary {
   branchName?: string;
 }
 
+export interface RevenueDashboardVoucher {
+  id: number;
+  number: number;
+  studentId: string;
+  studentName: string;
+  studentPhone: string | null;
+  classId: number | null;
+  className: string;
+  branchId: number;
+  branchName: string;
+  issuingBranchName: string;
+  paymentType: string;
+  amount: number;
+  issuedAt: string;
+  issuedBy: string;
+  isVoided: boolean;
+  isPartial: boolean;
+  status: string | null;
+}
+
 export interface RevenueDashboardData {
   periodMode: "daily" | "weekly" | "monthly";
   dateFrom: string;
@@ -37,6 +57,7 @@ export interface RevenueDashboardData {
   summary: RevenueSummary;
   branchComparison: BranchComparisonItem[];
   timeline: TimelineBucket[];
+  vouchers: RevenueDashboardVoucher[];
   recentLedgerEntries: Array<{
     id: number;
     date: Date;
@@ -103,8 +124,8 @@ export async function getDailyRevenueDashboardData(options?: {
 
   const targetBranchId = branchFilter !== "all" ? Number(branchFilter) : undefined;
 
-  // Query DailyLedger within the date range, confirmed MissingMoney, and confirmed SurplusMoney
-  const [ledgerRows, comparisonRows, confirmedMissingRows, confirmedSurplusRows] = await Promise.all([
+  // Query DailyLedger within the date range, confirmed MissingMoney, confirmed SurplusMoney, and individual Vouchers
+  const [ledgerRows, comparisonRows, confirmedMissingRows, confirmedSurplusRows, voucherRows] = await Promise.all([
     prisma.dailyLedger.findMany({
       where: {
         date: {
@@ -152,6 +173,21 @@ export async function getDailyRevenueDashboardData(options?: {
       include: {
         branch: { select: { id: true, name: true } },
       },
+    }),
+    prisma.voucher.findMany({
+      where: {
+        issuedAt: {
+          gte: startDate,
+          lte: endDate,
+        },
+        ...(targetBranchId ? { targetBranchId } : {}),
+      },
+      include: {
+        student: { select: { id: true, name: true, phone: true } },
+        class: { select: { id: true, name: true } },
+        workshop: { select: { id: true, title: true } },
+      },
+      orderBy: { issuedAt: "desc" },
     }),
   ]);
 
@@ -409,6 +445,29 @@ export async function getDailyRevenueDashboardData(options?: {
   // Sort timeline by date descending for tabular view
   const timeline = Array.from(timelineMap.values()).sort((a, b) => b.key.localeCompare(a.key));
 
+  const branchNameMap = new Map(branches.map((b) => [b.id, b.name]));
+
+  // Format detailed vouchers for audit trail and day-level inspection
+  const formattedVouchers: RevenueDashboardVoucher[] = voucherRows.map((v) => ({
+    id: v.id,
+    number: v.number,
+    studentId: v.studentId,
+    studentName: v.student?.name || "—",
+    studentPhone: v.student?.phone || null,
+    classId: v.classId,
+    className: v.class?.name || v.workshop?.title || "—",
+    branchId: v.targetBranchId,
+    branchName: branchNameMap.get(v.targetBranchId) || `Branche #${v.targetBranchId}`,
+    issuingBranchName: branchNameMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`,
+    paymentType: v.paymentType,
+    amount: Number(v.amount),
+    issuedAt: v.issuedAt.toISOString(),
+    issuedBy: v.issuedBy,
+    isVoided: v.isVoided,
+    isPartial: v.isPartial,
+    status: v.status,
+  }));
+
   // Recent ledger entries for transparency
   const recentLedgerEntries = ledgerRows
     .slice(-30)
@@ -430,6 +489,7 @@ export async function getDailyRevenueDashboardData(options?: {
     summary,
     branchComparison,
     timeline,
+    vouchers: formattedVouchers,
     recentLedgerEntries,
   };
 }
@@ -489,10 +549,13 @@ export interface DailyBranchLedgerData {
 }
 
 /**
- * Fetches strictly TODAY's money at a specific branch, broken down by fee types.
+ * Fetches money at a specific branch for a specific day, broken down by fee types.
  * Reads from the exact same DailyLedger and Voucher tables as the revenue dashboard.
  */
-export async function getDailyBranchLedgerData(branchId: number): Promise<DailyBranchLedgerData | null> {
+export async function getDailyBranchLedgerData(
+  branchId: number,
+  targetDate?: Date | string
+): Promise<DailyBranchLedgerData | null> {
   const branch = await prisma.branch.findUnique({
     where: { id: branchId },
     select: { id: true, name: true, address: true },
@@ -500,7 +563,7 @@ export async function getDailyBranchLedgerData(branchId: number): Promise<DailyB
 
   if (!branch) return null;
 
-  const now = new Date();
+  const now = targetDate ? new Date(targetDate) : new Date();
   const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
   const endOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
 

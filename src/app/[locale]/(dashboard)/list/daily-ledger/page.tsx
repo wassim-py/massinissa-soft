@@ -17,10 +17,13 @@ import { AlertCircle, ArrowDownRight, ArrowUpRight, Banknote, Calendar, CheckCir
 import MissingMoneyActions from "@/components/finance/MissingMoneyActions";
 import SurplusMoneyActions from "@/components/finance/SurplusMoneyActions";
 
+import DailyLedgerDateFilter from "@/components/daily-ledger/DailyLedgerDateFilter";
+
 interface PageProps {
   searchParams: Promise<{
     branchId?: string;
     page?: string;
+    date?: string;
   }>;
 }
 
@@ -83,8 +86,10 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
     }
   }
 
+  const targetDateStr = searchParams.date || new Date().toISOString().split("T")[0];
+
   const [ledgerData, allBranches] = await Promise.all([
-    getDailyBranchLedgerData(selectedBranchId),
+    getDailyBranchLedgerData(selectedBranchId, targetDateStr),
     prisma.branch.findMany({
       select: { id: true, name: true },
       orderBy: { id: "asc" },
@@ -115,7 +120,8 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
       ? `${num.toLocaleString("ar-DZ")} دج`
       : `${num.toLocaleString("fr-DZ")} DZD`;
 
-  const formattedToday = format(new Date(), "d MMMM yyyy", {
+  const parsedDate = new Date(targetDateStr);
+  const formattedSelectedDate = format(parsedDate, "d MMMM yyyy", {
     locale: locale === "ar" ? arDZ : undefined,
   });
 
@@ -142,11 +148,12 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
-            {/* Today Date Badge */}
+            {/* Selected Date Badge & Date Picker */}
             <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-surface-muted border border-border text-xs font-semibold text-gray-800">
-              <Calendar className="w-4 h-4 text-primary" />
-              <span>{formattedToday}</span>
+              <Calendar className="w-4 h-4 text-primary shrink-0" />
+              <span>{formattedSelectedDate}</span>
             </div>
+            <DailyLedgerDateFilter currentDate={targetDateStr} />
           </div>
         </div>
 
@@ -285,7 +292,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
         <div className="flex items-center justify-between">
           <h2 className="text-section-title font-bold text-gray-900 flex items-center gap-2">
             <Coins className="w-5 h-5 text-primary" />
-            <span>Détail par type de frais ({formattedToday})</span>
+            <span>Détail par type de frais ({formattedSelectedDate})</span>
           </h2>
           <span className="text-xs text-muted font-medium">
             Source : Grand Livre Journalier

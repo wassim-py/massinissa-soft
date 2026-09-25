@@ -6,6 +6,7 @@ import RevenueFilterBar from "./RevenueFilterBar";
 import RevenueSummaryCards from "./RevenueSummaryCards";
 import BranchComparisonChart from "./BranchComparisonChart";
 import RevenueAggregationTable from "./RevenueAggregationTable";
+import RevenuePaymentsTable from "./RevenuePaymentsTable";
 import { Badge } from "@/components/ui/Badge";
 
 interface DailyRevenueDashboardProps {
@@ -64,6 +65,9 @@ export default function DailyRevenueDashboard({ data }: DailyRevenueDashboardPro
           timeline={data.timeline}
           periodMode={data.periodMode}
         />
+
+        {/* Detailed Payments & Vouchers Records Table */}
+        <RevenuePaymentsTable vouchers={data.vouchers || []} />
       </div>
     </div>
   );

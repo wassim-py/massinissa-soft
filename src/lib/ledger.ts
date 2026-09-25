@@ -137,17 +137,35 @@ export async function syncDailyLedgerFromVouchers() {
   await prisma.$transaction(async (tx) => {
     await tx.dailyLedger.deleteMany({});
 
-    for (const item of ledgerMap.values()) {
-      await tx.dailyLedger.create({
-        data: {
-          branchId: item.branchId,
-          date: item.date,
-          type: item.type,
-          amount: new Prisma.Decimal(item.amount),
-        },
+    const items = Array.from(ledgerMap.values()).map((item) => ({
+      branchId: item.branchId,
+      date: item.date,
+      type: item.type,
+      amount: new Prisma.Decimal(item.amount),
+    }));
+
+    if (items.length > 0) {
+      await tx.dailyLedger.createMany({
+        data: items,
       });
     }
   });
+
+  // Ensure VoucherSeries currentNumber counters never lag behind existing vouchers
+  const allSeries = await prisma.voucherSeries.findMany({ select: { id: true, currentNumber: true } });
+  for (const s of allSeries) {
+    const agg = await prisma.voucher.aggregate({
+      where: { seriesId: s.id },
+      _max: { number: true },
+    });
+    const maxNum = agg._max.number ?? 0;
+    if (maxNum > s.currentNumber) {
+      await prisma.voucherSeries.update({
+        where: { id: s.id },
+        data: { currentNumber: maxNum },
+      });
+    }
+  }
 
   return { success: true, count: ledgerMap.size };
 }
