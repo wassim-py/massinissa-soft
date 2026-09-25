@@ -818,18 +818,14 @@ const dayToSaturdayOffset: Record<string, number> = {
   FRIDAY: 6,
 };
 
-function getNextWeekSaturday(referenceDate: Date = new Date()): Date {
+function getCurrentWeekSaturday(referenceDate: Date = new Date()): Date {
   const d = new Date(referenceDate);
   const dayOfWeek = d.getDay(); // 0 is Sun, ..., 6 is Sat
   const diffToSaturday = (dayOfWeek + 1) % 7; // Sat -> 0, Sun -> 1, ..., Fri -> 6
   const currentSaturday = new Date(d);
   currentSaturday.setDate(d.getDate() - diffToSaturday);
   currentSaturday.setHours(0, 0, 0, 0);
-
-  // Next week's Saturday (+7 days)
-  const nextSaturday = new Date(currentSaturday);
-  nextSaturday.setDate(currentSaturday.getDate() + 7);
-  return nextSaturday;
+  return currentSaturday;
 }
 
 const getLessonDateTime = (day: string, time: string, dateStr?: string | null): Date => {
@@ -846,7 +842,7 @@ const getLessonDateTime = (day: string, time: string, dateStr?: string | null): 
       month = parts[1] - 1; // 0-indexed in JS Date
       dayNum = parts[2];
     } else {
-      const targetSaturday = getNextWeekSaturday(new Date());
+      const targetSaturday = getCurrentWeekSaturday(new Date());
       const offset = dayToSaturdayOffset[(day || "").toUpperCase()] ?? 0;
       const targetDate = new Date(targetSaturday);
       targetDate.setDate(targetSaturday.getDate() + offset);
@@ -855,8 +851,8 @@ const getLessonDateTime = (day: string, time: string, dateStr?: string | null): 
       dayNum = targetDate.getDate();
     }
   } else {
-    // Normal lesson: use next week's corresponding day as base reference
-    const targetSaturday = getNextWeekSaturday(new Date());
+    // Normal lesson: use current week's corresponding day as base reference
+    const targetSaturday = getCurrentWeekSaturday(new Date());
     const offset = dayToSaturdayOffset[(day || "").toUpperCase()] ?? 0;
     const targetDate = new Date(targetSaturday);
     targetDate.setDate(targetSaturday.getDate() + offset);

@@ -128,7 +128,7 @@ const LessonForm = ({
     defaultValues: data
       ? {
           ...data,
-          date: formatDate(data.startsAt),
+          date: (data.isExtra || data.isCatchUp || data.isFree) ? formatDate(data.startsAt) : undefined,
           startTime: formatTime(data.startTime),
           endTime: formatTime(data.endTime),
           branchId: data.branchId ?? (isOwner ? undefined : userBranchId),

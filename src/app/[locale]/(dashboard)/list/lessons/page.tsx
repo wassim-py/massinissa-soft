@@ -129,7 +129,7 @@ const LessonListPage = async (props: {
   try {
     const whereConditions: Prisma.Sql[] = [
       // Only fetch normal recurring lessons, or one-off lessons occurring in the requested week
-      Prisma.sql`((l."isExtra" = false AND l."isCatchUp" = false AND (c."isFormation" = false OR c."isFormation" IS NULL)) OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek}))`,
+      Prisma.sql`((l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false AND (c."isFormation" = false OR c."isFormation" IS NULL)) OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek}))`,
     ];
 
     if (search) {
@@ -167,9 +167,9 @@ const LessonListPage = async (props: {
 
     // DISPLAY RULE (§7.13):
     // Normal recurring lessons display every week.
-    // Extra, catch-up, and formation lessons display ONLY for the week (Saturday-Friday) they actually occur in.
+    // Extra, catch-up, free, and formation lessons display ONLY for the week (Saturday-Friday) they actually occur in.
     const displayedRawLessons = rawLessons.filter((r) => {
-      const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFormation);
+      const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFree || r.isFormation);
       if (!isOneOff) {
         return true;
       }
