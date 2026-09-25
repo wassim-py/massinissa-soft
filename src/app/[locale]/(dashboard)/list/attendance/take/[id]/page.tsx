@@ -214,8 +214,17 @@ const TakeAttendancePage = async (
         include: {
           family: true,
           vouchers: {
-            where: { classId: l.classId, isVoided: false },
+            where: {
+              isVoided: false,
+              OR: [
+                { classId: l.classId },
+                { paymentType: "INSCRIPTION" },
+              ],
+            },
             orderBy: { issuedAt: "desc" },
+          },
+          enrollments: {
+            where: { classId: l.classId },
           },
           attendances: {
             where: {
@@ -272,6 +281,18 @@ const TakeAttendancePage = async (
       received: receivedSet.has(b.id),
     }));
 
+    const enrollment = details?.enrollments?.[0];
+    const inscVoucher = details?.vouchers?.find(
+      (v: any) => v.paymentType === "INSCRIPTION" && !v.isVoided
+    );
+    const isOwnerWaived = enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged;
+    const isAutoWaived = enrollment && !enrollment.inscriptionFeeCharged;
+    const inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" = inscVoucher
+      ? "PAID"
+      : isOwnerWaived || isAutoWaived
+      ? "WAIVED"
+      : "UNPAID";
+
     return {
       id: s.id,
       globalNumber: s.globalNumber ?? details?.globalNumber,
@@ -286,6 +307,7 @@ const TakeAttendancePage = async (
       receivedBookIds,
       outstandingBooks,
       bookDetails,
+      inscriptionStatus,
     };
   });
 

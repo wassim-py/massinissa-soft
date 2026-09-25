@@ -66,6 +66,7 @@ type FullStudent = Student & {
   receivedBookIds?: number[];
   outstandingBooks?: Array<{ id: number; title: string }>;
   bookDetails?: Array<{ id: number; title: string; received: boolean; receivedAt?: string | Date | null }>;
+  inscriptionStatus?: "PAID" | "WAIVED" | "UNPAID";
 };
 
 type FullLesson = Lesson & {
@@ -615,6 +616,8 @@ const AttendanceRoster = ({
                 className={`p-3.5 sm:p-4 rounded-xl border transition-all ${
                   currentStatus === "PRESENT"
                     ? "bg-emerald-50/40 border-emerald-300 shadow-2xs"
+                    : currentStatus === "ABSENT"
+                    ? "bg-rose-50/40 border-rose-300 shadow-2xs"
                     : currentStatus === "NOT_DEFINED"
                     ? "bg-blue-50/30 border-blue-200 shadow-2xs"
                     : "bg-white border-gray-200 hover:border-gray-300"
@@ -638,6 +641,8 @@ const AttendanceRoster = ({
                       className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold text-xs shrink-0 cursor-pointer select-none transition-all duration-150 active:scale-95 hover:opacity-90 ${
                         currentStatus === "PRESENT"
                           ? "bg-emerald-600 text-white shadow-2xs ring-2 ring-emerald-500/25"
+                          : currentStatus === "ABSENT"
+                          ? "bg-rose-600 text-white shadow-2xs ring-2 ring-rose-500/25"
                           : currentStatus === "NOT_DEFINED"
                           ? "bg-blue-600 text-white shadow-2xs ring-2 ring-blue-500/25"
                           : "bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200"
@@ -651,6 +656,20 @@ const AttendanceRoster = ({
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-gray-900 text-sm">{student.name}</span>
                         <span className={`w-2 h-2 rounded-full ${statusBubble.color}`}></span>
+                        {/* Inscription Fee Status Badge */}
+                        {student.inscriptionStatus === "PAID" ? (
+                          <Badge variant="success" size="sm" withDot>
+                            {locale === "ar" ? "تسجيل مسدد" : "Inscr. Payée"}
+                          </Badge>
+                        ) : student.inscriptionStatus === "WAIVED" ? (
+                          <Badge variant="secondary" size="sm" withDot>
+                            {locale === "ar" ? "تسجيل معفى" : "Inscr. Exonérée"}
+                          </Badge>
+                        ) : (
+                          <Badge variant="danger" size="sm" withDot>
+                            {locale === "ar" ? "تسجيل غير مسدد" : "Inscr. Non payée"}
+                          </Badge>
+                        )}
                         {student.phone && (
                           <span className="text-[11px] text-gray-400 font-mono">
                             {student.phone}
@@ -663,7 +682,7 @@ const AttendanceRoster = ({
                         <span>
                           {isSiblingWaived
                             ? t("tuitionWaivedSibling")
-                            : t("sessionsCount", { remaining: Math.max(0, sessionsRemaining), total: sessionsPurchased })}
+                            : t("sessionsRemainingCount", { count: Math.max(0, sessionsRemaining) })}
                         </span>
                       </div>
                     </div>

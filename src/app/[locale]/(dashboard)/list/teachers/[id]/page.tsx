@@ -230,6 +230,7 @@ const SingleTeacherPage = async (
     { header: tProfile("colStudentsCount"), accessor: "studentsCount", align: "center" },
     { header: tProfile("colSessionPrice"), accessor: "sessionPrice", align: "end" },
     { header: tProfile("colTeacherCut"), accessor: "teacherCut", align: "end" },
+    { header: tProfile("colSchoolCut"), accessor: "schoolCut", align: "end" },
   ];
 
   const upcomingLessonColumns: Column[] = [
@@ -415,6 +416,7 @@ const SingleTeacherPage = async (
                 renderRow={(g) => {
                   const sessionPrice = g.pricePerCycle > 0 ? g.pricePerCycle / 4 : 0;
                   const teacherCut = (sessionPrice * initialPercentage) / 100;
+                  const schoolCut = Math.max(0, sessionPrice - teacherCut);
                   return (
                     <tr
                       key={g.id}
@@ -437,6 +439,9 @@ const SingleTeacherPage = async (
                       </td>
                       <td className="p-3.5 text-end font-bold text-success-text">
                         {formatDZD(Math.round(teacherCut), locale)}
+                      </td>
+                      <td className="p-3.5 text-end font-bold text-blue-700">
+                        {formatDZD(Math.round(schoolCut), locale)}
                       </td>
                     </tr>
                   );

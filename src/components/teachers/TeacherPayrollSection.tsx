@@ -46,6 +46,12 @@ export default function TeacherPayrollSection({
   const percentage = payroll.percentageOfSessionFee ?? 0;
   const sessions = payroll.sessionDetails || [];
 
+  const totalTuitionGross = sessions.reduce((acc, s) => {
+    const count = s.payingCount ?? s.presentCount ?? 0;
+    return acc + (count * s.sessionPrice);
+  }, 0);
+  const schoolShareAmount = Math.max(0, totalTuitionGross - payroll.grossAmount);
+
   const sessionColumns: Column[] = [
     { header: t("colDateTime"), accessor: "startsAt" },
     { header: t("colGroup"), accessor: "className" },
@@ -54,6 +60,7 @@ export default function TeacherPayrollSection({
     { header: t("colStudentsPresent"), accessor: "presentCount", align: "center" },
     { header: t("colSessionPrice"), accessor: "sessionPrice", align: "end" },
     { header: t("colTeacherCut"), accessor: "teacherCut", align: "end" },
+    { header: t("colSchoolCut"), accessor: "schoolCut", align: "end" },
     { header: t("colLessonTotal"), accessor: "lessonAmount", align: "end" },
   ];
 
@@ -85,7 +92,7 @@ export default function TeacherPayrollSection({
 
       <CardContent className="space-y-6 pt-2">
         {/* KPI Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3.5">
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3.5">
           {/* Sessions count */}
           <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
             <span className="text-xs text-muted font-medium">{t("completedSessions")}</span>
@@ -118,6 +125,19 @@ export default function TeacherPayrollSection({
             </div>
           </div>
 
+          {/* School Share Card */}
+          <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200/80 flex flex-col justify-between shadow-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-blue-900 font-semibold">{t("schoolShareTitle")}</span>
+              <Badge variant="primary" size="sm">{100 - percentage}%</Badge>
+            </div>
+            <div className="mt-2 flex items-baseline gap-1">
+              <span className="text-2xl font-bold text-blue-900">
+                {formatDZD(schoolShareAmount)}
+              </span>
+            </div>
+          </div>
+
           {/* Deductions: Advances & Photocopies */}
           <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
             <span className="text-xs text-muted font-medium">{t("totalDeductions")}</span>
@@ -138,7 +158,7 @@ export default function TeacherPayrollSection({
           </div>
 
           {/* Net Amount Due */}
-          <div className="bg-emerald-50/70 border-2 border-emerald-300 p-4 rounded-xl flex flex-col justify-between col-span-2 lg:col-span-1 shadow-xs">
+          <div className="bg-emerald-50/70 border-2 border-emerald-300 p-4 rounded-xl flex flex-col justify-between shadow-xs">
             <span className="text-xs font-bold text-emerald-800">{t("netDueAmount")}</span>
             <div className="mt-2 flex items-baseline gap-1">
               <span className="text-2xl font-black text-emerald-900">
@@ -196,6 +216,9 @@ export default function TeacherPayrollSection({
                 </td>
                 <td className="p-3.5 text-end text-success-text font-semibold">
                   {formatDZD(Math.round(s.teacherCut))}
+                </td>
+                <td className="p-3.5 text-end text-blue-700 font-semibold">
+                  {formatDZD(Math.round(Math.max(0, s.sessionPrice - s.teacherCut)))}
                 </td>
                 <td className="p-3.5 text-end font-bold text-gray-900">
                   {formatDZD(s.lessonAmount)}
