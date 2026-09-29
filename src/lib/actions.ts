@@ -2597,7 +2597,7 @@ export const transferEnrollmentCredit = async (
     const fromEnrollment = await prisma.enrollment.findUnique({
       where: { id: fromEnrollmentId },
       include: {
-        class: { include: { lessons: true } },
+        class: { include: { lessons: true, branch: true } },
         student: true,
         academicYear: true,
       },
@@ -2609,6 +2609,7 @@ export const transferEnrollmentCredit = async (
     // 2. Fetch destination Class
     const toClass = await prisma.class.findUnique({
       where: { id: toClassId },
+      include: { branch: true },
     });
     if (!toClass) {
       return { success: false, error: true, message: "القسم الجديد غير موجود." };
@@ -2623,6 +2624,8 @@ export const transferEnrollmentCredit = async (
       },
     });
 
+    let transferredAmount = 0;
+
     await prisma.$transaction(async (tx) => {
       if (!toEnrollment) {
         toEnrollment = await tx.enrollment.create({
@@ -2636,29 +2639,83 @@ export const transferEnrollmentCredit = async (
         });
       }
 
-      // Record EnrollmentTransfer
+      // Calculate transferred monetary value
+      const studentVouchers = await tx.voucher.findMany({
+        where: {
+          studentId: studentId,
+          classId: fromEnrollment.classId,
+          isVoided: false,
+          paymentType: "TUITION_4SESSION",
+        },
+        orderBy: { issuedAt: "desc" },
+      });
+
+      let sessionPrice = 0;
+      if (studentVouchers.length > 0 && Number(studentVouchers[0].amount) > 0) {
+        sessionPrice = Number(studentVouchers[0].amount) / 4;
+      } else if (fromEnrollment.class.pricePerCycle && Number(fromEnrollment.class.pricePerCycle) > 0) {
+        sessionPrice = Number(fromEnrollment.class.pricePerCycle) / 4;
+      } else if (toClass.pricePerCycle && Number(toClass.pricePerCycle) > 0) {
+        sessionPrice = Number(toClass.pricePerCycle) / 4;
+      }
+
+      transferredAmount = Math.round(Number(transferredSessions) * sessionPrice);
+
+      // Record EnrollmentTransfer with amount and notes
       await tx.enrollmentTransfer.create({
         data: {
           fromEnrollmentId: fromEnrollment.id,
           toEnrollmentId: toEnrollment.id,
           transferredSessions: Number(transferredSessions),
+          amount: transferredAmount,
+          notes: notes || null,
           transferredAt: new Date(),
           transferredBy: session.userId || "admin",
         },
       });
+
+      // Cross-branch money transfer in DailyLedger
+      const fromBranchId = fromEnrollment.class.branchId;
+      const toBranchId = toClass.branchId;
+
+      if (fromBranchId !== toBranchId && transferredAmount > 0) {
+        const now = new Date();
+        // Deduct from source branch ledger
+        await upsertDailyLedger(tx, {
+          branchId: fromBranchId,
+          date: now,
+          type: "TUITION",
+          amount: -transferredAmount,
+        });
+        // Add to destination branch ledger
+        await upsertDailyLedger(tx, {
+          branchId: toBranchId,
+          date: now,
+          type: "TUITION",
+          amount: transferredAmount,
+        });
+      }
     });
 
     try {
       safeRevalidatePath(`/list/payments/class/${fromEnrollment.classId}`);
       safeRevalidatePath(`/list/payments/class/${toClassId}`);
       safeRevalidatePath(`/list/students/${studentId}`);
+      safeRevalidatePath(`/list/finance`);
+      safeRevalidatePath(`/list/daily-ledger`);
     } catch {
       // Ignore if executed outside Next.js request context (e.g. standalone test scripts)
     }
+
+    const branchTransferNote =
+      fromEnrollment.class.branchId !== toClass.branchId && transferredAmount > 0
+        ? ` (تم تحويل مبلغ ${transferredAmount.toLocaleString("ar-DZ")} دج من فرع ${fromEnrollment.class.branch.name} إلى فرع ${toClass.branch.name})`
+        : "";
+
     return {
       success: true,
       error: false,
-      message: `تم تحويل ${transferredSessions} حصص من ${fromEnrollment.class.name} إلى ${toClass.name} بنجاح.`,
+      message: `تم تحويل ${transferredSessions} حصص من ${fromEnrollment.class.name} إلى ${toClass.name} بنجاح.${branchTransferNote}`,
     };
   } catch (err: any) {
     console.error("transferEnrollmentCredit error:", err);

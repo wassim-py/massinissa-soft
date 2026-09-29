@@ -279,6 +279,7 @@ export async function recordStaffPayrollAction(data: {
   month: number;
   year: number;
   amount: number;
+  bonus?: number;
   status?: "PAID" | "PENDING";
   notes?: string;
 }) {
@@ -295,6 +296,8 @@ export async function recordStaffPayrollAction(data: {
       return { success: false, error: true, message: "Le montant du salaire doit être supérieur à 0." };
     }
 
+    const bonusValue = Math.max(0, Number(data.bonus || 0));
+
     const payroll = await prisma.staffPayroll.upsert({
       where: {
         staffMemberId_month_year: {
@@ -308,6 +311,7 @@ export async function recordStaffPayrollAction(data: {
         month: Number(data.month),
         year: Number(data.year),
         amount: new Prisma.Decimal(data.amount),
+        bonus: new Prisma.Decimal(bonusValue),
         status: data.status || "PAID",
         notes: data.notes?.trim() || null,
         recordedBy: session.userId || "owner",
@@ -315,6 +319,7 @@ export async function recordStaffPayrollAction(data: {
       },
       update: {
         amount: new Prisma.Decimal(data.amount),
+        bonus: new Prisma.Decimal(bonusValue),
         status: data.status || "PAID",
         notes: data.notes?.trim() || null,
         paidAt: data.status === "PENDING" ? null : new Date(),
@@ -326,5 +331,66 @@ export async function recordStaffPayrollAction(data: {
   } catch (err: any) {
     console.error("recordStaffPayrollAction error:", err);
     return { success: false, error: true, message: err.message || "Erreur lors de l'enregistrement du salaire." };
+  }
+}
+
+export async function updateStaffPayrollAction(
+  id: number,
+  data: {
+    staffMemberId?: number;
+    month?: number;
+    year?: number;
+    amount?: number;
+    bonus?: number;
+    status?: "PAID" | "PENDING";
+    notes?: string;
+  }
+) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
+    }
+
+    const updatePayload: any = {};
+    if (data.amount !== undefined) updatePayload.amount = new Prisma.Decimal(data.amount);
+    if (data.bonus !== undefined) updatePayload.bonus = new Prisma.Decimal(Math.max(0, Number(data.bonus)));
+    if (data.month !== undefined) updatePayload.month = Number(data.month);
+    if (data.year !== undefined) updatePayload.year = Number(data.year);
+    if (data.status !== undefined) {
+      updatePayload.status = data.status;
+      updatePayload.paidAt = data.status === "PENDING" ? null : new Date();
+    }
+    if (data.notes !== undefined) updatePayload.notes = data.notes?.trim() || null;
+
+    const payroll = await prisma.staffPayroll.update({
+      where: { id },
+      data: updatePayload,
+    });
+
+    safeRevalidate("/list/finance");
+    return { success: true, error: false, message: "Règlement du salaire mis à jour avec succès.", payroll };
+  } catch (err: any) {
+    console.error("updateStaffPayrollAction error:", err);
+    return { success: false, error: true, message: err.message || "Erreur lors de la modification du salaire." };
+  }
+}
+
+export async function deleteStaffPayrollAction(id: number) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
+    }
+
+    await prisma.staffPayroll.delete({
+      where: { id },
+    });
+
+    safeRevalidate("/list/finance");
+    return { success: true, error: false, message: "Règlement de salaire supprimé avec succès." };
+  } catch (err: any) {
+    console.error("deleteStaffPayrollAction error:", err);
+    return { success: false, error: true, message: err.message || "Erreur lors de la suppression." };
   }
 }

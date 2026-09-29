@@ -4,7 +4,7 @@ import { useState } from "react";
 import { levelUpStudent } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
-import { GraduationCap, TrendingUp, X, Building2 } from "lucide-react";
+import { GraduationCap, TrendingUp, X, Building2, Search } from "lucide-react";
 
 export default function AssistedLevelUpModal({
   isOpen,
@@ -45,7 +45,18 @@ export default function AssistedLevelUpModal({
   const [selectedClassId, setSelectedClassId] = useState<number | null>(
     availableGroups[0]?.id || null
   );
+  const [groupSearchTerm, setGroupSearchTerm] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const filteredGroups = availableGroups.filter((grp) => {
+    if (!groupSearchTerm.trim()) return true;
+    const term = groupSearchTerm.toLowerCase().trim();
+    return (
+      grp.name.toLowerCase().includes(term) ||
+      grp.branch?.name?.toLowerCase().includes(term) ||
+      grp.ageGroup?.toLowerCase().includes(term)
+    );
+  });
 
   if (!isOpen) return null;
 
@@ -183,7 +194,24 @@ export default function AssistedLevelUpModal({
               </div>
             ) : (
               <div className="space-y-3">
-                {availableGroups.map((grp) => {
+                {availableGroups.length > 2 && (
+                  <div className="relative flex items-center mb-1">
+                    <Search className="w-3.5 h-3.5 text-gray-400 absolute start-3 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder={locale === "ar" ? "بحث في الأفواج المتاحة..." : "Rechercher parmi les groupes disponibles..."}
+                      value={groupSearchTerm}
+                      onChange={(e) => setGroupSearchTerm(e.target.value)}
+                      className="w-full ps-8 pe-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    />
+                  </div>
+                )}
+                {filteredGroups.length === 0 ? (
+                  <p className="text-center py-4 text-xs text-gray-500 bg-gray-50 rounded-xl border border-gray-200">
+                    {locale === "ar" ? "لم يتم العثور على أي فوج يطابق البحث" : "Aucun groupe ne correspond à votre recherche"}
+                  </p>
+                ) : (
+                  filteredGroups.map((grp) => {
                   const isSelected = selectedClassId === grp.id;
                   const lessons = grp.lessons || [];
 
@@ -267,7 +295,7 @@ export default function AssistedLevelUpModal({
                       )}
                     </div>
                   );
-                })}
+                }))}
               </div>
             )}
           </div>

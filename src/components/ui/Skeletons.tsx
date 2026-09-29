@@ -196,16 +196,21 @@ export function TimetableSkeleton() {
 
       {/* Timetable grid */}
       <div className="bg-surface rounded-2xl border border-border p-4 shadow-xs overflow-hidden">
-        <div className="grid grid-cols-7 gap-3 mb-3 border-b border-border pb-3">
-          {[...Array(7)].map((_, d) => (
-            <div key={d} className="h-6 bg-surface-muted rounded-md text-center" />
+        {/* Header row: days label + hours */}
+        <div className="grid grid-cols-8 gap-2 mb-3 border-b border-border pb-3">
+          <div className="h-6 bg-surface-muted rounded-md" />
+          {[...Array(7)].map((_, h) => (
+            <div key={h} className="h-6 bg-surface-muted rounded-md text-center" />
           ))}
         </div>
-        <div className="grid grid-cols-7 gap-3 h-96">
-          {[...Array(7)].map((_, col) => (
-            <div key={col} className="space-y-3">
-              <div className="h-20 bg-surface-muted/50 rounded-xl" />
-              <div className="h-16 bg-surface-muted/30 rounded-xl" />
+        {/* Day rows */}
+        <div className="space-y-3">
+          {[...Array(7)].map((_, row) => (
+            <div key={row} className="grid grid-cols-8 gap-2 items-center">
+              <div className="h-14 bg-surface-muted/60 rounded-xl" />
+              {[...Array(7)].map((_, col) => (
+                <div key={col} className="h-14 bg-surface-muted/30 rounded-xl" />
+              ))}
             </div>
           ))}
         </div>

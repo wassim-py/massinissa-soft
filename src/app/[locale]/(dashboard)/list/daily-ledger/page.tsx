@@ -13,7 +13,7 @@ import Link from "next/link";
 import { format } from "date-fns";
 import { arDZ } from "date-fns/locale";
 import { getTranslations, getLocale } from "next-intl/server";
-import { AlertCircle, ArrowDownRight, ArrowUpRight, Banknote, Calendar, CheckCircle2, Clock, Coins, PlusCircle, ShieldAlert, Sparkles, Store, Wallet } from "lucide-react";
+import { AlertCircle, ArrowDownRight, ArrowUpRight, Banknote, Calendar, CheckCircle2, Clock, Coins, PlusCircle, ShieldAlert, Sparkles, Store, Wallet, ArrowRightLeft } from "lucide-react";
 import MissingMoneyActions from "@/components/finance/MissingMoneyActions";
 import SurplusMoneyActions from "@/components/finance/SurplusMoneyActions";
 
@@ -86,7 +86,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
     }
   }
 
-  const targetDateStr = searchParams.date || new Date().toISOString().split("T")[0];
+  const targetDateStr = isOwner && searchParams.date ? searchParams.date : new Date().toISOString().split("T")[0];
 
   const [ledgerData, allBranches] = await Promise.all([
     getDailyBranchLedgerData(selectedBranchId, targetDateStr),
@@ -108,7 +108,16 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
     );
   }
 
-  const { branch, summary, missingMoneyList, surplusMoneyList, todayVouchers } = ledgerData;
+  const {
+    branch,
+    summary,
+    missingMoneyList,
+    surplusMoneyList,
+    todayVouchers,
+    todayTransfers,
+    transfersInTotal,
+    transfersOutTotal,
+  } = ledgerData;
 
   const discrepancies = [
     ...missingMoneyList.map((m) => ({ ...m, type: "MISSING" as const })),
@@ -148,12 +157,12 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
-            {/* Selected Date Badge & Date Picker */}
+            {/* Selected Date Badge & Date Picker (Date picker is Owner only) */}
             <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-surface-muted border border-border text-xs font-semibold text-gray-800">
               <Calendar className="w-4 h-4 text-primary shrink-0" />
               <span>{formattedSelectedDate}</span>
             </div>
-            <DailyLedgerDateFilter currentDate={targetDateStr} />
+            {isOwner && <DailyLedgerDateFilter currentDate={targetDateStr} />}
           </div>
         </div>
 
@@ -287,76 +296,78 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
         </Card>
       </div>
 
-      {/* SECTION 2: BREAKDOWN BY FEE TYPE (§7.11 & §1.1) */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-section-title font-bold text-gray-900 flex items-center gap-2">
-            <Coins className="w-5 h-5 text-primary" />
-            <span>Détail par type de frais ({formattedSelectedDate})</span>
-          </h2>
-          <span className="text-xs text-muted font-medium">
-            Source : Grand Livre Journalier
-          </span>
+      {/* SECTION 2: BREAKDOWN BY FEE TYPE (§7.11 & §1.1) - OWNER ONLY */}
+      {isOwner && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-section-title font-bold text-gray-900 flex items-center gap-2">
+              <Coins className="w-5 h-5 text-primary" />
+              <span>Détail par type de frais ({formattedSelectedDate})</span>
+            </h2>
+            <span className="text-xs text-muted font-medium">
+              Source : Grand Livre Journalier
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* 1. Inscription Fees */}
+            <Card className="border-border/80 shadow-xs p-5 bg-surface hover:shadow-sm transition-shadow">
+              <div className="flex items-center justify-between text-xs text-muted font-semibold">
+                <span>{t("inscriptionFees")}</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-success"></span>
+              </div>
+              <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
+                {formatDZD(summary.inscription)}
+              </p>
+              <p className="text-form-helper text-muted mt-1">
+                {t("inscriptionFeesHelper")}
+              </p>
+            </Card>
+
+            {/* 2. Book Fees */}
+            <Card className="border-border/80 shadow-xs p-5 bg-surface hover:shadow-sm transition-shadow">
+              <div className="flex items-center justify-between text-xs text-muted font-semibold">
+                <span>{t("bookFees")}</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+              </div>
+              <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
+                {formatDZD(summary.book)}
+              </p>
+              <p className="text-form-helper text-muted mt-1">
+                {t("bookFeesHelper")}
+              </p>
+            </Card>
+
+            {/* 3. Tuition / Lesson Fees */}
+            <Card className="border-border/80 shadow-xs p-5 bg-surface hover:shadow-sm transition-shadow">
+              <div className="flex items-center justify-between text-xs text-muted font-semibold">
+                <span>{t("tuitionFees")}</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-primary"></span>
+              </div>
+              <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
+                {formatDZD(summary.tuition)}
+              </p>
+              <p className="text-form-helper text-muted mt-1">
+                {t("tuitionFeesHelper")}
+              </p>
+            </Card>
+
+            {/* 4. Formation / Dawarat Fees */}
+            <Card className="border-border/80 shadow-xs p-5 bg-surface hover:shadow-sm transition-shadow">
+              <div className="flex items-center justify-between text-xs text-muted font-semibold">
+                <span>{t("dawaratFormationFees")}</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+              </div>
+              <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
+                {formatDZD(summary.atelierFormation)}
+              </p>
+              <p className="text-form-helper text-muted mt-1">
+                {t("dawaratFormationFeesHelper")}
+              </p>
+            </Card>
+          </div>
         </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* 1. Inscription Fees */}
-          <Card className="border-border/80 shadow-xs p-5 bg-surface hover:shadow-sm transition-shadow">
-            <div className="flex items-center justify-between text-xs text-muted font-semibold">
-              <span>{t("inscriptionFees")}</span>
-              <span className="w-2.5 h-2.5 rounded-full bg-success"></span>
-            </div>
-            <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
-              {formatDZD(summary.inscription)}
-            </p>
-            <p className="text-form-helper text-muted mt-1">
-              {t("inscriptionFeesHelper")}
-            </p>
-          </Card>
-
-          {/* 2. Book Fees */}
-          <Card className="border-border/80 shadow-xs p-5 bg-surface hover:shadow-sm transition-shadow">
-            <div className="flex items-center justify-between text-xs text-muted font-semibold">
-              <span>{t("bookFees")}</span>
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-            </div>
-            <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
-              {formatDZD(summary.book)}
-            </p>
-            <p className="text-form-helper text-muted mt-1">
-              {t("bookFeesHelper")}
-            </p>
-          </Card>
-
-          {/* 3. Tuition / Lesson Fees */}
-          <Card className="border-border/80 shadow-xs p-5 bg-surface hover:shadow-sm transition-shadow">
-            <div className="flex items-center justify-between text-xs text-muted font-semibold">
-              <span>{t("tuitionFees")}</span>
-              <span className="w-2.5 h-2.5 rounded-full bg-primary"></span>
-            </div>
-            <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
-              {formatDZD(summary.tuition)}
-            </p>
-            <p className="text-form-helper text-muted mt-1">
-              {t("tuitionFeesHelper")}
-            </p>
-          </Card>
-
-          {/* 4. Formation / Dawarat Fees */}
-          <Card className="border-border/80 shadow-xs p-5 bg-surface hover:shadow-sm transition-shadow">
-            <div className="flex items-center justify-between text-xs text-muted font-semibold">
-              <span>{t("dawaratFormationFees")}</span>
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
-            </div>
-            <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
-              {formatDZD(summary.atelierFormation)}
-            </p>
-            <p className="text-form-helper text-muted mt-1">
-              {t("dawaratFormationFeesHelper")}
-            </p>
-          </Card>
-        </div>
-      </div>
+      )}
 
       {/* SECTION 3: CASHBOX DISCREPANCIES (MISSING & SURPLUS) */}
       <Card className="border-border/80 shadow-xs bg-surface">
@@ -531,6 +542,118 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           })()}
         </CardContent>
       </Card>
+
+      {/* SECTION 5: TODAY'S CREDIT TRANSFERS */}
+      {todayTransfers && todayTransfers.length > 0 && (
+        <Card className="border-border/80 shadow-xs bg-surface">
+          <CardContent className="p-5 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-border/80">
+              <div>
+                <h3 className="text-section-title font-bold text-gray-900 flex items-center gap-2">
+                  <ArrowRightLeft className="w-4 h-4 text-primary" />
+                  <span>
+                    {locale === "ar"
+                      ? "تحويلات الأرصدة لهذا اليوم"
+                      : "Transferts de solde du jour"}
+                  </span>
+                  <Badge variant="primary" size="sm">
+                    {todayTransfers.length}
+                  </Badge>
+                </h3>
+                <p className="text-form-helper text-muted mt-0.5">
+                  {locale === "ar"
+                    ? "العمليات المالية لتحويل الحصص المرتبطة بهذا الفرع اليوم (واردة أو صادرة)"
+                    : "Opérations de transfert de séances associées à cette branche aujourd'hui"}
+                </p>
+              </div>
+
+              {(transfersInTotal > 0 || transfersOutTotal > 0) && (
+                <div className="flex items-center gap-2 text-xs">
+                  {transfersInTotal > 0 && (
+                    <Badge variant="success" size="sm">
+                      +{formatDZD(transfersInTotal)} {locale === "ar" ? "وارد" : "entrant"}
+                    </Badge>
+                  )}
+                  {transfersOutTotal > 0 && (
+                    <Badge variant="danger" size="sm">
+                      -{formatDZD(transfersOutTotal)} {locale === "ar" ? "صادر" : "sortant"}
+                    </Badge>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <DataTable
+              columns={[
+                { header: locale === "ar" ? "التلميذ" : "Élève", accessor: "studentName" },
+                { header: locale === "ar" ? "من" : "De", accessor: "fromClassName" },
+                { header: locale === "ar" ? "إلى" : "Vers", accessor: "toClassName" },
+                { header: locale === "ar" ? "الاتجاه" : "Direction", accessor: "direction", align: "center" },
+                { header: locale === "ar" ? "الحصص" : "Séances", accessor: "transferredSessions", align: "center" },
+                { header: locale === "ar" ? "المبلغ" : "Montant", accessor: "amount", align: "end" },
+                { header: locale === "ar" ? "المسؤول" : "Par", accessor: "transferredBy" },
+              ]}
+              data={todayTransfers}
+              renderRow={(item) => (
+                <tr
+                  key={item.id}
+                  className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
+                >
+                  <td className="p-3.5 font-semibold text-gray-900">
+                    {item.studentName}
+                  </td>
+                  <td className="p-3.5 text-xs text-gray-700">
+                    <div>{item.fromClassName}</div>
+                    <div className="text-[11px] text-muted">{item.fromBranchName}</div>
+                  </td>
+                  <td className="p-3.5 text-xs text-gray-700">
+                    <div>{item.toClassName}</div>
+                    <div className="text-[11px] text-muted">{item.toBranchName}</div>
+                  </td>
+                  <td className="p-3.5 text-center">
+                    {item.direction === "IN" ? (
+                      <Badge variant="success" size="sm">
+                        {locale === "ar" ? "وارد من فرع آخر" : "Entrant"}
+                      </Badge>
+                    ) : item.direction === "OUT" ? (
+                      <Badge variant="danger" size="sm">
+                        {locale === "ar" ? "صادر لفرع آخر" : "Sortant"}
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" size="sm">
+                        {locale === "ar" ? "داخلي" : "Interne"}
+                      </Badge>
+                    )}
+                  </td>
+                  <td className="p-3.5 text-center font-mono font-bold text-xs">
+                    {item.transferredSessions}
+                  </td>
+                  <td className={`p-3.5 font-mono font-bold text-end ${
+                    item.direction === "IN"
+                      ? "text-success-text"
+                      : item.direction === "OUT"
+                      ? "text-danger"
+                      : "text-gray-900"
+                  }`}>
+                    {item.amount > 0 ? (
+                      item.direction === "IN"
+                        ? `+${formatDZD(item.amount)}`
+                        : item.direction === "OUT"
+                        ? `-${formatDZD(item.amount)}`
+                        : formatDZD(item.amount)
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="p-3.5 text-xs text-muted">
+                    {item.transferredBy}
+                  </td>
+                </tr>
+              )}
+            />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

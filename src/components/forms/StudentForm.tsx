@@ -19,7 +19,7 @@ import { createStudent, updateStudent } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
 import { Button } from "@/components/ui/Button";
-import { X } from "lucide-react";
+import { X, Search } from "lucide-react";
 import { splitFullName } from "@/lib/utils";
 
 type FormState = {
@@ -112,6 +112,7 @@ const StudentForm = ({
   };
 
   const [isClassesOpen, setIsClassesOpen] = useState(false);
+  const [classSearchTerm, setClassSearchTerm] = useState("");
   const classesDropdownRef = useRef<HTMLDivElement>(null);
 
   const initialState: FormState = { success: false, error: false, message: "" };
@@ -150,6 +151,7 @@ const StudentForm = ({
         !classesDropdownRef.current.contains(event.target as Node)
       ) {
         setIsClassesOpen(false);
+        setClassSearchTerm("");
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -159,6 +161,12 @@ const StudentForm = ({
   }, []);
 
   const { grades = [], classes = [] } = relatedData || {};
+
+  const filteredClasses = useMemo(() => {
+    if (!classSearchTerm.trim()) return classes;
+    const term = classSearchTerm.toLowerCase().trim();
+    return classes.filter((c: any) => c.name.toLowerCase().includes(term));
+  }, [classes, classSearchTerm]);
 
   return (
     <form className="flex flex-col gap-6" onSubmit={handleSubmit(onSubmit)}>
@@ -331,31 +339,67 @@ const StudentForm = ({
                     </svg>
                   </button>
                   {isClassesOpen && (
-                    <div className="absolute top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-20 max-h-48 overflow-y-auto">
-                      {classes.map((classItem: { id: number; name: string }) => (
-                        <label
-                          key={classItem.id}
-                          className="flex items-center gap-2 p-2 hover:bg-gray-100 cursor-pointer"
-                        >
+                    <div className="absolute top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-20 flex flex-col max-h-60 overflow-hidden">
+                      {/* Search bar for classes */}
+                      <div className="p-2 border-b border-gray-200 sticky top-0 bg-white z-10">
+                        <div className="relative flex items-center">
+                          <Search className="w-3.5 h-3.5 text-gray-400 absolute start-2 pointer-events-none" />
                           <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                            checked={safeFieldValue.includes(classItem.id)}
-                            onChange={(e) => {
-                              const selectedId = classItem.id;
-                              if (e.target.checked)
-                                field.onChange([...safeFieldValue, selectedId]);
-                              else
-                                field.onChange(
-                                  safeFieldValue.filter((id) => id !== selectedId)
-                                );
-                            }}
+                            type="text"
+                            placeholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
+                            className="w-full ps-7 pe-7 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-gray-50 focus:bg-white"
+                            value={classSearchTerm}
+                            onChange={(e) => setClassSearchTerm(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            autoFocus
                           />
-                          <span className="text-sm text-gray-700">
-                            {classItem.name}
-                          </span>
-                        </label>
-                      ))}
+                          {classSearchTerm && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setClassSearchTerm("");
+                              }}
+                              className="absolute end-1.5 text-gray-400 hover:text-gray-600 p-0.5"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="overflow-y-auto max-h-48 divide-y divide-gray-100">
+                        {filteredClasses.length > 0 ? (
+                          filteredClasses.map((classItem: { id: number; name: string }) => (
+                            <label
+                              key={classItem.id}
+                              className="flex items-center gap-2 p-2 hover:bg-gray-100 cursor-pointer text-xs"
+                            >
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                checked={safeFieldValue.includes(classItem.id)}
+                                onChange={(e) => {
+                                  const selectedId = classItem.id;
+                                  if (e.target.checked)
+                                    field.onChange([...safeFieldValue, selectedId]);
+                                  else
+                                    field.onChange(
+                                      safeFieldValue.filter((id) => id !== selectedId)
+                                    );
+                                }}
+                              />
+                              <span className="text-gray-700 font-medium">
+                                {classItem.name}
+                              </span>
+                            </label>
+                          ))
+                        ) : (
+                          <p className="p-3 text-center text-xs text-gray-400">
+                            {locale === "ar" ? "لم يتم العثور على أي فوج" : "Aucun groupe trouvé"}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   )}
                 </>

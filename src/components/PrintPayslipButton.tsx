@@ -45,13 +45,20 @@ export const PrintPayslipButton = ({
                 color: #000;
                 margin: 0;
                 padding: 20px;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
               }
               @media print {
-                body { margin: 0; padding: 0; }
+                body {
+                  margin: 0;
+                  padding: 0;
+                  -webkit-print-color-adjust: exact !important;
+                  print-color-adjust: exact !important;
+                }
                 .no-print { display: none; }
                 @page {
                   size: A4 portrait;
-                  margin: 10mm;
+                  margin: 8mm;
                 }
               }
             </style>

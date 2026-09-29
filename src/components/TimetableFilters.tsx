@@ -45,13 +45,20 @@ const TimetableFilters = ({
   const locale = useLocale();
 
   const safeTeachers = Array.isArray(teachers) ? teachers : [];
+  const safeClasses = Array.isArray(classes) ? classes : [];
   const safeBranches = Array.isArray(branches) ? branches : [];
 
-  // --- START: State for the new custom teacher dropdown ---
+  // --- START: State for the custom teacher dropdown ---
   const [isTeacherDropdownOpen, setIsTeacherDropdownOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const teacherDropdownRef = useRef<HTMLDivElement>(null);
-  // --- END: State for the new custom teacher dropdown ---
+  // --- END: State for the custom teacher dropdown ---
+
+  // --- START: State for the custom group dropdown ---
+  const [isClassDropdownOpen, setIsClassDropdownOpen] = useState(false);
+  const [classSearchTerm, setClassSearchTerm] = useState("");
+  const classDropdownRef = useRef<HTMLDivElement>(null);
+  // --- END: State for the custom group dropdown ---
 
   const handleFilterChange = (
     value: string,
@@ -86,7 +93,7 @@ const TimetableFilters = ({
     replace(`${pathname}?${params.toString()}`);
   };
 
-  // Effect to close the custom dropdown when clicking outside
+  // Effect to close the custom dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
@@ -94,6 +101,13 @@ const TimetableFilters = ({
         !teacherDropdownRef.current.contains(event.target as Node)
       ) {
         setIsTeacherDropdownOpen(false);
+      }
+      if (
+        classDropdownRef.current &&
+        !classDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsClassDropdownOpen(false);
+        setClassSearchTerm("");
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -111,6 +125,14 @@ const TimetableFilters = ({
   
   const selectedTeacherId = searchParams.get("teacherId");
   const selectedTeacher = safeTeachers.find(t => t.id === selectedTeacherId);
+
+  // Filter groups based on the class search term
+  const filteredClasses = safeClasses.filter((c) =>
+    c.name.toLowerCase().includes(classSearchTerm.toLowerCase())
+  );
+
+  const selectedClassId = searchParams.get("classId");
+  const selectedClass = safeClasses.find((c) => c.id.toString() === selectedClassId);
 
   const selectedBranchParam = searchParams.get("branchId");
   const currentBranchValue =
@@ -212,6 +234,79 @@ const TimetableFilters = ({
           </div>
         )}
       </div>
+
+      {/* --- Custom Searchable Dropdown for Groups --- */}
+      {safeClasses.length > 0 && (
+        <div className="relative" ref={classDropdownRef}>
+          <button
+            type="button"
+            onClick={() => setIsClassDropdownOpen((prev) => !prev)}
+            className="ring-[1.5px] ring-gray-300 px-3 py-2 rounded-full text-sm w-48 flex items-center justify-between bg-white text-gray-800"
+          >
+            <span className="truncate">
+              {selectedClass ? selectedClass.name : t("filterByGroup")}
+            </span>
+            <svg
+              className={`w-4 h-4 transition-transform shrink-0 ${
+                isClassDropdownOpen ? "transform rotate-180" : ""
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M19 9l-7 7-7-7"
+              ></path>
+            </svg>
+          </button>
+          {isClassDropdownOpen && (
+            <div className="absolute top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-30">
+              <div className="p-2 border-b border-gray-200">
+                <input
+                  type="text"
+                  placeholder={t("searchGroupPlaceholder")}
+                  className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full"
+                  value={classSearchTerm}
+                  onChange={(e) => setClassSearchTerm(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <ul className="max-h-48 overflow-y-auto">
+                <li
+                  onClick={() => {
+                    handleFilterChange("all", "classId");
+                    setIsClassDropdownOpen(false);
+                  }}
+                  className="p-2 hover:bg-gray-100 cursor-pointer text-sm font-medium"
+                >
+                  {t("allClasses")}
+                </li>
+                {filteredClasses.map((cls) => (
+                  <li
+                    key={cls.id}
+                    onClick={() => {
+                      handleFilterChange(cls.id.toString(), "classId");
+                      setIsClassDropdownOpen(false);
+                    }}
+                    className="p-2 hover:bg-gray-100 cursor-pointer text-sm"
+                  >
+                    {cls.name}
+                  </li>
+                ))}
+                {filteredClasses.length === 0 && (
+                  <li className="p-2 text-center text-xs text-gray-400">
+                    {t("noGroupsFound")}
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
 
       {/* --- Week Navigator Controls (Requirement 3) --- */}

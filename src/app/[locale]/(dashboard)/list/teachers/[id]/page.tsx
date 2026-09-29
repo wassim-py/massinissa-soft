@@ -353,18 +353,18 @@ const SingleTeacherPage = async (
               </div>
             </div>
 
-            {/* Editable Rate Widgets for Owner (Req 7 & §2.5) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-5">
-              {/* 7. Editable field for OWNER to set TeacherPayRate.percentageOfSessionFee */}
-              <TeacherPayrollPercentageWidget
-                teacherId={t.id}
-                initialPercentage={initialPercentage}
-              />
-
+            {/* Editable Rate Widgets for Owner - Horizontally stacked above each other with full responsiveness */}
+            <div className="flex flex-col gap-3.5 mt-5 w-full">
               {/* Editable photocopy rate per page */}
               <TeacherPhotocopyRateWidget
                 teacherId={t.id}
                 initialRate={photocopyRate}
+              />
+
+              {/* Editable field for OWNER to set TeacherPayRate.percentageOfSessionFee */}
+              <TeacherPayrollPercentageWidget
+                teacherId={t.id}
+                initialPercentage={initialPercentage}
               />
             </div>
           </CardContent>

@@ -4,8 +4,9 @@ import { useState, useTransition } from "react";
 import { updateEnrollmentPayerStatusAction, updateStudentPayerStatusAction } from "@/lib/actions";
 import { executeWithRetry } from "@/lib/retryUtils";
 import { toast } from "react-toastify";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { Check, Loader2, Sparkles, ShieldAlert } from "lucide-react";
+import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
 
 export interface EnrolledGroupPayerInfo {
   enrollmentId: number;
@@ -29,6 +30,7 @@ export default function StudentPayerStatusControl({
   canEdit = true,
 }: StudentPayerStatusControlProps) {
   const t = useTranslations("studentProfile");
+  const locale = useLocale();
   const [isPending, startTransition] = useTransition();
 
   // Selected group state (default to first enrolled group)
@@ -125,23 +127,22 @@ export default function StudentPayerStatusControl({
             <label htmlFor="group-select" className="text-[11px] font-semibold text-muted">
               {t("selectGroup")}:
             </label>
-            <select
-              id="group-select"
-              value={selectedEnrollmentId ?? ""}
-              onChange={(e) => setSelectedEnrollmentId(Number(e.target.value))}
-              disabled={isPending}
-              className="text-xs font-semibold bg-surface-subtle border border-border rounded-lg px-2.5 py-1 text-gray-800 focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer max-w-[220px] truncate"
-            >
-              {enrolledGroups.map((g) => {
+            <SearchableGroupSelect
+              options={enrolledGroups.map((g) => {
                 const grpStatus = statusMap[g.enrollmentId] || g.payerStatus;
                 const statusTag = grpStatus === "NON_PAYER" ? " (Non-payeur)" : grpStatus === "SCHOOL_FEES_ONLY" ? " (Frais école)" : "";
-                return (
-                  <option key={g.enrollmentId} value={g.enrollmentId}>
-                    {g.className} ({g.branchName}){statusTag}
-                  </option>
-                );
+                return {
+                  id: g.enrollmentId,
+                  name: g.className,
+                  secondaryLabel: `${g.branchName}${statusTag}`,
+                };
               })}
-            </select>
+              value={selectedEnrollmentId ?? ""}
+              onChange={(val) => setSelectedEnrollmentId(Number(val))}
+              disabled={isPending}
+              searchPlaceholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
+              buttonClassName="text-xs font-semibold px-2.5 py-1 min-h-[34px] max-w-[240px] rounded-lg"
+            />
           </div>
         )}
 

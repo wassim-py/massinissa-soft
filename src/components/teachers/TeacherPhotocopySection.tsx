@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { DataTable, Column } from "@/components/ui/DataTable";
+import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
 import { recordTeacherPhotocopyAction } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { Printer, Plus, Filter, X } from "lucide-react";
@@ -189,19 +190,15 @@ export default function TeacherPhotocopySection({
               <label htmlFor="filter-group" className="text-xs text-muted">
                 {t("groupFilter")}
               </label>
-              <select
-                id="filter-group"
+              <SearchableGroupSelect
+                options={groups.map((g) => ({ id: String(g.id), name: g.name }))}
                 value={selectedGroupId}
-                onChange={(e) => setSelectedGroupId(e.target.value)}
-                className="text-xs border border-border/80 bg-surface rounded-lg px-2.5 py-1.5 text-gray-900 shadow-xs focus:ring-2 focus:ring-primary/20 focus:border-primary"
-              >
-                <option value="all">{t("allGroups")}</option>
-                {groups.map((g) => (
-                  <option key={g.id} value={String(g.id)}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setSelectedGroupId(String(val))}
+                allOptionLabel={t("allGroups")}
+                allOptionValue="all"
+                searchPlaceholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
+                buttonClassName="text-xs px-2.5 py-1.5 min-w-[150px] min-h-[34px] rounded-lg"
+              />
             </div>
 
             {(selectedBranchId !== "all" || selectedGroupId !== "all") && (
@@ -320,18 +317,15 @@ export default function TeacherPhotocopySection({
                     <label className="block text-gray-700 font-semibold mb-1.5">
                       {t("beneficiaryGroupOptional")}
                     </label>
-                    <select
+                    <SearchableGroupSelect
+                      options={groups.map((g) => ({ id: String(g.id), name: g.name }))}
                       value={newGroupId}
-                      onChange={(e) => setNewGroupId(e.target.value)}
-                      className="w-full border border-border rounded-lg p-2 bg-surface text-gray-900 shadow-xs focus:ring-2 focus:ring-primary/20"
-                    >
-                      <option value="">{t("noGroupGeneral")}</option>
-                      {groups.map((g) => (
-                        <option key={g.id} value={String(g.id)}>
-                          {g.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setNewGroupId(String(val))}
+                      placeholder={t("noGroupGeneral")}
+                      allowClear
+                      searchPlaceholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
+                      buttonClassName="text-xs p-2 min-h-[38px] rounded-lg"
+                    />
                   </div>
 
                   <div>

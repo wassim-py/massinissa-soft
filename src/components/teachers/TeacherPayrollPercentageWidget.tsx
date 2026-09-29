@@ -44,17 +44,17 @@ export default function TeacherPayrollPercentageWidget({
   };
 
   return (
-    <div className="bg-surface-subtle/80 border border-border/80 p-3.5 rounded-xl flex items-center justify-between gap-3 shadow-xs">
-      <div className="flex items-center gap-3 min-w-0">
+    <div className="bg-surface-subtle/80 border border-border/80 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs w-full">
+      <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
         <div className="w-9 h-9 rounded-lg bg-surface flex items-center justify-center border border-border text-muted-dark shrink-0">
           <Percent className="w-4 h-4 text-emerald-600" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 grow sm:grow-0">
           <span className="text-xs text-muted font-medium block truncate">
             {t("percentageLabel")}
           </span>
           {isEditing ? (
-            <form onSubmit={handleSave} className="flex items-center gap-2 mt-1.5">
+            <form onSubmit={handleSave} className="flex flex-wrap items-center gap-2 mt-1.5">
               <input
                 type="number"
                 min="0"
@@ -66,28 +66,30 @@ export default function TeacherPayrollPercentageWidget({
                 autoFocus
               />
               <span className="text-xs text-muted font-medium">{t("percentOfFee")}</span>
-              <Button
-                type="submit"
-                size="sm"
-                variant="primary"
-                className="py-1 px-2.5 text-xs"
-                disabled={isPending}
-                leftIcon={<Check className="w-3 h-3" />}
-              >
-                {isPending ? "..." : t("save")}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setIsEditing(false);
-                  setEditValue(percentage);
-                }}
-                className="py-1 px-2 text-xs"
-              >
-                <X className="w-3 h-3" />
-              </Button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="primary"
+                  className="py-1 px-2.5 text-xs"
+                  disabled={isPending}
+                  leftIcon={<Check className="w-3 h-3" />}
+                >
+                  {isPending ? "..." : t("save")}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setIsEditing(false);
+                    setEditValue(percentage);
+                  }}
+                  className="py-1 px-2 text-xs"
+                >
+                  <X className="w-3 h-3" />
+                </Button>
+              </div>
             </form>
           ) : (
             <div className="flex items-baseline gap-1.5 mt-0.5">
@@ -106,7 +108,7 @@ export default function TeacherPayrollPercentageWidget({
           variant="outline"
           size="sm"
           onClick={() => setIsEditing(true)}
-          className="text-xs shrink-0"
+          className="text-xs shrink-0 self-end sm:self-auto"
           leftIcon={<Edit2 className="w-3 h-3" />}
         >
           {t("edit")}

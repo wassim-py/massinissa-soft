@@ -4,6 +4,7 @@ import { getAuthSession } from "@/lib/auth";
 import { PayslipTicket, PayslipPrintData } from "@/components/printable/PayslipTicket";
 import PrintPayslipButton from "@/components/PrintPayslipButton";
 import Link from "next/link";
+import { calculateTeacherPayroll } from "@/lib/payroll";
 
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -85,6 +86,61 @@ export default async function PayslipDetailPage(props: PageProps) {
     orderBy: { date: "asc" },
   });
 
+  // Fetch detailed sessions via calculateTeacherPayroll or database fallback
+  const payrollCalc = await calculateTeacherPayroll(
+    payslip.personId,
+    payslip.PayrollRun.periodStart,
+    payslip.PayrollRun.periodEnd
+  );
+
+  let sessionItems: NonNullable<PayslipPrintData["sessions"]> = [];
+  if (payrollCalc?.sessionDetails && payrollCalc.sessionDetails.length > 0) {
+    sessionItems = payrollCalc.sessionDetails.map((s) => ({
+      lessonId: s.lessonId,
+      startsAt: s.startsAt,
+      className: s.className,
+      branchName: s.branchName,
+      presentCount: s.presentCount,
+      payingCount: s.payingCount,
+      sessionPrice: s.sessionPrice,
+      teacherCut: s.teacherCut,
+      lessonAmount: s.lessonAmount,
+      isFree: s.isFree,
+      isExtra: s.isExtra,
+      isCatchUp: s.isCatchUp,
+    }));
+  } else {
+    const rawLessons = await prisma.lesson.findMany({
+      where: {
+        teacherId: payslip.personId,
+        startsAt: {
+          gte: payslip.PayrollRun.periodStart,
+          lte: payslip.PayrollRun.periodEnd,
+        },
+      },
+      include: {
+        branch: true,
+        class: true,
+        attendances: true,
+      },
+      orderBy: { startsAt: "asc" },
+    });
+
+    sessionItems = rawLessons.map((l) => ({
+      lessonId: l.id,
+      startsAt: l.startsAt,
+      className: l.class?.name || "Classe",
+      branchName: l.branch.name,
+      presentCount: l.attendances.filter((a) => a.status === "PRESENT").length,
+      lessonAmount: 0,
+      isFree: l.isFree,
+      isExtra: l.isExtra,
+      isCatchUp: l.isCatchUp,
+    }));
+  }
+
+  const freeSessionsCount = sessionItems.filter((s) => s.isFree).length;
+
   const printData: PayslipPrintData = {
     id: payslip.id,
     periodStart: payslip.PayrollRun.periodStart,
@@ -95,17 +151,24 @@ export default async function PayslipDetailPage(props: PageProps) {
       name: teacher?.name || payslip.personId,
       phone: (teacher as any)?.phone || null,
     },
-    sessionsCount: payslip.sessionsCount || 0,
+    sessionsCount: payslip.sessionsCount || sessionItems.length,
+    freeSessionsCount,
     grossAmount: Number(payslip.grossAmount),
     advances: Number(payslip.advances),
     photocopyDeductions: Number(payslip.photocopyDeductions),
     netAmount: Number(payslip.netAmount),
-    branchLines: payslip.PayslipBranchLine.map((bl) => ({
-      branchId: bl.branchId,
-      branchName: bl.Branch.name,
-      sessionsCount: bl.sessionsCount,
-      amount: Number(bl.amount),
-    })),
+    branchLines: payslip.PayslipBranchLine.map((bl) => {
+      const branchCalc = payrollCalc?.branchBreakdown.find((b) => b.branchId === bl.branchId);
+      const branchFree = branchCalc?.freeSessionsCount ?? sessionItems.filter((s) => s.branchName === bl.Branch.name && s.isFree).length;
+      return {
+        branchId: bl.branchId,
+        branchName: bl.Branch.name,
+        sessionsCount: bl.sessionsCount,
+        freeSessionsCount: branchFree,
+        amount: Number(bl.amount),
+      };
+    }),
+    sessions: sessionItems,
     photocopyDetails: photocopyCharges.map((pc) => ({
       branchName: pc.Branch.name,
       pages: pc.pages,

@@ -376,6 +376,7 @@ const LessonListPage = async (props: {
             <TableSearch placeholder={t("searchPlaceholder")} />
             <TimetableFilters
               teachers={teachers}
+              classes={classes}
               branches={branches}
               defaultBranchId={session.isOwner ? (selectedBranchId ?? undefined) : (activeBranchId || undefined)}
               currentWeekRange={{

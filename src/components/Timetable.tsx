@@ -235,31 +235,31 @@ const Timetable = ({
 
   const getLessonCardStyle = (lesson: TimetableLesson, isClickable: boolean) => {
     if (lesson.isWorkshop) {
-      return `bg-rose-50 border-2 border-rose-500 text-rose-950 p-2 rounded-md text-xs flex flex-col justify-between w-[95%] shadow-sm ${
+      return `bg-rose-50 border-2 border-rose-500 text-rose-950 p-2 rounded-md text-xs flex flex-col justify-between w-full shadow-xs ${
         isClickable ? 'hover:bg-rose-100 hover:border-rose-600 transition-all cursor-pointer' : 'cursor-default'
       }`;
     }
     if (lesson.isFormation) {
-      return `bg-teal-50 border-2 border-teal-500 text-teal-950 p-2 rounded-md text-xs flex flex-col justify-between w-[95%] shadow-sm ${
+      return `bg-teal-50 border-2 border-teal-500 text-teal-950 p-2 rounded-md text-xs flex flex-col justify-between w-full shadow-xs ${
         isClickable ? 'hover:bg-teal-100 hover:border-teal-600 transition-all cursor-pointer' : 'cursor-default'
       }`;
     }
     if (lesson.isFree) {
-      return `bg-emerald-50 border-2 border-emerald-500 text-emerald-950 p-2 rounded-md text-xs flex flex-col justify-between w-[95%] shadow-sm ${
+      return `bg-emerald-50 border-2 border-emerald-500 text-emerald-950 p-2 rounded-md text-xs flex flex-col justify-between w-full shadow-xs ${
         isClickable ? 'hover:bg-emerald-100 hover:border-emerald-600 transition-all cursor-pointer' : 'cursor-default'
       }`;
     }
     if (lesson.isExtra) {
-      return `bg-purple-50 border-2 border-purple-500 text-purple-950 p-2 rounded-md text-xs flex flex-col justify-between w-[95%] shadow-sm ${
+      return `bg-purple-50 border-2 border-purple-500 text-purple-950 p-2 rounded-md text-xs flex flex-col justify-between w-full shadow-xs ${
         isClickable ? 'hover:bg-purple-100 hover:border-purple-600 transition-all cursor-pointer' : 'cursor-default'
       }`;
     }
     if (lesson.isCatchUp) {
-      return `bg-amber-50 border-2 border-amber-500 text-amber-950 p-2 rounded-md text-xs flex flex-col justify-between w-[95%] shadow-sm ${
+      return `bg-amber-50 border-2 border-amber-500 text-amber-950 p-2 rounded-md text-xs flex flex-col justify-between w-full shadow-xs ${
         isClickable ? 'hover:bg-amber-100 hover:border-amber-600 transition-all cursor-pointer' : 'cursor-default'
       }`;
     }
-    return `bg-blue-50 border border-blue-300 text-blue-950 p-2 rounded-md text-xs flex flex-col justify-between w-[95%] shadow-sm ${
+    return `bg-blue-50 border border-blue-300 text-blue-950 p-2 rounded-md text-xs flex flex-col justify-between w-full shadow-xs ${
       isClickable ? 'hover:bg-blue-100 hover:border-blue-400 transition-all cursor-pointer' : 'cursor-default'
     }`;
   };
@@ -498,109 +498,147 @@ const Timetable = ({
         )}
       </div>
 
-      {/* Full Week Grid (shown on desktop or when mobileMode is 'week') */}
+      {/* Full Week Grid (reversed structure: days in first column, hours in first line) */}
       <div
-        className={`overflow-x-auto ${
+        className={`overflow-x-auto pb-2 ${
           mobileMode === "day" ? "hidden md:block" : "block"
         }`}
       >
-        <div className="min-w-[800px]">
-          <div className="grid grid-cols-8 gap-0 border-t border-l border-gray-200 text-center font-bold text-sm bg-gray-50">
-            <div className="p-2 border-b border-r border-gray-200">{t("timeHeader")}</div>
-            {daysOfWeek.map((day) => (
-              <div key={day} className={`p-2 border-b border-r border-gray-200 ${day === today ? 'bg-blue-50 text-blue-700' : ''}`}>
-                {getDayTranslation(day)}
+        <div style={{ minWidth: `${140 + timeSlots.length * 170}px` }}>
+          {/* Header Row: Days Header in 1st cell, Time Slots in subsequent cells */}
+          <div
+            className="grid gap-0 border-t border-l border-gray-200 text-center font-bold text-sm bg-gray-50"
+            style={{
+              gridTemplateColumns: `minmax(120px, 140px) repeat(${timeSlots.length}, minmax(170px, 1fr))`,
+            }}
+          >
+            <div className="p-2.5 border-b border-r border-gray-200 sticky start-0 z-20 bg-gray-100 font-bold text-xs text-gray-700 flex items-center justify-center uppercase tracking-wider shadow-xs">
+              {t("dayLabel")}
+            </div>
+            {timeSlots.map((time) => (
+              <div
+                key={time}
+                className="p-2.5 border-b border-r border-gray-200 font-bold text-xs text-gray-700 flex items-center justify-center bg-gray-50"
+              >
+                {time}
               </div>
             ))}
           </div>
 
-          {timeSlots.map((time, idx) => {
-            const rowBgClass = idx % 2 === 0 ? "bg-white" : "bg-gray-50/50";
+          {/* Rows: One row per Day */}
+          {daysOfWeek.map((day, idx) => {
+            const isToday = day === today;
+            const rowBgClass = idx % 2 === 0 ? "bg-white" : "bg-gray-50/40";
             return (
-              <div key={time} className="grid grid-cols-8 gap-0 text-right">
-                <div className="p-2 border-b border-l border-r border-gray-200 font-medium text-xs text-gray-500 flex items-center justify-center">
-                  {time}
+              <div
+                key={day}
+                className="grid gap-0 text-start"
+                style={{
+                  gridTemplateColumns: `minmax(120px, 140px) repeat(${timeSlots.length}, minmax(170px, 1fr))`,
+                }}
+              >
+                {/* 1st Column: Day Label */}
+                <div
+                  className={`p-3 border-b border-l border-r border-gray-200 font-bold text-xs flex flex-col items-center justify-center sticky start-0 z-10 shadow-xs ${
+                    isToday
+                      ? "bg-blue-100 text-blue-900 ring-1 ring-blue-300"
+                      : "bg-gray-50 text-gray-800"
+                  }`}
+                >
+                  <span className="font-bold text-xs sm:text-sm text-center">
+                    {getDayTranslation(day)}
+                  </span>
+                  {isToday && (
+                    <span className="text-[10px] font-bold text-blue-700 bg-blue-200/80 px-1.5 py-0.5 rounded-full mt-1">
+                      {locale === "ar" ? "اليوم" : "Aujourd'hui"}
+                    </span>
+                  )}
                 </div>
-                {daysOfWeek.map((day) => {
+
+                {/* Hour slots for this day */}
+                {timeSlots.map((time) => {
                   const lessonsInSlot = findLessonsForSlot(day, time);
                   return (
-                    <div key={`${day}-${time}`} className={`p-1 border-b border-r border-gray-200 min-h-[100px] flex flex-col gap-1 relative ${rowBgClass}`}>
+                    <div
+                      key={`${day}-${time}`}
+                      className={`p-1.5 border-b border-r border-gray-200 min-h-[110px] flex flex-col gap-1.5 relative ${rowBgClass}`}
+                    >
                       {lessonsInSlot.map((lesson) => {
                         const formattedEndTime = formatLessonTimeInAlgiers(lesson.endsAt);
                         const formattedStartTime = formatLessonTimeInAlgiers(lesson.startsAt);
-                        
-                        const lessonDay = getLessonDay(lesson);
-                        const isClickable = userRole === 'admin';
+
+                        const isClickable = userRole === "admin";
                         const clickHandler = isClickable ? () => handleLessonClick(lesson) : undefined;
                         const cardClassName = getLessonCardStyle(lesson, isClickable);
 
-                        let lessonStyle: React.CSSProperties = { position: 'relative', zIndex: 1 };
-                        if (userRole === 'teacher' || userRole === 'student') {
-                            const start = new Date(lesson.startsAt);
-                            const end = new Date(lesson.endsAt);
-                            const durationInMinutes = (end.getTime() - start.getTime()) / (1000 * 60);
-                            const heightPerMinute = 100 / 60;
-                            lessonStyle.height = `${durationInMinutes * heightPerMinute}px`;
-                            lessonStyle.position = 'absolute';
-                        }
-                        
                         return (
-                         <div 
-                            key={lesson.id} 
+                          <div
+                            key={lesson.id}
                             onClick={clickHandler}
-                            style={lessonStyle}
                             className={cardClassName}
                           >
                             <div>
-                                <div className="flex flex-wrap items-center gap-1 mb-1.5">
-                                  {lesson.isWorkshop && (
-                                    <span className="bg-rose-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
-                                      {t("workshopBadge")}
-                                    </span>
-                                  )}
-                                  {lesson.isFormation && (
-                                    <span className="bg-teal-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
-                                      {t("formationBadge")}
-                                    </span>
-                                  )}
-                                  {lesson.isFree && (
-                                    <span className="bg-emerald-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
-                                      {t("freeBadge")}
-                                    </span>
-                                  )}
-                                  {lesson.isExtra && (
-                                    <span className="bg-purple-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
-                                      {t("extraBadge")}
-                                    </span>
-                                  )}
-                                  {lesson.isCatchUp && (
-                                    <span className="bg-amber-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
-                                      {t("catchUpBadge")}
-                                    </span>
-                                  )}
-                                  {!lesson.isWorkshop && !lesson.isFormation && !lesson.isFree && !lesson.isExtra && !lesson.isCatchUp && (
+                              <div className="flex flex-wrap items-center gap-1 mb-1.5">
+                                {lesson.isWorkshop && (
+                                  <span className="bg-rose-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
+                                    {t("workshopBadge")}
+                                  </span>
+                                )}
+                                {lesson.isFormation && (
+                                  <span className="bg-teal-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
+                                    {t("formationBadge")}
+                                  </span>
+                                )}
+                                {lesson.isFree && (
+                                  <span className="bg-emerald-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
+                                    {t("freeBadge")}
+                                  </span>
+                                )}
+                                {lesson.isExtra && (
+                                  <span className="bg-purple-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
+                                    {t("extraBadge")}
+                                  </span>
+                                )}
+                                {lesson.isCatchUp && (
+                                  <span className="bg-amber-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
+                                    {t("catchUpBadge")}
+                                  </span>
+                                )}
+                                {!lesson.isWorkshop &&
+                                  !lesson.isFormation &&
+                                  !lesson.isFree &&
+                                  !lesson.isExtra &&
+                                  !lesson.isCatchUp && (
                                     <span className="bg-blue-600 text-white font-medium text-[10px] px-1.5 py-0.5 rounded shadow-xs">
                                       {t("regularBadge")}
                                     </span>
                                   )}
-                                </div>
-                                <h4 className="font-bold">{lesson.class?.name || lesson.name}</h4>
-                                {(userRole === 'admin' || userRole === 'student' || userRole === 'parent') && (
-                                    <p className="text-gray-600 italic mt-0.5">
-                                        {lesson.teacher?.surname ? `${lesson.teacher.surname} ${lesson.teacher.name}` : lesson.teacher?.name}
-                                    </p>
-                                )}
-                                <div className="flex flex-col mt-2 gap-0.5">
-                                    <span className="font-semibold text-gray-800">{lesson.classroom?.name || t("noClassroomAssigned")}</span>
-                                    <span className="text-[10px] text-gray-700 font-medium bg-white/80 border border-gray-200/80 px-1 py-0.5 rounded inline-flex items-center gap-1 w-fit">
-                                      <Building2 className="w-3 h-3 text-muted shrink-0" />
-                                      <span>{lesson.branchName || t("unspecified")}</span>
-                                    </span>
-                                    <span className="text-[11px] text-gray-500 pt-0.5">{formattedStartTime} - {formattedEndTime}</span>
-                                </div>
+                              </div>
+                              <h4 className="font-bold text-xs">{lesson.class?.name || lesson.name}</h4>
+                              {(userRole === "admin" ||
+                                userRole === "student" ||
+                                userRole === "parent") && (
+                                <p className="text-gray-600 italic text-[11px] mt-0.5">
+                                  {lesson.teacher?.surname
+                                    ? `${lesson.teacher.surname} ${lesson.teacher.name}`
+                                    : lesson.teacher?.name}
+                                </p>
+                              )}
+                              <div className="flex flex-col mt-2 gap-0.5">
+                                <span className="font-semibold text-gray-800 text-[11px]">
+                                  {lesson.classroom?.name || t("noClassroomAssigned")}
+                                </span>
+                                <span className="text-[10px] text-gray-700 font-medium bg-white/80 border border-gray-200/80 px-1 py-0.5 rounded inline-flex items-center gap-1 w-fit">
+                                  <Building2 className="w-3 h-3 text-muted shrink-0" />
+                                  <span>{lesson.branchName || t("unspecified")}</span>
+                                </span>
+                                <span className="text-[11px] text-gray-500 pt-0.5">
+                                  {formattedStartTime} - {formattedEndTime}
+                                </span>
+                              </div>
                             </div>
 
-                            {/* Take Attendance button ONLY on lesson cards for lessons happening TODAY (Requirement 2 & 5) */}
+                            {/* Take Attendance button ONLY on lesson cards for lessons happening TODAY */}
                             {isLessonToday(lesson) && (
                               <div className="mt-2 pt-1 border-t border-gray-200/60">
                                 <Link
@@ -614,12 +652,12 @@ const Timetable = ({
                               </div>
                             )}
 
-                            {userRole === 'parent' && lesson.forChildren && (
-                                <div className="mt-auto pt-1">
-                                    <p className="text-center text-xs font-semibold bg-green-200 text-green-800 rounded-full px-2 py-1">
-                                        {t("forChildren", { names: lesson.forChildren.join(', ') })}
-                                    </p>
-                                </div>
+                            {userRole === "parent" && lesson.forChildren && (
+                              <div className="mt-auto pt-1">
+                                <p className="text-center text-xs font-semibold bg-green-200 text-green-800 rounded-full px-2 py-1">
+                                  {t("forChildren", { names: lesson.forChildren.join(", ") })}
+                                </p>
+                              </div>
                             )}
                           </div>
                         );

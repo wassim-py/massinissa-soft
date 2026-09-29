@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { FormField, Input, Select } from "@/components/ui/FormField";
+import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
 import { ArrowRightLeft, X, Phone } from "lucide-react";
 import BookStatusBadge, { BookStudentStatus, computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
 
@@ -1138,20 +1139,20 @@ export default function PaymentGrid({
               </div>
 
               <FormField label={t("targetClassLabel")} required>
-                <Select
-                  value={targetClassId}
-                  onChange={(e) => setTargetClassId(Number(e.target.value))}
-                  required
-                >
-                  <option value="">{t("selectTargetClass")}</option>
-                  {availableClassesForTransfer
+                <SearchableGroupSelect
+                  options={availableClassesForTransfer
                     .filter((c) => c.id !== classData.id)
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.branch.name})
-                      </option>
-                    ))}
-                </Select>
+                    .map((c) => ({
+                      id: c.id,
+                      name: c.name,
+                      secondaryLabel: c.branch.name,
+                    }))}
+                  value={targetClassId}
+                  onChange={(val) => setTargetClassId(val ? Number(val) : "")}
+                  placeholder={t("selectTargetClass")}
+                  searchPlaceholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
+                  required
+                />
               </FormField>
 
               <FormField label={t("sessionsToTransferLabel")} required>

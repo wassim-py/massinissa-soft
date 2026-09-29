@@ -330,6 +330,8 @@ model EnrollmentTransfer {
   fromEnrollmentId    Int
   toEnrollmentId      Int
   transferredSessions Int
+  amount              Decimal    @default(0)
+  notes               String?
   transferredAt       DateTime   @default(now())
   transferredBy       String
   fromEnrollment      Enrollment @relation("FromEnrollment", fields: [fromEnrollmentId], references: [id])
@@ -726,7 +728,8 @@ model StaffPayroll {
   staffMemberId Int
   month         Int         // 1-12
   year          Int         // e.g. 2026
-  amount        Decimal
+  amount        Decimal     // base salary
+  bonus         Decimal     @default(0) // prime / bonus cash
   status        String      @default("PAID") // "PAID" | "PENDING"
   paidAt        DateTime?   @default(now())
   notes         String?

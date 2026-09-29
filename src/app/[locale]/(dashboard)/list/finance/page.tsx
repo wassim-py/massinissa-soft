@@ -15,6 +15,7 @@ import {
   Users,
   Wallet,
   Coins,
+  ArrowRightLeft,
 } from "lucide-react";
 
 const DailyRevenueDashboard = dynamic(() => import("@/components/revenue/DailyRevenueDashboard"), {
@@ -37,12 +38,16 @@ const StaffPayrollSection = dynamic(() => import("@/components/finance/StaffPayr
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement du personnel...</div>,
 });
 
+const TransferredMoneySection = dynamic(() => import("@/components/finance/TransferredMoneySection"), {
+  loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement des transferts...</div>,
+});
+
 import { getTranslations, getLocale } from "next-intl/server";
 import { getCaisseNoireSummary } from "@/lib/financeActions";
 
 interface PageProps {
   searchParams: Promise<{
-    section?: "revenue" | "expenses" | "caisseNoire" | "payroll" | "staff";
+    section?: "revenue" | "expenses" | "caisseNoire" | "payroll" | "staff" | "transfers";
     tab?: "runs" | "deductions" | "rates" | "overview" | "payslips" | "photocopy" | "advances";
     dateFrom?: string;
     dateTo?: string;
@@ -84,14 +89,15 @@ export default async function FinancePage(props: PageProps) {
     selectedBranchParam = activeBranchId;
   }
 
-  // Active Section: revenue | expenses | caisseNoire | payroll | staff
-  let activeSection: "revenue" | "expenses" | "caisseNoire" | "payroll" | "staff" = "revenue";
+  // Active Section: revenue | expenses | caisseNoire | payroll | staff | transfers
+  let activeSection: "revenue" | "expenses" | "caisseNoire" | "payroll" | "staff" | "transfers" = "revenue";
   if (
     searchParams.section === "payroll" ||
     searchParams.section === "revenue" ||
     searchParams.section === "expenses" ||
     searchParams.section === "caisseNoire" ||
-    searchParams.section === "staff"
+    searchParams.section === "staff" ||
+    searchParams.section === "transfers"
   ) {
     activeSection = searchParams.section;
   } else if (
@@ -129,7 +135,16 @@ export default async function FinancePage(props: PageProps) {
       orderBy: { name: "asc" },
     }),
     prisma.staffPayroll.findMany({
-      include: { staffMember: { select: { name: true, roleTitle: true } } },
+      include: {
+        staffMember: {
+          select: {
+            name: true,
+            roleTitle: true,
+            phone: true,
+            branch: { select: { name: true } },
+          },
+        },
+      },
       orderBy: [{ year: "desc" }, { month: "desc" }],
     }),
     prisma.branch.findMany({
@@ -165,9 +180,12 @@ export default async function FinancePage(props: PageProps) {
     staffMemberId: p.staffMemberId,
     staffName: p.staffMember.name,
     roleTitle: p.staffMember.roleTitle,
+    phone: p.staffMember.phone,
+    branchName: p.staffMember.branch?.name,
     month: p.month,
     year: p.year,
     amount: Number(p.amount),
+    bonus: Number((p as any).bonus || 0),
     status: p.status,
     paidAt: p.paidAt,
     notes: p.notes,
@@ -176,7 +194,7 @@ export default async function FinancePage(props: PageProps) {
   const totalDailyExpensesSum = formattedExpenses.reduce((sum, e) => sum + e.amount, 0);
   const totalStaffPayrollSum = formattedStaffPayrolls
     .filter((p) => p.status === "PAID")
-    .reduce((sum, p) => sum + p.amount, 0);
+    .reduce((sum, p) => sum + p.amount + p.bonus, 0);
 
   // Top KPIs Revenue data
   const dashboardData = await getDailyRevenueDashboardData({
@@ -291,6 +309,49 @@ export default async function FinancePage(props: PageProps) {
     }
   }
 
+  // Transfers data
+  let formattedTransfers: any[] = [];
+  if (activeSection === "transfers") {
+    const rawTransfers = await prisma.enrollmentTransfer.findMany({
+      include: {
+        fromEnrollment: {
+          include: {
+            student: { select: { id: true, name: true, phone: true } },
+            class: { include: { branch: { select: { id: true, name: true } } } },
+          },
+        },
+        toEnrollment: {
+          include: {
+            student: { select: { id: true, name: true, phone: true } },
+            class: { include: { branch: { select: { id: true, name: true } } } },
+          },
+        },
+      },
+      orderBy: { transferredAt: "desc" },
+    });
+
+    formattedTransfers = rawTransfers.map((tr) => ({
+      id: tr.id,
+      studentId: tr.fromEnrollment?.student?.id || tr.toEnrollment?.student?.id || "",
+      studentName: tr.fromEnrollment?.student?.name || tr.toEnrollment?.student?.name || "—",
+      studentPhone: tr.fromEnrollment?.student?.phone || tr.toEnrollment?.student?.phone || null,
+      fromClassId: tr.fromEnrollment?.class?.id || 0,
+      fromClassName: tr.fromEnrollment?.class?.name || "—",
+      fromBranchId: tr.fromEnrollment?.class?.branch?.id || 0,
+      fromBranchName: tr.fromEnrollment?.class?.branch?.name || "—",
+      toClassId: tr.toEnrollment?.class?.id || 0,
+      toClassName: tr.toEnrollment?.class?.name || "—",
+      toBranchId: tr.toEnrollment?.class?.branch?.id || 0,
+      toBranchName: tr.toEnrollment?.class?.branch?.name || "—",
+      isCrossBranch: (tr.fromEnrollment?.class?.branch?.id || 0) !== (tr.toEnrollment?.class?.branch?.id || 0),
+      transferredSessions: tr.transferredSessions,
+      amount: Number(tr.amount || 0),
+      notes: tr.notes,
+      transferredBy: tr.transferredBy,
+      transferredAt: tr.transferredAt,
+    }));
+  }
+
   const totalRevenueSum = Number(dashboardData?.summary?.grossRevenue || 0);
   const totalTeacherPayrollSum = overviewData?.totalGrossPayroll
     ? Number(overviewData.totalGrossPayroll)
@@ -375,6 +436,17 @@ export default async function FinancePage(props: PageProps) {
           >
             <Wallet className="w-4 h-4 shrink-0" />
             <span>{t("caisseNoireTab")}</span>
+          </Link>
+          <Link
+            href={`/list/finance?section=transfers`}
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+              activeSection === "transfers"
+                ? "bg-primary text-white shadow-xs"
+                : "text-muted hover:text-gray-900 hover:bg-surface"
+            }`}
+          >
+            <ArrowRightLeft className="w-4 h-4 shrink-0" />
+            <span>{t("transfersTab")}</span>
           </Link>
         </div>
       </Card>
@@ -603,6 +675,15 @@ export default async function FinancePage(props: PageProps) {
         <StaffPayrollSection
           staffMembers={formattedStaff}
           payrollLogs={formattedStaffPayrolls}
+          branches={allBranchesData}
+          locale={locale}
+        />
+      )}
+
+      {/* SECTION 6: TRANSFERRED MONEY */}
+      {activeSection === "transfers" && (
+        <TransferredMoneySection
+          transfers={formattedTransfers}
           branches={allBranchesData}
           locale={locale}
         />

@@ -13,6 +13,7 @@ import { Class, Teacher, Classroom } from "@prisma/client";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { FormField, Input, Select } from "@/components/ui/FormField";
+import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
 import { Sparkles, User, CheckCircle2, Calendar } from "lucide-react";
 
 export type Day = "SATURDAY" | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY";
@@ -344,17 +345,24 @@ const LessonForm = ({
           required
           error={errors.classId?.message?.toString()}
         >
-          <Select
+          <input type="hidden" {...register("classId")} />
+          <SearchableGroupSelect
+            options={classes.map((c) => ({
+              id: c.id,
+              name: c.name,
+            }))}
+            value={selectedClassId ? Number(selectedClassId) : ""}
+            onChange={(val) => {
+              setValue("classId", val ? Number(val) : ("" as any), {
+                shouldValidate: true,
+                shouldDirty: true,
+              });
+            }}
+            placeholder={t("selectClass")}
+            searchPlaceholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
             hasError={!!errors.classId}
-            {...register("classId")}
-          >
-            <option value="">{t("selectClass")}</option>
-            {classes.map((c) => (
-              <option value={c.id} key={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
+            required
+          />
         </FormField>
 
         {/* Auto-fetched Head Teacher Display (Read-Only) */}

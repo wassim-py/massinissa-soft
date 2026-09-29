@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
 import { enrollGraduatedStudentsInNewFormation } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
@@ -141,19 +142,17 @@ export default function FinalLevelEnrollmentModal({
                   : "Aucune autre formation active disponible actuellement."}
               </p>
             ) : (
-              <select
+              <SearchableGroupSelect
+                options={availableFormations.map((form) => ({
+                  id: form.id,
+                  name: form.name,
+                  secondaryLabel: form.languageName ? `${form.languageName}${form.price ? ` • ${form.price} DZD` : ""}` : (form.price ? `${form.price} DZD` : undefined),
+                }))}
                 value={selectedClassId || ""}
-                onChange={(e) => setSelectedClassId(Number(e.target.value))}
-                className="w-full px-3 py-2.5 rounded-xl border border-gray-300 text-sm focus:ring-2 focus:ring-primary outline-none bg-white font-medium"
-              >
-                {availableFormations.map((form) => (
-                  <option key={form.id} value={form.id}>
-                    {form.name}{" "}
-                    {form.languageName ? `(${form.languageName})` : ""}{" "}
-                    {form.price ? `• ${form.price} DZD` : ""}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setSelectedClassId(Number(val))}
+                placeholder={locale === "ar" ? "اختر الفوج التكويني" : "Sélectionner la formation"}
+                searchPlaceholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
+              />
             )}
           </div>
 

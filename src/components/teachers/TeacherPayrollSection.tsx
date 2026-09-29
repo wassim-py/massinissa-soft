@@ -186,7 +186,9 @@ export default function TeacherPayrollSection({
             renderRow={(s, idx) => (
               <tr
                 key={idx}
-                className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
+                className={`border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body ${
+                  s.isFree ? "bg-orange-50/50 border-l-4 border-l-orange-500" : ""
+                }`}
               >
                 <td className="p-3.5 text-gray-800 font-medium">
                   {formatDate(s.startsAt)}
@@ -199,7 +201,9 @@ export default function TeacherPayrollSection({
                 </td>
                 <td className="p-3.5 text-center">
                   {s.isFree ? (
-                    <Badge variant="success" size="sm">{t("lessonTypeFree")}</Badge>
+                    <Badge size="sm" className="bg-orange-100 text-orange-800 border-orange-300 font-bold">
+                      {t("lessonTypeFree")}
+                    </Badge>
                   ) : s.isExtra ? (
                     <Badge variant="warning" size="sm">{t("lessonTypeExtra")}</Badge>
                   ) : s.isCatchUp ? (

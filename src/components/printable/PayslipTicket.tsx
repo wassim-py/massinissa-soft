@@ -1,6 +1,21 @@
 import React from 'react';
 import Image from 'next/image';
 
+export interface PayslipSessionItem {
+  lessonId: number;
+  startsAt: string | Date;
+  className: string;
+  branchName: string;
+  presentCount: number;
+  payingCount?: number;
+  sessionPrice?: number;
+  teacherCut?: number;
+  lessonAmount: number;
+  isFree: boolean;
+  isExtra?: boolean;
+  isCatchUp?: boolean;
+}
+
 export interface PayslipPrintData {
   id: number;
   periodStart: string | Date;
@@ -12,6 +27,7 @@ export interface PayslipPrintData {
     phone?: string | null;
   };
   sessionsCount: number;
+  freeSessionsCount?: number;
   grossAmount: number;
   advances: number;
   photocopyDeductions: number;
@@ -20,8 +36,10 @@ export interface PayslipPrintData {
     branchId: number;
     branchName: string;
     sessionsCount: number;
+    freeSessionsCount?: number;
     amount: number;
   }>;
+  sessions?: PayslipSessionItem[];
   photocopyDetails?: Array<{
     branchName: string;
     pages: number;
@@ -61,7 +79,29 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
     }
   };
 
+  const formatDateTime = (d: string | Date) => {
+    try {
+      const dateObj = new Date(d);
+      return `${dateObj.toLocaleDateString('fr-FR', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+      })} ${dateObj.toLocaleTimeString('fr-FR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })}`;
+    } catch {
+      return String(d);
+    }
+  };
+
   const formatDZD = (num: number) => `${Number(num).toLocaleString('fr-FR')} DZD`;
+
+  const allSessions = data.sessions || [];
+  const freeLessons = allSessions.filter((s) => s.isFree);
+  const paidLessons = allSessions.filter((s) => !s.isFree);
+  const totalFreeSessions = data.freeSessionsCount ?? freeLessons.length;
+  const totalPaidSessions = Math.max(0, data.sessionsCount - totalFreeSessions);
 
   return (
     <div style={containerStyle} className="payslip-container">
@@ -109,36 +149,59 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       <div className="mb-6">
         <div className="flex justify-between items-center mb-2">
           <h2 className="text-sm font-bold text-gray-900 flex items-center gap-1">
-            <span>Détail des séances par succursale</span>
+            <span>Synthèse des séances par succursale</span>
             <span className="text-xs font-normal text-gray-500">(Transparence - paiement unique)</span>
           </h2>
-          <span className="text-xs text-blue-700 font-semibold bg-blue-50 px-2 py-0.5 rounded">
-            Total séances : {data.sessionsCount} (y compris gratuites)
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-blue-700 font-semibold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+              Total séances : {data.sessionsCount}
+            </span>
+            {totalFreeSessions > 0 && (
+              <span className="text-xs text-orange-800 font-bold bg-orange-100 px-2 py-0.5 rounded border border-orange-300">
+                Dont {totalFreeSessions} séance{totalFreeSessions > 1 ? 's' : ''} gratuite{totalFreeSessions > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
         </div>
 
         <table className="w-full border-collapse text-xs text-left">
           <thead>
             <tr className="bg-gray-100 border border-gray-300 text-gray-700">
               <th className="p-2 border border-gray-300 font-bold">Branche</th>
-              <th className="p-2 border border-gray-300 font-bold text-center">Séances effectuées</th>
+              <th className="p-2 border border-gray-300 font-bold text-center">Séances rémunérées</th>
+              <th className="p-2 border border-gray-300 font-bold text-center text-orange-900 bg-orange-50/70">Séances gratuites</th>
+              <th className="p-2 border border-gray-300 font-bold text-center">Total séances</th>
               <th className="p-2 border border-gray-300 font-bold text-right">Montant calculé</th>
             </tr>
           </thead>
           <tbody>
             {data.branchLines && data.branchLines.length > 0 ? (
-              data.branchLines.map((line) => (
-                <tr key={line.branchId} className="border border-gray-200">
-                  <td className="p-2 border border-gray-200 font-semibold">{line.branchName}</td>
-                  <td className="p-2 border border-gray-200 text-center font-mono">{line.sessionsCount}</td>
-                  <td className="p-2 border border-gray-200 font-mono font-bold text-right">
-                    {formatDZD(Number(line.amount))}
-                  </td>
-                </tr>
-              ))
+              data.branchLines.map((line) => {
+                const branchFree = line.freeSessionsCount ?? 0;
+                const branchPaid = Math.max(0, line.sessionsCount - branchFree);
+                return (
+                  <tr key={line.branchId} className="border border-gray-200">
+                    <td className="p-2 border border-gray-200 font-semibold">{line.branchName}</td>
+                    <td className="p-2 border border-gray-200 text-center font-mono">{branchPaid}</td>
+                    <td className="p-2 border border-gray-200 text-center font-mono bg-orange-50/30">
+                      {branchFree > 0 ? (
+                        <span className="inline-block bg-orange-100 text-orange-800 font-bold px-2 py-0.5 rounded text-[11px] border border-orange-200">
+                          {branchFree}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">0</span>
+                      )}
+                    </td>
+                    <td className="p-2 border border-gray-200 text-center font-mono font-bold">{line.sessionsCount}</td>
+                    <td className="p-2 border border-gray-200 font-mono font-bold text-right">
+                      {formatDZD(Number(line.amount))}
+                    </td>
+                  </tr>
+                );
+              })
             ) : (
               <tr>
-                <td colSpan={3} className="p-3 text-center text-gray-500 border border-gray-200">
+                <td colSpan={5} className="p-3 text-center text-gray-500 border border-gray-200">
                   Aucune séance enregistrée
                 </td>
               </tr>
@@ -146,7 +209,11 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           </tbody>
           <tfoot>
             <tr className="bg-gray-50 font-bold border border-gray-300">
-              <td className="p-2 border border-gray-300">Total brut des séances</td>
+              <td className="p-2 border border-gray-300">Total général</td>
+              <td className="p-2 border border-gray-300 text-center font-mono">{totalPaidSessions}</td>
+              <td className="p-2 border border-gray-300 text-center font-mono text-orange-900 bg-orange-50/70 font-black">
+                {totalFreeSessions}
+              </td>
               <td className="p-2 border border-gray-300 text-center font-mono">{data.sessionsCount}</td>
               <td className="p-2 border border-gray-300 font-mono text-blue-900 text-right">
                 {formatDZD(Number(data.grossAmount))}
@@ -156,7 +223,152 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </table>
       </div>
 
-      {/* Section 2: Detailed Deductions (Photocopy & Advances) */}
+      {/* Section 2: Detailed Paid Lessons Breakdown */}
+      {paidLessons.length > 0 && (
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+              <span>Détail des séances d&apos;enseignement rémunérées</span>
+            </h2>
+            <span className="text-xs text-gray-600 font-semibold bg-gray-100 px-2 py-0.5 rounded border border-gray-200">
+              {paidLessons.length} séance{paidLessons.length > 1 ? 's' : ''} payante{paidLessons.length > 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <table className="w-full border-collapse text-xs text-left">
+            <thead>
+              <tr className="bg-gray-100 border border-gray-300 text-gray-700">
+                <th className="p-2 border border-gray-300 font-bold">Date & Heure</th>
+                <th className="p-2 border border-gray-300 font-bold">Classe / Groupe</th>
+                <th className="p-2 border border-gray-300 font-bold">Branche</th>
+                <th className="p-2 border border-gray-300 font-bold text-center">Type</th>
+                <th className="p-2 border border-gray-300 font-bold text-center">Présents</th>
+                <th className="p-2 border border-gray-300 font-bold text-right">Part ens.</th>
+                <th className="p-2 border border-gray-300 font-bold text-right">Montant</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paidLessons.map((l, idx) => (
+                <tr key={l.lessonId || idx} className="border border-gray-200 hover:bg-gray-50/50">
+                  <td className="p-1.5 border border-gray-200 font-mono text-[11px] text-gray-800">
+                    {formatDateTime(l.startsAt)}
+                  </td>
+                  <td className="p-1.5 border border-gray-200 font-semibold text-gray-900">{l.className}</td>
+                  <td className="p-1.5 border border-gray-200 text-gray-600">{l.branchName}</td>
+                  <td className="p-1.5 border border-gray-200 text-center">
+                    {l.isExtra ? (
+                      <span className="bg-purple-100 text-purple-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Supplémentaire</span>
+                    ) : l.isCatchUp ? (
+                      <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Rattrapage</span>
+                    ) : (
+                      <span className="bg-blue-50 text-blue-800 text-[10px] font-medium px-1.5 py-0.5 rounded">Normale</span>
+                    )}
+                  </td>
+                  <td className="p-1.5 border border-gray-200 text-center font-mono font-bold text-blue-900">
+                    {l.presentCount}
+                  </td>
+                  <td className="p-1.5 border border-gray-200 text-right font-mono text-gray-600">
+                    {formatDZD(Number(l.teacherCut || 0))}
+                  </td>
+                  <td className="p-1.5 border border-gray-200 text-right font-mono font-bold text-emerald-800">
+                    {formatDZD(Number(l.lessonAmount || 0))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-50 font-bold border border-gray-300">
+                <td colSpan={4} className="p-2 border border-gray-300">Total séances payantes</td>
+                <td className="p-2 border border-gray-300 text-center font-mono">{paidLessons.length}</td>
+                <td className="p-2 border border-gray-300 text-right font-mono">-</td>
+                <td className="p-2 border border-gray-300 text-right font-mono text-blue-900 font-bold">
+                  {formatDZD(Number(data.grossAmount))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      {/* Section 3: SEPARATED FREE LESSONS (Highlighted in ORANGE) */}
+      <div className="mb-6 border-2 border-orange-400 bg-orange-50/40 rounded-lg p-3.5 shadow-2xs">
+        <div className="flex justify-between items-center bg-orange-500 text-white font-bold px-3 py-2 rounded-md mb-2.5 shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-black uppercase tracking-wider">
+              Séances gratuites dispensées (Non facturées aux élèves)
+            </span>
+          </div>
+          <span className="bg-white text-orange-950 font-black px-2.5 py-0.5 text-xs rounded-full shadow-2xs">
+            {totalFreeSessions} séance{totalFreeSessions > 1 ? 's' : ''} gratuite{totalFreeSessions > 1 ? 's' : ''}
+          </span>
+        </div>
+
+        <p className="text-[11px] text-orange-900 mb-2.5 font-medium">
+          Note explicative : Ces séances ont été dispensées à titre gratuit. Elles sont présentées séparément des séances régulières payantes et ne débitent aucun crédit d&apos;heures sur les fiches des élèves.
+        </p>
+
+        {freeLessons.length > 0 ? (
+          <table className="w-full border-collapse text-xs text-left bg-white rounded border border-orange-300 overflow-hidden">
+            <thead>
+              <tr className="bg-orange-100 border-b border-orange-300 text-orange-950 font-bold">
+                <th className="p-2 border-r border-orange-300">Date & Heure</th>
+                <th className="p-2 border-r border-orange-300">Classe / Groupe</th>
+                <th className="p-2 border-r border-orange-300">Branche</th>
+                <th className="p-2 border-r border-orange-300 text-center">Type de séance</th>
+                <th className="p-2 border-r border-orange-300 text-center">Élèves présents</th>
+                <th className="p-2 text-right">Impact comptable élève</th>
+              </tr>
+            </thead>
+            <tbody>
+              {freeLessons.map((fl, idx) => (
+                <tr key={fl.lessonId || idx} className="border-b border-orange-200 bg-orange-50/50 hover:bg-orange-100/50">
+                  <td className="p-2 border-r border-orange-200 font-mono text-[11px] text-gray-800">
+                    {formatDateTime(fl.startsAt)}
+                  </td>
+                  <td className="p-2 border-r border-orange-200 font-bold text-gray-900">
+                    {fl.className}
+                  </td>
+                  <td className="p-2 border-r border-orange-200 text-gray-700">
+                    {fl.branchName}
+                  </td>
+                  <td className="p-2 border-r border-orange-200 text-center">
+                    <span className="inline-block bg-orange-600 text-white font-bold text-[10px] px-2 py-0.5 rounded shadow-2xs">
+                      Séance Gratuite
+                    </span>
+                  </td>
+                  <td className="p-2 border-r border-orange-200 text-center font-mono font-bold text-orange-950">
+                    {fl.presentCount} présent{fl.presentCount > 1 ? 's' : ''}
+                  </td>
+                  <td className="p-2 text-right font-semibold text-orange-800 text-[11px]">
+                    0 crédit débité (Gratuit)
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-orange-100/90 font-bold border-t border-orange-300 text-orange-950">
+                <td colSpan={4} className="p-2 border-r border-orange-300">
+                  Total des séances gratuites effectuées
+                </td>
+                <td className="p-2 text-center font-mono font-black text-orange-900">
+                  {freeLessons.length}
+                </td>
+                <td className="p-2 text-right text-orange-900 font-semibold">
+                  Non facturé aux élèves
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        ) : (
+          <div className="bg-orange-100/60 border border-orange-300 text-orange-900 p-2.5 rounded text-center text-xs font-semibold">
+            {totalFreeSessions > 0
+              ? `${totalFreeSessions} séance(s) gratuite(s) enregistrée(s) pour cette période comptable.`
+              : "Aucune séance gratuite dispensée durant cette période comptable."}
+          </div>
+        )}
+      </div>
+
+      {/* Section 4: Detailed Deductions (Photocopy & Advances) */}
       {data.photocopyDetails && data.photocopyDetails.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-bold text-gray-700 mb-2">
@@ -187,7 +399,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </div>
       )}
 
-      {/* Section 3: Final Consolidated Net Calculation */}
+      {/* Section 5: Final Consolidated Net Calculation */}
       <div className="border-2 border-gray-900 rounded-lg p-4 bg-gray-50 mb-6">
         <h2 className="text-sm font-bold text-gray-900 mb-3 border-b border-gray-300 pb-1">
           Calcul du Net à Payer :

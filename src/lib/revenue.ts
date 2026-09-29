@@ -546,6 +546,22 @@ export interface DailyBranchLedgerData {
     issuedBy: string;
     isPartial: boolean;
   }>;
+  todayTransfers: Array<{
+    id: number;
+    studentName: string;
+    fromClassName: string;
+    fromBranchName: string;
+    toClassName: string;
+    toBranchName: string;
+    transferredSessions: number;
+    amount: number;
+    transferredBy: string;
+    transferredAt: Date;
+    direction: "IN" | "OUT" | "INTERNAL";
+    notes: string | null;
+  }>;
+  transfersInTotal: number;
+  transfersOutTotal: number;
 }
 
 /**
@@ -568,7 +584,7 @@ export async function getDailyBranchLedgerData(
   const endOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
 
   // Reads from the same ledger data as §1.1's revenue dashboard, just filtered to one day and one branch
-  const [ledgerRows, missingRecords, surplusRecords, todayVouchers] = await Promise.all([
+  const [ledgerRows, missingRecords, surplusRecords, todayVouchers, todayTransfers] = await Promise.all([
     prisma.dailyLedger.findMany({
       where: {
         branchId,
@@ -601,6 +617,30 @@ export async function getDailyBranchLedgerData(
         workshop: { select: { title: true } },
       },
       orderBy: { issuedAt: "desc" },
+    }),
+    prisma.enrollmentTransfer.findMany({
+      where: {
+        transferredAt: { gte: startOfDay, lte: endOfDay },
+        OR: [
+          { fromEnrollment: { class: { branchId } } },
+          { toEnrollment: { class: { branchId } } },
+        ],
+      },
+      include: {
+        fromEnrollment: {
+          include: {
+            student: { select: { name: true } },
+            class: { include: { branch: { select: { id: true, name: true } } } },
+          },
+        },
+        toEnrollment: {
+          include: {
+            student: { select: { name: true } },
+            class: { include: { branch: { select: { id: true, name: true } } } },
+          },
+        },
+      },
+      orderBy: { transferredAt: "desc" },
     }),
   ]);
 
@@ -688,6 +728,43 @@ export async function getDailyBranchLedgerData(
       issuedBy: v.issuedBy,
       isPartial: v.isPartial,
     })),
+    todayTransfers: (() => {
+      let inTotal = 0;
+      let outTotal = 0;
+      return (todayTransfers || []).map((t) => {
+        const fromBId = t.fromEnrollment.class.branch.id;
+        const toBId = t.toEnrollment.class.branch.id;
+        let direction: "IN" | "OUT" | "INTERNAL" = "INTERNAL";
+        const amt = Number(t.amount || 0);
+
+        if (fromBId === branchId && toBId !== branchId) {
+          direction = "OUT";
+        } else if (toBId === branchId && fromBId !== branchId) {
+          direction = "IN";
+        }
+
+        return {
+          id: t.id,
+          studentName: t.fromEnrollment.student.name || t.toEnrollment.student.name || "—",
+          fromClassName: t.fromEnrollment.class.name,
+          fromBranchName: t.fromEnrollment.class.branch.name,
+          toClassName: t.toEnrollment.class.name,
+          toBranchName: t.toEnrollment.class.branch.name,
+          transferredSessions: t.transferredSessions,
+          amount: amt,
+          transferredBy: t.transferredBy,
+          transferredAt: t.transferredAt,
+          direction,
+          notes: t.notes,
+        };
+      });
+    })(),
+    transfersInTotal: (todayTransfers || [])
+      .filter((t) => t.toEnrollment.class.branch.id === branchId && t.fromEnrollment.class.branch.id !== branchId)
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0),
+    transfersOutTotal: (todayTransfers || [])
+      .filter((t) => t.fromEnrollment.class.branch.id === branchId && t.toEnrollment.class.branch.id !== branchId)
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0),
   };
 }
 

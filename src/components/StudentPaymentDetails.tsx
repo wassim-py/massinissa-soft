@@ -13,6 +13,7 @@ import { toast } from "react-toastify";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
 import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
@@ -927,20 +928,20 @@ export default function StudentPaymentDetails({
 
               <div>
                 <label className="font-semibold block mb-1">{t("modalTransferTargetClass")}</label>
-                <select
-                  value={targetClassId}
-                  onChange={(e) => setTargetClassId(Number(e.target.value))}
-                  className="w-full border border-border rounded p-2 text-xs bg-white"
-                >
-                  <option value="">{t("modalTransferSelectPlaceholder")}</option>
-                  {availableClassesForTransfer
+                <SearchableGroupSelect
+                  options={availableClassesForTransfer
                     .filter((c) => c.id !== transferModal.enrollment?.classId)
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.branch.name})
-                      </option>
-                    ))}
-                </select>
+                    .map((c) => ({
+                      id: c.id,
+                      name: c.name,
+                      secondaryLabel: c.branch.name,
+                    }))}
+                  value={targetClassId}
+                  onChange={(val) => setTargetClassId(val ? Number(val) : "")}
+                  placeholder={t("modalTransferSelectPlaceholder")}
+                  searchPlaceholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
+                  buttonClassName="text-xs p-2 min-h-[38px]"
+                />
               </div>
 
               <div>
