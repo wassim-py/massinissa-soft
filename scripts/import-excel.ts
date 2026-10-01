@@ -333,15 +333,16 @@ async function main() {
 
       // Inscription vouchers
       for (const v of student.inscriptionVouchers) {
+        const vNumber = getValidVoucherNumber(v.number, seriesKey, seriesMaxNumber);
         const exists = await prisma.voucher.findFirst({
-          where: { studentId, classId: cls.id, paymentType: 'INSCRIPTION', number: v.number, seriesId },
+          where: { studentId, classId: cls.id, paymentType: 'INSCRIPTION', number: vNumber, seriesId },
         });
         if (!exists) {
           await createVoucher({
             studentId,
             classId: cls.id,
             seriesId,
-            number: v.number,
+            number: vNumber,
             amount: v.amount || INSCRIPTION_AMOUNT,
             paymentType: 'INSCRIPTION',
             issuingBranchId: group.branchId,
@@ -349,21 +350,22 @@ async function main() {
             issuedAt: v.date,
           });
           createdVouchers++;
-          updateSeriesMax(seriesMaxNumber, seriesKey, v.number);
+          updateSeriesMax(seriesMaxNumber, seriesKey, vNumber);
         }
       }
 
       // Tuition vouchers
       for (const v of student.tuitionVouchers) {
+        const vNumber = getValidVoucherNumber(v.number, seriesKey, seriesMaxNumber);
         const exists = await prisma.voucher.findFirst({
-          where: { studentId, classId: cls.id, paymentType: 'TUITION_4SESSION', number: v.number, seriesId },
+          where: { studentId, classId: cls.id, paymentType: 'TUITION_4SESSION', number: vNumber, seriesId },
         });
         if (!exists) {
           await createVoucher({
             studentId,
             classId: cls.id,
             seriesId,
-            number: v.number,
+            number: vNumber,
             amount: v.amount,
             paymentType: 'TUITION_4SESSION',
             issuingBranchId: group.branchId,
@@ -371,19 +373,20 @@ async function main() {
             issuedAt: v.date,
           });
           createdVouchers++;
-          updateSeriesMax(seriesMaxNumber, seriesKey, v.number);
+          updateSeriesMax(seriesMaxNumber, seriesKey, vNumber);
         }
       }
 
       // Book vouchers
       for (const bv of student.bookVouchers) {
         const trimId = TRIMESTER_IDS[bv.trimNum];
+        const vNumber = getValidVoucherNumber(bv.voucher.number, seriesKey, seriesMaxNumber);
         const exists = await prisma.voucher.findFirst({
           where: {
             studentId,
             classId: cls.id,
             paymentType: 'BOOK',
-            number: bv.voucher.number,
+            number: vNumber,
             seriesId,
             trimesterId: trimId,
           },
@@ -393,7 +396,7 @@ async function main() {
             studentId,
             classId: cls.id,
             seriesId,
-            number: bv.voucher.number,
+            number: vNumber,
             amount: bv.voucher.amount,
             paymentType: 'BOOK',
             issuingBranchId: group.branchId,
@@ -403,7 +406,7 @@ async function main() {
           });
           createdBookVouchers++;
           createdVouchers++;
-          updateSeriesMax(seriesMaxNumber, seriesKey, bv.voucher.number);
+          updateSeriesMax(seriesMaxNumber, seriesKey, vNumber);
         }
       }
     }
@@ -521,6 +524,9 @@ async function parseExcelFile(
 
   for (const sheet of workbook.worksheets) {
     const levelName = sheet.name.trim();
+    if (levelName.includes('READ ME') || levelName.startsWith('📖') || levelName.toLowerCase().startsWith('read')) {
+      continue;
+    }
     console.log(`   Sheet: "${levelName}"`);
 
     const sheetGroups = parseSheet(sheet, levelName, branchId, errors);
@@ -569,8 +575,9 @@ function parseSheet(
     const { students, nextRow } = parseStudentRows(rows, headerIdx + 1, colMap, errors, levelName);
 
     if (students.length > 0) {
-      groups.push({ groupName, levelName, branchId, students });
-      console.log(`     Group: "${groupName}" → ${students.length} students`);
+      const hasBooks = colMap.bookCols.length > 0 || students.some((s) => s.bookVouchers.length > 0);
+      groups.push({ groupName, levelName, branchId, hasBooks, students });
+      console.log(`     Group: "${groupName}" → ${students.length} students${hasBooks ? ' 📚 (hasBooks)' : ''}`);
     }
 
     i = Math.max(headerIdx + 1, nextRow);
@@ -676,14 +683,36 @@ function parseStudentRows(
     // Name comes from the top row (merged cell spans both rows)
     const rawName = topRow[colMap.nameCol]?.trim() ?? '';
 
-    // If no name or empty row, the table has ended (handles 1, 2, or more empty rows)
+    // If no name, check if there are further students in this table before the next table header or banner
     if (!rawName) {
-      break;
+      let hasMoreStudents = false;
+      for (let scan = i + 1; scan < rows.length; scan++) {
+        const scanRow = rows[scan] || [];
+        if (isHeaderRow(scanRow)) break;
+        if (scan + 1 < rows.length && isHeaderRow(rows[scan + 1])) break;
+        if (scan + 2 < rows.length && isHeaderRow(rows[scan + 2])) {
+          if (!scanRow[colMap.nameCol]?.trim()) break;
+        }
+        if (scanRow[colMap.nameCol]?.trim()) {
+          hasMoreStudents = true;
+          break;
+        }
+      }
+
+      if (!hasMoreStudents) {
+        break; // Truly ended
+      }
+
+      i++;
+      continue;
     }
 
-    // Parse phones
+    const cleanName = rawName.replace(/\s+/g, ' ').trim();
+
+    // Parse phones (from top or bottom row)
+    const phoneRaw = topRow[colMap.phoneCol] || bottomRow[colMap.phoneCol];
     const phones = colMap.phoneCol >= 0
-      ? parsePhoneCell(topRow[colMap.phoneCol])
+      ? parsePhoneCell(phoneRaw)
       : [];
 
     // Parse inscription voucher
@@ -691,7 +720,7 @@ function parseStudentRows(
     if (colMap.inscriptionCol >= 0) {
       const amtRaw = topRow[colMap.inscriptionCol];
       const bonRaw = bottomRow[colMap.inscriptionCol];
-      const parsed = parsePaymentCell(amtRaw, bonRaw);
+      const parsed = parsePaymentCell(amtRaw, bonRaw, INSCRIPTION_AMOUNT);
       inscriptionVouchers.push(...parsed);
     }
 
@@ -703,9 +732,15 @@ function parseStudentRows(
       if (!amtRaw && !bonRaw) continue;
       const parsed = parsePaymentCell(amtRaw, bonRaw);
       if (parsed.length === 0 && (amtRaw || bonRaw)) {
-        errors.push(
-          `Sheet "${sheetName}", row ${i + 1}: Could not parse cell amt="${amtRaw}" bon="${bonRaw}"`
-        );
+        const isNote =
+          /حول|تحويل|مجاني|مجانية|مسلك|RMB/i.test(String(amtRaw)) ||
+          /حول|تحويل|RMB/i.test(String(bonRaw)) ||
+          (amtRaw === '0' && (bonRaw === '0' || !bonRaw));
+        if (!isNote) {
+          errors.push(
+            `Sheet "${sheetName}", row ${i + 1}: Could not parse cell amt="${amtRaw}" bon="${bonRaw}"`
+          );
+        }
       }
       tuitionVouchers.push(...parsed);
     }
@@ -728,7 +763,7 @@ function parseStudentRows(
     }
 
     students.push({
-      name: rawName,
+      name: cleanName,
       phones,
       inscriptionVouchers,
       tuitionVouchers,
@@ -808,6 +843,14 @@ function matchClass(
     }
   }
 
+  // Cross-branch fallback: exact name match in another branch
+  for (const [key, cls] of classLookup.entries()) {
+    const normClass = normalizeArabic(cls.name);
+    if (normClass === normGroup) {
+      return cls;
+    }
+  }
+
   return null;
 }
 
@@ -871,6 +914,13 @@ async function createVoucher(opts: {
 function updateSeriesMax(map: Map<string, number>, key: string, num: number) {
   const prev = map.get(key) ?? 0;
   if (num > prev) map.set(key, num);
+}
+
+function getValidVoucherNumber(num: number, seriesKey: string, seriesMaxNumber: Map<string, number>): number {
+  if (num > 0) return num;
+  const nextNum = (seriesMaxNumber.get(seriesKey) ?? 0) + 1;
+  seriesMaxNumber.set(seriesKey, nextNum);
+  return nextNum;
 }
 
 // ── Utility helpers ─────────────────────────────────────────────────

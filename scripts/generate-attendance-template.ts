@@ -56,15 +56,17 @@ async function main() {
 
   const branchFilter = (() => {
     const idx = process.argv.indexOf('--branch');
-    return idx >= 0 ? parseInt(process.argv[idx + 1], 10) : 1; // Default to branch 1 (ECOLE)
+    if (idx < 0) return null; // null = all branches
+    const val = process.argv[idx + 1];
+    return val === 'all' ? null : parseInt(val, 10);
   })();
 
-  console.log(`\n📋 Generating attendance grid templates (Branch ${branchFilter})...\n`);
+  console.log(`\n📋 Generating attendance grid templates ${branchFilter ? `(Branch ${branchFilter})` : '(All Branches)'}...\n`);
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
   const classes = await prisma.class.findMany({
     where: {
-      branchId: branchFilter,
+      ...(branchFilter ? { branchId: branchFilter } : {}),
       ...(classFilter ? { id: classFilter } : {}),
     },
     include: {

@@ -606,20 +606,20 @@ export const updateStudent = async (
   }
   try {
     const session = await getAuthSession();
+    if (!session.isOwner && !session.isBranchAdmin && !session.isOwnerOrAdmin && !session.can("update", "students")) {
+      return { success: false, error: true, message: "Non autorisé à modifier cet élève / غير مصرح لك بتعديل بيانات هذا التلميذ." };
+    }
+
     const existing = await prisma.$queryRaw<Array<{ registeredBranchId: number }>>`
       SELECT "registeredBranchId" FROM "Student" WHERE id = ${data.id} LIMIT 1
     `;
-    if (existing.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, existing[0].registeredBranchId)) {
-      return { success: false, error: true, message: "Non autorisé à modifier cet élève / غير مصرح لك بتعديل بيانات تلميذ في هذا الفرع." };
+    if (existing.length === 0) {
+      return { success: false, error: true, message: "Élève introuvable / التلميذ غير موجود." };
     }
 
     const fullName = [data.surname, data.name].filter(Boolean).join(" ").trim();
     const phone = data.phone?.trim() || null;
-    const branchId = (data as any).registeredBranchId || (existing.length > 0 ? existing[0].registeredBranchId : 1);
-
-    if (!canUserAccessBranch(session.rawRole, session.branchIds, branchId)) {
-      return { success: false, error: true, message: "Non autorisé à transférer l'élève vers cette succursale / غير مصرح لك بنقل التلميذ إلى هذا الفرع." };
-    }
+    const branchId = (data as any).registeredBranchId || existing[0].registeredBranchId;
 
     await prisma.$executeRaw`
       UPDATE "Student"
@@ -669,6 +669,7 @@ export const updateStudent = async (
 
     try {
       safeRevalidatePath("/list/students");
+      safeRevalidatePath(`/list/students/${data.id}`);
     } catch {
       // Intentionally tolerated outside Next.js request context
     }
@@ -5565,11 +5566,11 @@ export async function updateStudentPayerStatusAction(
       };
     }
 
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, student.registeredBranchId)) {
+    if (!session.isOwner && !session.isBranchAdmin && !session.isOwnerOrAdmin) {
       return {
         success: false,
         error: true,
-        message: "Non autorisé pour cette branche / غير مصرح لك بتعديل تلاميذ هذا الفرع",
+        message: "Non autorisé / غير مصرح لك بتعديل حالة الدفع لهذا التلميذ",
       };
     }
 
@@ -5677,11 +5678,11 @@ export async function updateEnrollmentPayerStatusAction(
     }
 
     const branchId = enrollment.class.branchId;
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, branchId)) {
+    if (!session.isOwner && !session.isBranchAdmin && !session.isOwnerOrAdmin) {
       return {
         success: false,
         error: true,
-        message: "Non autorisé pour cette branche / غير مصرح لك بتعديل أفواج هذا الفرع",
+        message: "Non autorisé / غير مصرح لك بتعديل أفواج هذا الفرع",
       };
     }
 

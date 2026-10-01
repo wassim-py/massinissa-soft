@@ -167,7 +167,7 @@ const SingleStudentPage = async (
     );
 
     const canEditStatus = Boolean(
-      session.isOwner || canUserAccessBranch(session.rawRole, session.branchIds, s.registeredBranchId)
+      session.isOwner || session.isBranchAdmin || session.isOwnerOrAdmin
     );
 
     // Group metrics & remaining session count per enrolled group across all branches (§1.0 & Rule 3)
@@ -343,6 +343,7 @@ const SingleStudentPage = async (
       parent: s.familyId ? { name: t("familyPrefix", { id: s.familyId }), surname: "" } : null,
       classes: sortedGroupSummaries.map((g) => ({ id: g.classId, name: g.className })),
       gradeId: studentLevelId || undefined,
+      registeredBranchId: s.registeredBranchId,
     };
 
     const upcomingLessonColumns: Column[] = [
