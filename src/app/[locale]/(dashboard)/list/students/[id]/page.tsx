@@ -102,8 +102,30 @@ const SingleStudentPage = async (
                   },
                 },
               },
-              transfersFrom: true,
-              transfersTo: true,
+              transfersFrom: {
+                include: {
+                  toEnrollment: {
+                    include: {
+                      class: {
+                        include: { branch: true },
+                      },
+                    },
+                  },
+                },
+                orderBy: { transferredAt: "desc" },
+              },
+              transfersTo: {
+                include: {
+                  fromEnrollment: {
+                    include: {
+                      class: {
+                        include: { branch: true },
+                      },
+                    },
+                  },
+                },
+                orderBy: { transferredAt: "desc" },
+              },
             },
             orderBy: { enrolledAt: "asc" },
           },
@@ -235,6 +257,7 @@ const SingleStudentPage = async (
         isSiblingWaived,
         isNonPayer: enrStatus === "NON_PAYER",
         payerStatus: enrStatus,
+        status: (enr as any).status || "ACTIVE",
         studentSessionFee: feeCalc.studentSessionFee,
         studentCycleFee: feeCalc.studentCycleFee,
         schoolPercentage: feeCalc.schoolPercentage,
@@ -242,10 +265,14 @@ const SingleStudentPage = async (
       };
     });
 
+    // Separate active and transferred/unenrolled groups
+    const activeGroupSummaries = groupSummaries.filter((g) => g.status === "ACTIVE");
+    const inactiveGroupSummaries = groupSummaries.filter((g) => g.status !== "ACTIVE");
+
     // SORTING RULE (§1.0 / Payment-Renewal Signal - Rule 4):
-    // Groups where the student has only 1 session left appear FIRST, above every other group on this page!
+    // Active groups with 1 session left appear FIRST.
     // Secondary sort: exhausted/unpaid (<= 0), then paid (> 1), then by class name.
-    const sortedGroupSummaries = [...groupSummaries].sort((a, b) => {
+    const sortedActiveGroupSummaries = [...activeGroupSummaries].sort((a, b) => {
       const aIsOne = a.netSessions === 1;
       const bIsOne = b.netSessions === 1;
       if (aIsOne && !bIsOne) return -1;
@@ -257,9 +284,13 @@ const SingleStudentPage = async (
       return a.className.localeCompare(b.className);
     });
 
-    const expiringGroupsCount = sortedGroupSummaries.filter((g) => g.netSessions === 1).length;
+    const sortedGroupSummaries = [...sortedActiveGroupSummaries, ...inactiveGroupSummaries];
 
-    const classIds = (studentPaymentData?.enrollments || []).map((e) => e.classId);
+    const expiringGroupsCount = sortedActiveGroupSummaries.filter((g) => g.netSessions === 1).length;
+
+    const classIds = (studentPaymentData?.enrollments || [])
+      .filter((e) => (e as any).status === "ACTIVE" || !(e as any).status)
+      .map((e) => e.classId);
 
     // UPCOMING LESSONS ACROSS THE WHOLE SCHOOL (§1.0 - Rule 2):
     // Queries lessons in any enrolled group across all 3 branches starting from now
@@ -337,11 +368,12 @@ const SingleStudentPage = async (
       name: s.name,
       surname: "",
       phone: s.phone || t("notAvailable"),
-      address: t("branchPrefix", { branch: s.branchName || s.registeredBranchId || "ECOLE" }),
+      address: s.address || t("branchPrefix", { branch: s.branchName || s.registeredBranchId || "ECOLE" }),
       parentPhoneNumbers,
-      birthday: new Date(2008, 0, 1),
+      birthday: s.birthday ? new Date(s.birthday) : new Date(2008, 0, 1),
+      sex: s.sex || "MALE",
       parent: s.familyId ? { name: t("familyPrefix", { id: s.familyId }), surname: "" } : null,
-      classes: sortedGroupSummaries.map((g) => ({ id: g.classId, name: g.className })),
+      classes: sortedActiveGroupSummaries.map((g) => ({ id: g.classId, name: g.className })),
       gradeId: studentLevelId || undefined,
       registeredBranchId: s.registeredBranchId,
     };
@@ -524,7 +556,7 @@ const SingleStudentPage = async (
                     </h2>
                   </div>
                   <Badge variant="primary" size="sm">
-                    {t("enrolledGroupsCount", { count: sortedGroupSummaries.length })}
+                    {t("enrolledGroupsCount", { count: sortedActiveGroupSummaries.length })}
                   </Badge>
                 </div>
                 <p className="text-[11px] text-muted mb-3">
@@ -534,15 +566,19 @@ const SingleStudentPage = async (
                 <div className="space-y-2 max-h-[190px] overflow-y-auto pe-1">
                   {sortedGroupSummaries.length > 0 ? (
                     sortedGroupSummaries.map((g) => {
-                      const isOne = g.netSessions === 1;
-                      const isUnpaid = g.netSessions <= 0;
-                      const isPaid = g.netSessions > 1;
+                      const isTransferred = g.status === "TRANSFERRED";
+                      const isUnenrolled = g.status === "UNENROLLED";
+                      const isOne = g.status === "ACTIVE" && g.netSessions === 1;
+                      const isUnpaid = g.status === "ACTIVE" && g.netSessions <= 0;
+                      const isPaid = g.status === "ACTIVE" && g.netSessions > 1;
 
                       return (
                         <div
                           key={g.enrollmentId}
                           className={`p-2.5 rounded-lg border transition-all flex items-center justify-between gap-2 text-xs ${
-                            isOne
+                            isTransferred || isUnenrolled
+                              ? "border-dashed border-gray-300 bg-gray-50/60 opacity-80"
+                              : isOne
                               ? "border-amber-400 bg-amber-50/70 ring-1 ring-amber-300"
                               : isUnpaid
                               ? "border-red-200 bg-red-50/40"
@@ -579,9 +615,17 @@ const SingleStudentPage = async (
                             )}
                           </div>
 
-                          {/* Status badge with distinct visual flag for 1-session left */}
+                          {/* Status badge with distinct visual flag for 1-session left / transferred */}
                           <div className="shrink-0 flex items-center gap-1.5">
-                            {isOne ? (
+                            {isTransferred ? (
+                              <Badge variant="secondary" size="sm" withDot>
+                                {locale === "ar" ? "رصيد منقول" : "Transféré"}
+                              </Badge>
+                            ) : isUnenrolled ? (
+                              <Badge variant="neutral" size="sm" withDot>
+                                {locale === "ar" ? "ملغى التسجيل" : "Désinscrit"}
+                              </Badge>
+                            ) : isOne ? (
                               <Badge variant="warning" size="sm" withDot className="font-bold shadow-xs">
                                 {t("statusOneSessionLeft")}
                               </Badge>

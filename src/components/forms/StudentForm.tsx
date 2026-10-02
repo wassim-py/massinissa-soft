@@ -15,17 +15,19 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { getStudentSchema, StudentSchema } from "@/lib/formValidationSchemas";
-import { createStudent, updateStudent } from "@/lib/actions";
+import { createStudent, updateStudent, checkStudentDuplicateAction } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
 import { Button } from "@/components/ui/Button";
-import { X, Search } from "lucide-react";
+import { X, Search, AlertTriangle, CreditCard, UserCheck, ShieldAlert } from "lucide-react";
 import { splitFullName } from "@/lib/utils";
+import { Badge } from "@/components/ui/Badge";
 
 type FormState = {
   success: boolean;
   error: boolean;
-  message?: string;
+  message: string;
+  student?: any;
 };
 
 const StudentForm = ({
@@ -34,12 +36,14 @@ const StudentForm = ({
   setOpen,
   relatedData,
   onSuccess,
+  onSwitchToExisting,
 }: {
   type: "create" | "update";
   data?: any;
   setOpen: Dispatch<SetStateAction<boolean>>;
   relatedData?: any;
   onSuccess?: (result?: any) => void;
+  onSwitchToExisting?: (student: any) => void;
 }) => {
   const router = useRouter();
   const locale = useLocale();
@@ -78,7 +82,7 @@ const StudentForm = ({
           parentPhoneNumbers: Array.isArray(data.parentPhoneNumbers)
             ? data.parentPhoneNumbers.map((p: any) => (typeof p === "string" ? p : p.phone))
             : [],
-          birthday: data.birthday
+          birthday: data.birthday && !isNaN(new Date(data.birthday).getTime())
             ? new Date(data.birthday).toISOString().split("T")[0]
             : undefined,
         }
@@ -111,38 +115,126 @@ const StudentForm = ({
     setValue("parentPhoneNumbers", updated, { shouldDirty: true });
   };
 
+  const watchedName = watch("name");
+  const watchedSurname = watch("surname");
+  const watchedGradeId = watch("gradeId");
+
+  const submitModeRef = useRef<"create" | "create_and_pay">("create");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeSubmittingMode, setActiveSubmittingMode] = useState<"create" | "create_and_pay">("create");
+  const [duplicateCandidates, setDuplicateCandidates] = useState<any[]>([]);
+  const [duplicateBypassed, setDuplicateBypassed] = useState(false);
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [pendingFormData, setPendingFormData] = useState<StudentSchema | null>(null);
+
+  // Debounced duplicate detection
+  useEffect(() => {
+    if (type !== "create") return;
+    const cleanFirst = watchedName ? watchedName.trim() : "";
+    const cleanLast = watchedSurname ? watchedSurname.trim() : "";
+
+    if (cleanFirst.length < 2 || cleanLast.length < 2) {
+      setDuplicateCandidates([]);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      checkStudentDuplicateAction({
+        name: cleanFirst,
+        surname: cleanLast,
+        excludeStudentId: data?.id,
+      }).then((res) => {
+        if (res.hasDuplicate) {
+          setDuplicateCandidates(res.duplicates);
+        } else {
+          setDuplicateCandidates([]);
+        }
+      });
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [watchedName, watchedSurname, type, data?.id]);
+
   const [isClassesOpen, setIsClassesOpen] = useState(false);
   const [classSearchTerm, setClassSearchTerm] = useState("");
   const classesDropdownRef = useRef<HTMLDivElement>(null);
 
-  const initialState: FormState = { success: false, error: false, message: "" };
-  const actionToRun = type === "create" ? createStudent : updateStudent;
-  const [state, formAction, isPending] = useActionState(actionToRun, initialState);
+  const executeStudentSubmit = async (
+    formData: StudentSchema,
+    mode: "create" | "create_and_pay"
+  ) => {
+    setIsSubmitting(true);
+    setActiveSubmittingMode(mode);
+    try {
+      const initialState = { success: false, error: false, message: "" };
+      const res = await (type === "create"
+        ? createStudent(initialState, formData)
+        : updateStudent(initialState, formData));
 
-  const onSubmit = (formData: StudentSchema) => {
-    startTransition(() => {
-      formAction(formData as any);
-    });
+      if (res.success) {
+        toast.success(
+          res.message ||
+            (type === "create"
+              ? tStudents("createdSuccess")
+              : tStudents("updatedSuccess"))
+        );
+        const andPay = mode === "create_and_pay";
+        const selectedClassId = formData.classes && formData.classes.length > 0 ? Number(formData.classes[0]) : null;
+        const targetClass = selectedClassId ? classes.find((c: any) => Number(c.id) === selectedClassId) : null;
+
+        if (andPay && !selectedClassId) {
+          toast.warning(
+            locale === "ar"
+              ? "تنبيه: يجب اختيار فوج دراسي لفتح نافذة الدفع مباشرة"
+              : "Veuillez sélectionner au moins un groupe pour ouvrir le paiement direct"
+          );
+        }
+
+        if (onSuccess) {
+          onSuccess({
+            ...res,
+            andPay: andPay && Boolean(targetClass),
+            student: (res as any).student,
+            classData: targetClass,
+          });
+        } else {
+          setOpen(false);
+          startTransition(() => {
+            router.refresh();
+          });
+        }
+      } else {
+        toast.error(res.message || tErrors("general"));
+      }
+    } catch (err: any) {
+      toast.error(err?.message || tErrors("general"));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  useEffect(() => {
-    if (state.success) {
-      toast.success(
-        state.message ||
-          (type === "create"
-            ? tStudents("createdSuccess")
-            : tStudents("updatedSuccess"))
-      );
-      setOpen(false);
-      onSuccess?.(state);
-      startTransition(() => {
-        router.refresh();
-      });
+  const handleFormSubmit = (formData: StudentSchema) => {
+    const mode = submitModeRef.current;
+    if (
+      type === "create" &&
+      duplicateCandidates.length > 0 &&
+      !duplicateBypassed
+    ) {
+      setPendingFormData(formData);
+      setShowDuplicateModal(true);
+      return;
     }
-    if (state.error && state.message) {
-      toast.error(state.message || tErrors("general"));
+
+    executeStudentSubmit(formData, mode);
+  };
+
+  const handleConfirmDuplicateBypass = () => {
+    setDuplicateBypassed(true);
+    setShowDuplicateModal(false);
+    if (pendingFormData) {
+      executeStudentSubmit(pendingFormData, submitModeRef.current);
     }
-  }, [state, type, setOpen, onSuccess, tStudents, tErrors, router]);
+  };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -163,13 +255,19 @@ const StudentForm = ({
   const { grades = [], classes = [] } = relatedData || {};
 
   const filteredClasses = useMemo(() => {
-    if (!classSearchTerm.trim()) return classes;
+    let list = classes;
+    if (watchedGradeId) {
+      list = list.filter(
+        (c: any) => !c.levelId || Number(c.levelId) === Number(watchedGradeId)
+      );
+    }
+    if (!classSearchTerm.trim()) return list;
     const term = classSearchTerm.toLowerCase().trim();
-    return classes.filter((c: any) => c.name.toLowerCase().includes(term));
-  }, [classes, classSearchTerm]);
+    return list.filter((c: any) => c.name.toLowerCase().includes(term));
+  }, [classes, watchedGradeId, classSearchTerm]);
 
   return (
-    <form className="flex flex-col gap-6" onSubmit={handleSubmit(onSubmit)}>
+    <form className="flex flex-col gap-6" onSubmit={handleSubmit(handleFormSubmit)}>
       {type === "update" && (
         <input type="hidden" {...register("id")} defaultValue={data?.id} />
       )}
@@ -217,6 +315,39 @@ const StudentForm = ({
           register={register}
           error={errors.name}
         />
+
+        {/* Live Duplicate Warning Banner */}
+        {duplicateCandidates.length > 0 && !duplicateBypassed && (
+          <div className="w-full p-3 bg-amber-50 border border-amber-300 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-amber-950 shadow-2xs animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <div>
+                <p className="font-bold">
+                  {locale === "ar"
+                    ? `تنبيه: يوجد تلميذ مسجل بنفس الاسم: #${duplicateCandidates[0].globalNumber} ${duplicateCandidates[0].name}`
+                    : `Attention : Un élève avec ce nom existe déjà : #${duplicateCandidates[0].globalNumber} ${duplicateCandidates[0].name}`}
+                </p>
+                <p className="text-[11px] text-amber-800">
+                  {locale === "ar"
+                    ? `الفرع: ${duplicateCandidates[0].branchName} • الهاتف: ${duplicateCandidates[0].phone || "غير محدد"}`
+                    : `Siège : ${duplicateCandidates[0].branchName} • Tél : ${duplicateCandidates[0].phone || "Non renseigné"}`}
+                </p>
+              </div>
+            </div>
+            {onSwitchToExisting && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onSwitchToExisting(duplicateCandidates[0])}
+                className="bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-900 font-bold shrink-0 self-end sm:self-center"
+              >
+                {locale === "ar" ? "تسجيل هذا التلميذ" : "Inscrire cet élève"}
+              </Button>
+            )}
+          </div>
+        )}
+
         <InputField
           label={tStudents("phone")}
           name="phone"
@@ -254,12 +385,26 @@ const StudentForm = ({
           )}
         </div>
 
-        {/* GRADE SELECT */}
+        {/* GRADE SELECT WITH REVERSE FILTERING */}
         <div className="flex flex-col gap-2 w-full md:w-1/4">
           <label className="text-xs text-gray-500">{tStudents("grade")}</label>
           <select
             className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] bg-white text-gray-700"
-            {...register("gradeId")}
+            {...register("gradeId", {
+              onChange: (e) => {
+                const newGradeId = e.target.value ? Number(e.target.value) : undefined;
+                if (newGradeId) {
+                  const currentClasses = watch("classes") || [];
+                  const validClasses = currentClasses.filter((cid: number) => {
+                    const cls = classes.find((c: any) => c.id === cid);
+                    return !cls || !cls.levelId || Number(cls.levelId) === Number(newGradeId);
+                  });
+                  if (validClasses.length !== currentClasses.length) {
+                    setValue("classes", validClasses);
+                  }
+                }
+              },
+            })}
           >
             <option value="">{tStudents("selectGrade")}</option>
             {grades.map((grade: { id: number; level?: string; name?: string }) => (
@@ -340,6 +485,15 @@ const StudentForm = ({
                   </button>
                   {isClassesOpen && (
                     <div className="absolute top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-20 flex flex-col max-h-60 overflow-hidden">
+                      {watchedGradeId && (
+                        <div className="px-2.5 py-1.5 bg-blue-50 text-blue-800 text-[11px] font-semibold border-b border-blue-100 flex items-center justify-between">
+                          <span>
+                            {locale === "ar"
+                              ? `أفواج المستوى المحدد (${filteredClasses.length})`
+                              : `Groupes de ce niveau (${filteredClasses.length})`}
+                          </span>
+                        </div>
+                      )}
                       {/* Search bar for classes */}
                       <div className="p-2 border-b border-gray-200 sticky top-0 bg-white z-10">
                         <div className="relative flex items-center">
@@ -370,7 +524,7 @@ const StudentForm = ({
 
                       <div className="overflow-y-auto max-h-48 divide-y divide-gray-100">
                         {filteredClasses.length > 0 ? (
-                          filteredClasses.map((classItem: { id: number; name: string }) => (
+                          filteredClasses.map((classItem: { id: number; name: string; levelId?: number }) => (
                             <label
                               key={classItem.id}
                               className="flex items-center gap-2 p-2 hover:bg-gray-100 cursor-pointer text-xs"
@@ -381,12 +535,16 @@ const StudentForm = ({
                                 checked={safeFieldValue.includes(classItem.id)}
                                 onChange={(e) => {
                                   const selectedId = classItem.id;
-                                  if (e.target.checked)
+                                  if (e.target.checked) {
                                     field.onChange([...safeFieldValue, selectedId]);
-                                  else
+                                    if (classItem.levelId) {
+                                      setValue("gradeId", Number(classItem.levelId), { shouldValidate: true });
+                                    }
+                                  } else {
                                     field.onChange(
-                                      safeFieldValue.filter((id) => id !== selectedId)
+                                      safeFieldValue.filter((id: number) => id !== selectedId)
                                     );
+                                  }
                                 }}
                               />
                               <span className="text-gray-700 font-medium">
@@ -461,27 +619,143 @@ const StudentForm = ({
         )}
       </div>
 
-      {state?.error && !state.message && (
-        <span className="text-red-500 text-sm font-medium">
-          {tErrors("general")}
-        </span>
+      {/* Dual action buttons or update button */}
+      {type === "create" ? (
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full mt-2">
+          <Button
+            type="submit"
+            variant="outline"
+            size="lg"
+            disabled={isSubmitting}
+            isLoading={isSubmitting && activeSubmittingMode === "create"}
+            className="w-full sm:flex-1"
+            onClick={() => {
+              submitModeRef.current = "create";
+            }}
+          >
+            {isSubmitting && activeSubmittingMode === "create"
+              ? tStudents("submittingCreate")
+              : tCommon("create")}
+          </Button>
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            disabled={isSubmitting}
+            isLoading={isSubmitting && activeSubmittingMode === "create_and_pay"}
+            className="w-full sm:flex-1 bg-emerald-600 hover:bg-emerald-700 border-emerald-600 text-white"
+            onClick={() => {
+              submitModeRef.current = "create_and_pay";
+            }}
+            leftIcon={<CreditCard className="w-4 h-4" />}
+          >
+            {isSubmitting && activeSubmittingMode === "create_and_pay"
+              ? tStudents("submittingCreate")
+              : locale === "ar"
+              ? "تسجيل ودفع وصل"
+              : "Inscrire et Payer"}
+          </Button>
+        </div>
+      ) : (
+        <Button
+          type="submit"
+          variant="primary"
+          size="lg"
+          disabled={isSubmitting}
+          isLoading={isSubmitting}
+          className="w-full mt-2"
+          onClick={() => {
+            submitModeRef.current = "create";
+          }}
+        >
+          {isSubmitting ? tStudents("submittingUpdate") : tCommon("edit")}
+        </Button>
       )}
 
-      <Button
-        type="submit"
-        variant="primary"
-        size="lg"
-        disabled={isPending}
-        className="w-full mt-2"
-      >
-        {isPending
-          ? type === "create"
-            ? tStudents("submittingCreate")
-            : tStudents("submittingUpdate")
-          : type === "create"
-          ? tCommon("create")
-          : tCommon("edit")}
-      </Button>
+      {/* Duplicate Confirmation Modal */}
+      {showDuplicateModal && duplicateCandidates.length > 0 && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4 font-sans">
+          <div className="bg-surface rounded-xl border border-border shadow-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-3 text-amber-700">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5 text-amber-700" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-gray-900">
+                  {locale === "ar"
+                    ? "تنبيه: تلميذ مسجل بنفس الاسم مسبقاً"
+                    : "Attention : Élève avec le même nom détecté"}
+                </h3>
+                <p className="text-xs text-muted">
+                  {locale === "ar"
+                    ? "تم العثور على تلميذ مسجل بنفس الاسم واللقب في قاعدة البيانات"
+                    : "Un élève portant le même nom et prénom est déjà enregistré."}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl text-xs space-y-1.5 text-amber-950">
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <span>#{duplicateCandidates[0].globalNumber}</span>
+                <span>{duplicateCandidates[0].name}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-muted">
+                <span>{duplicateCandidates[0].branchName}</span>
+                {duplicateCandidates[0].phone && <span>• {duplicateCandidates[0].phone}</span>}
+                {duplicateCandidates[0].classes?.length > 0 && (
+                  <span>
+                    •{" "}
+                    {locale === "ar"
+                      ? `الأفواج: ${duplicateCandidates[0].classes.join(", ")}`
+                      : `Groupes : ${duplicateCandidates[0].classes.join(", ")}`}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-600 leading-relaxed">
+              {locale === "ar"
+                ? "هل ترغب في تسجيل هذا التلميذ المسجل مسبقاً في هذا الفوج، أو تأكيد إنشاء تلميذ جديد تماماً يحمل نفس الاسم (حالة تشابه أسماء)؟"
+                : "Souhaitez-vous inscrire cet élève existant dans ce groupe, ou confirmer la création d'un nouvel élève portant le même nom (homonyme) ?"}
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2 border-t border-border">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowDuplicateModal(false)}
+                className="w-full sm:w-auto"
+              >
+                {locale === "ar" ? "تعديل البيانات" : "Vérifier la saisie"}
+              </Button>
+              {onSwitchToExisting && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    setShowDuplicateModal(false);
+                    onSwitchToExisting(duplicateCandidates[0]);
+                  }}
+                  className="w-full sm:w-auto bg-primary text-white"
+                >
+                  {locale === "ar" ? "تسجيل التلميذ الموجود" : "Inscrire l'élève existant"}
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleConfirmDuplicateBypass}
+                className="w-full sm:w-auto text-amber-800 hover:bg-amber-50"
+              >
+                {locale === "ar" ? "تأكيد وإنشاء تلميذ جديد" : "Créer quand même"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   );
 };

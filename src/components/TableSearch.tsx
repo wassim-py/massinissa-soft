@@ -4,12 +4,12 @@ import Image from "next/image";
 import { usePathname, useRouter } from "@/i18n/navigation";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useTransition, useCallback } from "react";
 import { X } from "lucide-react";
 
 const TableSearch = ({
   placeholder,
-  debounceMs = 300,
+  debounceMs = 350,
 }: {
   placeholder?: string;
   debounceMs?: number;
@@ -18,15 +18,69 @@ const TableSearch = ({
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
+  const [, startTransition] = useTransition();
 
   const urlSearch = searchParams.get("search")?.toString() || "";
   const [searchTerm, setSearchTerm] = useState(urlSearch);
-  const isFirstMount = useRef(true);
 
-  // Synchronize state if URL changes externally (e.g., browser back/forward)
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
+
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
+
+  const isFocusedRef = useRef(false);
+  const isFirstMount = useRef(true);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Track the latest search term pushed to the router by this component
+  // to prevent stale in-flight server responses from overwriting active user typing
+  const lastPushedSearchRef = useRef<string | null>(null);
+
+  // Synchronize state if URL changes externally (e.g. browser back/forward, tab switches)
+  // CRITICAL: NEVER overwrite user input while the user is actively typing or input is focused!
   useEffect(() => {
+    // If the URL matches what we recently pushed, mark it as acknowledged
+    if (lastPushedSearchRef.current !== null && urlSearch.trim() === lastPushedSearchRef.current.trim()) {
+      return;
+    }
+
+    // Never overwrite while the user is actively focused on this input
+    if (isFocusedRef.current) {
+      return;
+    }
+
+    // External change (e.g. browser back/forward or external navigation)
     setSearchTerm(urlSearch);
+    lastPushedSearchRef.current = null;
   }, [urlSearch]);
+
+  const executeSearch = useCallback((value: string) => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    const currentInUrl = searchParamsRef.current.get("search")?.toString() || "";
+    const trimmed = value.trim();
+
+    if (trimmed !== currentInUrl.trim()) {
+      lastPushedSearchRef.current = trimmed;
+      const params = new URLSearchParams(searchParamsRef.current.toString());
+      if (trimmed) {
+        params.set("search", trimmed);
+      } else {
+        params.delete("search");
+      }
+      params.delete("page"); // Reset to page 1 on new search
+      const queryString = params.toString();
+      const targetUrl = queryString ? `${pathnameRef.current}?${queryString}` : pathnameRef.current;
+
+      startTransition(() => {
+        router.replace(targetUrl, { scroll: false });
+      });
+    }
+  }, [router]);
 
   // Debounced live search as user types
   useEffect(() => {
@@ -35,39 +89,61 @@ const TableSearch = ({
       return;
     }
 
-    const timer = setTimeout(() => {
-      const currentInUrl = searchParams.get("search")?.toString() || "";
-      if (searchTerm.trim() !== currentInUrl.trim()) {
-        const params = new URLSearchParams(searchParams.toString());
-        if (searchTerm.trim()) {
-          params.set("search", searchTerm.trim());
-        } else {
-          params.delete("search");
-        }
-        params.delete("page"); // Reset to page 1 on new search
-        const queryString = params.toString();
-        router.replace(queryString ? `${pathname}?${queryString}` : pathname);
+    const currentInUrl = searchParamsRef.current.get("search")?.toString() || "";
+    // If searchTerm matches what's currently in the URL, clear any pending timer and do nothing
+    if (searchTerm.trim() === currentInUrl.trim()) {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
       }
+      return;
+    }
+
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+    }
+
+    timerRef.current = setTimeout(() => {
+      executeSearch(searchTerm);
     }, debounceMs);
 
-    return () => clearTimeout(timer);
-  }, [searchTerm, debounceMs, pathname, router, searchParams]);
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [searchTerm, debounceMs, executeSearch]);
 
   const handleImmediateSearch = (value: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (value.trim()) {
-      params.set("search", value.trim());
-    } else {
-      params.delete("search");
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
-    params.delete("page");
-    const queryString = params.toString();
-    router.replace(queryString ? `${pathname}?${queryString}` : pathname);
+    executeSearch(value);
   };
 
   const handleClear = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     setSearchTerm("");
-    handleImmediateSearch("");
+    lastPushedSearchRef.current = "";
+    executeSearch("");
+  };
+
+  const handleBlur = () => {
+    isFocusedRef.current = false;
+    // When blurring, if there is a pending debounced search that differs from URL, flush it immediately
+    const currentInUrl = searchParamsRef.current.get("search")?.toString() || "";
+    if (searchTerm.trim() !== currentInUrl.trim()) {
+      handleImmediateSearch(searchTerm);
+    }
+  };
+
+  const handleFocus = () => {
+    isFocusedRef.current = true;
   };
 
   return (
@@ -78,6 +154,8 @@ const TableSearch = ({
         placeholder={placeholder || t("placeholder")}
         value={searchTerm}
         onChange={(e) => setSearchTerm(e.target.value)}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -90,7 +168,7 @@ const TableSearch = ({
         <button
           type="button"
           onClick={handleClear}
-          className="text-muted hover:text-gray-700 transition-colors p-0.5 rounded-full hover:bg-surface-subtle"
+          className="text-muted hover:text-gray-700 transition-colors p-0.5 rounded-full hover:bg-surface-subtle cursor-pointer"
           title={t("clearSearch")}
           aria-label={t("clearSearch")}
         >

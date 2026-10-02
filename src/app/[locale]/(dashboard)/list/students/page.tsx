@@ -156,75 +156,105 @@ const StudentListPage = async (props: {
 
     if (cleanSearch) {
       if (hasNumeric) {
-        const countRes = await prisma.$queryRaw<Array<{ count: string | number | bigint }>>`
-          SELECT count(*) FROM "Student" s
-          WHERE (
-            s.name ILIKE ${'%' + cleanSearch + '%'}
-            OR (s.phone IS NOT NULL AND s.phone ILIKE ${'%' + cleanSearch + '%'})
-            OR CAST(s."globalNumber" AS TEXT) ILIKE ${'%' + cleanNumeric + '%'}
-          )
-        `;
+        const [countRes, queryRows] = await Promise.all([
+          prisma.$queryRaw<Array<{ count: string | number | bigint }>>`
+            SELECT count(*) FROM "Student" s
+            WHERE (
+              s.name ILIKE ${'%' + cleanSearch + '%'}
+              OR (s.phone IS NOT NULL AND s.phone ILIKE ${'%' + cleanSearch + '%'})
+              OR CAST(s."globalNumber" AS TEXT) ILIKE ${'%' + cleanNumeric + '%'}
+            )
+          `,
+          prisma.$queryRaw<Array<{
+            id: string;
+            globalNumber: number;
+            name: string;
+            phone: string | null;
+            registeredBranchId: number;
+            branchName: string | null;
+            createdAt: Date;
+          }>>`
+            SELECT s.id, s."globalNumber", s.name, s.phone, s."registeredBranchId", b.name as "branchName", s."createdAt"
+            FROM "Student" s
+            LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
+            WHERE (
+              s.name ILIKE ${'%' + cleanSearch + '%'}
+              OR (s.phone IS NOT NULL AND s.phone ILIKE ${'%' + cleanSearch + '%'})
+              OR CAST(s."globalNumber" AS TEXT) ILIKE ${'%' + cleanNumeric + '%'}
+            )
+            ORDER BY
+              CASE
+                WHEN CAST(s."globalNumber" AS TEXT) = ${cleanNumeric} THEN 0
+                WHEN CAST(s."globalNumber" AS TEXT) LIKE ${cleanNumeric + '%'} THEN 1
+                WHEN s.name ILIKE ${cleanSearch + '%'} THEN 2
+                ELSE 3
+              END,
+              s."globalNumber" ASC
+            LIMIT ${ITEM_PER_PAGE} OFFSET ${ITEM_PER_PAGE * (p - 1)}
+          `,
+        ]);
         count = Number(countRes[0]?.count || 0);
-
-        rows = await prisma.$queryRaw`
-          SELECT s.id, s."globalNumber", s.name, s.phone, s."registeredBranchId", b.name as "branchName", s."createdAt"
-          FROM "Student" s
-          LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
-          WHERE (
-            s.name ILIKE ${'%' + cleanSearch + '%'}
-            OR (s.phone IS NOT NULL AND s.phone ILIKE ${'%' + cleanSearch + '%'})
-            OR CAST(s."globalNumber" AS TEXT) ILIKE ${'%' + cleanNumeric + '%'}
-          )
-          ORDER BY
-            CASE
-              WHEN CAST(s."globalNumber" AS TEXT) = ${cleanNumeric} THEN 0
-              WHEN CAST(s."globalNumber" AS TEXT) LIKE ${cleanNumeric + '%'} THEN 1
-              WHEN s.name ILIKE ${cleanSearch + '%'} THEN 2
-              ELSE 3
-            END,
-            s."globalNumber" ASC
-          LIMIT ${ITEM_PER_PAGE} OFFSET ${ITEM_PER_PAGE * (p - 1)}
-        `;
+        rows = queryRows;
       } else {
-        const countRes = await prisma.$queryRaw<Array<{ count: string | number | bigint }>>`
-          SELECT count(*) FROM "Student" s
-          WHERE (
-            s.name ILIKE ${'%' + cleanSearch + '%'}
-            OR (s.phone IS NOT NULL AND s.phone ILIKE ${'%' + cleanSearch + '%'})
-          )
-        `;
+        const [countRes, queryRows] = await Promise.all([
+          prisma.$queryRaw<Array<{ count: string | number | bigint }>>`
+            SELECT count(*) FROM "Student" s
+            WHERE (
+              s.name ILIKE ${'%' + cleanSearch + '%'}
+              OR (s.phone IS NOT NULL AND s.phone ILIKE ${'%' + cleanSearch + '%'})
+            )
+          `,
+          prisma.$queryRaw<Array<{
+            id: string;
+            globalNumber: number;
+            name: string;
+            phone: string | null;
+            registeredBranchId: number;
+            branchName: string | null;
+            createdAt: Date;
+          }>>`
+            SELECT s.id, s."globalNumber", s.name, s.phone, s."registeredBranchId", b.name as "branchName", s."createdAt"
+            FROM "Student" s
+            LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
+            WHERE (
+              s.name ILIKE ${'%' + cleanSearch + '%'}
+              OR (s.phone IS NOT NULL AND s.phone ILIKE ${'%' + cleanSearch + '%'})
+            )
+            ORDER BY
+              CASE
+                WHEN s.name ILIKE ${cleanSearch + '%'} THEN 0
+                ELSE 1
+              END,
+              s."globalNumber" ASC
+            LIMIT ${ITEM_PER_PAGE} OFFSET ${ITEM_PER_PAGE * (p - 1)}
+          `,
+        ]);
         count = Number(countRes[0]?.count || 0);
-
-        rows = await prisma.$queryRaw`
-          SELECT s.id, s."globalNumber", s.name, s.phone, s."registeredBranchId", b.name as "branchName", s."createdAt"
-          FROM "Student" s
-          LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
-          WHERE (
-            s.name ILIKE ${'%' + cleanSearch + '%'}
-            OR (s.phone IS NOT NULL AND s.phone ILIKE ${'%' + cleanSearch + '%'})
-          )
-          ORDER BY
-            CASE
-              WHEN s.name ILIKE ${cleanSearch + '%'} THEN 0
-              ELSE 1
-            END,
-            s."globalNumber" ASC
-          LIMIT ${ITEM_PER_PAGE} OFFSET ${ITEM_PER_PAGE * (p - 1)}
-        `;
+        rows = queryRows;
       }
     } else {
-      const countRes = await prisma.$queryRaw<Array<{ count: string | number | bigint }>>`
-        SELECT count(*) FROM "Student"
-      `;
+      const [countRes, queryRows] = await Promise.all([
+        prisma.$queryRaw<Array<{ count: string | number | bigint }>>`
+          SELECT count(*) FROM "Student"
+        `,
+        prisma.$queryRaw<Array<{
+          id: string;
+          globalNumber: number;
+          name: string;
+          phone: string | null;
+          registeredBranchId: number;
+          branchName: string | null;
+          createdAt: Date;
+        }>>`
+          SELECT s.id, s."globalNumber", s.name, s.phone, s."registeredBranchId", b.name as "branchName", s."createdAt"
+          FROM "Student" s
+          LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
+          ORDER BY s."globalNumber" ASC
+          LIMIT ${ITEM_PER_PAGE} OFFSET ${ITEM_PER_PAGE * (p - 1)}
+        `,
+      ]);
       count = Number(countRes[0]?.count || 0);
-
-      rows = await prisma.$queryRaw`
-        SELECT s.id, s."globalNumber", s.name, s.phone, s."registeredBranchId", b.name as "branchName", s."createdAt"
-        FROM "Student" s
-        LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
-        ORDER BY s."globalNumber" ASC
-        LIMIT ${ITEM_PER_PAGE} OFFSET ${ITEM_PER_PAGE * (p - 1)}
-      `;
+      rows = queryRows;
     }
 
     const studentIds = rows.map((r) => r.id);

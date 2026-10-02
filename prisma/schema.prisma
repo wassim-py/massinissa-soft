@@ -40,6 +40,9 @@ model Student {
   familyId                              Int?
   registeredBranchId                    Int
   phone                                 String?
+  birthday                              DateTime?
+  address                               String?
+  sex                                   String?               @default("MALE")
   payerStatus                           String                @default("NORMAL")
   parentPhoneNumbers                    ParentPhoneNumber[]
   attendances                           Attendance[]
@@ -309,6 +312,7 @@ model Enrollment {
   inscriptionFeeCharged Boolean
   inscriptionFeeAmount  Decimal?
   payerStatus           String               @default("NORMAL")
+  status                String               @default("ACTIVE")
   feeOverriddenByOwner  Boolean              @default(false)
   feeOverrideNote       String?
   academicYear          AcademicYear         @relation(fields: [academicYearId], references: [id])
@@ -323,6 +327,8 @@ model Enrollment {
   @@index([classId, academicYearId])
   @@index([studentId, classId])
   @@index([enrolledAt])
+  @@index([status])
+  @@index([studentId, classId, status])
 }
 
 model EnrollmentTransfer {

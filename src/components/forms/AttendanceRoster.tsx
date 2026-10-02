@@ -18,6 +18,8 @@ import { BookOpen, Check, X, Minus, ChevronDown, UserPlus } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
 import BookStatusBadge, { computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
+import { FilterTabs } from "@/components/ui/FilterTabs";
+import EnrollExistingStudentTab from "./EnrollExistingStudentTab";
 
 const StudentForm = dynamic(() => import("./StudentForm"), { ssr: false });
 
@@ -60,6 +62,9 @@ export interface CatchUpVisitor {
 type FullStudent = Student & {
   vouchers: Voucher[];
   attendances: Attendance[];
+  payerStatus?: string;
+  transfersFrom?: Array<{ id?: number; transferredSessions: number }>;
+  transfersTo?: Array<{ id?: number; transferredSessions: number }>;
   family?: { payerStudentId: string | null } | null;
   isBookEligible?: boolean;
   hasPaidBook?: boolean;
@@ -96,7 +101,7 @@ const AttendanceRoster = ({
   initialSearch?: string;
   studentRelatedData?: {
     grades: Array<{ id: number; level?: string; name?: string }>;
-    classes: Array<{ id: number; name: string }>;
+    classes: Array<{ id: number; name: string; levelId?: number | null }>;
   };
   canCreateStudent?: boolean;
 }) => {
@@ -109,49 +114,59 @@ const AttendanceRoster = ({
   const [searchTerm, setSearchTerm] = useState(initialSearch || "");
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch || "");
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+  const [activeRegisterTab, setActiveRegisterTab] = useState<"create" | "enroll_existing">("create");
+  const [preselectedStudentForEnroll, setPreselectedStudentForEnroll] = useState<any>(null);
 
   const resolvedStudentRelatedData = useMemo(() => {
     const grades = studentRelatedData?.grades || [];
     let classesList = studentRelatedData?.classes ? [...studentRelatedData.classes] : [];
     if (!classesList.some((c) => c.id === lesson.class.id)) {
-      classesList.push({ id: lesson.class.id, name: lesson.class.name });
+      classesList.push({ id: lesson.class.id, name: lesson.class.name, levelId: lesson.class.levelId });
     }
     return { grades, classes: classesList };
-  }, [studentRelatedData, lesson.class.id, lesson.class.name]);
+  }, [studentRelatedData, lesson.class.id, lesson.class.name, lesson.class.levelId]);
 
   useEffect(() => {
+    if (!searchTerm.trim()) {
+      setDebouncedSearch("");
+      return;
+    }
     const timer = setTimeout(() => {
       setDebouncedSearch(searchTerm);
-    }, 250);
+    }, 150);
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
   const cleanSearch = debouncedSearch.trim().toLowerCase();
   const cleanNumeric = cleanSearch.replace(/[^0-9]/g, "");
 
-  const filteredStudents = students.filter((student) => {
-    if (!cleanSearch) return true;
-    const matchName = student.name.toLowerCase().includes(cleanSearch);
-    const matchId =
-      cleanNumeric && student.globalNumber !== undefined && student.globalNumber !== null
-        ? String(student.globalNumber).includes(cleanNumeric)
-        : false;
-    const matchPhone =
-      cleanSearch && student.phone
-        ? student.phone.toLowerCase().includes(cleanSearch)
-        : false;
-    return matchName || matchId || matchPhone;
-  });
+  const filteredStudents = useMemo(() => {
+    if (!cleanSearch) return students;
+    return students.filter((student) => {
+      const matchName = student.name.toLowerCase().includes(cleanSearch);
+      const matchId =
+        cleanNumeric && student.globalNumber !== undefined && student.globalNumber !== null
+          ? String(student.globalNumber).includes(cleanNumeric)
+          : false;
+      const matchPhone =
+        cleanSearch && student.phone
+          ? student.phone.toLowerCase().includes(cleanSearch)
+          : false;
+      return matchName || matchId || matchPhone;
+    });
+  }, [students, cleanSearch, cleanNumeric]);
 
-  const filteredCatchUpVisitors = catchUpVisitors.filter((visitor) => {
-    if (!cleanSearch) return true;
-    const matchName = visitor.studentName.toLowerCase().includes(cleanSearch);
-    const matchId =
-      cleanNumeric && visitor.globalNumber !== undefined && visitor.globalNumber !== null
-        ? String(visitor.globalNumber).includes(cleanNumeric)
-        : false;
-    return matchName || matchId;
-  });
+  const filteredCatchUpVisitors = useMemo(() => {
+    if (!cleanSearch) return catchUpVisitors;
+    return catchUpVisitors.filter((visitor) => {
+      const matchName = visitor.studentName.toLowerCase().includes(cleanSearch);
+      const matchId =
+        cleanNumeric && visitor.globalNumber !== undefined && visitor.globalNumber !== null
+          ? String(visitor.globalNumber).includes(cleanNumeric)
+          : false;
+      return matchName || matchId;
+    });
+  }, [catchUpVisitors, cleanSearch, cleanNumeric]);
 
   // Quick book handout state: Map of studentId -> array of received book IDs
   const [studentReceivedBooks, setStudentReceivedBooks] = useState<Record<string, number[]>>(() => {
@@ -492,6 +507,18 @@ const AttendanceRoster = ({
               {t("catchUpVisitorsCount", { count: catchUpVisitors.length })}
             </span>
           )}
+
+          {/* Status Color Indicators Legend */}
+          <div className="flex items-center gap-1.5 ms-auto sm:ms-2 flex-wrap">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-950 border border-amber-300 text-[11px] font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+              {locale === "ar" ? "معفى / إخوة (برتقالي)" : "Exonéré / Fratrie (Orange)"}
+            </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-100 text-sky-950 border border-sky-300 text-[11px] font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
+              {locale === "ar" ? "حصة المدرسة فقط (أزرق)" : "Frais école seuls (Bleu)"}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {canCreateStudent && (
@@ -556,13 +583,18 @@ const AttendanceRoster = ({
               student.family.payerStudentId !== student.id
             );
 
+            const payerStatus = student.payerStatus || "NORMAL";
+            const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
+            const isSchoolFeesOnly = payerStatus === "SCHOOL_FEES_ONLY";
+            const isWaivedTuition = isSiblingWaived || isNonPayer;
+
             const activeTuitionVouchers = (student.vouchers || []).filter(
               (v) => !v.isVoided && v.paymentType === "TUITION_4SESSION"
             );
             const cyclePrice = Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0);
             const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
             let sessionsPurchased = 0;
-            if (isSiblingWaived) {
+            if (isWaivedTuition) {
               sessionsPurchased = 16;
             } else if (lessonPrice > 0) {
               const totalPaidTuition = activeTuitionVouchers.reduce(
@@ -573,12 +605,27 @@ const AttendanceRoster = ({
             } else {
               sessionsPurchased = activeTuitionVouchers.length * 4;
             }
+
+            const transferredIn = (student.transfersTo || []).reduce(
+              (sum, t) => sum + Number(t.transferredSessions || 0),
+              0
+            );
+            const transferredOut = (student.transfersFrom || []).reduce(
+              (sum, t) => sum + Number(t.transferredSessions || 0),
+              0
+            );
+            const totalCreditSessions = sessionsPurchased + transferredIn - transferredOut;
+
             const sessionsConsumed = (student.attendances || []).filter((a) => a.status === "PRESENT").length;
-            const sessionsRemaining = sessionsPurchased - sessionsConsumed;
+            const sessionsRemaining = totalCreditSessions - sessionsConsumed;
 
             let statusBubble = { text: t("unpaidDue"), color: "bg-red-500" };
             if (isSiblingWaived) {
-              statusBubble = { text: t("waivedSibling"), color: "bg-purple-600" };
+              statusBubble = { text: t("waivedSibling"), color: "bg-amber-600" };
+            } else if (isNonPayer) {
+              statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
+            } else if (isSchoolFeesOnly) {
+              statusBubble = { text: locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls", color: "bg-sky-500" };
             } else if (sessionsRemaining >= 2) {
               statusBubble = { text: t("paidGood"), color: "bg-green-500" };
             } else if (sessionsRemaining >= 1) {
@@ -620,6 +667,10 @@ const AttendanceRoster = ({
                     ? "bg-rose-50/40 border-rose-300 shadow-2xs"
                     : currentStatus === "NOT_DEFINED"
                     ? "bg-blue-50/30 border-blue-200 shadow-2xs"
+                    : isWaivedTuition
+                    ? "bg-amber-50/30 border-amber-200/80 hover:border-amber-300"
+                    : isSchoolFeesOnly
+                    ? "bg-sky-50/30 border-sky-200/80 hover:border-sky-300"
                     : "bg-white border-gray-200 hover:border-gray-300"
                 }`}
               >
@@ -645,6 +696,10 @@ const AttendanceRoster = ({
                           ? "bg-rose-600 text-white shadow-2xs ring-2 ring-rose-500/25"
                           : currentStatus === "NOT_DEFINED"
                           ? "bg-blue-600 text-white shadow-2xs ring-2 ring-blue-500/25"
+                          : isWaivedTuition
+                          ? "bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200"
+                          : isSchoolFeesOnly
+                          ? "bg-sky-100 text-sky-900 border border-sky-300 hover:bg-sky-200"
                           : "bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200"
                       }`}
                     >
@@ -654,7 +709,35 @@ const AttendanceRoster = ({
                     </button>
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-gray-900 text-sm">{student.name}</span>
+                        {isWaivedTuition ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-amber-100 text-amber-950 border border-amber-300/90 font-bold text-sm shadow-2xs ring-1 ring-amber-400/30">
+                            <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+                            <span>{student.name}</span>
+                          </span>
+                        ) : isSchoolFeesOnly ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-sky-100 text-sky-950 border border-sky-300/90 font-bold text-sm shadow-2xs ring-1 ring-sky-400/30">
+                            <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
+                            <span>{student.name}</span>
+                          </span>
+                        ) : (
+                          <span className="font-bold text-gray-900 text-sm">{student.name}</span>
+                        )}
+
+                        {/* Status Badges for Not-Normal Students */}
+                        {isSiblingWaived ? (
+                          <Badge variant="warning" size="sm" withDot className="bg-amber-100/90 text-amber-900 border-amber-300 font-semibold shadow-2xs">
+                            {locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)"}
+                          </Badge>
+                        ) : isNonPayer ? (
+                          <Badge variant="warning" size="sm" withDot className="bg-amber-100/90 text-amber-900 border-amber-300 font-semibold shadow-2xs">
+                            {locale === "ar" ? "معفى من الرسوم" : "Non-payeur (Exonéré)"}
+                          </Badge>
+                        ) : isSchoolFeesOnly ? (
+                          <Badge variant="primary" size="sm" withDot className="bg-sky-100/90 text-sky-900 border-sky-300 font-semibold shadow-2xs">
+                            {locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls"}
+                          </Badge>
+                        ) : null}
+
                         <span className={`w-2 h-2 rounded-full ${statusBubble.color}`}></span>
                         {/* Inscription Fee Status Badge */}
                         {student.inscriptionStatus === "PAID" ? (
@@ -682,6 +765,10 @@ const AttendanceRoster = ({
                         <span>
                           {isSiblingWaived
                             ? t("tuitionWaivedSibling")
+                            : isNonPayer
+                            ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
+                            : isSchoolFeesOnly
+                            ? (locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls")
                             : t("sessionsRemainingCount", { count: Math.max(0, sessionsRemaining) })}
                         </span>
                       </div>
@@ -1071,35 +1158,96 @@ const AttendanceRoster = ({
         </div>
       )}
 
-      {/* Rapid Student Registration Modal */}
+      {/* Rapid Student Registration Modal with Two Tabs */}
       {isRegisterModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-surface p-6 rounded-xl border border-border shadow-xl relative w-[90%] md:w-[70%] lg:w-[60%] xl:w-[50%] 2xl:w-[40%] max-h-[90vh] overflow-y-auto">
+          <div className="bg-surface p-6 rounded-xl border border-border shadow-xl relative w-[90%] md:w-[70%] lg:w-[60%] xl:w-[50%] 2xl:w-[40%] max-h-[90vh] overflow-y-auto space-y-4">
             <button
               type="button"
-              className="absolute top-4 end-4 cursor-pointer p-1.5 rounded-lg text-muted hover:text-gray-900 hover:bg-surface-subtle transition-colors"
-              onClick={() => setIsRegisterModalOpen(false)}
+              className="absolute top-4 end-4 cursor-pointer p-1.5 rounded-lg text-muted hover:text-gray-900 hover:bg-surface-subtle transition-colors z-10"
+              onClick={() => {
+                setIsRegisterModalOpen(false);
+                setPreselectedStudentForEnroll(null);
+              }}
             >
               <Image src="/close.png" alt={tCommon("cancel")} width={14} height={14} />
             </button>
-            <div className="p-1">
-              <StudentForm
-                type="create"
-                setOpen={setIsRegisterModalOpen}
-                data={{
-                  classes: [lesson.class.id],
-                  gradeId: lesson.class.levelId || undefined,
-                  registeredBranchId: lesson.branchId || undefined,
-                  targetClassName: lesson.class.name,
-                }}
-                relatedData={resolvedStudentRelatedData}
-                onSuccess={() => {
-                  setSearchTerm("");
-                  startTransition(() => {
-                    router.refresh();
-                  });
-                }}
+
+            {/* Two Tabs: Create New vs Enroll Existing */}
+            <div className="pt-1">
+              <FilterTabs
+                tabs={[
+                  {
+                    id: "create",
+                    label: locale === "ar" ? "إنشاء تلميذ جديد" : "Créer un nouvel élève",
+                  },
+                  {
+                    id: "enroll_existing",
+                    label: locale === "ar" ? "تسجيل تلميذ مسجل مسبقاً" : "Inscrire un élève existant",
+                  },
+                ]}
+                activeTab={activeRegisterTab}
+                onTabChange={(tabId) => setActiveRegisterTab(tabId as any)}
+                size="md"
               />
+            </div>
+
+            <div className="p-1">
+              {activeRegisterTab === "create" ? (
+                <StudentForm
+                  type="create"
+                  setOpen={setIsRegisterModalOpen}
+                  data={{
+                    classes: [lesson.class.id],
+                    gradeId: lesson.class.levelId || undefined,
+                    registeredBranchId: lesson.branchId || undefined,
+                    targetClassName: lesson.class.name,
+                  }}
+                  relatedData={resolvedStudentRelatedData}
+                  onSwitchToExisting={(existingStudent) => {
+                    setPreselectedStudentForEnroll(existingStudent);
+                    setActiveRegisterTab("enroll_existing");
+                  }}
+                  onSuccess={(result) => {
+                    setSearchTerm("");
+                    setIsRegisterModalOpen(false);
+                    setPreselectedStudentForEnroll(null);
+                    if (result?.andPay && result?.student) {
+                      setSelectedStudent(result.student);
+                      setIsPaymentModalOpen(true);
+                    }
+                    startTransition(() => {
+                      router.refresh();
+                    });
+                  }}
+                />
+              ) : (
+                <EnrollExistingStudentTab
+                  classId={lesson.class.id}
+                  className={lesson.class.name}
+                  initialSelectedStudent={preselectedStudentForEnroll}
+                  onClose={() => {
+                    setIsRegisterModalOpen(false);
+                    setPreselectedStudentForEnroll(null);
+                  }}
+                  onSuccess={() => {
+                    setIsRegisterModalOpen(false);
+                    setPreselectedStudentForEnroll(null);
+                    startTransition(() => {
+                      router.refresh();
+                    });
+                  }}
+                  onEnrollAndPay={(student) => {
+                    setIsRegisterModalOpen(false);
+                    setPreselectedStudentForEnroll(null);
+                    setSelectedStudent(student);
+                    setIsPaymentModalOpen(true);
+                    startTransition(() => {
+                      router.refresh();
+                    });
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -1107,8 +1255,8 @@ const AttendanceRoster = ({
 
       {/* Voucher Modal */}
       {isPaymentModalOpen && selectedStudent && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl relative w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-60 z-[80] flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl relative w-full max-w-md max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setIsPaymentModalOpen(false)}
               className="absolute top-4 left-4 text-gray-400 hover:text-gray-600"

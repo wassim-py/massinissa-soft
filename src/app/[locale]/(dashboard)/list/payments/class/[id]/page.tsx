@@ -56,6 +56,9 @@ const ClassPaymentHistoryPage = async (
         },
       },
       enrollments: {
+        where: {
+          status: "ACTIVE",
+        },
         include: {
           student: {
             include: {
@@ -72,8 +75,32 @@ const ClassPaymentHistoryPage = async (
               },
             },
           },
-          transfersFrom: true,
-          transfersTo: true,
+          transfersFrom: {
+            include: {
+              toEnrollment: {
+                include: {
+                  class: {
+                    include: {
+                      branch: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+          transfersTo: {
+            include: {
+              fromEnrollment: {
+                include: {
+                  class: {
+                    include: {
+                      branch: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         orderBy: { enrolledAt: "asc" },
       },

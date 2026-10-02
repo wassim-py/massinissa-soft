@@ -35,6 +35,7 @@ type FormComponentProps = {
   type: "create" | "update";
   data?: any;
   relatedData?: any;
+  onSuccess?: (result?: any) => void;
 };
 
 type TableName = FormContainerProps["table"];
@@ -49,6 +50,7 @@ const LessonForm = dynamic(() => import("./forms/LessonForm"));
 const AnnouncementForm = dynamic(() => import("./forms/AnnouncementForm"));
 const WorkshopForm = dynamic(() => import("./forms/WorkshopForm"));
 const FormationForm = dynamic(() => import("./forms/FormationForm"));
+const PaymentForm = dynamic(() => import("./forms/PaymentForm"));
 
 // --- FORM MAP ---
 const forms: Partial<Record<TableName, ComponentType<FormComponentProps>>> = {
@@ -194,7 +196,19 @@ const FormModal = ({
 }: FormContainerProps) => {
   const { can, isLoaded } = usePermission();
   const [open, setOpen] = useState(false);
+  const router = useRouter();
   const tModals = useTranslations("modals");
+  const tCommon = useTranslations("common");
+
+  const [paymentHandover, setPaymentHandover] = useState<{
+    isOpen: boolean;
+    student: any;
+    classData: any;
+  }>({
+    isOpen: false,
+    student: null,
+    classData: null,
+  });
 
   if (isLoaded && !can(type, table)) {
     return null;
@@ -262,6 +276,21 @@ const FormModal = ({
                   type={type}
                   data={data}
                   relatedData={relatedData}
+                  onSuccess={(result: any) => {
+                    if (table === "student" && result?.andPay && result?.student && result?.classData) {
+                      setOpen(false);
+                      setPaymentHandover({
+                        isOpen: true,
+                        student: result.student,
+                        classData: result.classData,
+                      });
+                    } else {
+                      setOpen(false);
+                      startTransition(() => {
+                        router.refresh();
+                      });
+                    }
+                  }}
                 />
               </div>
             ) : (
@@ -269,6 +298,38 @@ const FormModal = ({
                 {tModals("notFound")}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Immediate Payment Handover Modal (e.g. from Student Creation) */}
+      {paymentHandover.isOpen && paymentHandover.student && paymentHandover.classData && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+          <div className="bg-surface rounded-xl border border-border shadow-2xl relative w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => {
+                setPaymentHandover({ isOpen: false, student: null, classData: null });
+                startTransition(() => {
+                  router.refresh();
+                });
+              }}
+              className="absolute top-4 end-4 text-muted hover:text-gray-900 z-10 p-1.5 rounded-lg hover:bg-surface-subtle transition-colors cursor-pointer"
+            >
+              <Image src="/close.png" alt={tCommon("cancel")} width={14} height={14} />
+            </button>
+            <PaymentForm
+              student={paymentHandover.student}
+              classData={paymentHandover.classData}
+              setOpen={(isOpen) => {
+                setPaymentHandover((prev) => ({ ...prev, isOpen }));
+                if (!isOpen) {
+                  startTransition(() => {
+                    router.refresh();
+                  });
+                }
+              }}
+              type="create"
+            />
           </div>
         </div>
       )}

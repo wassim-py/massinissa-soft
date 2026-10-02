@@ -31,8 +31,12 @@ export type ExtendedEnrollment = Enrollment & {
       class: { id: number; name: string; branchId: number; branch: { name: string } };
     }[];
   };
-  transfersFrom: EnrollmentTransfer[];
-  transfersTo: EnrollmentTransfer[];
+  transfersFrom: (EnrollmentTransfer & {
+    toEnrollment?: { class?: { name: string; branch?: { name: string } } };
+  })[];
+  transfersTo: (EnrollmentTransfer & {
+    fromEnrollment?: { class?: { name: string; branch?: { name: string } } };
+  })[];
 };
 
 export type ExtendedClass = Class & {
@@ -669,6 +673,28 @@ export default function PaymentGrid({
                 {locale === "ar" ? "مستحقات المدرسة فقط" : "Frais école"}
               </Badge>
             )}
+            {item.transferredIn > 0 && (
+              <Badge
+                variant="secondary"
+                size="sm"
+                className="bg-purple-100 text-purple-900 border-purple-300 font-semibold shadow-2xs inline-flex items-center gap-1 cursor-help"
+                title={
+                  item.enrollment.transfersTo?.map((t: any) => {
+                    const fromName = t.fromEnrollment?.class?.name;
+                    return fromName
+                      ? `${t.transferredSessions} ${locale === "ar" ? "حصص منقولة من" : "séances transférées depuis"} ${fromName}`
+                      : `${t.transferredSessions} ${locale === "ar" ? "حصص منقولة" : "séances transférées"}`;
+                  }).join(" • ") || (locale === "ar" ? "رصيد منقول" : "Crédit transféré")
+                }
+              >
+                <ArrowRightLeft className="w-3 h-3 text-purple-600 shrink-0" />
+                <span>
+                  {locale === "ar"
+                    ? `تحويل (+${item.transferredIn})`
+                    : `Transféré (+${item.transferredIn})`}
+                </span>
+              </Badge>
+            )}
           </div>
           <div className="text-[11px] text-muted font-mono mt-0.5">
             {s.phone || t("noPhone")}
@@ -727,6 +753,20 @@ export default function PaymentGrid({
               count: item.netSessions,
             })}
           </Badge>
+          {item.transferredIn > 0 && (
+            <span
+              className="block text-[10px] text-purple-700 font-medium mt-0.5"
+              title={
+                item.enrollment.transfersTo?.map((t: any) =>
+                  t.fromEnrollment?.class?.name
+                    ? `+${t.transferredSessions} (${t.fromEnrollment.class.name})`
+                    : `+${t.transferredSessions}`
+                ).join(", ")
+              }
+            >
+              +{item.transferredIn} {locale === "ar" ? "محولة" : "transférées"}
+            </span>
+          )}
         </td>
 
         {/* 7. Status Badge */}
@@ -920,6 +960,20 @@ export default function PaymentGrid({
                         >
                           {s.name}
                         </Link>
+                        {item.transferredIn > 0 && (
+                          <Badge
+                            variant="secondary"
+                            size="sm"
+                            className="bg-purple-100 text-purple-900 border-purple-300 font-semibold shadow-2xs inline-flex items-center gap-1"
+                          >
+                            <ArrowRightLeft className="w-3 h-3 text-purple-600 shrink-0" />
+                            <span>
+                              {locale === "ar"
+                                ? `تحويل (+${item.transferredIn})`
+                                : `Transféré (+${item.transferredIn})`}
+                            </span>
+                          </Badge>
+                        )}
                       </div>
                       <div className="text-xs text-muted font-mono mt-0.5">
                         {s.phone ? (

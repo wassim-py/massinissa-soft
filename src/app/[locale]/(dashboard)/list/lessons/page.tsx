@@ -84,11 +84,13 @@ const LessonListPage = async (props: {
   endOfWeek.setHours(23, 59, 59, 999);
 
   let selectedBranchId: number | null = null;
-  if (!session.isOwner) {
-    selectedBranchId = activeBranchId || null;
-  } else if (branchId && branchId !== "all") {
+  if (branchId && branchId !== "all") {
     const parsed = parseInt(branchId, 10);
     selectedBranchId = isNaN(parsed) ? null : parsed;
+  } else if (branchId === "all") {
+    selectedBranchId = null;
+  } else if (!session.isOwner) {
+    selectedBranchId = activeBranchId || null;
   }
   const selectedClassId = classId && classId !== "all" ? parseInt(classId, 10) : null;
   const selectedTeacherId = teacherId && teacherId !== "all" ? teacherId : null;
@@ -305,7 +307,8 @@ const LessonListPage = async (props: {
   }
 
   const fallbackBranchId = activeBranchId || session.branchIds[0] || branches[0]?.id || 1;
-  const effectiveBranchId = selectedBranchId || fallbackBranchId;
+  const adminOwnBranchId = session.branchIds[0] || activeBranchId || fallbackBranchId;
+  const formBranchId = session.isOwner ? (selectedBranchId || fallbackBranchId) : adminOwnBranchId;
 
   const relatedDataForForms = {
     teachers,
@@ -313,12 +316,18 @@ const LessonListPage = async (props: {
     classrooms,
     branches,
     isOwner: session.isOwner,
-    userBranchId: effectiveBranchId,
+    userBranchId: formBranchId,
     subjects: classes.map((c) => ({ id: c.id, name: c.name })),
   };
 
   const lessonActions = lessons.reduce((acc, lesson) => {
     if (canManage) {
+      const canEditLesson =
+        session.isOwner ||
+        (session.branchIds.length > 0
+          ? session.branchIds.includes(lesson.branchId)
+          : lesson.branchId === activeBranchId);
+
       if (lesson.isWorkshop && lesson.workshopId) {
         acc[lesson.id] = (
           <div className="flex justify-end gap-2">
@@ -339,16 +348,20 @@ const LessonListPage = async (props: {
             >
               {t("viewFormation")}
             </Link>
-            <FormContainer table="lesson" type="delete" id={lesson.id} />
-            <FormContainer
-              table="lesson"
-              type="update"
-              data={lesson}
-              relatedData={relatedDataForForms}
-            />
+            {canEditLesson && (
+              <>
+                <FormContainer table="lesson" type="delete" id={lesson.id} />
+                <FormContainer
+                  table="lesson"
+                  type="update"
+                  data={lesson}
+                  relatedData={relatedDataForForms}
+                />
+              </>
+            )}
           </div>
         );
-      } else {
+      } else if (canEditLesson) {
         acc[lesson.id] = (
           <div className="flex justify-end gap-3">
             <FormContainer table="lesson" type="delete" id={lesson.id} />

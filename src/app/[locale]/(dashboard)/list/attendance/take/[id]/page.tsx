@@ -32,7 +32,16 @@ const TakeAttendancePage = async (
   const searchQuery = searchParams.search;
 
   const rawLesson = await prisma.$queryRaw<any[]>`
-    SELECT l.*, c.name as "className", c."pricePerCycle" as "classPrice", c."teacherId" as "classTeacherId", c."levelId" as "classLevelId", t.name as "teacherName"
+    SELECT l.*,
+           c.name as "className",
+           c."pricePerCycle" as "classPrice",
+           c."pricePerCycle",
+           c."inscriptionFee",
+           c."bookFee",
+           c."hasBooks",
+           c."teacherId" as "classTeacherId",
+           c."levelId" as "classLevelId",
+           t.name as "teacherName"
     FROM "Lesson" l
     LEFT JOIN "Class" c ON c.id = l."classId"
     LEFT JOIN "Teacher" t ON t.id = l."teacherId"
@@ -79,6 +88,10 @@ const TakeAttendancePage = async (
       id: l.classId,
       name: l.className || (locale === "ar" ? "قسم" : "Groupe"),
       price: Number(l.classPrice || 0),
+      pricePerCycle: Number(l.pricePerCycle || l.classPrice || 0),
+      inscriptionFee: l.inscriptionFee != null ? Number(l.inscriptionFee) : 0,
+      bookFee: l.bookFee != null ? Number(l.bookFee) : 0,
+      hasBooks: Boolean(l.hasBooks),
       levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
       branchId: l.branchId != null ? Number(l.branchId) : null,
     },
@@ -179,6 +192,7 @@ const TakeAttendancePage = async (
       FROM "Student" s
       JOIN "Enrollment" e ON e."studentId" = s.id
       WHERE e."classId" = ${l.classId}
+        AND (e.status IS NULL OR e.status = 'ACTIVE')
       ORDER BY s."globalNumber" ASC, s.name ASC
     `;
     // Deduplicate defensively
@@ -225,6 +239,10 @@ const TakeAttendancePage = async (
           },
           enrollments: {
             where: { classId: l.classId },
+            include: {
+              transfersFrom: true,
+              transfersTo: true,
+            },
           },
           attendances: {
             where: {
@@ -293,14 +311,19 @@ const TakeAttendancePage = async (
       ? "WAIVED"
       : "UNPAID";
 
+    const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
+
     return {
       id: s.id,
       globalNumber: s.globalNumber ?? details?.globalNumber,
       name: s.name,
       phone: s.phone ?? details?.phone ?? null,
       surname: "",
+      payerStatus: effectivePayerStatus,
       vouchers: details?.vouchers || [],
       attendances: details?.attendances || [],
+      transfersFrom: details?.enrollments?.[0]?.transfersFrom || [],
+      transfersTo: details?.enrollments?.[0]?.transfersTo || [],
       family: details?.family || null,
       isBookEligible: hasPaidBook,
       hasPaidBook,
@@ -332,14 +355,14 @@ const TakeAttendancePage = async (
         }),
         prisma.class.findMany({
           where: session.isOwner ? {} : { OR: [{ branchId: l.branchId }, { id: l.classId }] },
-          select: { id: true, name: true },
+          select: { id: true, name: true, levelId: true },
           orderBy: { name: "asc" },
         }),
       ]);
 
       studentRelatedData = {
         grades: levels.map((lvl) => ({ id: lvl.id, level: lvl.name, name: lvl.name })),
-        classes: classes.map((c) => ({ id: c.id, name: c.name })),
+        classes: classes.map((c) => ({ id: c.id, name: c.name, levelId: c.levelId })),
       };
     } catch (e) {
       console.error("Error fetching student registration relatedData:", e);

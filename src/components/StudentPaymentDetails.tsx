@@ -14,8 +14,21 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
-import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, ArrowRightLeft } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
+
+export type ExtendedTransferItem = {
+  id: number;
+  fromEnrollmentId: number;
+  toEnrollmentId: number;
+  transferredSessions: number;
+  amount?: any;
+  notes?: string | null;
+  transferredAt: Date | string;
+  transferredBy: string;
+  fromClass?: { id: number; name: string; branchId: number; branch?: { id: number; name: string } };
+  toClass?: { id: number; name: string; branchId: number; branch?: { id: number; name: string } };
+};
 
 export type ExtendedEnrollmentItem = {
   id: number;
@@ -26,6 +39,7 @@ export type ExtendedEnrollmentItem = {
   feeOverriddenByOwner: boolean;
   feeOverrideNote?: string | null;
   isNonPayer?: boolean;
+  status?: string;
   class: {
     id: number;
     name: string;
@@ -38,8 +52,28 @@ export type ExtendedEnrollmentItem = {
     level?: { id: number; name: string } | null;
     teacher?: { id: string; name: string; TeacherPayRate?: Array<{ percentageOfSessionFee: any }> } | null;
   };
-  transfersFrom?: Array<{ id: number; transferredSessions: number; transferredAt: Date | string; transferredBy: string }>;
-  transfersTo?: Array<{ id: number; transferredSessions: number; transferredAt: Date | string; transferredBy: string }>;
+  transfersFrom?: Array<{
+    id: number;
+    fromEnrollmentId: number;
+    toEnrollmentId: number;
+    transferredSessions: number;
+    amount?: any;
+    notes?: string | null;
+    transferredAt: Date | string;
+    transferredBy: string;
+    toEnrollment?: { class?: { name: string; branch?: { id: number; name: string } } };
+  }>;
+  transfersTo?: Array<{
+    id: number;
+    fromEnrollmentId: number;
+    toEnrollmentId: number;
+    transferredSessions: number;
+    amount?: any;
+    notes?: string | null;
+    transferredAt: Date | string;
+    transferredBy: string;
+    fromEnrollment?: { class?: { name: string; branch?: { id: number; name: string } } };
+  }>;
 };
 
 export type ExtendedVoucherItem = Voucher & {
@@ -141,8 +175,11 @@ export default function StudentPaymentDetails({
 
   const [auditModal, setAuditModal] = useState<{
     isOpen: boolean;
-    voucher?: ExtendedVoucherItem;
+    voucher?: ExtendedVoucherItem | null;
+    transfer?: ExtendedTransferItem | null;
   }>({ isOpen: false });
+
+  const [historyTab, setHistoryTab] = useState<"all" | "vouchers" | "transfers">("all");
 
   const [refundModal, setRefundModal] = useState<{
     isOpen: boolean;
@@ -185,6 +222,59 @@ export default function StudentPaymentDetails({
     }
     return true;
   });
+
+  // Extract all unique transfers across enrollments
+  const allTransfersMap = new Map<number, ExtendedTransferItem>();
+  allEnrollments.forEach((enr) => {
+    (enr.transfersFrom || []).forEach((t: any) => {
+      if (!allTransfersMap.has(t.id)) {
+        allTransfersMap.set(t.id, {
+          ...t,
+          fromClass: enr.class,
+          toClass: t.toEnrollment?.class,
+        });
+      }
+    });
+    (enr.transfersTo || []).forEach((t: any) => {
+      if (!allTransfersMap.has(t.id)) {
+        allTransfersMap.set(t.id, {
+          ...t,
+          fromClass: t.fromEnrollment?.class,
+          toClass: enr.class,
+        });
+      }
+    });
+  });
+  const allTransfers = Array.from(allTransfersMap.values()).sort(
+    (a, b) => new Date(b.transferredAt).getTime() - new Date(a.transferredAt).getTime()
+  );
+
+  const branchScopedTransfers = allTransfers.filter((t) => {
+    if (selectedBranchTab === "all") return true;
+    return (
+      t.fromClass?.branchId === selectedBranchTab ||
+      t.toClass?.branchId === selectedBranchTab ||
+      (t.fromClass?.branch as any)?.id === selectedBranchTab ||
+      (t.toClass?.branch as any)?.id === selectedBranchTab
+    );
+  });
+
+  type CombinedPaymentItem =
+    | { kind: "voucher"; date: Date | string; voucher: ExtendedVoucherItem }
+    | { kind: "transfer"; date: Date | string; transfer: ExtendedTransferItem };
+
+  const combinedItems: CombinedPaymentItem[] = [];
+  if (historyTab === "all" || historyTab === "vouchers") {
+    branchScopedVouchers.forEach((v) => {
+      combinedItems.push({ kind: "voucher", date: v.issuedAt, voucher: v });
+    });
+  }
+  if (historyTab === "all" || historyTab === "transfers") {
+    branchScopedTransfers.forEach((t) => {
+      combinedItems.push({ kind: "transfer", date: t.transferredAt, transfer: t });
+    });
+  }
+  combinedItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   // Calculate per-class metrics
   const classMetrics = branchScopedEnrollments.map((enr) => {
@@ -504,16 +594,20 @@ export default function StudentPaymentDetails({
             {sortedClassMetrics.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {sortedClassMetrics.map((cm) => {
-                  const isPaid = cm.status === "PAID";
-                  const isExpiring = cm.status === "EXPIRING" || cm.netSessions === 1;
-                  const isUnpaid = cm.status === "UNPAID";
-                  const isSibling = cm.status === "SIBLING_WAIVED";
+                  const isTransferred = cm.enrollment.status === "TRANSFERRED";
+                  const isUnenrolled = cm.enrollment.status === "UNENROLLED";
+                  const isPaid = !isTransferred && !isUnenrolled && cm.status === "PAID";
+                  const isExpiring = !isTransferred && !isUnenrolled && (cm.status === "EXPIRING" || cm.netSessions === 1);
+                  const isUnpaid = !isTransferred && !isUnenrolled && cm.status === "UNPAID";
+                  const isSibling = !isTransferred && !isUnenrolled && cm.status === "SIBLING_WAIVED";
 
                   return (
                     <Card
                       key={cm.class.id}
                       className={`border p-4 transition-all rounded-xl ${
-                        isExpiring
+                        isTransferred || isUnenrolled
+                          ? "border-dashed border-gray-300 bg-gray-50/50 opacity-80"
+                          : isExpiring
                           ? "border-amber-400 bg-amber-50/40 ring-2 ring-amber-300/80 shadow-xs"
                           : isUnpaid
                           ? "border-red-300 bg-red-50/20"
@@ -582,7 +676,15 @@ export default function StudentPaymentDetails({
                               </span>
                             </Badge>
                           )}
-                          {isExpiring ? (
+                          {isTransferred ? (
+                            <Badge variant="secondary" size="sm" withDot>
+                              {locale === "ar" ? "رصيد منقول (غير مسجل)" : "Transféré (Désinscrit)"}
+                            </Badge>
+                          ) : isUnenrolled ? (
+                            <Badge variant="neutral" size="sm" withDot>
+                              {locale === "ar" ? "ملغى التسجيل" : "Désinscrit"}
+                            </Badge>
+                          ) : isExpiring ? (
                             <Badge variant="warning" size="sm" withDot className="font-bold">
                               {t("expiringWarningBadge")}
                             </Badge>
@@ -723,15 +825,56 @@ export default function StudentPaymentDetails({
             )}
           </div>
 
-          {/* SCOPED VOUCHERS HISTORY TABLE */}
+          {/* SCOPED VOUCHERS & TRANSFERS HISTORY TABLE */}
           <div className="mt-8 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-gray-900">
-                {t("vouchersTableTitle")} ({branchScopedVouchers.length})
-              </h3>
-              <p className="text-xs text-muted">
-                {t("officialFormatDesc", { format: "BRANCH [LEVEL] BON NUMBER (DATE)" })}
-              </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-gray-900">
+                  {locale === "ar" ? "سجل وصولات الدفع وتحويلات الرصيد" : "Historique des Reçus & Mouvements de Crédit"} ({combinedItems.length})
+                </h3>
+                <p className="text-xs text-muted">
+                  {locale === "ar"
+                    ? "يتضمن الوصولات المسددة بالإضافة إلى سجل تحويلات الحصص بين الأفواج الدراسية"
+                    : "Comprend les reçus d'encaissement et les transferts de solde de séances entre groupes"}
+                </p>
+              </div>
+
+              {/* Filter Tabs: All vs Vouchers vs Transfers */}
+              <div className="flex items-center bg-surface-muted p-1 rounded-xl border border-border text-xs font-semibold self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setHistoryTab("all")}
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                    historyTab === "all"
+                      ? "bg-primary text-white shadow-xs"
+                      : "text-muted hover:text-gray-900"
+                  }`}
+                >
+                  {locale === "ar" ? "الكل" : "Tous"} ({branchScopedVouchers.length + branchScopedTransfers.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryTab("vouchers")}
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                    historyTab === "vouchers"
+                      ? "bg-primary text-white shadow-xs"
+                      : "text-muted hover:text-gray-900"
+                  }`}
+                >
+                  {locale === "ar" ? "وصولات فقط" : "Reçus"} ({branchScopedVouchers.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryTab("transfers")}
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                    historyTab === "transfers"
+                      ? "bg-primary text-white shadow-xs"
+                      : "text-muted hover:text-gray-900"
+                  }`}
+                >
+                  {locale === "ar" ? "تحويلات فقط" : "Transferts"} ({branchScopedTransfers.length})
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto border border-border rounded-xl bg-surface shadow-xs">
@@ -748,8 +891,92 @@ export default function StudentPaymentDetails({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
-                  {branchScopedVouchers.length > 0 ? (
-                    branchScopedVouchers.map((v) => {
+                  {combinedItems.length > 0 ? (
+                    combinedItems.map((item) => {
+                      if (item.kind === "transfer") {
+                        const trf = item.transfer;
+                        return (
+                          <tr
+                            key={`transfer-${trf.id}`}
+                            className="hover:bg-purple-50/40 transition-colors bg-purple-50/20"
+                          >
+                            {/* Reference */}
+                            <td className="p-3 text-start">
+                              <span
+                                className="font-mono font-bold text-purple-900 bg-purple-100/90 px-2 py-0.5 rounded-lg border border-purple-300 inline-flex items-center gap-1.5 shadow-2xs"
+                                dir="ltr"
+                              >
+                                <ArrowRightLeft className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                                TRF-#{trf.id}
+                              </span>
+                            </td>
+
+                            {/* Class Names: Source -> Destination */}
+                            <td className="p-3 text-start">
+                              <div className="flex items-center gap-1.5 flex-wrap text-xs">
+                                <span className="text-gray-800 font-medium">
+                                  {trf.fromClass?.name || (locale === "ar" ? "فوج مصدر" : "Groupe source")}
+                                </span>
+                                <span className="text-purple-600 font-bold px-0.5">➔</span>
+                                <span className="text-purple-950 font-bold">
+                                  {trf.toClass?.name || (locale === "ar" ? "فوج هدف" : "Groupe cible")}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Payment / Movement Type */}
+                            <td className="p-3 text-start">
+                              <Badge
+                                variant="secondary"
+                                size="sm"
+                                className="bg-purple-100 text-purple-900 border-purple-300 font-semibold"
+                              >
+                                <ArrowRightLeft className="w-3 h-3 text-purple-600 inline me-1" />
+                                {locale === "ar" ? "تحويل رصيد" : "Transfert de crédit"}
+                              </Badge>
+                            </td>
+
+                            {/* Date */}
+                            <td className="p-3 text-muted font-mono text-start" dir="ltr">
+                              {new Date(trf.transferredAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                            </td>
+
+                            {/* Sessions & Amount */}
+                            <td className="p-3 text-end">
+                              <span className="font-mono font-bold text-purple-900 block text-xs">
+                                +{trf.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
+                              </span>
+                              <span className="text-[10px] text-muted font-mono block">
+                                ({Number(trf.amount || 0).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD)
+                              </span>
+                            </td>
+
+                            {/* Status */}
+                            <td className="p-3 text-center">
+                              <Badge variant="success" size="sm" className="bg-emerald-50 text-emerald-800 border-emerald-200">
+                                {locale === "ar" ? "محول بنجاح" : "Transféré"}
+                              </Badge>
+                            </td>
+
+                            {/* Actions: Audit Button */}
+                            <td className="p-3 text-end">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setAuditModal({ isOpen: true, transfer: trf })}
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                  title={locale === "ar" ? "عرض تدقيق التحويل" : "Détails et audit du transfert"}
+                                >
+                                  <ArrowRightLeft className="w-3 h-3 text-purple-700" />
+                                  <span>{t("auditBtn")}</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      const v = item.voucher;
                       const totalRefunded = v.refunds?.reduce((sum, r) => sum + Number(r.amount), 0) || 0;
                       const remainingBalance = Number(v.remainingBalance ?? (Number(v.amount) - totalRefunded));
                       const isVoidedOrFullyRefunded = v.isVoided || remainingBalance <= 0;
@@ -990,7 +1217,7 @@ export default function StudentPaymentDetails({
       )}
 
       {/* MODAL 3: Audit Trail Modal */}
-      {auditModal.isOpen && auditModal.voucher && (
+      {auditModal.isOpen && (auditModal.voucher || auditModal.transfer) && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4">
           <div className="bg-white rounded-xl shadow-xl relative w-full max-w-lg max-h-[92vh] overflow-y-auto p-5 font-sans">
             <button
@@ -1000,68 +1227,150 @@ export default function StudentPaymentDetails({
               <Image src="/close.png" alt="close" width={16} height={16} />
             </button>
 
-            <h3 className="text-base font-bold text-gray-900 border-b pb-2">
-              {t("modalAuditTitle", { voucher: formatVoucherDisplay(auditModal.voucher) })}
-            </h3>
+            {auditModal.transfer ? (
+              <div>
+                <h3 className="text-base font-bold text-gray-900 border-b pb-2 flex items-center gap-2">
+                  <span className="p-1 rounded bg-purple-100 text-purple-700">
+                    <ArrowRightLeft className="w-4 h-4" />
+                  </span>
+                  <span>
+                    {locale === "ar"
+                      ? `سجل تدقيق تحويل الرصيد #TRF-${auditModal.transfer.id}`
+                      : `Journal d'audit du transfert #TRF-${auditModal.transfer.id}`}
+                  </span>
+                </h3>
 
-            <div className="mt-4 space-y-3 text-xs">
-              <div className="bg-surface-muted p-3 rounded-lg border border-border space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-muted">{t("modalAuditAmount")}</span>
-                  <span className="font-mono font-bold">{Number(auditModal.voucher.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted">{t("modalAuditIssuedBy")}</span>
-                  <span>{auditModal.voucher.issuedBy}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted">{t("modalAuditIssuedAt")}</span>
-                  <span className="font-mono">{new Date(auditModal.voucher.issuedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}</span>
+                <div className="mt-4 space-y-3 text-xs">
+                  <div className="bg-purple-50/60 p-3.5 rounded-xl border border-purple-200/80 space-y-2">
+                    <div className="flex justify-between items-center py-1 border-b border-purple-100">
+                      <span className="text-muted">{locale === "ar" ? "الفوج المصدر (القديم) :" : "Groupe d'origine :"}</span>
+                      <span className="font-bold text-gray-900">
+                        {auditModal.transfer.fromClass?.name || (locale === "ar" ? "فوج مصدر" : "Groupe source")}
+                        {auditModal.transfer.fromClass?.branch?.name && (
+                          <span className="text-[10px] text-muted font-normal ms-1">
+                            ({auditModal.transfer.fromClass.branch.name})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1 border-b border-purple-100">
+                      <span className="text-muted">{locale === "ar" ? "الفوج الهدف (الجديد) :" : "Groupe de destination :"}</span>
+                      <span className="font-bold text-purple-950">
+                        {auditModal.transfer.toClass?.name || (locale === "ar" ? "فوج هدف" : "Groupe cible")}
+                        {auditModal.transfer.toClass?.branch?.name && (
+                          <span className="text-[10px] text-muted font-normal ms-1">
+                            ({auditModal.transfer.toClass.branch.name})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1 border-b border-purple-100">
+                      <span className="text-muted">{locale === "ar" ? "عدد الحصص المنقولة :" : "Séances transférées :"}</span>
+                      <span className="font-mono font-bold text-sm text-purple-900">
+                        +{auditModal.transfer.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1 border-b border-purple-100">
+                      <span className="text-muted">{locale === "ar" ? "القيمة المالية المعادلة :" : "Valeur financière équivalente :"}</span>
+                      <span className="font-mono font-bold text-gray-900">
+                        {Number(auditModal.transfer.amount || 0).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1 border-b border-purple-100">
+                      <span className="text-muted">{locale === "ar" ? "الموظف المنفذ للتحويل :" : "Effectué par :"}</span>
+                      <span className="font-semibold text-gray-800">{auditModal.transfer.transferredBy}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1">
+                      <span className="text-muted">{locale === "ar" ? "تاريخ ووقت التحويل :" : "Date et heure du transfert :"}</span>
+                      <span className="font-mono text-gray-800">
+                        {new Date(auditModal.transfer.transferredAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Notes / Reason */}
+                  <div className="bg-surface-subtle p-3 rounded-xl border border-border">
+                    <p className="font-bold text-gray-900 mb-1">
+                      {locale === "ar" ? "سبب / ملاحظات التحويل :" : "Motif / Remarques du transfert :"}
+                    </p>
+                    <p className="text-gray-700 italic">
+                      {auditModal.transfer.notes ||
+                        (locale === "ar" ? "لا توجد ملاحظات مسجلة." : "Aucune remarque spécifiée lors du transfert.")}
+                    </p>
+                  </div>
                 </div>
               </div>
+            ) : auditModal.voucher ? (
+              <div>
+                <h3 className="text-base font-bold text-gray-900 border-b pb-2">
+                  {t("modalAuditTitle", { voucher: formatVoucherDisplay(auditModal.voucher) })}
+                </h3>
 
-              {/* Edits trail */}
-              {auditModal.voucher.edits && auditModal.voucher.edits.length > 0 && (
-                <div className="space-y-2">
-                  <p className="font-bold text-amber-800">{t("modalAuditEditsTitle")}</p>
-                  {auditModal.voucher.edits.map((ed) => (
-                    <div key={ed.id} className="bg-amber-50 p-2.5 rounded border border-amber-200">
-                      <div>
-                        {t("modalAuditFieldChanged", {
-                          field: ed.fieldName,
-                          oldVal: ed.oldValue,
-                          newVal: ed.newValue,
-                        })}
-                      </div>
-                      <div className="text-muted text-[10px] mt-0.5">
-                        {t("modalAuditEditedBy", {
-                          user: ed.editedBy,
-                          date: new Date(ed.editedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
-                        })}
-                      </div>
-                      {ed.reason && <p className="text-gray-600 italic mt-0.5">{t("modalAuditEditReason", { reason: ed.reason })}</p>}
+                <div className="mt-4 space-y-3 text-xs">
+                  <div className="bg-surface-muted p-3 rounded-lg border border-border space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-muted">{t("modalAuditAmount")}</span>
+                      <span className="font-mono font-bold">{Number(auditModal.voucher.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD</span>
                     </div>
-                  ))}
-                </div>
-              )}
+                    <div className="flex justify-between">
+                      <span className="text-muted">{t("modalAuditIssuedBy")}</span>
+                      <span>{auditModal.voucher.issuedBy}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted">{t("modalAuditIssuedAt")}</span>
+                      <span className="font-mono">{new Date(auditModal.voucher.issuedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}</span>
+                    </div>
+                  </div>
 
-              {/* Refunds trail */}
-              {auditModal.voucher.refunds && auditModal.voucher.refunds.length > 0 && (
-                <div className="space-y-2">
-                  <p className="font-bold text-red-800">{t("modalAuditRefundsTitle")}</p>
-                  {auditModal.voucher.refunds.map((rf) => (
-                    <div key={rf.id} className="bg-red-50 p-2.5 rounded border border-red-200">
-                      <div className="flex justify-between font-bold text-red-700">
-                        <span>{t("modalAuditRefundItem", { amount: Number(rf.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ") })}</span>
-                        <span className="text-muted text-[10px] font-normal">{new Date(rf.refundedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}</span>
-                      </div>
-                      <div className="mt-1 text-gray-700">{t("modalAuditRefundReason", { reason: rf.reason })}</div>
-                      <div className="text-[10px] text-muted mt-0.5">{t("modalAuditRefundBy", { user: rf.refundedBy })}</div>
+                  {/* Edits trail */}
+                  {auditModal.voucher.edits && auditModal.voucher.edits.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="font-bold text-amber-800">{t("modalAuditEditsTitle")}</p>
+                      {auditModal.voucher.edits.map((ed) => (
+                        <div key={ed.id} className="bg-amber-50 p-2.5 rounded border border-amber-200">
+                          <div>
+                            {t("modalAuditFieldChanged", {
+                              field: ed.fieldName,
+                              oldVal: ed.oldValue,
+                              newVal: ed.newValue,
+                            })}
+                          </div>
+                          <div className="text-muted text-[10px] mt-0.5">
+                            {t("modalAuditEditedBy", {
+                              user: ed.editedBy,
+                              date: new Date(ed.editedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
+                            })}
+                          </div>
+                          {ed.reason && <p className="text-gray-600 italic mt-0.5">{t("modalAuditEditReason", { reason: ed.reason })}</p>}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
+
+                  {/* Refunds trail */}
+                  {auditModal.voucher.refunds && auditModal.voucher.refunds.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="font-bold text-red-800">{t("modalAuditRefundsTitle")}</p>
+                      {auditModal.voucher.refunds.map((rf) => (
+                        <div key={rf.id} className="bg-red-50 p-2.5 rounded border border-red-200">
+                          <div className="flex justify-between font-bold text-red-700">
+                            <span>{t("modalAuditRefundItem", { amount: Number(rf.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ") })}</span>
+                            <span className="text-muted text-[10px] font-normal">{new Date(rf.refundedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}</span>
+                          </div>
+                          <div className="mt-1 text-gray-700">{t("modalAuditRefundReason", { reason: rf.reason })}</div>
+                          <div className="text-[10px] text-muted mt-0.5">{t("modalAuditRefundBy", { user: rf.refundedBy })}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </div>
+            ) : null}
           </div>
         </div>
       )}

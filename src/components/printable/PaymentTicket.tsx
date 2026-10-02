@@ -24,12 +24,15 @@ const PAYMENT_TYPE_LABELS_FR: Record<string, string> = {
 };
 
 export type VoucherTicketProps = {
-  voucher: Voucher & {
+  voucher: (Voucher & {
     student: Student;
     class: Class;
     series?: { scope: string; id: number; level?: { name: string } | null; issuingBranch?: { name: string } | null; targetBranch?: { name: string } | null } | null;
     issuingBranch?: { name: string } | null;
     targetBranch?: { name: string } | null;
+  }) & {
+    items?: Array<{ type: string; labelFr?: string; labelAr?: string; label?: string; amount: number }>;
+    totalAmount?: number;
   };
   sessionsCount?: number;
   remainingBalance?: number;
@@ -99,19 +102,39 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
           <p><span className="font-bold">{isAr ? "التلميذ:" : "Élève :"}</span> {student.name}</p>
           {student.phone && <p><span className="font-bold">{isAr ? "الهاتف:" : "Tél :"}</span> {student.phone}</p>}
           <p><span className="font-bold">{isAr ? "الفوج:" : "Classe :"}</span> {classData.name}</p>
-          <p><span className="font-bold">{isAr ? "نوع الدفع:" : "Type :"}</span> {typeLabel}</p>
+          <p>
+            <span className="font-bold">{isAr ? "نوع الدفع:" : "Type :"}</span>{" "}
+            {voucher.items && voucher.items.length > 1
+              ? isAr
+                ? "دفع مجمّع (اشتراك + رسوم)"
+                : "Paiement combiné"
+              : typeLabel}
+          </p>
         </div>
 
         {/* Items Table */}
         <div className="border-t border-dashed border-black pt-2">
-          <div className="flex justify-between font-bold text-xs">
+          <div className="flex justify-between font-bold text-xs pb-1 border-b border-dashed border-black/40">
             <span>{isAr ? "البيان" : "Désignation"}</span>
             <span>{isAr ? "المبلغ" : "Montant"}</span>
           </div>
-          <div className="flex justify-between mt-1 text-sm">
-            <span>{typeLabel}</span>
-            <span>{amountNum.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}</span>
-          </div>
+          {voucher.items && Array.isArray(voucher.items) && voucher.items.length > 0 ? (
+            voucher.items.map((item: any, idx: number) => {
+              const label = isAr ? item.labelAr || item.label : item.labelFr || item.label;
+              const amt = Number(item.amount);
+              return (
+                <div key={idx} className="flex justify-between mt-1 text-xs">
+                  <span>{label}</span>
+                  <span className="font-mono">{amt.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}</span>
+                </div>
+              );
+            })
+          ) : (
+            <div className="flex justify-between mt-1 text-sm">
+              <span>{typeLabel}</span>
+              <span className="font-mono">{amountNum.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}</span>
+            </div>
+          )}
         </div>
 
         {/* Additional Info if applicable */}
@@ -135,7 +158,9 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
         {/* Total */}
         <div className="border-t-2 border-black mt-2 pt-2 text-end">
           <p className="font-bold text-base">
-            {isAr ? "المجموع:" : "Total :"} {amountNum.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}
+            {isAr ? "المجموع:" : "Total :"} {
+              (voucher.totalAmount !== undefined ? Number(voucher.totalAmount) : amountNum).toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')
+            } {isAr ? 'دج' : 'DZD'}
           </p>
         </div>
 

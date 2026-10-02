@@ -102,13 +102,32 @@ const FormContainer = async ({
               orderBy: { id: "asc" },
             }),
             prisma.class.findMany({
-              select: { id: true, name: true },
+              select: {
+                id: true,
+                name: true,
+                levelId: true,
+                pricePerCycle: true,
+                inscriptionFee: true,
+                bookFee: true,
+                hasBooks: true,
+                branchId: true,
+              },
               orderBy: { name: "asc" },
             }),
           ]);
           finalRelatedData = {
             grades: levels.map((l) => ({ id: l.id, level: l.name, name: l.name })),
-            classes: classes.map((c) => ({ id: c.id, name: c.name })),
+            classes: classes.map((c) => ({
+              id: c.id,
+              name: c.name,
+              levelId: c.levelId,
+              price: Number(c.pricePerCycle || 0),
+              pricePerCycle: Number(c.pricePerCycle || 0),
+              inscriptionFee: Number(c.inscriptionFee || 0),
+              bookFee: Number(c.bookFee || 0),
+              hasBooks: Boolean(c.hasBooks),
+              branchId: c.branchId,
+            })),
           };
           break;
         }

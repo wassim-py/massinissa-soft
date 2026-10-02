@@ -8,7 +8,7 @@ import { Voucher, Student, Class } from "@prisma/client";
 import Image from 'next/image';
 
 type PrintButtonProps = {
-  voucher: Voucher & { student: Student; class: Class; series?: { scope: string; id: number } | null };
+  voucher: any;
   sessionsForThisPayment?: number;
   amountOwedByStudent?: number;
 };

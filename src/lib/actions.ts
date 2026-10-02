@@ -544,10 +544,13 @@ export const createStudent = async (
     const fullName = [data.surname, data.name].filter(Boolean).join(" ").trim();
     const phone = data.phone?.trim() || null;
     const globalNumber = await getNextGlobalStudentNumber(prisma);
+    const birthday = data.birthday ? new Date(data.birthday) : null;
+    const address = data.address?.trim() || null;
+    const sex = data.sex || "MALE";
 
     await prisma.$executeRaw`
-      INSERT INTO "Student" (id, "globalNumber", name, phone, "registeredBranchId", "createdAt")
-      VALUES (${id}, ${globalNumber}, ${fullName}, ${phone}, ${branchId}, NOW())
+      INSERT INTO "Student" (id, "globalNumber", name, phone, "registeredBranchId", birthday, address, sex, "createdAt")
+      VALUES (${id}, ${globalNumber}, ${fullName}, ${phone}, ${branchId}, ${birthday}, ${address}, ${sex}, NOW())
     `;
 
     // Handle optional repeatable parent phone numbers (§7.2)
@@ -573,8 +576,8 @@ export const createStudent = async (
 
       for (const classId of data.classes) {
         await prisma.$executeRaw`
-          INSERT INTO "Enrollment" ("studentId", "classId", "academicYearId", "inscriptionFeeCharged", "enrolledAt")
-          VALUES (${id}, ${Number(classId)}, ${yearId}, true, NOW())
+          INSERT INTO "Enrollment" ("studentId", "classId", "academicYearId", "inscriptionFeeCharged", status, "enrolledAt")
+          VALUES (${id}, ${Number(classId)}, ${yearId}, true, 'ACTIVE', NOW())
         `;
       }
     }
@@ -590,7 +593,18 @@ export const createStudent = async (
     } catch {
       // Intentionally tolerated outside Next.js request context
     }
-    return { success: true, error: false, message: "Élève créé avec succès / تم انشاء التلميذ بنجاح." };
+    return {
+      success: true,
+      error: false,
+      message: "Élève créé avec succès / تم انشاء التلميذ بنجاح.",
+      student: {
+        id,
+        globalNumber,
+        name: fullName,
+        phone,
+        registeredBranchId: branchId,
+      },
+    };
   } catch (err: any) {
     console.error(err);
     return { success: false, error: true, message: "Échec de la création de l'élève / فشل في انشاء التلميذ." };
@@ -620,10 +634,13 @@ export const updateStudent = async (
     const fullName = [data.surname, data.name].filter(Boolean).join(" ").trim();
     const phone = data.phone?.trim() || null;
     const branchId = (data as any).registeredBranchId || existing[0].registeredBranchId;
+    const birthday = data.birthday ? new Date(data.birthday) : null;
+    const address = data.address?.trim() || null;
+    const sex = data.sex || "MALE";
 
     await prisma.$executeRaw`
       UPDATE "Student"
-      SET name = ${fullName}, phone = ${phone}, "registeredBranchId" = ${branchId}
+      SET name = ${fullName}, phone = ${phone}, "registeredBranchId" = ${branchId}, birthday = ${birthday}, address = ${address}, sex = ${sex}
       WHERE id = ${data.id}
     `;
 
@@ -647,23 +664,70 @@ export const updateStudent = async (
       }
     }
 
-    // Handle enrollments for selected classes
-    if (data.classes && data.classes.length > 0) {
+    // Handle enrollments synchronization for selected classes
+    if (data.classes !== undefined) {
+      const selectedClassIds = (data.classes || [])
+        .map((cid) => Number(cid))
+        .filter((cid) => !isNaN(cid));
+
       const years = await prisma.$queryRaw<Array<{ id: number }>>`
         SELECT id FROM "AcademicYear" ORDER BY "startDate" DESC LIMIT 1
       `;
       const yearId = years.length > 0 ? years[0].id : 1;
 
-      for (const classId of data.classes) {
-        const existingEnrollment = await prisma.$queryRaw<Array<{ id: number }>>`
-          SELECT id FROM "Enrollment" WHERE "studentId" = ${data.id} AND "classId" = ${Number(classId)}
-        `;
-        if (existingEnrollment.length === 0) {
-          await prisma.$executeRaw`
-            INSERT INTO "Enrollment" ("studentId", "classId", "academicYearId", "inscriptionFeeCharged", "enrolledAt")
-            VALUES (${data.id}, ${Number(classId)}, ${yearId}, true, NOW())
-          `;
+      const currentEnrollments = await prisma.enrollment.findMany({
+        where: { studentId: data.id },
+        include: {
+          transfersFrom: true,
+          transfersTo: true,
+        },
+      });
+
+      // 1. Un-enroll or delete classes not selected
+      for (const enr of currentEnrollments) {
+        if (!selectedClassIds.includes(enr.classId)) {
+          if (enr.transfersFrom.length > 0 || enr.transfersTo.length > 0) {
+            if (enr.status !== "UNENROLLED" && enr.status !== "TRANSFERRED") {
+              await prisma.enrollment.update({
+                where: { id: enr.id },
+                data: { status: "UNENROLLED" },
+              });
+            }
+          } else {
+            await prisma.enrollment.delete({
+              where: { id: enr.id },
+            });
+          }
+          try {
+            safeRevalidatePath(`/list/attendance/class/${enr.classId}`);
+            safeRevalidatePath(`/list/payments/class/${enr.classId}`);
+          } catch {}
         }
+      }
+
+      // 2. Reactivate or insert selected classes
+      for (const classId of selectedClassIds) {
+        const existingEnr = currentEnrollments.find((e) => e.classId === classId);
+        if (!existingEnr) {
+          await prisma.enrollment.create({
+            data: {
+              studentId: data.id,
+              classId,
+              academicYearId: yearId,
+              inscriptionFeeCharged: true,
+              status: "ACTIVE",
+            },
+          });
+        } else if (existingEnr.status !== "ACTIVE") {
+          await prisma.enrollment.update({
+            where: { id: existingEnr.id },
+            data: { status: "ACTIVE" },
+          });
+        }
+        try {
+          safeRevalidatePath(`/list/attendance/class/${classId}`);
+          safeRevalidatePath(`/list/payments/class/${classId}`);
+        } catch {}
       }
     }
 
@@ -1924,6 +1988,675 @@ export async function removeCatchUpAttendanceAction(
 }
 
 // =================================================================
+// STUDENT RAPID ENROLLMENT & DUPLICATE PROTECTION ACTIONS
+// =================================================================
+
+function normalizeStudentName(str: string): string {
+  if (!str) return "";
+  let s = str.trim().toLowerCase();
+  s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  s = s.replace(/[أإآٱ]/g, "ا");
+  s = s.replace(/ة/g, "ه");
+  s = s.replace(/ى/g, "ي");
+  s = s.replace(/[\u064B-\u065F\u0670]/g, "");
+  s = s.replace(/[^\p{L}\p{N}\s]/gu, " ");
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}
+
+/**
+ * Checks if any existing student has the same first name and surname.
+ * Uses smart Arabic and Latin normalization for high precision.
+ */
+export async function checkStudentDuplicateAction({
+  name,
+  surname,
+  excludeStudentId,
+}: {
+  name: string;
+  surname: string;
+  excludeStudentId?: string;
+}): Promise<{
+  hasDuplicate: boolean;
+  isExact: boolean;
+  duplicates: Array<{
+    id: string;
+    globalNumber: number;
+    name: string;
+    phone: string | null;
+    branchName: string;
+    classes: string[];
+  }>;
+}> {
+  try {
+    const cleanName = name ? name.trim() : "";
+    const cleanSurname = surname ? surname.trim() : "";
+
+    if (cleanName.length < 2 || cleanSurname.length < 2) {
+      return { hasDuplicate: false, isExact: false, duplicates: [] };
+    }
+
+    const normTargetFirst = normalizeStudentName(cleanName);
+    const normTargetLast = normalizeStudentName(cleanSurname);
+
+    const candidates = await prisma.student.findMany({
+      where: {
+        AND: [
+          excludeStudentId ? { id: { not: excludeStudentId } } : {},
+          {
+            OR: [
+              { name: { contains: cleanSurname, mode: "insensitive" } },
+              { name: { contains: cleanName, mode: "insensitive" } },
+            ],
+          },
+        ],
+      },
+      include: {
+        registeredBranch: { select: { name: true } },
+        enrollments: {
+          include: {
+            class: { select: { id: true, name: true } },
+          },
+        },
+      },
+      take: 20,
+    });
+
+    const matchedDuplicates: Array<{
+      id: string;
+      globalNumber: number;
+      name: string;
+      phone: string | null;
+      branchName: string;
+      classes: string[];
+    }> = [];
+
+    let isExactFound = false;
+
+    for (const cand of candidates) {
+      const normCand = normalizeStudentName(cand.name);
+      const containsFirst = normCand.includes(normTargetFirst);
+      const containsLast = normCand.includes(normTargetLast);
+
+      if (containsFirst && containsLast) {
+        const fullCombo1 = `${normTargetLast} ${normTargetFirst}`;
+        const fullCombo2 = `${normTargetFirst} ${normTargetLast}`;
+        if (normCand === fullCombo1 || normCand === fullCombo2) {
+          isExactFound = true;
+        }
+
+        matchedDuplicates.push({
+          id: cand.id,
+          globalNumber: cand.globalNumber,
+          name: cand.name,
+          phone: cand.phone,
+          branchName: cand.registeredBranch?.name || "Siège",
+          classes: cand.enrollments.map((e) => e.class.name),
+        });
+      }
+    }
+
+    return {
+      hasDuplicate: matchedDuplicates.length > 0,
+      isExact: isExactFound,
+      duplicates: matchedDuplicates.slice(0, 5),
+    };
+  } catch (err) {
+    console.error("checkStudentDuplicateAction error:", err);
+    return { hasDuplicate: false, isExact: false, duplicates: [] };
+  }
+}
+
+/**
+ * Fast search for existing registered students to enroll in a group.
+ */
+export async function searchStudentsForEnrollmentAction({
+  query,
+  classId,
+}: {
+  query: string;
+  classId: number;
+}): Promise<{
+  success: boolean;
+  candidates: Array<{
+    id: string;
+    globalNumber: number;
+    name: string;
+    phone: string | null;
+    branchName: string;
+    classes: string[];
+    isAlreadyEnrolled: boolean;
+  }>;
+  message?: string;
+}> {
+  try {
+    const trimmed = query ? query.trim() : "";
+    if (!trimmed) {
+      return { success: true, candidates: [] };
+    }
+
+    const isNumeric = !isNaN(Number(trimmed));
+
+    const students = await prisma.student.findMany({
+      where: {
+        OR: [
+          { name: { contains: trimmed, mode: "insensitive" } },
+          ...(isNumeric ? [{ globalNumber: Number(trimmed) }] : []),
+          { phone: { contains: trimmed } },
+        ],
+      },
+      include: {
+        registeredBranch: { select: { name: true } },
+        enrollments: {
+          include: {
+            class: { select: { id: true, name: true } },
+          },
+        },
+      },
+      take: 15,
+      orderBy: { name: "asc" },
+    });
+
+    const candidates = students.map((s) => ({
+      id: s.id,
+      globalNumber: s.globalNumber,
+      name: s.name,
+      phone: s.phone,
+      branchName: s.registeredBranch?.name || "Siège",
+      classes: s.enrollments.map((e) => e.class.name),
+      isAlreadyEnrolled: s.enrollments.some((e) => e.class.id === classId),
+    }));
+
+    return { success: true, candidates };
+  } catch (err: any) {
+    console.error("searchStudentsForEnrollmentAction error:", err);
+    return { success: false, candidates: [], message: err.message || "Erreur de recherche" };
+  }
+}
+
+/**
+ * Enrolls an existing registered student into a class/group with one click.
+ */
+export async function enrollStudentInClassAction({
+  studentId,
+  classId,
+}: {
+  studentId: string;
+  classId: number;
+}): Promise<{
+  success: boolean;
+  error: boolean;
+  message: string;
+  student?: {
+    id: string;
+    globalNumber: number;
+    name: string;
+    phone: string | null;
+  };
+}> {
+  try {
+    const session = await getAuthSession();
+    if (!session.can("create", "student") && !session.isOwner && !session.isBranchAdmin && !session.isOwnerOrAdmin) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé à inscrire des élèves / غير مصرح لك بتسجيل التلاميذ.",
+      };
+    }
+
+    const targetClass = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { id: true, name: true, branchId: true, inscriptionFee: true },
+    });
+
+    if (!targetClass) {
+      return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود." };
+    }
+
+    if (!canUserAccessBranch(session.rawRole, session.branchIds, targetClass.branchId)) {
+      return { success: false, error: true, message: "Non autorisé pour cette succursale / غير مصرح لك بهذا الفرع." };
+    }
+
+    const student = await prisma.student.findUnique({
+      where: { id: studentId },
+      select: { id: true, globalNumber: true, name: true, phone: true },
+    });
+
+    if (!student) {
+      return { success: false, error: true, message: "Élève introuvable / التلميذ غير موجود." };
+    }
+
+    const existingEnrollment = await prisma.enrollment.findFirst({
+      where: { studentId, classId },
+    });
+
+    if (existingEnrollment) {
+      return {
+        success: false,
+        error: true,
+        message: "L'élève est déjà inscrit dans ce groupe / التلميذ مسجل بالفعل في هذا الفوج.",
+        student,
+      };
+    }
+
+    const latestYear = await prisma.academicYear.findFirst({
+      orderBy: { startDate: "desc" },
+      select: { id: true },
+    });
+    const academicYearId = latestYear?.id || 1;
+
+    await prisma.enrollment.create({
+      data: {
+        studentId,
+        classId,
+        academicYearId,
+        inscriptionFeeCharged: true,
+        inscriptionFeeAmount: targetClass.inscriptionFee,
+        payerStatus: "NORMAL",
+        enrolledAt: new Date(),
+      },
+    });
+
+    try {
+      safeRevalidatePath("/list/attendance");
+      safeRevalidatePath(`/list/attendance/class/${classId}`);
+      safeRevalidatePath(`/list/classes/${classId}`);
+      safeRevalidatePath(`/list/students/${studentId}`);
+    } catch {
+      // Tolerate revalidation outside request
+    }
+
+    return {
+      success: true,
+      error: false,
+      message: `${student.name} a été inscrit dans ${targetClass.name} avec succès / تم تسجيل التلميذ بنجاح.`,
+      student,
+    };
+  } catch (err: any) {
+    console.error("enrollStudentInClassAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err.message || "Erreur lors de l'inscription / فشل في تسجيل التلميذ بالفوج.",
+    };
+  }
+}
+
+/**
+ * Checks whether a student is exempt from inscription fees (paid in 3 different groups)
+ * or has already paid for this specific class.
+ */
+export async function checkStudentInscriptionExemptionAction({
+  studentId,
+  classId,
+}: {
+  studentId: string;
+  classId: number;
+}): Promise<{
+  success: boolean;
+  isAlreadyPaidInThisClass: boolean;
+  hasPaidThreeInscriptions: boolean;
+  paidGroupsCount: number;
+}> {
+  try {
+    const thisClassVoucher = await prisma.voucher.findFirst({
+      where: {
+        studentId,
+        classId,
+        paymentType: "INSCRIPTION",
+        isVoided: false,
+      },
+    });
+
+    const isAlreadyPaidInThisClass = Boolean(thisClassVoucher);
+
+    const distinctVouchers = await prisma.voucher.findMany({
+      where: {
+        studentId,
+        paymentType: "INSCRIPTION",
+        isVoided: false,
+      },
+      select: { classId: true },
+      distinct: ["classId"],
+    });
+
+    const paidGroupsCount = distinctVouchers.filter((v) => v.classId !== null).length;
+    const hasPaidThreeInscriptions = paidGroupsCount >= 3;
+
+    return {
+      success: true,
+      isAlreadyPaidInThisClass,
+      hasPaidThreeInscriptions,
+      paidGroupsCount,
+    };
+  } catch (err) {
+    console.error("checkStudentInscriptionExemptionAction error:", err);
+    return {
+      success: false,
+      isAlreadyPaidInThisClass: false,
+      hasPaidThreeInscriptions: false,
+      paidGroupsCount: 0,
+    };
+  }
+}
+
+export interface MultiItemVoucherItemInput {
+  enabled: boolean;
+  amount: number;
+}
+
+export interface MultiItemVoucherPayload {
+  studentId: string;
+  classId: number;
+  items: {
+    tuition?: MultiItemVoucherItemInput;
+    inscription?: MultiItemVoucherItemInput;
+    book?: MultiItemVoucherItemInput;
+  };
+  notes?: string;
+}
+
+/**
+ * Issues a combined multi-item payment voucher (Tuition + Inscription + Books) in a single atomic transaction.
+ * System categorizes each value into the database and daily ledger, producing one unified ticket.
+ */
+export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPayload): Promise<{
+  success: boolean;
+  error: boolean;
+  message: string;
+  bundle?: any;
+}> {
+  try {
+    const session = await getAuthSession();
+    const issuingBranchId = await getActiveBranchId();
+
+    if (!canUserAccessBranch(session.rawRole, session.branchIds, issuingBranchId)) {
+      return { success: false, error: true, message: "Non autorisé pour cette succursale / غير مصرح لك بهذا الفرع." };
+    }
+
+    const targetClass = await prisma.class.findUnique({
+      where: { id: payload.classId },
+      include: { branch: true },
+    });
+    if (!targetClass) {
+      return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود." };
+    }
+
+    const student = await prisma.student.findUnique({
+      where: { id: payload.studentId },
+      include: { family: true },
+    });
+    if (!student) {
+      return { success: false, error: true, message: "Élève introuvable / التلميذ غير موجود." };
+    }
+
+    const targetBranchId = targetClass.branchId;
+    const isCrossBranch = issuingBranchId !== targetBranchId;
+    const seriesScope = isCrossBranch ? "CROSS_BRANCH" : "LOCAL_LEVEL";
+
+    let series = await prisma.voucherSeries.findFirst({
+      where: {
+        issuingBranchId,
+        scope: seriesScope,
+        ...(isCrossBranch ? { targetBranchId } : {}),
+      },
+      orderBy: { id: "asc" },
+    });
+
+    if (!series) {
+      series = await prisma.voucherSeries.create({
+        data: {
+          issuingBranchId,
+          scope: seriesScope,
+          targetBranchId: isCrossBranch ? targetBranchId : null,
+          currentNumber: isCrossBranch ? 50 : 100,
+        },
+      });
+    }
+
+    let latestYear = await prisma.academicYear.findFirst({
+      orderBy: { startDate: "desc" },
+    });
+    if (!latestYear) {
+      const curYear = new Date().getFullYear();
+      latestYear = await prisma.academicYear.create({
+        data: {
+          label: `${curYear}-${curYear + 1}`,
+          startDate: new Date(`${curYear}-09-01`),
+          endDate: new Date(`${curYear + 1}-06-30`),
+        },
+      });
+    }
+
+    let activeTrimesterId: number | null = null;
+    try {
+      const activeTrimester = await prisma.trimester.findFirst({
+        where: { status: "active" },
+      });
+      activeTrimesterId = activeTrimester?.id ?? null;
+    } catch {}
+
+    const tuitionItem = payload.items.tuition?.enabled ? payload.items.tuition : null;
+    const inscriptionItem = payload.items.inscription?.enabled ? payload.items.inscription : null;
+    const bookItem = payload.items.book?.enabled ? payload.items.book : null;
+
+    if (!tuitionItem && !inscriptionItem && !bookItem) {
+      return { success: false, error: true, message: "Veuillez sélectionner au moins un élément à payer / يرجى تحديد بند واحد على الأقل للدفع." };
+    }
+
+    let voucherNumber = 0;
+    const issuedItems: Array<{ type: string; labelFr: string; labelAr: string; amount: number }> = [];
+    let totalAmount = 0;
+
+    await prisma.$transaction(async (tx) => {
+      const updatedSeries = await tx.voucherSeries.update({
+        where: { id: series!.id },
+        data: { currentNumber: { increment: 1 } },
+      });
+      voucherNumber = updatedSeries.currentNumber;
+
+      // 1. Process Tuition
+      if (tuitionItem) {
+        const amt = Number(tuitionItem.amount);
+        totalAmount += amt;
+        issuedItems.push({
+          type: "TUITION_4SESSION",
+          labelFr: "Cycle d'études (4 séances)",
+          labelAr: "اشتراك دراسي (4 حصص)",
+          amount: amt,
+        });
+
+        await tx.voucher.create({
+          data: {
+            seriesId: series!.id,
+            number: voucherNumber,
+            studentId: payload.studentId,
+            classId: payload.classId,
+            issuingBranchId,
+            targetBranchId,
+            paymentType: "TUITION_4SESSION",
+            amount: new Prisma.Decimal(amt),
+            issuedBy: session.userId || "admin",
+            isVoided: false,
+            trimesterId: activeTrimesterId,
+          },
+        });
+
+        if (amt > 0) {
+          const ledgerType = resolveLedgerType("TUITION_4SESSION", targetClass.isFormation);
+          await upsertDailyLedger(tx, {
+            branchId: targetBranchId,
+            date: new Date(),
+            type: ledgerType,
+            amount: amt,
+          });
+        }
+      }
+
+      // 2. Process Inscription
+      if (inscriptionItem) {
+        const amt = Number(inscriptionItem.amount);
+        totalAmount += amt;
+        issuedItems.push({
+          type: "INSCRIPTION",
+          labelFr: "Frais d'inscription",
+          labelAr: "حقوق التسجيل",
+          amount: amt,
+        });
+
+        await tx.voucher.create({
+          data: {
+            seriesId: series!.id,
+            number: voucherNumber,
+            studentId: payload.studentId,
+            classId: payload.classId,
+            issuingBranchId,
+            targetBranchId,
+            paymentType: "INSCRIPTION",
+            amount: new Prisma.Decimal(amt),
+            issuedBy: session.userId || "admin",
+            isVoided: false,
+            trimesterId: activeTrimesterId,
+          },
+        });
+
+        if (amt > 0) {
+          const ledgerType = resolveLedgerType("INSCRIPTION", targetClass.isFormation);
+          await upsertDailyLedger(tx, {
+            branchId: targetBranchId,
+            date: new Date(),
+            type: ledgerType,
+            amount: amt,
+          });
+        }
+
+        // Update enrollment inscription status
+        const existingEnrollment = await tx.enrollment.findFirst({
+          where: {
+            studentId: payload.studentId,
+            classId: payload.classId,
+            academicYearId: latestYear!.id,
+          },
+        });
+
+        if (existingEnrollment) {
+          await tx.enrollment.update({
+            where: { id: existingEnrollment.id },
+            data: {
+              inscriptionFeeCharged: amt > 0,
+              inscriptionFeeAmount: amt > 0 ? new Prisma.Decimal(amt) : null,
+            },
+          });
+        }
+      }
+
+      // 3. Process Book
+      if (bookItem) {
+        const amt = Number(bookItem.amount);
+        totalAmount += amt;
+        issuedItems.push({
+          type: "BOOK",
+          labelFr: "Frais des manuels",
+          labelAr: "رسوم الكتب المدرسية",
+          amount: amt,
+        });
+
+        await tx.voucher.create({
+          data: {
+            seriesId: series!.id,
+            number: voucherNumber,
+            studentId: payload.studentId,
+            classId: payload.classId,
+            issuingBranchId,
+            targetBranchId,
+            paymentType: "BOOK",
+            amount: new Prisma.Decimal(amt),
+            issuedBy: session.userId || "admin",
+            isVoided: false,
+            trimesterId: activeTrimesterId,
+          },
+        });
+
+        if (amt > 0) {
+          const ledgerType = resolveLedgerType("BOOK", targetClass.isFormation);
+          await upsertDailyLedger(tx, {
+            branchId: targetBranchId,
+            date: new Date(),
+            type: ledgerType,
+            amount: amt,
+          });
+        }
+      }
+
+      // Ensure Enrollment exists
+      const enr = await tx.enrollment.findFirst({
+        where: {
+          studentId: payload.studentId,
+          classId: payload.classId,
+          academicYearId: latestYear!.id,
+        },
+      });
+
+      if (!enr) {
+        await tx.enrollment.create({
+          data: {
+            studentId: payload.studentId,
+            classId: payload.classId,
+            academicYearId: latestYear!.id,
+            inscriptionFeeCharged: inscriptionItem ? Number(inscriptionItem.amount) > 0 : true,
+            inscriptionFeeAmount: inscriptionItem && Number(inscriptionItem.amount) > 0 ? new Prisma.Decimal(Number(inscriptionItem.amount)) : targetClass.inscriptionFee,
+            payerStatus: "NORMAL",
+          },
+        });
+      }
+    });
+
+    try {
+      safeRevalidatePath(`/list/payments/class/${payload.classId}`);
+      safeRevalidatePath(`/list/students/${payload.studentId}`);
+      safeRevalidatePath("/list/attendance");
+      safeRevalidatePath(`/list/attendance/class/${payload.classId}`);
+    } catch {}
+
+    const bundle = {
+      voucherNumber,
+      seriesId: series.id,
+      seriesScope,
+      totalAmount,
+      student: {
+        id: student.id,
+        globalNumber: student.globalNumber,
+        name: student.name,
+        phone: student.phone,
+      },
+      class: {
+        id: targetClass.id,
+        name: targetClass.name,
+      },
+      items: issuedItems,
+      issuedAt: new Date().toISOString(),
+      issuedBy: session.userId || "admin",
+      issuingBranchId,
+      targetBranchId,
+    };
+
+    return {
+      success: true,
+      error: false,
+      message: `Reçu #${voucherNumber} émis avec succès (${totalAmount.toLocaleString()} DZD) / تم إصدار الوصل #${voucherNumber} بنجاح.`,
+      bundle,
+    };
+  } catch (err: any) {
+    console.error("issueMultiItemVoucherAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err.message || "Échec de l'émission du reçu / فشل في إصدار الوصل.",
+    };
+  }
+}
+
+// =================================================================
 // ANNOUNCEMENT ACTIONS
 // =================================================================
 
@@ -2601,6 +3334,8 @@ export const transferEnrollmentCredit = async (
         class: { include: { lessons: true, branch: true } },
         student: true,
         academicYear: true,
+        transfersFrom: true,
+        transfersTo: true,
       },
     });
     if (!fromEnrollment) {
@@ -2626,6 +3361,7 @@ export const transferEnrollmentCredit = async (
     });
 
     let transferredAmount = 0;
+    let isFullTransfer = false;
 
     await prisma.$transaction(async (tx) => {
       if (!toEnrollment) {
@@ -2636,7 +3372,13 @@ export const transferEnrollmentCredit = async (
             academicYearId: fromEnrollment.academicYearId,
             inscriptionFeeCharged: false, // Inscription already paid/waived on earlier enrollment
             feeOverriddenByOwner: false,
+            status: "ACTIVE",
           },
+        });
+      } else if (toEnrollment.status !== "ACTIVE") {
+        await tx.enrollment.update({
+          where: { id: toEnrollment.id },
+          data: { status: "ACTIVE" },
         });
       }
 
@@ -2675,6 +3417,41 @@ export const transferEnrollmentCredit = async (
         },
       });
 
+      // Calculate remaining sessions in fromEnrollment to determine if it should be un-enrolled
+      const cyclePriceFrom = Number(fromEnrollment.class.pricePerCycle || 0);
+      const lessonPriceFrom = cyclePriceFrom > 0 ? cyclePriceFrom / 4 : 0;
+      let purchasedSessionsFrom = 0;
+      if (lessonPriceFrom > 0) {
+        const totalTuitionFrom = studentVouchers.reduce((sum, v) => sum + Number(v.amount || 0), 0);
+        purchasedSessionsFrom = Math.floor(totalTuitionFrom / lessonPriceFrom);
+      } else {
+        purchasedSessionsFrom = studentVouchers.length * 4;
+      }
+
+      const transferredInFrom = (fromEnrollment.transfersTo || []).reduce((sum, t) => sum + t.transferredSessions, 0);
+      const transferredOutFrom = (fromEnrollment.transfersFrom || []).reduce((sum, t) => sum + t.transferredSessions, 0);
+
+      const attendedSessionsFrom = await tx.attendance.count({
+        where: {
+          studentId: studentId,
+          status: "PRESENT",
+          lesson: {
+            classId: fromEnrollment.classId,
+            isFree: false,
+          },
+        },
+      });
+
+      const availableSessionsFrom = Math.max(0, (purchasedSessionsFrom + transferredInFrom - transferredOutFrom) - attendedSessionsFrom);
+      isFullTransfer = Number(transferredSessions) >= availableSessionsFrom;
+
+      if (isFullTransfer) {
+        await tx.enrollment.update({
+          where: { id: fromEnrollment.id },
+          data: { status: "TRANSFERRED" },
+        });
+      }
+
       // Cross-branch money transfer in DailyLedger
       const fromBranchId = fromEnrollment.class.branchId;
       const toBranchId = toClass.branchId;
@@ -2704,6 +3481,9 @@ export const transferEnrollmentCredit = async (
       safeRevalidatePath(`/list/students/${studentId}`);
       safeRevalidatePath(`/list/finance`);
       safeRevalidatePath(`/list/daily-ledger`);
+      safeRevalidatePath("/list/attendance");
+      safeRevalidatePath(`/list/attendance/class/${fromEnrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/class/${toClassId}`);
     } catch {
       // Ignore if executed outside Next.js request context (e.g. standalone test scripts)
     }
@@ -2713,10 +3493,14 @@ export const transferEnrollmentCredit = async (
         ? ` (تم تحويل مبلغ ${transferredAmount.toLocaleString("ar-DZ")} دج من فرع ${fromEnrollment.class.branch.name} إلى فرع ${toClass.branch.name})`
         : "";
 
+    const unenrollNote = isFullTransfer
+      ? ` (تم إلغاء تسجيل التلميذ من ${fromEnrollment.class.name} لتحويل كامل الرصيد المتاح)`
+      : "";
+
     return {
       success: true,
       error: false,
-      message: `تم تحويل ${transferredSessions} حصص من ${fromEnrollment.class.name} إلى ${toClass.name} بنجاح.${branchTransferNote}`,
+      message: `تم تحويل ${transferredSessions} حصص من ${fromEnrollment.class.name} إلى ${toClass.name} بنجاح.${branchTransferNote}${unenrollNote}`,
     };
   } catch (err: any) {
     console.error("transferEnrollmentCredit error:", err);
