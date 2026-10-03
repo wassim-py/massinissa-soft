@@ -44,12 +44,19 @@ const ClassAttendancePage = async (
         notFound();
     }
 
-    const classHeader = await prisma.class.findUnique({
-        where: { id: classId },
-        include: {
-            branch: { select: { id: true, name: true } },
-        },
-    });
+    const [classHeader, latestLesson] = await Promise.all([
+        prisma.class.findUnique({
+            where: { id: classId },
+            include: {
+                branch: { select: { id: true, name: true } },
+            },
+        }),
+        prisma.lesson.findFirst({
+            where: { classId },
+            orderBy: { startsAt: "desc" },
+            select: { id: true },
+        }),
+    ]);
 
     if (!classHeader) {
         notFound();
@@ -305,14 +312,24 @@ const ClassAttendancePage = async (
                         </p>
                     </div>
 
-                    {classData.isFormation && (
-                        <Link
-                            href={`/list/formations/${classData.id}`}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors shrink-0"
-                        >
-                            <span>{locale === "ar" ? "تفاصيل التكوين ←" : "Détails de la formation →"}</span>
-                        </Link>
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap shrink-0">
+                        {latestLesson && (
+                            <Link
+                                href={`/list/attendance/take/${latestLesson.id}`}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors shrink-0 shadow-xs"
+                            >
+                                <span>{locale === "ar" ? "تسجيل الحضور للفوج ←" : "Prendre la présence →"}</span>
+                            </Link>
+                        )}
+                        {classData.isFormation && (
+                            <Link
+                                href={`/list/formations/${classData.id}`}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors shrink-0"
+                            >
+                                <span>{locale === "ar" ? "تفاصيل التكوين ←" : "Détails de la formation →"}</span>
+                            </Link>
+                        )}
+                    </div>
                 </div>
 
                 {/* Group Navigation Tabs (§7.20) */}

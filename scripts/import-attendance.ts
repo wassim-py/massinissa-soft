@@ -101,6 +101,14 @@ async function main() {
   });
   const classMap = new Map(classes.map((c) => [c.id, c]));
 
+  const validStudents = await prisma.student.findMany({ select: { id: true, name: true } });
+  const validStudentSet = new Set(validStudents.map((s) => s.id));
+  const studentByName = new Map<string, string>();
+  for (const s of validStudents) {
+    studentByName.set(s.name.trim().toLowerCase(), s.id);
+  }
+  const studentLookup = { validStudents, validStudentSet, studentByName };
+
   const bookCache = new Map<string, number>();
 
   let totalPresent = 0;
@@ -114,7 +122,7 @@ async function main() {
   for (const filePath of files) {
     console.log(`\n📄 File: ${path.basename(filePath)}`);
 
-    const result = await processFile(filePath, classMap, bookCache, dryRun);
+    const result = await processFile(filePath, classMap, bookCache, studentLookup, dryRun);
 
     if (result.notStarted) {
       totalSkippedGroups++;
@@ -150,12 +158,18 @@ async function processFile(
   filePath: string,
   classMap: Map<number, any>,
   bookCache: Map<string, number>,
+  studentLookup: {
+    validStudents: Array<{ id: string; name: string }>;
+    validStudentSet: Set<string>;
+    studentByName: Map<string, string>;
+  },
   dryRun: boolean
 ): Promise<{
   present: number; absent: number; lessonsCreated: number;
   booksCreated: number; receiptsCreated: number; notStarted: boolean;
   errors: string[];
 }> {
+  const { validStudents, validStudentSet, studentByName } = studentLookup;
   const res = {
     present: 0, absent: 0, lessonsCreated: 0,
     booksCreated: 0, receiptsCreated: 0, notStarted: false,
@@ -283,8 +297,10 @@ async function processFile(
   });
 
   // ── Resolve or Create Lessons in DB ───────────────────────────────
+  // IMPORTANT: Only match lessons created for attendance imports (isExtra: true)
+  // NEVER hijack the class's recurring timetable template lesson (isExtra: false)!
   const existingLessons = await prisma.lesson.findMany({
-    where: { classId },
+    where: { classId, isExtra: true },
     select: { id: true, startsAt: true, isFree: true },
   });
 
@@ -348,7 +364,24 @@ async function processFile(
       rowIdx++;
       continue;
     }
-    const studentId = studentIdMatch[1];
+    let studentId = studentIdMatch[1];
+    if (!validStudentSet.has(studentId)) {
+      const byName = studentByName.get(nameVal.trim().toLowerCase());
+      if (byName) {
+        studentId = byName;
+      } else {
+        const found = validStudents.find(
+          (s) => s.name.includes(nameVal) || nameVal.includes(s.name)
+        );
+        if (found) {
+          studentId = found.id;
+        } else {
+          res.errors.push(`Row ${rowIdx}: Student "${nameVal}" (id: ${studentId}) not found in DB. Skipping.`);
+          rowIdx++;
+          continue;
+        }
+      }
+    }
 
     // ── Process Attendance for Each Lesson ──────────────────────────
     for (const lCol of lessonCols) {
@@ -358,22 +391,27 @@ async function processFile(
       const isPresent = val === 1 || val === '1' || String(val).toUpperCase() === 'X';
 
       if (!dryRun && lCol.lessonId > 0) {
-        const existingAtt = await prisma.attendance.findFirst({
-          where: { studentId, lessonId: lCol.lessonId },
-        });
-        if (!existingAtt) {
-          await prisma.attendance.create({
-            data: {
-              studentId,
-              lessonId: lCol.lessonId,
-              status: isPresent ? 'PRESENT' : 'ABSENT',
-            },
+        try {
+          const existingAtt = await prisma.attendance.findFirst({
+            where: { studentId, lessonId: lCol.lessonId },
           });
-        } else if (existingAtt.status !== (isPresent ? 'PRESENT' : 'ABSENT')) {
-          await prisma.attendance.update({
-            where: { id: existingAtt.id },
-            data: { status: isPresent ? 'PRESENT' : 'ABSENT' },
-          });
+          if (!existingAtt) {
+            await prisma.attendance.create({
+              data: {
+                studentId,
+                lessonId: lCol.lessonId,
+                status: isPresent ? 'PRESENT' : 'ABSENT',
+              },
+            });
+          } else if (existingAtt.status !== (isPresent ? 'PRESENT' : 'ABSENT')) {
+            await prisma.attendance.update({
+              where: { id: existingAtt.id },
+              data: { status: isPresent ? 'PRESENT' : 'ABSENT' },
+            });
+          }
+        } catch (attErr: any) {
+          res.errors.push(`Row ${rowIdx}: Failed saving attendance for "${nameVal}": ${attErr.message}`);
+          continue;
         }
       }
 
@@ -446,14 +484,32 @@ async function processFile(
 
 function parseDateValue(val: any): Date | null {
   if (!val) return null;
+
   if (val instanceof Date && !isNaN(val.getTime())) {
+    // If Excel inverted month and day due to US MM/DD/YYYY regional settings:
+    // E.g. Month stored is 11 (Dec), Day stored is 9 -> Intended: 12/09/2026
+    const origMonth = val.getMonth(); // 0-indexed: 0..11
+    const origDay = val.getDate();    // 1..31
+    const year = val.getFullYear();
+
+    if (origDay >= 8 && origDay <= 10 && origMonth + 1 <= 31) {
+      // Swapped case: origDay was intended month (Aug, Sept, Oct), origMonth+1 was intended day
+      const trueDay = origMonth + 1;
+      const trueMonth = origDay;
+      const dt = new Date(Date.UTC(year, trueMonth - 1, trueDay, 12, 0, 0));
+      return isNaN(dt.getTime()) ? null : dt;
+    }
+
     return val;
   }
+
   const str = String(val).trim();
-  // Format DD/MM/YYYY
-  const dmy = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  // Format DD/MM/YYYY or DD-MM-YYYY
+  const dmy = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (dmy) {
-    const [, d, m, y] = dmy;
+    let [, d, m, y] = dmy;
+    if (y.length === 2) y = '20' + y;
+    if (y === '206') y = '2026';
     const dt = new Date(Date.UTC(parseInt(y), parseInt(m) - 1, parseInt(d), 12, 0, 0));
     return isNaN(dt.getTime()) ? null : dt;
   }

@@ -160,17 +160,13 @@ const LessonDetailModal = ({
         </div>
 
         <div className="mt-6 pt-4 border-t border-border flex flex-wrap items-center justify-between gap-3">
-          {isToday ? (
-            <Link
-              href={getTakeAttendanceHref()}
-              className="inline-flex items-center gap-1.5 bg-primary hover:bg-primary-hover text-white text-xs font-bold py-2 px-3.5 rounded-lg shadow-xs transition-colors"
-            >
-              <ClipboardList className="w-4 h-4" />
-              <span>{t("takeAttendanceToday")}</span>
-            </Link>
-          ) : (
-            <div />
-          )}
+          <Link
+            href={getTakeAttendanceHref()}
+            className="inline-flex items-center gap-1.5 bg-primary hover:bg-primary-hover text-white text-xs font-bold py-2 px-3.5 rounded-lg shadow-xs transition-colors"
+          >
+            <ClipboardList className="w-4 h-4" />
+            <span>{isToday ? t("takeAttendanceToday") : t("takeAttendance")}</span>
+          </Link>
           <div className="flex items-center gap-2">
             {actions}
           </div>

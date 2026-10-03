@@ -469,8 +469,8 @@ const Timetable = ({
                       </span>
                     </div>
 
-                    {/* Take Attendance button ONLY on lesson cards for lessons happening TODAY (Requirement 2 & 5) */}
-                    {isLessonToday(lesson) && (
+                    {/* Take Attendance button */}
+                    {(isLessonToday(lesson) || selectedDay === getLessonDay(lesson)) && (
                       <div className="pt-1.5">
                         <Link
                           href={getTakeAttendanceHref(lesson)}
