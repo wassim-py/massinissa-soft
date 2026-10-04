@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useTransition, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -8,6 +9,9 @@ import { FormField, Input } from "@/components/ui/FormField";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import {
   createBookAction,
+  updateBookAction,
+  deleteBookAction,
+  updateClassBookSettingsAction,
   toggleBookReceiptAction,
 } from "@/lib/bookActions";
 import { executeWithRetry } from "@/lib/retryUtils";
@@ -33,6 +37,9 @@ import {
   Search,
   Users,
   CreditCard,
+  Pencil,
+  Trash2,
+  SlidersHorizontal,
 } from "lucide-react";
 import BookStatusBadge, { BookStudentStatus, computeBookStatus } from "@/components/books/BookStatusBadge";
 import PaymentForm from "@/components/forms/PaymentForm";
@@ -117,6 +124,7 @@ export default function GroupBooksTab({
   feePaidStudents = [],
   allLevels,
 }: GroupBooksTabProps) {
+  const router = useRouter();
   const t = useTranslations("classes");
   const locale = useLocale();
   const isAr = locale === "ar";
@@ -152,6 +160,20 @@ export default function GroupBooksTab({
   const [newBookTitle, setNewBookTitle] = useState("");
   const [selectedLevelId, setSelectedLevelId] = useState<number>(
     classData.levelId || (allLevels[0]?.id ?? 1)
+  );
+
+  // Modal State for Editing a Book
+  const [editingBook, setEditingBook] = useState<BookItem | null>(null);
+  const [editBookTitle, setEditBookTitle] = useState("");
+
+  // Modal State for Deleting a Book
+  const [deletingBook, setDeletingBook] = useState<BookItem | null>(null);
+
+  // Modal State for Group Book Settings (hasBooks & bookFee)
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [settingsHasBooks, setSettingsHasBooks] = useState(Boolean(classData.hasBooks));
+  const [settingsBookFee, setSettingsBookFee] = useState<string | number>(
+    classData.bookFee != null ? String(classData.bookFee) : ""
   );
 
   // Payment Form Modal for issuing voucher
@@ -271,11 +293,88 @@ export default function GroupBooksTab({
           toast.success(res.message);
           setNewBookTitle("");
           setIsAddModalOpen(false);
+          router.refresh();
         } else {
           toast.error(res.message);
         }
       } catch (err: any) {
         toast.error(err?.message || "Erreur lors de l'ajout du livre");
+      }
+    });
+  };
+
+  const handleEditBookSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingBook || !editBookTitle.trim()) {
+      toast.error(isAr ? "يرجى إدخال عنوان الكتاب." : "Veuillez saisir le titre du livre.");
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        const res = await updateBookAction({
+          bookId: editingBook.id,
+          title: editBookTitle.trim(),
+          classId: classData.id,
+        });
+
+        if (res.success) {
+          toast.success(res.message);
+          setEditingBook(null);
+          router.refresh();
+        } else {
+          toast.error(res.message);
+        }
+      } catch (err: any) {
+        toast.error(err?.message || "Erreur de modification du livre");
+      }
+    });
+  };
+
+  const handleDeleteBookSubmit = () => {
+    if (!deletingBook) return;
+
+    startTransition(async () => {
+      try {
+        const res = await deleteBookAction({
+          bookId: deletingBook.id,
+          classId: classData.id,
+        });
+
+        if (res.success) {
+          toast.success(res.message);
+          setDeletingBook(null);
+          router.refresh();
+        } else {
+          toast.error(res.message);
+        }
+      } catch (err: any) {
+        toast.error(err?.message || "Erreur de suppression du livre");
+      }
+    });
+  };
+
+  const handleSaveSettingsSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const feeNum = settingsBookFee !== "" ? Number(settingsBookFee) : null;
+
+    startTransition(async () => {
+      try {
+        const res = await updateClassBookSettingsAction({
+          classId: classData.id,
+          hasBooks: settingsHasBooks,
+          bookFee: feeNum,
+        });
+
+        if (res.success) {
+          toast.success(res.message);
+          setIsSettingsModalOpen(false);
+          router.refresh();
+        } else {
+          toast.error(res.message);
+        }
+      } catch (err: any) {
+        toast.error(err?.message || "Erreur de mise à jour des paramètres");
       }
     });
   };
@@ -452,18 +551,33 @@ export default function GroupBooksTab({
             </div>
           </div>
 
-          {/* Action to Add Book */}
-          {!isTrimesterFinished && (
+          {/* Actions: Group Book Settings & Add Book */}
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
             <Button
-              variant="primary"
+              variant="outline"
               size="sm"
-              onClick={() => setIsAddModalOpen(true)}
-              className="shrink-0 font-semibold shadow-xs"
+              onClick={() => {
+                setSettingsHasBooks(Boolean(classData.hasBooks));
+                setSettingsBookFee(classData.bookFee != null ? String(classData.bookFee) : "");
+                setIsSettingsModalOpen(true);
+              }}
+              className="font-semibold shadow-xs bg-white text-gray-700 hover:bg-gray-100"
             >
-              <Plus className="w-4 h-4 me-1.5" />
-              {isAr ? "إضافة كتاب جديد للأستاذ" : "Ajouter un livre"}
+              <SlidersHorizontal className="w-4 h-4 me-1.5" />
+              {isAr ? "إعدادات الفوج" : "Paramètres du groupe"}
             </Button>
-          )}
+            {!isTrimesterFinished && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setIsAddModalOpen(true)}
+                className="font-semibold shadow-xs"
+              >
+                <Plus className="w-4 h-4 me-1.5" />
+                {isAr ? "إضافة كتاب جديد للأستاذ" : "Ajouter un livre"}
+              </Button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-4">
@@ -759,10 +873,42 @@ export default function GroupBooksTab({
                           key={book.id}
                           className="p-3 text-center min-w-[160px] border-s border-border/60 bg-surface-subtle/40"
                         >
-                          <div className="flex flex-col items-center gap-1">
-                            <span className="font-bold text-gray-900 text-xs">
-                              {book.title}
-                            </span>
+                          <div className="flex flex-col items-center gap-1.5">
+                            <div className="flex items-center justify-between w-full gap-1">
+                              <span
+                                className="font-bold text-gray-900 text-xs truncate max-w-[110px]"
+                                title={book.title}
+                              >
+                                {book.title}
+                              </span>
+                              {!isTrimesterFinished && (
+                                <div className="flex items-center gap-0.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingBook(book);
+                                      setEditBookTitle(book.title);
+                                    }}
+                                    title={isAr ? "تعديل عنوان الكتاب" : "Modifier le livre"}
+                                    className="p-1 rounded-md text-muted hover:text-primary hover:bg-white transition-colors cursor-pointer"
+                                  >
+                                    <Pencil className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setDeletingBook(book);
+                                    }}
+                                    title={isAr ? "حذف الكتاب" : "Supprimer le livre"}
+                                    className="p-1 rounded-md text-muted hover:text-rose-600 hover:bg-white transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                             <div className="flex items-center gap-1 text-[10px] font-mono">
                               <span
                                 className={`px-1.5 py-0.5 rounded-full font-bold ${
@@ -1039,6 +1185,264 @@ export default function GroupBooksTab({
                 if (!open) setPaymentModalStudent(null);
               }}
             />
+          </div>
+        </div>
+      )}
+      {/* Modal: Edit Book Title */}
+      {editingBook && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full border border-border shadow-xl space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-primary-light text-primary flex items-center justify-center">
+                  <Pencil className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-900 text-base">
+                    {isAr ? "تعديل عنوان الكتاب" : "Modifier le livre"}
+                  </h3>
+                  <p className="text-xs text-muted">
+                    {classData.teacherName} • {classData.levelName}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingBook(null)}
+                className="text-muted hover:text-gray-900 p-1.5 rounded-lg hover:bg-surface-subtle transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditBookSubmit} className="space-y-4">
+              <FormField
+                label={isAr ? "عنوان الكتاب" : "Titre du livre"}
+                required
+              >
+                <Input
+                  value={editBookTitle}
+                  onChange={(e) => setEditBookTitle(e.target.value)}
+                  placeholder={
+                    isAr
+                      ? "عنوان الكتاب الجديد..."
+                      : "Nouveau titre du manuel..."
+                  }
+                  autoFocus
+                  required
+                />
+              </FormField>
+
+              <div className="p-3 bg-amber-50/80 rounded-xl text-xs text-amber-900 border border-amber-200/80 space-y-1">
+                <p className="font-bold flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-700" />
+                  <span>{isAr ? "نطاق التعديل:" : "Portée de la modification :"}</span>
+                </p>
+                <p className="text-[11px] leading-relaxed opacity-90">
+                  {isAr
+                    ? `هذا الكتاب مسند للأستاذ (${classData.teacherName || ""}) في المستوى (${classData.levelName || ""}). تعديل العنوان سيحدثه في جميع الأفواج التابعة له في هذا المستوى.`
+                    : `Ce livre est rattaché à l'enseignant (${classData.teacherName || ""}) pour le niveau (${classData.levelName || ""}). Le changement de titre s'appliquera à tous ses groupes correspondants.`}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditingBook(null)}
+                >
+                  {isAr ? "إلغاء" : "Annuler"}
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={isPending || !editBookTitle.trim()}
+                >
+                  {isPending
+                    ? isAr
+                      ? "جارِ الحفظ..."
+                      : "Enregistrement..."
+                    : isAr
+                    ? "حفظ التعديل"
+                    : "Enregistrer"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Delete Book Confirmation */}
+      {deletingBook && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full border border-border shadow-xl space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-900 text-base">
+                    {isAr ? "حذف الكتاب" : "Supprimer le manuel"}
+                  </h3>
+                  <p className="text-xs text-muted truncate max-w-[200px]">
+                    {deletingBook.title}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeletingBook(null)}
+                className="text-muted hover:text-gray-900 p-1.5 rounded-lg hover:bg-surface-subtle transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-gray-700 leading-relaxed">
+                {isAr
+                  ? `هل أنت متأكد من رغبتك في حذف كتاب "${deletingBook.title}" نهائياً؟`
+                  : `Êtes-vous sûr de vouloir supprimer définitivement le livre "${deletingBook.title}" ?`}
+              </p>
+
+              {(bookProgressMap.get(deletingBook.id)?.receivedCount || 0) > 0 && (
+                <div className="p-3 bg-rose-50 rounded-xl text-xs text-rose-900 border border-rose-200 space-y-1">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-rose-600" />
+                    <span>{isAr ? "تنبيه هام:" : "Avertissement :"}</span>
+                  </p>
+                  <p className="text-[11px] leading-relaxed">
+                    {isAr
+                      ? `تم تسليم ${bookProgressMap.get(deletingBook.id)?.receivedCount} نسخة من هذا الكتاب في هذا الفوج. حذفه سيمسح سجلات تسليم هذا الكتاب.`
+                      : `${bookProgressMap.get(deletingBook.id)?.receivedCount} exemplaire(s) ont déjà été remis dans ce groupe. La suppression effacera l'historique de distribution de ce manuel.`}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border/80">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setDeletingBook(null)}
+              >
+                {isAr ? "إلغاء" : "Annuler"}
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                disabled={isPending}
+                onClick={handleDeleteBookSubmit}
+              >
+                {isPending
+                  ? isAr
+                    ? "جارِ الحذف..."
+                    : "Suppression..."
+                  : isAr
+                  ? "حذف نهائي"
+                  : "Supprimer définitivement"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Group Book Settings */}
+      {isSettingsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full border border-border shadow-xl space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-primary-light text-primary flex items-center justify-center">
+                  <SlidersHorizontal className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-900 text-base">
+                    {isAr ? "إعدادات كتب الفوج" : "Paramètres des livres du groupe"}
+                  </h3>
+                  <p className="text-xs text-muted">
+                    {classData.name} ({classData.branchName})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSettingsModalOpen(false)}
+                className="text-muted hover:text-gray-900 p-1.5 rounded-lg hover:bg-surface-subtle transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSettingsSubmit} className="space-y-4">
+              <div className="p-3 bg-surface-subtle/80 rounded-xl border border-border/80 flex flex-col gap-3">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={settingsHasBooks}
+                    onChange={(e) => setSettingsHasBooks(e.target.checked)}
+                    className="w-4 h-4 rounded text-primary focus:ring-primary border-gray-300 cursor-pointer"
+                  />
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold text-gray-900">
+                      {isAr ? "الفوج يعتمد على كتب مدرسية" : "Ce groupe utilise des manuels"}
+                    </span>
+                    <span className="text-[11px] text-muted">
+                      {isAr
+                        ? "تفعيل متابعة وتسليم الكتب ووصل استحقاق الكتب لهذا الفوج"
+                        : "Active le suivi des manuels et les bons de paiement de livres"}
+                    </span>
+                  </div>
+                </label>
+
+                {settingsHasBooks && (
+                  <div className="flex flex-col gap-1.5 ps-6.5 pt-2 border-t border-border/60">
+                    <label className="text-xs text-gray-700 font-semibold">
+                      {isAr ? "رسم الكتاب لكل فصل (دج)" : "Frais du livre par trimestre (DZD)"}
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      placeholder="0"
+                      value={settingsBookFee}
+                      onChange={(e) => setSettingsBookFee(e.target.value)}
+                      className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[40px] bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsSettingsModalOpen(false)}
+                >
+                  {isAr ? "إلغاء" : "Annuler"}
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={isPending}
+                >
+                  {isPending
+                    ? isAr
+                      ? "جارِ الحفظ..."
+                      : "Enregistrement..."
+                    : isAr
+                    ? "حفظ الإعدادات"
+                    : "Enregistrer"}
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}

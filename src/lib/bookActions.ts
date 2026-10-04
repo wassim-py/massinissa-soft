@@ -1,7 +1,10 @@
 "use server";
 
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { getAuthSession } from "@/lib/auth";
+import { canUserAccessBranch } from "@/lib/settings";
+import { serializeForClient } from "@/lib/utils";
 import { revalidatePath } from "next/cache";
 import { getActiveTrimester } from "@/lib/configurationActions";
 
@@ -554,3 +557,269 @@ export async function getGroupBooksData(classId: number) {
     allLevels,
   };
 }
+
+/**
+ * 4. Update an existing book title (§7.20)
+ * Scoped to teacher + level + trimester. Updating the title updates it for all sibling groups.
+ */
+export async function updateBookAction(data: {
+  bookId: number;
+  title: string;
+  classId?: number;
+}): Promise<ActionResponse> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner && !session.isBranchAdmin) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé / غير مصرح لك بتعديل الكتب.",
+      };
+    }
+
+    if (!data.bookId) {
+      return {
+        success: false,
+        error: true,
+        message: "Identifiant du livre manquant / معرف الكتاب مفقود.",
+      };
+    }
+
+    if (!data.title || !data.title.trim()) {
+      return {
+        success: false,
+        error: true,
+        message: "Le titre du livre est obligatoire / عنوان الكتاب مطلوب.",
+      };
+    }
+
+    const book = await prisma.book.findUnique({
+      where: { id: Number(data.bookId) },
+      include: { trimester: true, level: true, teacher: true },
+    });
+
+    if (!book) {
+      return {
+        success: false,
+        error: true,
+        message: "Livre introuvable / الكتاب غير موجود.",
+      };
+    }
+
+    // Freeze check: finished trimester is read-only history
+    if (book.trimester && book.trimester.status === "finished") {
+      return {
+        success: false,
+        error: true,
+        message:
+          "Ce trimestre est clôturé et gelé en lecture seule / هذا الفصل الدراسي منتهي ومجمد كأرشيف للقراءة فقط.",
+      };
+    }
+
+    const updatedBook = await prisma.book.update({
+      where: { id: book.id },
+      data: {
+        title: data.title.trim(),
+      },
+    });
+
+    // Revalidate affected routes
+    safeRevalidatePath("/list/classes");
+    safeRevalidatePath("/list/attendance");
+    if (data.classId) {
+      safeRevalidatePath(`/list/classes/${data.classId}`);
+      safeRevalidatePath(`/list/payments/class/${data.classId}`);
+      safeRevalidatePath(`/list/attendance/class/${data.classId}`);
+    }
+
+    return {
+      success: true,
+      error: false,
+      message: `Livre renommé en "${updatedBook.title}" avec succès / تم تحديث عنوان الكتاب بنجاح.`,
+      data: serializeForClient(updatedBook),
+    };
+  } catch (error: any) {
+    console.error("Error in updateBookAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "Échec de modification du livre / فشل في تعديل الكتاب.",
+    };
+  }
+}
+
+/**
+ * 5. Delete a book and its distribution records (§7.20)
+ * Safely removes receipt records and book copies in a transaction.
+ */
+export async function deleteBookAction(data: {
+  bookId: number;
+  classId?: number;
+}): Promise<ActionResponse> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner && !session.isBranchAdmin) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé / غير مصرح لك بحذف الكتب.",
+      };
+    }
+
+    if (!data.bookId) {
+      return {
+        success: false,
+        error: true,
+        message: "Identifiant du livre manquant / معرف الكتاب مفقود.",
+      };
+    }
+
+    const book = await prisma.book.findUnique({
+      where: { id: Number(data.bookId) },
+      include: {
+        trimester: true,
+        drops: { select: { id: true } },
+        _count: { select: { receipts: true } },
+      },
+    });
+
+    if (!book) {
+      return {
+        success: false,
+        error: true,
+        message: "Livre introuvable / الكتاب غير موجود.",
+      };
+    }
+
+    // Freeze check: finished trimester is read-only history
+    if (book.trimester && book.trimester.status === "finished") {
+      return {
+        success: false,
+        error: true,
+        message:
+          "Ce trimestre est clôturé et gelé en lecture seule / هذا الفصل الدراسي منتهي ومجمد كأرشيف للقراءة فقط.",
+      };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Delete copy distributions linked to drops of this book
+      const dropIds = book.drops.map((d) => d.id);
+      if (dropIds.length > 0) {
+        await tx.bookCopyDistribution.deleteMany({
+          where: { bookDropId: { in: dropIds } },
+        });
+        await tx.bookDrop.deleteMany({
+          where: { id: { in: dropIds } },
+        });
+      }
+
+      // 2. Delete receipts for this book
+      await tx.bookReceipt.deleteMany({
+        where: { bookId: book.id },
+      });
+
+      // 3. Delete the book itself
+      await tx.book.delete({
+        where: { id: book.id },
+      });
+    });
+
+    // Revalidate affected routes
+    safeRevalidatePath("/list/classes");
+    safeRevalidatePath("/list/attendance");
+    if (data.classId) {
+      safeRevalidatePath(`/list/classes/${data.classId}`);
+      safeRevalidatePath(`/list/payments/class/${data.classId}`);
+      safeRevalidatePath(`/list/attendance/class/${data.classId}`);
+    }
+
+    return {
+      success: true,
+      error: false,
+      message: `Livre "${book.title}" supprimé avec succès / تم حذف الكتاب بنجاح.`,
+    };
+  } catch (error: any) {
+    console.error("Error in deleteBookAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "Échec de suppression du livre / فشل في حذف الكتاب.",
+    };
+  }
+}
+
+/**
+ * 6. Update class-level book settings: hasBooks and bookFee
+ */
+export async function updateClassBookSettingsAction(data: {
+  classId: number;
+  hasBooks: boolean;
+  bookFee?: number | null;
+}): Promise<ActionResponse> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner && !session.isBranchAdmin) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé / غير مصرح لك بتعديل إعدادات الكتب للفوج.",
+      };
+    }
+
+    const cls = await prisma.class.findUnique({
+      where: { id: Number(data.classId) },
+    });
+
+    if (!cls) {
+      return {
+        success: false,
+        error: true,
+        message: "Groupe introuvable / الفوج غير موجود.",
+      };
+    }
+
+    if (
+      !session.isOwner &&
+      !canUserAccessBranch(session.rawRole, session.branchIds, cls.branchId)
+    ) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé pour cette succursale / غير مصرح لك بتعديل فوج في هذا الفرع.",
+      };
+    }
+
+    const updated = await prisma.class.update({
+      where: { id: cls.id },
+      data: {
+        hasBooks: Boolean(data.hasBooks),
+        bookFee:
+          data.hasBooks && data.bookFee != null && data.bookFee > 0
+            ? new Prisma.Decimal(data.bookFee)
+            : null,
+      },
+    });
+
+    safeRevalidatePath("/list/classes");
+    safeRevalidatePath(`/list/classes/${cls.id}`);
+    safeRevalidatePath(`/list/payments/class/${cls.id}`);
+    safeRevalidatePath(`/list/attendance/class/${cls.id}`);
+
+    return {
+      success: true,
+      error: false,
+      message: "Paramètres des livres mis à jour avec succès / تم تحديث إعدادات الكتب بنجاح.",
+      data: serializeForClient(updated),
+    };
+  } catch (error: any) {
+    console.error("Error in updateClassBookSettingsAction:", error);
+    return {
+      success: false,
+      error: true,
+      message:
+        error?.message ||
+        "Échec de mise à jour des paramètres des livres / فشل في تحديث إعدادات الكتب.",
+    };
+  }
+}
+

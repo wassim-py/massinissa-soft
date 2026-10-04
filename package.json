@@ -14,7 +14,9 @@
     "import:attendance:dry": "npx tsx scripts/import-attendance.ts --dry-run",
     "import:template": "npx tsx scripts/generate-attendance-template.ts",
     "db:check": "node scripts/check-db.js",
-    "sync:ledger": "node scripts/sync-database-payments.js"
+    "sync:ledger": "node scripts/sync-database-payments.js",
+    "merge:student": "npx tsx scripts/merge-student.ts",
+    "merge:scan": "npx tsx scripts/merge-student.ts --scan"
   },
   "prisma": {
     "seed": "ts-node --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed.ts"

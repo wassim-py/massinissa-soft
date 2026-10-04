@@ -12,11 +12,13 @@ import BackButton from "@/components/BackButton";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable, Column } from "@/components/ui/DataTable";
+import { StudentAvatar } from "@/components/ui/UserAvatar";
 import { serializeForClient } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
 import { canUserAccessBranch } from "@/lib/settings";
-import { computeStudentSessionFee } from "@/lib/studentBilling";
+import { computeStudentSessionFee, computeStudentConsumedSessions } from "@/lib/studentBilling";
 import StudentPayerStatusControl from "@/components/students/StudentPayerStatusControl";
+import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 import {
   Calendar,
   Building2,
@@ -67,7 +69,7 @@ const SingleStudentPage = async (
     const session = await getAuthSession();
     const activeBranchId = await getActiveBranchId();
 
-    const [rawStudent, studentPaymentData, availableClasses] = await Promise.all([
+    const [rawStudent, studentPaymentData, availableClasses, configuredInscriptionFee] = await Promise.all([
       prisma.$queryRaw<any[]>`
         SELECT s.*, b.name as "branchName"
         FROM "Student" s
@@ -156,7 +158,7 @@ const SingleStudentPage = async (
           attendances: {
             include: {
               lesson: {
-                select: { id: true, isFree: true, classId: true },
+                select: { id: true, isFree: true, classId: true, startsAt: true },
               },
             },
           },
@@ -170,6 +172,7 @@ const SingleStudentPage = async (
         },
         orderBy: [{ branchId: "asc" }, { name: "asc" }],
       }),
+      getFixedInscriptionFeeAction(),
     ]);
 
     if (!rawStudent || rawStudent.length === 0) {
@@ -177,11 +180,15 @@ const SingleStudentPage = async (
     }
     const s = rawStudent[0];
 
-    // Sibling discount waiver check (§2.4)
-    const isSiblingWaived = Boolean(
+    // Sibling discount check (§2.4)
+    const isSiblingDiscount = Boolean(
       studentPaymentData?.family?.payerStudentId &&
       studentPaymentData.family.payerStudentId !== id
     );
+    const siblingDiscountPct = isSiblingDiscount
+      ? Number((studentPaymentData?.family as any)?.discountPercentage ?? 50)
+      : 0;
+    const isSiblingWaived100 = siblingDiscountPct >= 100;
 
     const isFamilyPayer = Boolean(
       studentPaymentData?.family?.payerStudentId &&
@@ -200,18 +207,25 @@ const SingleStudentPage = async (
       );
       const tuitionVouchers = classVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
       const cyclePrice = Number(c?.pricePerCycle || 0);
-      const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+      const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+      const effectiveLessonPrice =
+        siblingDiscountPct > 0 && siblingDiscountPct < 100
+          ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+          : siblingDiscountPct >= 100
+          ? 0
+          : baseLessonPrice;
+
       let purchasedSessions = 0;
-      if (isSiblingWaived) {
+      if (isSiblingWaived100) {
         purchasedSessions = 16;
-      } else if (lessonPrice > 0) {
+      } else if (effectiveLessonPrice > 0) {
         let totalPaidTuition = 0;
         tuitionVouchers.forEach((v) => {
           const vAmount = Number(v.amount || 0);
           const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
           totalPaidTuition += Math.max(0, vAmount - vRefunded);
         });
-        purchasedSessions = Math.floor(totalPaidTuition / lessonPrice);
+        purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
       } else {
         purchasedSessions = tuitionVouchers.length * 4;
       }
@@ -224,11 +238,13 @@ const SingleStudentPage = async (
         0
       );
 
-      let attendedSessions = 0;
-      (studentPaymentData?.attendances || []).forEach((att) => {
-        if (att.status === "PRESENT" && att.lesson && att.lesson.classId === c.id && !att.lesson.isFree) {
-          attendedSessions++;
-        }
+      const classAtts = (studentPaymentData?.attendances || []).filter(
+        (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
+      );
+      const classLessons = classAtts.map((att: any) => att.lesson);
+      const attendedSessions = computeStudentConsumedSessions({
+        lessons: classLessons,
+        attendances: classAtts.map((att: any) => ({ lessonId: att.lesson.id, status: att.status })),
       });
 
       const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions;
@@ -242,7 +258,8 @@ const SingleStudentPage = async (
         payerStatus: enrStatus,
         pricePerCycle: Number(c.pricePerCycle || 0),
         teacherPercentage,
-        isSiblingWaived,
+        isSiblingWaived: isSiblingWaived100,
+        siblingDiscountPercentage: siblingDiscountPct,
       });
 
       return {
@@ -254,7 +271,7 @@ const SingleStudentPage = async (
         levelName: c.level?.name || null,
         teacherName: c.teacher?.name || null,
         netSessions,
-        isSiblingWaived,
+        isSiblingWaived: isSiblingWaived100,
         isNonPayer: enrStatus === "NON_PAYER",
         payerStatus: enrStatus,
         status: (enr as any).status || "ACTIVE",
@@ -372,6 +389,7 @@ const SingleStudentPage = async (
       parentPhoneNumbers,
       birthday: s.birthday ? new Date(s.birthday) : new Date(2008, 0, 1),
       sex: s.sex || "MALE",
+      familyId: s.familyId,
       parent: s.familyId ? { name: t("familyPrefix", { id: s.familyId }), surname: "" } : null,
       classes: sortedActiveGroupSummaries.map((g) => ({ id: g.classId, name: g.className })),
       gradeId: studentLevelId || undefined,
@@ -419,12 +437,11 @@ const SingleStudentPage = async (
           {/* Core Profile Card */}
           <Card className="p-6 flex-1 flex flex-col md:flex-row items-center gap-6 border-border/80 shadow-xs">
             <div className="shrink-0">
-              <Image
-                src="/noAvatar.png"
+              <StudentAvatar
+                gender={student.sex}
                 alt={`${student.surname ? `${student.surname} ${student.name}` : student.name}`}
-                width={100}
-                height={100}
-                className="rounded-full object-cover border-4 border-surface shadow-md"
+                size={100}
+                className="border-4 border-surface shadow-md"
               />
             </div>
             <div className="grow text-center md:text-start">
@@ -453,10 +470,14 @@ const SingleStudentPage = async (
                     <span>{t("familyPayer")}</span>
                   </Badge>
                 )}
-                {isSiblingWaived && (
-                  <Badge variant="neutral" size="sm">
-                    <ShieldCheck className="w-3 h-3 text-primary" />
-                    <span>{t("siblingWaived")}</span>
+                {isSiblingDiscount && (
+                  <Badge variant="warning" size="sm" withDot>
+                    <ShieldCheck className="w-3 h-3 text-warning" />
+                    <span>
+                      {locale === "ar"
+                        ? `خصم إخوة (${siblingDiscountPct}%)`
+                        : `Remise fratrie (${siblingDiscountPct}%)`}
+                    </span>
                   </Badge>
                 )}
 
@@ -756,6 +777,7 @@ const SingleStudentPage = async (
             isOwner={session.isOwner}
             activeBranchId={activeBranchId}
             availableClassesForTransfer={serializeForClient(availableClasses) as any}
+            configuredInscriptionFee={configuredInscriptionFee}
           />
         )}
 

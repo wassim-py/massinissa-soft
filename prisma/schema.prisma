@@ -345,10 +345,12 @@ model EnrollmentTransfer {
 }
 
 model Family {
-  id             Int       @id @default(autoincrement())
-  payerStudentId String?   @unique
-  payerStudent   Student?  @relation("FamilyPayer", fields: [payerStudentId], references: [id])
-  students       Student[] @relation("FamilyStudents")
+  id                 Int       @id @default(autoincrement())
+  name               String?
+  discountPercentage Decimal   @default(50.00) @db.Decimal(5, 2)
+  payerStudentId     String?   @unique
+  payerStudent       Student?  @relation("FamilyPayer", fields: [payerStudentId], references: [id])
+  students           Student[] @relation("FamilyStudents")
 }
 
 model FormationLevel {

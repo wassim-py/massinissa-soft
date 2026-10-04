@@ -26,6 +26,8 @@ type ClassItem = {
   levelId?: number | null;
   levelName?: string | null;
   supervisor: null;
+  hasBooks?: boolean;
+  bookFee?: number | null;
 };
 
 const ClassListPage = async (
@@ -158,7 +160,8 @@ const ClassListPage = async (
                c."teacherId",
                COALESCE(t.name, lt.teacher_name) as "teacherName",
                c."pricePerCycle", c."inscriptionFee",
-               c."levelId", lvl.name as "levelName"
+               c."levelId", lvl.name as "levelName",
+               c."hasBooks", c."bookFee"
         FROM "Class" c
         LEFT JOIN "Branch" b ON b.id = c."branchId"
         LEFT JOIN "Teacher" t ON t.id = c."teacherId"
@@ -184,7 +187,8 @@ const ClassListPage = async (
                c."teacherId",
                COALESCE(t.name, lt.teacher_name) as "teacherName",
                c."pricePerCycle", c."inscriptionFee",
-               c."levelId", lvl.name as "levelName"
+               c."levelId", lvl.name as "levelName",
+               c."hasBooks", c."bookFee"
         FROM "Class" c
         LEFT JOIN "Branch" b ON b.id = c."branchId"
         LEFT JOIN "Teacher" t ON t.id = c."teacherId"
@@ -204,7 +208,7 @@ const ClassListPage = async (
 
     count = Number(countRes[0]?.count || 0);
 
-    data = rows.map((r) => {
+    data = rows.map((r: any) => {
       const priceNum = r.pricePerCycle != null ? Number(r.pricePerCycle) : null;
       return {
         id: r.id,
@@ -221,6 +225,8 @@ const ClassListPage = async (
         levelId: r.levelId,
         levelName: r.levelName,
         supervisor: null,
+        hasBooks: Boolean(r.hasBooks),
+        bookFee: r.bookFee != null ? Number(r.bookFee) : null,
       };
     });
   } catch {

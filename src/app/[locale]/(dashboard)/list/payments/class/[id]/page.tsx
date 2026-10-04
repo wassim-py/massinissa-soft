@@ -10,7 +10,7 @@ import { serializeForClient } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations } from "next-intl/server";
-import { getActiveTrimester } from "@/lib/configurationActions";
+import { getActiveTrimester, getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 
 const ClassPaymentHistoryPage = async (
   props: { 
@@ -119,10 +119,9 @@ const ClassPaymentHistoryPage = async (
       lessons: {
         where: { isFree: false },
         include: {
-          attendances: {
-            where: { status: "PRESENT" },
-          },
+          attendances: true,
         },
+        orderBy: { startsAt: "asc" },
       },
     },
   });
@@ -169,7 +168,7 @@ const ClassPaymentHistoryPage = async (
   classData.enrollments = Array.from(enrollmentMap.values());
 
   // Fetch classes across all branches for group credit transfers
-  const [availableClasses, activeTrimester] = await Promise.all([
+  const [availableClasses, activeTrimester, configuredInscriptionFee] = await Promise.all([
     prisma.class.findMany({
       select: {
         id: true,
@@ -179,6 +178,7 @@ const ClassPaymentHistoryPage = async (
       orderBy: [{ branchId: "asc" }, { name: "asc" }],
     }),
     getActiveTrimester(),
+    getFixedInscriptionFeeAction(),
   ]);
 
   const teacherId = classData.teacherId;
@@ -252,6 +252,7 @@ const ClassPaymentHistoryPage = async (
           activeTrimester={serializeForClient(activeTrimester) as any}
           classBooks={serializeForClient(classBooks) as any}
           classBookReceipts={serializeForClient(classBookReceipts) as any}
+          configuredInscriptionFee={configuredInscriptionFee}
         />
       </CardContent>
     </Card>

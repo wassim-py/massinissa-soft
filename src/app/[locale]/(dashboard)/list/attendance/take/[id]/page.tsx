@@ -7,7 +7,7 @@ import BackButton from "@/components/BackButton";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
-import { getActiveTrimester } from "@/lib/configurationActions";
+import { getActiveTrimester, getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 
 // This is the Server Component that fetches all the necessary data for taking attendance.
 const TakeAttendancePage = async (
@@ -21,6 +21,7 @@ const TakeAttendancePage = async (
   const role = await getAuthRole();
   const session = await getAuthSession();
   const activeBranchId = await getActiveBranchId();
+  const fixedInscriptionFee = await getFixedInscriptionFeeAction();
   const t = await getTranslations("attendance");
   const locale = await getLocale();
 
@@ -246,10 +247,23 @@ const TakeAttendancePage = async (
           },
           attendances: {
             where: {
-              status: "PRESENT",
               lesson: {
                 classId: l.classId,
                 isFree: false,
+              },
+            },
+            include: {
+              lesson: {
+                select: {
+                  id: true,
+                  startsAt: true,
+                  isFree: true,
+                },
+              },
+            },
+            orderBy: {
+              lesson: {
+                startsAt: "asc",
               },
             },
           },
@@ -300,12 +314,18 @@ const TakeAttendancePage = async (
     }));
 
     const enrollment = details?.enrollments?.[0];
-    const inscVoucher = details?.vouchers?.find(
+    const inscVouchers = details?.vouchers?.filter(
       (v: any) => v.paymentType === "INSCRIPTION" && !v.isVoided
-    );
+    ) || [];
+    const totalInscPaid = inscVouchers.reduce((sum: number, v: any) => sum + Number(v.amount || 0), 0);
+    const requiredInscFee =
+      Number(rawLesson[0]?.inscriptionFee || 0) > 0
+        ? Number(rawLesson[0].inscriptionFee)
+        : fixedInscriptionFee;
+    const isInscriptionPaid = totalInscPaid >= requiredInscFee && requiredInscFee > 0;
     const isOwnerWaived = enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged;
     const isAutoWaived = enrollment && !enrollment.inscriptionFeeCharged;
-    const inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" = inscVoucher
+    const inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" = isInscriptionPaid
       ? "PAID"
       : isOwnerWaived || isAutoWaived
       ? "WAIVED"

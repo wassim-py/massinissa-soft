@@ -15,9 +15,14 @@ export const classSchema = z.object({
   supervisorId: z
     .string()
     .optional()
-    .or(z.literal(""))
-    .transform((val) => (val === "" ? undefined : val)),
+    .or(z.literal("")),
   price: z.coerce.number().min(0, { message: "لا يمكن أن يكون السعر سالبًا." }), // ADDED: Price for 4 sessions
+  hasBooks: z.boolean().optional(),
+  bookFee: z.coerce
+    .number()
+    .min(0, { message: "لا يمكن أن تكون رسوم الكتب سالبة." })
+    .optional()
+    .nullable(),
 });
 
 export type ClassSchema = z.infer<typeof classSchema>;
@@ -63,6 +68,7 @@ export const studentSchema = z.object({
   classes: z.array(z.number()).optional(),
   parentPhoneNumbers: z.array(z.string()).optional(),
   registeredBranchId: z.coerce.number().optional(),
+  familyId: z.union([z.coerce.number(), z.literal(""), z.null()]).optional(),
 });
 
 export type StudentSchema = z.infer<typeof studentSchema>;
@@ -81,15 +87,18 @@ export const getStudentSchema = (t?: (key: string) => string) => {
     classes: z.array(z.number()).optional(),
     parentPhoneNumbers: z.array(z.string()).optional(),
     registeredBranchId: z.coerce.number().optional(),
+    familyId: z.union([z.coerce.number(), z.literal(""), z.null()]).optional(),
   });
 };
 
 export const parentSchema = z.object({
   id: z.string().optional(),
-  name: z.string().min(1, { message: "الاسم مطلوب!" }),
-  surname: z.string().min(1, { message: "اللقب مطلوب!" }),
-  phone: z.string().min(1, { message: "رقم الهاتف مطلوب!" }),
-  address: z.string().min(1, { message: "العنوان مطلوب!" }),
+  name: z.string().optional().or(z.literal("")),
+  surname: z.string().optional().or(z.literal("")),
+  phone: z.string().optional().or(z.literal("")),
+  address: z.string().optional().or(z.literal("")),
+  payerStudentId: z.string().optional().nullable(),
+  discountPercentage: z.coerce.number().min(0).max(100).optional(),
   students: z.array(z.string()).optional(),
 });
 
@@ -226,7 +235,9 @@ export type VoucherSeriesSchema = z.infer<typeof voucherSeriesSchema>;
 
 export const familySchema = z.object({
   id: z.coerce.number().optional(),
+  name: z.string().optional(),
   payerStudentId: z.string().optional().nullable(),
+  discountPercentage: z.coerce.number().min(0).max(100).optional().default(50),
   studentIds: z.array(z.string()).min(1, { message: "يجب تحديد تلميذ واحد على الأقل." }),
 });
 

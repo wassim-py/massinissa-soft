@@ -51,6 +51,28 @@ const FormContainer = async ({
           break;
         }
         case "class": {
+          const targetClassId = id || data?.id;
+          let existingClass = data;
+          if (!existingClass && targetClassId) {
+            const cls = await prisma.class.findUnique({
+              where: { id: Number(targetClassId) },
+            });
+            if (cls) {
+              existingClass = {
+                id: cls.id,
+                name: cls.name,
+                price: cls.pricePerCycle ? Number(cls.pricePerCycle) : 0,
+                pricePerCycle: cls.pricePerCycle ? Number(cls.pricePerCycle) : 0,
+                teacherId: cls.teacherId,
+                supervisorId: cls.teacherId,
+                levelId: cls.levelId,
+                gradeId: cls.levelId,
+                branchId: cls.branchId,
+                hasBooks: cls.hasBooks,
+                bookFee: cls.bookFee ? Number(cls.bookFee) : null,
+              };
+            }
+          }
           const [levels, teachers] = await Promise.all([
             prisma.level.findMany({
               select: { id: true, name: true },
@@ -62,6 +84,9 @@ const FormContainer = async ({
             grades: levels.map((l) => ({ id: l.id, level: l.name, name: l.name })),
             teachers: teachers.map((t) => ({ id: t.id, name: t.name, surname: "" })),
           };
+          if (existingClass && !data) {
+            data = existingClass;
+          }
           break;
         }
         case "teacher": {
@@ -96,7 +121,29 @@ const FormContainer = async ({
           break;
         }
         case "student": {
-          const [levels, classes] = await Promise.all([
+          const targetStudentId = (id || data?.id) as string | undefined;
+          let existingStudent = data;
+          if (!existingStudent && targetStudentId) {
+            const st = await prisma.student.findUnique({
+              where: { id: String(targetStudentId) },
+              include: { parentPhoneNumbers: true, enrollments: true },
+            });
+            if (st) {
+              existingStudent = {
+                id: st.id,
+                name: st.name,
+                phone: st.phone,
+                address: st.address,
+                birthday: st.birthday,
+                sex: st.sex,
+                familyId: st.familyId,
+                registeredBranchId: st.registeredBranchId,
+                parentPhoneNumbers: st.parentPhoneNumbers.map((p) => p.phone),
+                classes: st.enrollments.map((e) => e.classId),
+              };
+            }
+          }
+          const [levels, classes, families] = await Promise.all([
             prisma.level.findMany({
               select: { id: true, name: true },
               orderBy: { id: "asc" },
@@ -114,6 +161,17 @@ const FormContainer = async ({
               },
               orderBy: { name: "asc" },
             }),
+            prisma.family.findMany({
+              select: {
+                id: true,
+                name: true,
+                discountPercentage: true,
+                students: {
+                  select: { id: true, name: true },
+                },
+              },
+              orderBy: { id: "desc" },
+            }),
           ]);
           finalRelatedData = {
             grades: levels.map((l) => ({ id: l.id, level: l.name, name: l.name })),
@@ -128,7 +186,16 @@ const FormContainer = async ({
               hasBooks: Boolean(c.hasBooks),
               branchId: c.branchId,
             })),
+            families: families.map((f) => ({
+              id: f.id,
+              name: f.name || `Famille #${f.id}`,
+              discountPercentage: Number(f.discountPercentage || 50),
+              studentNames: f.students.map((s) => s.name).join(", "),
+            })),
           };
+          if (existingStudent && !data) {
+            data = existingStudent;
+          }
           break;
         }
         case "parent": {

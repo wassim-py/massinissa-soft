@@ -56,18 +56,9 @@ const StudentListPage = async (props: {
 
       {/* 2. Full Name */}
       <td className="p-3.5">
-        <div className="flex items-center gap-3">
-          <Image
-            src="/noAvatar.png"
-            alt=""
-            width={36}
-            height={36}
-            className="w-9 h-9 rounded-full object-cover border border-border shrink-0"
-          />
-          <span className="font-semibold text-gray-900 text-table-body">
-            {item.name}
-          </span>
-        </div>
+        <span className="font-semibold text-gray-900 text-table-body">
+          {item.name}
+        </span>
       </td>
 
       {/* 3. Level */}

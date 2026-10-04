@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <!-- Clean pastel pink background -->
+  <circle cx="50" cy="50" r="48" fill="#FCE7F3" stroke="#FBCFE8" stroke-width="2"/>
+  
+  <!-- Twin Pigtails -->
+  <path d="M30 33 C20 33 20 46 26 53 C29 50 31 43 31 33 Z" fill="#BE185D"/>
+  <path d="M70 33 C80 33 80 46 74 53 C71 50 69 43 69 33 Z" fill="#BE185D"/>
+  
+  <!-- Hair Ribbons -->
+  <circle cx="29" cy="35" r="3" fill="#FCE7F3" stroke="#BE185D" stroke-width="2"/>
+  <circle cx="71" cy="35" r="3" fill="#FCE7F3" stroke="#BE185D" stroke-width="2"/>
+  
+  <!-- Head -->
+  <circle cx="50" cy="36" r="16" stroke="#BE185D" stroke-width="4" fill="none"/>
+  
+  <!-- Bangs / Front Hair -->
+  <path d="M34 35 C34 22 42 20 50 20 C58 20 66 22 66 35" stroke="#BE185D" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M38 27 C43 28 48 33 50 36" stroke="#BE185D" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <path d="M62 27 C57 28 52 33 50 36" stroke="#BE185D" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  
+  <!-- Shoulders & Torso -->
+  <path d="M24 84 C24 67 35 61 50 61 C65 61 76 67 76 84" stroke="#BE185D" stroke-width="4" stroke-linecap="round" fill="none"/>
+  
+  <!-- Rounded Peter Pan Student Collar -->
+  <path d="M40 61 C40 69 50 69 50 64" stroke="#BE185D" stroke-width="3.5" fill="none"/>
+  <path d="M60 61 C60 69 50 69 50 64" stroke="#BE185D" stroke-width="3.5" fill="none"/>
+</svg>

@@ -30,6 +30,7 @@ const ClassForm = ({
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors },
   } = useForm<ClassSchema>({
     resolver: zodResolver(classSchema),
@@ -38,9 +39,13 @@ const ClassForm = ({
           ...data,
           supervisorId: data.teacherId || data.supervisorId || "",
           gradeId: data.levelId || data.gradeId || "",
+          hasBooks: Boolean(data.hasBooks),
+          bookFee: data.bookFee != null ? Number(data.bookFee) : undefined,
         }
-      : { price: 0 },
+      : { price: 0, hasBooks: false },
   });
+
+  const watchHasBooks = watch("hasBooks");
 
   const initialState = {
     success: false,
@@ -147,6 +152,46 @@ const ClassForm = ({
           )}
         </div>
       </div>
+
+      {/* Book Configuration for Group */}
+      <div className="p-3.5 bg-surface-subtle/80 rounded-xl border border-border/80 flex flex-col gap-3">
+        <label className="flex items-center gap-2.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            {...register("hasBooks")}
+            className="w-4 h-4 rounded text-primary focus:ring-primary border-gray-300 cursor-pointer"
+          />
+          <div className="flex flex-col">
+            <span className="text-xs font-bold text-gray-900">
+              {tClasses("hasBooksLabel")}
+            </span>
+            <span className="text-[11px] text-muted">
+              {tClasses("hasBooksHelper")}
+            </span>
+          </div>
+        </label>
+
+        {watchHasBooks && (
+          <div className="flex flex-col gap-1.5 ps-6.5 pt-2 border-t border-border/60">
+            <label className="text-xs text-gray-700 font-semibold">
+              {tClasses("bookFeeLabel")}
+            </label>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              placeholder="0"
+              {...register("bookFee")}
+              className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full md:w-1/2 h-[42px] bg-white"
+              defaultValue={data?.bookFee || ""}
+            />
+            {errors.bookFee && (
+              <p className="text-xs text-red-400">{errors.bookFee.message}</p>
+            )}
+          </div>
+        )}
+      </div>
+
       {state.error && !state.message && (
         <span className="text-red-500">{tErrors("general")}</span>
       )}

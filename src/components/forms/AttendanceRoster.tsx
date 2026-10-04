@@ -10,6 +10,7 @@ import { useActionState } from "react";
 import { saveAttendance, removeCatchUpAttendanceAction, markSingleAttendanceAction } from "@/lib/actions";
 import { executeWithRetry } from "@/lib/retryUtils";
 import { toast } from "react-toastify";
+import { computeStudentConsumedSessions } from "@/lib/studentBilling";
 import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
@@ -577,31 +578,42 @@ const AttendanceRoster = ({
           filteredStudents.map((student) => {
             const currentStatus = attendance[student.id];
 
-            const isSiblingWaived = Boolean(
+            const isSiblingDiscount = Boolean(
               student.family &&
               student.family.payerStudentId &&
               student.family.payerStudentId !== student.id
             );
+            const siblingDiscountPct = isSiblingDiscount
+              ? Number((student.family as any)?.discountPercentage ?? 50)
+              : 0;
+            const isSiblingWaived100 = siblingDiscountPct >= 100;
 
             const payerStatus = student.payerStatus || "NORMAL";
             const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
             const isSchoolFeesOnly = payerStatus === "SCHOOL_FEES_ONLY";
-            const isWaivedTuition = isSiblingWaived || isNonPayer;
+            const isWaivedTuition = isSiblingWaived100 || isNonPayer;
 
             const activeTuitionVouchers = (student.vouchers || []).filter(
               (v) => !v.isVoided && v.paymentType === "TUITION_4SESSION"
             );
             const cyclePrice = Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0);
-            const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+            const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+            const effectiveLessonPrice =
+              siblingDiscountPct > 0 && siblingDiscountPct < 100
+                ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+                : siblingDiscountPct >= 100
+                ? 0
+                : baseLessonPrice;
+
             let sessionsPurchased = 0;
             if (isWaivedTuition) {
               sessionsPurchased = 16;
-            } else if (lessonPrice > 0) {
+            } else if (effectiveLessonPrice > 0) {
               const totalPaidTuition = activeTuitionVouchers.reduce(
                 (sum, v) => sum + Math.max(0, Number(v.amount || 0)),
                 0
               );
-              sessionsPurchased = Math.floor(totalPaidTuition / lessonPrice);
+              sessionsPurchased = Math.floor(totalPaidTuition / effectiveLessonPrice);
             } else {
               sessionsPurchased = activeTuitionVouchers.length * 4;
             }
@@ -616,20 +628,32 @@ const AttendanceRoster = ({
             );
             const totalCreditSessions = sessionsPurchased + transferredIn - transferredOut;
 
-            const sessionsConsumed = (student.attendances || []).filter((a) => a.status === "PRESENT").length;
+            const studentLessons = (student.attendances || [])
+              .map((a: any) => a.lesson)
+              .filter(Boolean);
+            const studentAtts = (student.attendances || []).map((a: any) => ({
+              lessonId: a.lessonId,
+              status: a.status,
+            }));
+            const sessionsConsumed = computeStudentConsumedSessions({
+              lessons: studentLessons,
+              attendances: studentAtts,
+            });
             const sessionsRemaining = totalCreditSessions - sessionsConsumed;
 
             let statusBubble = { text: t("unpaidDue"), color: "bg-red-500" };
-            if (isSiblingWaived) {
+            if (isSiblingWaived100) {
               statusBubble = { text: t("waivedSibling"), color: "bg-amber-600" };
             } else if (isNonPayer) {
               statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
             } else if (isSchoolFeesOnly) {
               statusBubble = { text: locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls", color: "bg-sky-500" };
             } else if (sessionsRemaining >= 2) {
-              statusBubble = { text: t("paidGood"), color: "bg-green-500" };
+              statusBubble = { text: isSiblingDiscount ? (locale === "ar" ? `مدفوع (-${siblingDiscountPct}%)` : `Payé (-${siblingDiscountPct}%)`) : t("paidGood"), color: "bg-green-500" };
             } else if (sessionsRemaining >= 1) {
               statusBubble = { text: t("expiringSoon"), color: "bg-yellow-500" };
+            } else if (isSiblingDiscount) {
+              statusBubble = { text: locale === "ar" ? `غير مدفوع (خصم ${siblingDiscountPct}%)` : `Dû (-${siblingDiscountPct}%)`, color: "bg-amber-600" };
             }
 
             const mostRecentVoucher =
@@ -724,9 +748,13 @@ const AttendanceRoster = ({
                         )}
 
                         {/* Status Badges for Not-Normal Students */}
-                        {isSiblingWaived ? (
+                        {isSiblingWaived100 ? (
                           <Badge variant="warning" size="sm" withDot className="bg-amber-100/90 text-amber-900 border-amber-300 font-semibold shadow-2xs">
-                            {locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)"}
+                            {locale === "ar" ? "معفى 100% (أخ دافع)" : "Exonéré 100% (Fratrie)"}
+                          </Badge>
+                        ) : isSiblingDiscount ? (
+                          <Badge variant="warning" size="sm" withDot className="bg-amber-100/90 text-amber-900 border-amber-300 font-semibold shadow-2xs">
+                            {locale === "ar" ? `خصم إخوة (${siblingDiscountPct}%)` : `Remise fratrie (${siblingDiscountPct}%)`}
                           </Badge>
                         ) : isNonPayer ? (
                           <Badge variant="warning" size="sm" withDot className="bg-amber-100/90 text-amber-900 border-amber-300 font-semibold shadow-2xs">
@@ -763,7 +791,7 @@ const AttendanceRoster = ({
                         <span>{statusBubble.text}</span>
                         <span>•</span>
                         <span>
-                          {isSiblingWaived
+                          {isSiblingWaived100
                             ? t("tuitionWaivedSibling")
                             : isNonPayer
                             ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")

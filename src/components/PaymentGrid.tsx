@@ -8,6 +8,7 @@ import { Class, Student, Voucher, Enrollment, EnrollmentTransfer, VoucherEdit, R
 import PaymentForm from "./forms/PaymentForm";
 import PrintTicketButton from "./PrintTicketButton";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
+import { computeStudentConsumedSessions } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { useTranslations, useLocale } from "next-intl";
@@ -24,7 +25,7 @@ import BookStatusBadge, { BookStudentStatus, computeBookStatus, BookDetailItem }
 export type ExtendedEnrollment = Enrollment & {
   student: Student & {
     registeredBranch: { id: number; name: string };
-    family?: { id: number; payerStudentId: string | null } | null;
+    family?: { id: number; payerStudentId: string | null; discountPercentage?: any } | null;
     enrollments: {
       id: number;
       classId: number;
@@ -80,12 +81,14 @@ export default function PaymentGrid({
   activeTrimester,
   classBooks = [],
   classBookReceipts = [],
+  configuredInscriptionFee,
 }: {
   classData: ExtendedClass;
   availableClassesForTransfer: { id: number; name: string; branch: { name: string } }[];
   activeTrimester?: { id: number; name: string; label: string; status: string } | null;
   classBooks?: Array<{ id: number; title: string }>;
   classBookReceipts?: Array<{ studentId: string; bookId: number; receivedAt: string | Date }>;
+  configuredInscriptionFee?: number;
 }) {
   const t = useTranslations("payments");
   const tCommon = useTranslations("common");
@@ -233,7 +236,14 @@ export default function PaymentGrid({
     const activeVouchers = studentVouchers.filter((v) => !v.isVoided);
 
     // Inscription fee
-    const inscVoucher = activeVouchers.find((v) => v.paymentType === "INSCRIPTION");
+    const inscVouchers = activeVouchers.filter((v) => v.paymentType === "INSCRIPTION");
+    const totalInscPaid = inscVouchers.reduce((sum, v) => sum + Number(v.amount || 0), 0);
+    const requiredInscFee =
+      Number(classData.inscriptionFee || 0) > 0
+        ? Number(classData.inscriptionFee)
+        : (configuredInscriptionFee || 1000);
+    const isInscriptionPaid = totalInscPaid >= requiredInscFee && requiredInscFee > 0;
+    const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
     const isOwnerWaived = enrollment.feeOverriddenByOwner && !enrollment.inscriptionFeeCharged;
     const isAutoWaived = !enrollment.inscriptionFeeCharged;
 
@@ -245,28 +255,38 @@ export default function PaymentGrid({
     );
 
     // Sibling discount
-    const isWaivedSibling = Boolean(
+    const isSiblingDiscount = Boolean(
       student.family &&
       student.family.payerStudentId &&
       student.family.payerStudentId !== student.id
     );
+    const siblingDiscountPct = isSiblingDiscount
+      ? Number((student.family as any)?.discountPercentage ?? 50)
+      : 0;
+    const isSiblingWaived100 = siblingDiscountPct >= 100;
 
     // Tuition cycles & sessions
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
     let purchasedSessions = 0;
     const cyclePrice = Number(classData.pricePerCycle || 0);
-    const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+    const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+    const effectiveLessonPrice =
+      siblingDiscountPct > 0 && siblingDiscountPct < 100
+        ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+        : siblingDiscountPct >= 100
+        ? 0
+        : baseLessonPrice;
 
-    if (isWaivedSibling) {
+    if (isSiblingWaived100) {
       purchasedSessions = 16;
-    } else if (lessonPrice > 0) {
+    } else if (effectiveLessonPrice > 0) {
       let totalPaidTuition = 0;
       tuitionVouchers.forEach((v) => {
         const vAmount = Number(v.amount || 0);
         const vRefunded = v.refunds?.reduce((sum, r) => sum + Number(r.amount || 0), 0) || 0;
         totalPaidTuition += Math.max(0, vAmount - vRefunded);
       });
-      purchasedSessions = Math.floor(totalPaidTuition / lessonPrice);
+      purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
     } else {
       tuitionVouchers.forEach((v) => {
         const vAmount = Number(v.amount);
@@ -280,22 +300,25 @@ export default function PaymentGrid({
     const transferredOut = enrollment.transfersFrom.reduce((sum, t) => sum + t.transferredSessions, 0);
     const transferredIn = enrollment.transfersTo.reduce((sum, t) => sum + t.transferredSessions, 0);
 
-    // Attended non-free sessions
-    let attendedSessions = 0;
+    // Consumed non-free sessions (accounting for Massinissa absence rules)
+    const studentAtts: Array<{ lessonId: number; status: string }> = [];
     classData.lessons.forEach((l) => {
-      if (!l.isFree) {
-        const att = l.attendances.find((a) => a.studentId === student.id);
-        if (att && att.status === "PRESENT") {
-          attendedSessions++;
-        }
+      const att = l.attendances.find((a) => a.studentId === student.id);
+      if (att) {
+        studentAtts.push({ lessonId: l.id, status: att.status });
       }
+    });
+
+    const attendedSessions = computeStudentConsumedSessions({
+      lessons: classData.lessons as any,
+      attendances: studentAtts,
     });
 
     const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions;
 
     // Status
     let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" = "UNPAID";
-    if (isWaivedSibling) {
+    if (isSiblingWaived100) {
       status = "SIBLING_WAIVED";
     } else if (netSessions >= 2) {
       status = "PAID";
@@ -346,10 +369,13 @@ export default function PaymentGrid({
       activeVouchers,
       latestVoucher,
       inscVoucher,
+      isInscriptionPaid,
+      totalInscPaid,
+      requiredInscFee,
       isOwnerWaived,
       isAutoWaived,
       bookVoucher,
-      isWaivedSibling,
+      isWaivedSibling: isSiblingWaived100,
       tuitionVouchers,
       purchasedSessions,
       transferredIn,
@@ -445,9 +471,11 @@ export default function PaymentGrid({
       return !v.isVoided && rem > 0;
     });
 
-    const sortedActiveCycles = [...activeTuitionVouchers].sort(
-      (a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime()
-    );
+    const sortedActiveCycles = [...activeTuitionVouchers].sort((a, b) => {
+      const timeDiff = new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime();
+      if (timeDiff !== 0) return timeDiff;
+      return b.id - a.id;
+    });
     const mostRecentActiveCycle = sortedActiveCycles[0] || null;
 
     // Remaining unconsumed sessions for this student in this class
@@ -710,7 +738,7 @@ export default function PaymentGrid({
 
         {/* 4. Inscription Fee Badge (§7.8: paid / not paid / waived via 3rd enrollment) */}
         <td className="py-3 px-3 text-center">
-          {item.inscVoucher ? (
+          {item.isInscriptionPaid ? (
             <Badge variant="success" size="sm" withDot>
               {t("inscriptionPaid")}
             </Badge>
@@ -1027,7 +1055,7 @@ export default function PaymentGrid({
                     </div>
                     <div>
                       <span className="text-[10px] text-muted block mb-0.5">{t("inscriptionFee")}</span>
-                      {item.inscVoucher ? (
+                      {item.isInscriptionPaid ? (
                         <Badge variant="success" size="sm" withDot>
                           {t("inscriptionPaid")}
                         </Badge>
@@ -1140,6 +1168,7 @@ export default function PaymentGrid({
               setOpen={(open) => setVoucherModal({ ...voucherModal, isOpen: open })}
               type={voucherModal.type}
               data={voucherModal.voucher}
+              defaultInscriptionFee={configuredInscriptionFee}
             />
           </div>
         </div>,

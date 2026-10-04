@@ -73,6 +73,7 @@ const StudentForm = ({
           sex: data.sex || "MALE",
           gradeId: data.gradeId ? Number(data.gradeId) : undefined,
           registeredBranchId: data.registeredBranchId ? Number(data.registeredBranchId) : undefined,
+          familyId: data.familyId ? Number(data.familyId) : undefined,
           ...data,
           name: defaultFirstName,
           surname: defaultLastName,
@@ -95,6 +96,7 @@ const StudentForm = ({
           parentPhoneNumbers: [],
           classes: [],
           birthday: undefined,
+          familyId: undefined,
         },
   });
 
@@ -252,7 +254,7 @@ const StudentForm = ({
     };
   }, []);
 
-  const { grades = [], classes = [] } = relatedData || {};
+  const { grades = [], classes = [], families = [] } = relatedData || {};
 
   const filteredClasses = useMemo(() => {
     let list = classes;
@@ -567,6 +569,31 @@ const StudentForm = ({
           {errors.classes?.message && (
             <p className="text-xs text-red-400">
               {errors.classes.message.toString()}
+            </p>
+          )}
+        </div>
+
+        {/* FAMILY (SIBLING DISCOUNT GROUP) SELECT */}
+        <div className="flex flex-col gap-2 w-full md:w-1/4">
+          <label className="text-xs text-gray-500 font-medium">
+            {locale === "ar" ? "العائلة / خصم الإخوة (اختياري)" : "Famille / Remise fratrie (Optionnel)"}
+          </label>
+          <select
+            className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] bg-white text-gray-700"
+            {...register("familyId")}
+          >
+            <option value="">
+              {locale === "ar" ? "-- بدون عائلة (سعر عادي 100%) --" : "-- Aucune famille (Plein tarif) --"}
+            </option>
+            {families.map((fam: any) => (
+              <option value={fam.id} key={fam.id}>
+                {fam.name} {fam.studentNames ? `(${fam.studentNames})` : ""} - {fam.discountPercentage}%
+              </option>
+            ))}
+          </select>
+          {errors.familyId?.message && (
+            <p className="text-xs text-red-400">
+              {errors.familyId.message.toString()}
             </p>
           )}
         </div>

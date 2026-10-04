@@ -19,7 +19,7 @@ import { parentSchema, ParentSchema } from "@/lib/formValidationSchemas";
 import { createParent, updateParent } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { Button } from "@/components/ui/Button";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 
 type FormState = {
   success: boolean;
@@ -42,11 +42,14 @@ const ParentForm = ({
   const tParents = useTranslations("parents");
   const tCommon = useTranslations("common");
   const tErrors = useTranslations("errors");
+  const locale = useLocale();
   const {
     register,
     handleSubmit,
     formState: { errors },
     control,
+    watch,
+    setValue,
   } = useForm<ParentSchema>({
     resolver: zodResolver(parentSchema),
     defaultValues: data
@@ -56,13 +59,17 @@ const ParentForm = ({
           surname: data.surname ?? "",
           phone: data.phone ?? "",
           address: data.address ?? "",
-          students: data.students?.map((s: any) => s.id) || [],
+          payerStudentId: data.payerStudentId || (data.students?.[0]?.id || data.students?.[0] || undefined),
+          discountPercentage: data.discountPercentage != null ? Number(data.discountPercentage) : 50,
+          students: data.students?.map((s: any) => (typeof s === "object" ? s.id : s)) || [],
         }
       : {
           name: "",
           surname: "",
           phone: "",
           address: "",
+          payerStudentId: undefined,
+          discountPercentage: 50,
           students: [],
         },
   });
@@ -72,6 +79,22 @@ const ParentForm = ({
   
   // ADDED: State for the search term
   const [searchTerm, setSearchTerm] = useState("");
+
+  const watchedStudents = watch("students") || [];
+  const currentPayerId = watch("payerStudentId");
+  const selectedStudentsList = (relatedData?.students || []).filter((s: any) =>
+    Array.isArray(watchedStudents) && watchedStudents.includes(s.id)
+  );
+
+  useEffect(() => {
+    if (selectedStudentsList.length > 0) {
+      if (!currentPayerId || !selectedStudentsList.some((s: any) => s.id === currentPayerId)) {
+        setValue("payerStudentId", selectedStudentsList[0].id);
+      }
+    } else {
+      setValue("payerStudentId", null);
+    }
+  }, [watchedStudents, currentPayerId, selectedStudentsList, setValue]);
 
   const initialState: FormState = { success: false, error: false, message: "" };
   const actionToRun = type === "create" ? createParent : updateParent;
@@ -280,7 +303,53 @@ const ParentForm = ({
           )}
         </div>
 
+        {/* Primary Payer Selector */}
+        <div className="flex flex-col gap-2 w-full md:w-1/4">
+          <label className="text-xs text-gray-500 font-semibold">
+            {locale === "ar" ? "التلميذ الدافع الرئيسي (كامل السعر)" : "Élève payeur principal (plein tarif)"}
+          </label>
+          <select
+            {...register("payerStudentId")}
+            className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {selectedStudentsList.length === 0 ? (
+              <option value="">{locale === "ar" ? "حدد التلاميذ أولاً" : "Sélectionnez d'abord des élèves"}</option>
+            ) : (
+              selectedStudentsList.map((s: any) => (
+                <option key={s.id} value={s.id}>
+                  {s.surname ? `${s.surname} ${s.name}` : s.name}
+                </option>
+              ))
+            )}
+          </select>
+          {errors.payerStudentId && (
+            <p className="text-xs text-red-400">{errors.payerStudentId.message}</p>
+          )}
+        </div>
 
+        {/* Sibling Discount Percentage */}
+        <div className="flex flex-col gap-2 w-full md:w-1/4">
+          <label className="text-xs text-gray-500 font-semibold">
+            {locale === "ar" ? "نسبة تخفيض الإخوة (%)" : "Taux remise fratrie (%)"}
+          </label>
+          <div className="relative">
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              {...register("discountPercentage", { valueAsNumber: true })}
+              className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            />
+            <span className="absolute end-3 top-2.5 text-xs text-gray-400 font-bold">%</span>
+          </div>
+          <span className="text-[11px] text-gray-400">
+            {locale === "ar" ? "افتراضي: 50% (نصف السعر للإخوة)" : "Défaut : 50% (moitié prix fratrie)"}
+          </span>
+          {errors.discountPercentage && (
+            <p className="text-xs text-red-400">{errors.discountPercentage.message}</p>
+          )}
+        </div>
       </div>
       {state?.error && !state.message && <span className="text-red-500">{tErrors("general")}</span>}
       <Button 

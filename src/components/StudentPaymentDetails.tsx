@@ -8,7 +8,7 @@ import PaymentForm from "./forms/PaymentForm";
 import PrintTicketButton from "./PrintTicketButton";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
-import { computeStudentSessionFee } from "@/lib/studentBilling";
+import { computeStudentSessionFee, computeStudentConsumedSessions } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -105,7 +105,7 @@ export type StudentPaymentRecordData = {
   payerStatus?: string;
   registeredBranchId?: number;
   registeredBranch?: { id: number; name: string } | null;
-  family?: { id: number; payerStudentId: string | null } | null;
+  family?: { id: number; payerStudentId: string | null; discountPercentage?: any } | null;
   enrollments: ExtendedEnrollmentItem[];
   vouchers: ExtendedVoucherItem[];
   attendances?: Array<{
@@ -122,6 +122,7 @@ interface StudentPaymentDetailsProps {
   isOwner?: boolean;
   activeBranchId?: number;
   availableClassesForTransfer?: Array<{ id: number; name: string; branch: { name: string } }>;
+  configuredInscriptionFee?: number;
 }
 
 export default function StudentPaymentDetails({
@@ -130,6 +131,7 @@ export default function StudentPaymentDetails({
   isOwner = true,
   activeBranchId = 1,
   availableClassesForTransfer = [],
+  configuredInscriptionFee,
 }: StudentPaymentDetailsProps) {
   const t = useTranslations("studentPaymentDetails");
   const tCommon = useTranslations("common");
@@ -185,7 +187,9 @@ export default function StudentPaymentDetails({
     isOpen: boolean;
     voucher?: ExtendedVoucherItem;
     remainingBalance: number;
-  }>({ isOpen: false, remainingBalance: 0 });
+    maxRefundable: number;
+    unconsumedSessions?: number;
+  }>({ isOpen: false, remainingBalance: 0, maxRefundable: 0, unconsumedSessions: 0 });
 
   const [refundAmount, setRefundAmount] = useState<number | "">("");
   const [refundReason, setRefundReason] = useState<string>("");
@@ -197,10 +201,14 @@ export default function StudentPaymentDetails({
   const [transferNotes, setTransferNotes] = useState<string>("");
   const [isTransferPending, startTransferTransition] = useTransition();
 
-  // Sibling waiver check
-  const isSiblingWaived = Boolean(
+  // Sibling discount check
+  const isSiblingDiscount = Boolean(
     student.family && student.family.payerStudentId && student.family.payerStudentId !== student.id
   );
+  const siblingDiscountPct = isSiblingDiscount
+    ? Number((student.family as any)?.discountPercentage ?? 50)
+    : 0;
+  const isSiblingWaived100 = siblingDiscountPct >= 100;
 
   // CROSS-BRANCH ENROLLMENT (§1.0):
   // Both OWNER and BRANCH_ADMIN see the SAME complete picture (all branches, all groups).
@@ -277,44 +285,74 @@ export default function StudentPaymentDetails({
   combinedItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   // Calculate per-class metrics
-  const classMetrics = branchScopedEnrollments.map((enr) => {
+  const allClassMetrics = allEnrollments.map((enr) => {
     const c = enr.class;
     const classVouchers = allVouchers.filter((v) => v.classId === c.id || (v.class && v.class.id === c.id));
     const activeClassVouchers = classVouchers.filter((v) => !v.isVoided);
 
-    const inscVoucher = activeClassVouchers.find((v) => v.paymentType === "INSCRIPTION");
+    const inscVouchers = activeClassVouchers.filter((v) => v.paymentType === "INSCRIPTION");
+    const totalInscPaid = inscVouchers.reduce((sum, v) => sum + Number(v.amount || 0), 0);
+    const requiredInscFee =
+      Number(c?.inscriptionFee || 0) > 0
+        ? Number(c?.inscriptionFee)
+        : (configuredInscriptionFee || 1000);
+    const isInscriptionPaid = totalInscPaid >= requiredInscFee && requiredInscFee > 0;
+    const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
     const bookVoucher = activeClassVouchers.find((v) => v.paymentType === "BOOK");
     const tuitionVouchers = activeClassVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
 
     const cyclePrice = Number(c?.pricePerCycle || 0);
-    const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+    const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+    const effectiveLessonPrice =
+      siblingDiscountPct > 0 && siblingDiscountPct < 100
+        ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+        : siblingDiscountPct >= 100
+        ? 0
+        : baseLessonPrice;
+
     let purchasedSessions = 0;
-    if (isSiblingWaived) {
+    if (isSiblingWaived100) {
       purchasedSessions = 16;
-    } else if (lessonPrice > 0) {
+    } else if (effectiveLessonPrice > 0) {
       let totalPaidTuition = 0;
       tuitionVouchers.forEach((v) => {
         const vAmount = Number(v.amount || 0);
         const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
         totalPaidTuition += Math.max(0, vAmount - vRefunded);
       });
-      purchasedSessions = Math.floor(totalPaidTuition / lessonPrice);
+      purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
     } else {
       purchasedSessions = tuitionVouchers.length * 4;
     }
     const transferredOut = (enr.transfersFrom || []).reduce((sum, t) => sum + t.transferredSessions, 0);
     const transferredIn = (enr.transfersTo || []).reduce((sum, t) => sum + t.transferredSessions, 0);
 
-    let attendedSessions = 0;
-    if (student.attendances) {
-      student.attendances.forEach((att) => {
-        if (att.status === "PRESENT" && att.lesson && att.lesson.classId === c.id && !att.lesson.isFree) {
-          attendedSessions++;
-        }
-      });
-    }
+    const classAtts = (student.attendances || []).filter(
+      (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
+    );
+    const classLessons = classAtts.map((att: any) => att.lesson);
+    const attendedSessions = computeStudentConsumedSessions({
+      lessons: classLessons,
+      attendances: classAtts.map((att: any) => ({ lessonId: att.lessonId, status: att.status })),
+    });
 
     const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions;
+    const unconsumedInCycle = Math.max(0, Math.min(4, netSessions));
+
+    // Identify the student's most recent active cycle for this class (§7.8)
+    const activeTuitionVouchersWithBalance = tuitionVouchers.filter((v) => {
+      const totalRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+      const rem = Number(v.remainingBalance ?? (Number(v.amount) - totalRefunded));
+      return rem > 0;
+    });
+
+    const sortedActiveCycles = [...activeTuitionVouchersWithBalance].sort((a, b) => {
+      const timeDiff = new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime();
+      if (timeDiff !== 0) return timeDiff;
+      return b.id - a.id;
+    });
+
+    const mostRecentActiveCycle = sortedActiveCycles[0] || null;
 
     const teacherPercentage = (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
       ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
@@ -325,11 +363,12 @@ export default function StudentPaymentDetails({
       payerStatus: enrPayerStatus,
       pricePerCycle: Number(c.pricePerCycle || 0),
       teacherPercentage,
-      isSiblingWaived,
+      isSiblingWaived: isSiblingWaived100,
+      siblingDiscountPercentage: siblingDiscountPct,
     });
 
     let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" = "UNPAID";
-    if (isSiblingWaived) {
+    if (isSiblingWaived100) {
       status = "SIBLING_WAIVED";
     } else if (netSessions >= 2) {
       status = "PAID";
@@ -343,6 +382,9 @@ export default function StudentPaymentDetails({
       enrollment: enr,
       class: c,
       inscVoucher,
+      isInscriptionPaid,
+      totalInscPaid,
+      requiredInscFee,
       bookVoucher,
       tuitionVouchers,
       purchasedSessions,
@@ -350,10 +392,21 @@ export default function StudentPaymentDetails({
       transferredOut,
       attendedSessions,
       netSessions,
+      unconsumedInCycle,
+      mostRecentActiveCycle,
       status,
       feeCalc,
     };
   });
+
+  const classMetricsMap = new Map<number, (typeof allClassMetrics)[0]>();
+  allClassMetrics.forEach((m) => {
+    classMetricsMap.set(m.class.id, m);
+  });
+
+  const classMetrics = allClassMetrics.filter((m) =>
+    branchScopedEnrollments.some((enr) => enr.id === m.enrollment.id)
+  );
 
   // SORTING RULE (§1.0 / Payment-Renewal Signal):
   // Groups where the student has ONLY 1 session left appear FIRST, above every other group on this page!
@@ -409,21 +462,34 @@ export default function StudentPaymentDetails({
     });
   };
 
-  const handleOpenRefund = (v: ExtendedVoucherItem) => {
+  const handleOpenRefund = (
+    v: ExtendedVoucherItem,
+    maxRefundable: number,
+    unconsumedSessions?: number
+  ) => {
     const totalRefunded = v.refunds?.reduce((sum, r) => sum + Number(r.amount), 0) || 0;
     const remBal = Number(v.remainingBalance ?? (Number(v.amount) - totalRefunded));
+    const effectiveCap = Math.min(remBal, maxRefundable);
+
     setRefundModal({
       isOpen: true,
       voucher: v,
       remainingBalance: remBal,
+      maxRefundable: effectiveCap,
+      unconsumedSessions,
     });
-    setRefundAmount(remBal);
+    setRefundAmount(effectiveCap);
     setRefundReason("");
   };
 
   const handleExecuteRefund = () => {
     if (!refundModal.voucher || !refundAmount || Number(refundAmount) <= 0) {
       toast.error(t("refundAmountError"));
+      return;
+    }
+    const cap = refundModal.maxRefundable ?? refundModal.remainingBalance;
+    if (Number(refundAmount) > cap) {
+      toast.error(t("refundExceedsBalance", { balance: cap.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ") }));
       return;
     }
     if (!refundReason || refundReason.trim().length < 3) {
@@ -443,7 +509,12 @@ export default function StudentPaymentDetails({
 
       if (res.success) {
         toast.success(res.message);
-        setRefundModal({ isOpen: false, remainingBalance: 0 });
+        setRefundModal({
+          isOpen: false,
+          remainingBalance: 0,
+          maxRefundable: 0,
+          unconsumedSessions: 0,
+        });
         setAuditModal({ isOpen: false });
       } else {
         toast.error(res.message);
@@ -527,11 +598,23 @@ export default function StudentPaymentDetails({
             </div>
           </div>
 
-          {/* Sibling waiver banner if applicable */}
-          {isSiblingWaived && (
+          {/* Sibling waiver/discount banner if applicable */}
+          {isSiblingDiscount && (
             <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-xl flex items-center gap-2 text-xs text-purple-900">
-              <span className="font-bold">{t("siblingWaiverActive")}</span>
-              {t("siblingWaiverDesc")}
+              <span className="font-bold">
+                {locale === "ar"
+                  ? `خصم الإخوة مفعل (${siblingDiscountPct}%):`
+                  : `Remise fratrie active (${siblingDiscountPct}%) :`}
+              </span>
+              <span>
+                {locale === "ar"
+                  ? isSiblingWaived100
+                    ? t("siblingWaiverDesc")
+                    : `يستفيد هذا التلميذ من تخفيض بنسبة ${siblingDiscountPct}% على معاليم الحصص الدراسية (يدفع النصف فقط).`
+                  : isSiblingWaived100
+                  ? t("siblingWaiverDesc")
+                  : `Cet élève bénéficie d'une réduction de ${siblingDiscountPct}% sur les cours (paie la moitié).`}
+              </span>
             </div>
           )}
 
@@ -729,7 +812,7 @@ export default function StudentPaymentDetails({
                         <div>
                           <span className="text-[10px] text-muted block">{t("inscriptionFeeStatus")}</span>
                           <span className="text-xs font-semibold text-gray-800">
-                            {cm.inscVoucher ? (
+                            {cm.isInscriptionPaid ? (
                               <span className="text-success-text font-bold">{t("inscriptionSettled")}</span>
                             ) : cm.enrollment.feeOverriddenByOwner ? (
                               <span className="text-amber-700">{t("inscriptionOwnerWaived")}</span>
@@ -983,6 +1066,35 @@ export default function StudentPaymentDetails({
                       const isPartiallyRefunded = totalRefunded > 0 && remainingBalance > 0;
                       const formattedLabel = formatVoucherDisplay(v);
 
+                      // Refund eligibility and cashback cap calculation (§7.8)
+                      const targetClassId = v.classId || v.class?.id;
+                      const classMetric = targetClassId ? classMetricsMap.get(targetClassId) : null;
+
+                      let canRefund = false;
+                      let maxRefundable = 0;
+                      let unconsumedSessions: number | undefined = undefined;
+
+                      if (targetClassId && classMetric) {
+                        const isMostRecentCycle = Boolean(
+                          classMetric.mostRecentActiveCycle && classMetric.mostRecentActiveCycle.id === v.id
+                        );
+                        const pricePerSession = Number(v.amount) / 4;
+                        const effectiveCap = Math.round(classMetric.unconsumedInCycle * pricePerSession);
+                        maxRefundable = Math.min(remainingBalance, effectiveCap);
+                        unconsumedSessions = classMetric.unconsumedInCycle;
+                        canRefund =
+                          !isSiblingDiscount &&
+                          v.paymentType === "TUITION_4SESSION" &&
+                          isMostRecentCycle &&
+                          !isVoidedOrFullyRefunded &&
+                          remainingBalance > 0 &&
+                          maxRefundable > 0;
+                      } else if (!targetClassId) {
+                        // Non-class voucher (e.g. workshop / formation)
+                        maxRefundable = remainingBalance;
+                        canRefund = !isVoidedOrFullyRefunded && remainingBalance > 0 && v.paymentType !== "INSCRIPTION";
+                      }
+
                       return (
                         <tr
                           key={v.id}
@@ -1079,11 +1191,11 @@ export default function StudentPaymentDetails({
                                 {t("auditBtn")}
                               </button>
 
-                              {/* Refund button */}
-                              {!isVoidedOrFullyRefunded && remainingBalance > 0 && v.paymentType !== "INSCRIPTION" && (
+                              {/* Refund button - only on latest active cycle with unconsumed credit */}
+                              {canRefund && (
                                 <button
                                   type="button"
-                                  onClick={() => handleOpenRefund(v)}
+                                  onClick={() => handleOpenRefund(v, maxRefundable, unconsumedSessions)}
                                   className="px-2 py-1 rounded text-[11px] font-semibold bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 transition-colors"
                                   title={t("refundTooltip")}
                                 >
@@ -1125,6 +1237,7 @@ export default function StudentPaymentDetails({
               setOpen={(open) => setVoucherModal({ ...voucherModal, isOpen: open })}
               type={voucherModal.type}
               data={voucherModal.voucher}
+              defaultInscriptionFee={configuredInscriptionFee}
             />
           </div>
         </div>
@@ -1380,7 +1493,7 @@ export default function StudentPaymentDetails({
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4">
           <div className="bg-white rounded-xl shadow-xl relative w-full max-w-md p-5 font-sans">
             <button
-              onClick={() => setRefundModal({ isOpen: false, remainingBalance: 0 })}
+              onClick={() => setRefundModal({ isOpen: false, remainingBalance: 0, maxRefundable: 0, unconsumedSessions: 0 })}
               className="absolute top-4 end-4 text-gray-400 hover:text-gray-600"
             >
               <Image src="/close.png" alt="close" width={16} height={16} />
@@ -1393,20 +1506,63 @@ export default function StudentPaymentDetails({
             </h3>
 
             <div className="mt-4 space-y-3 text-xs">
-              <div className="bg-blue-50 border border-blue-200 p-2.5 rounded flex justify-between font-mono">
-                <span>{t("modalRefundAvailable")}</span>
-                <span className="font-bold text-green-700">{refundModal.remainingBalance.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD</span>
+              {/* Cashback Cap Banner */}
+              <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg space-y-1.5 font-mono">
+                <div className="flex justify-between">
+                  <span className="text-muted">{t("originalVoucherAmount")}</span>
+                  <span className="font-bold text-gray-900">
+                    {Number(refundModal.voucher.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
+                  </span>
+                </div>
+                <div className="flex justify-between text-green-700 font-bold">
+                  <span>{t("modalRefundAvailable")}</span>
+                  <span className="text-sm">
+                    {(refundModal.maxRefundable ?? refundModal.remainingBalance).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
+                  </span>
+                </div>
+                {refundModal.unconsumedSessions !== undefined && (
+                  <p className="text-[11px] text-muted border-t border-blue-200/60 pt-1 font-sans">
+                    {t("cashbackCapInfo", {
+                      count: refundModal.unconsumedSessions,
+                      amount: (refundModal.maxRefundable ?? refundModal.remainingBalance).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
+                    })}
+                  </p>
+                )}
               </div>
+
+              {/* Fast Presets */}
+              {(refundModal.maxRefundable ?? 0) > 0 && (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRefundAmount(refundModal.maxRefundable)}
+                    className={`flex-1 py-1.5 px-2 rounded-lg border text-xs font-semibold transition-colors ${
+                      Number(refundAmount) === refundModal.maxRefundable
+                        ? "bg-red-600 text-white border-red-600 shadow-xs"
+                        : "bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100"
+                    }`}
+                  >
+                    100% ({refundModal.maxRefundable.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRefundAmount(Math.round(refundModal.maxRefundable / 2))}
+                    className="py-1.5 px-3 rounded-lg border border-gray-200 text-xs font-semibold bg-gray-50 text-gray-700 hover:bg-gray-100"
+                  >
+                    50%
+                  </button>
+                </div>
+              )}
 
               <div>
                 <label className="font-semibold block mb-1">{t("modalRefundAmountLabel")}</label>
                 <input
                   type="number"
                   min="1"
-                  max={refundModal.remainingBalance}
+                  max={refundModal.maxRefundable ?? refundModal.remainingBalance}
                   value={refundAmount}
                   onChange={(e) => setRefundAmount(e.target.value === "" ? "" : Number(e.target.value))}
-                  className="w-full border border-border rounded p-2 font-mono font-bold"
+                  className="w-full border border-border rounded p-2 font-mono font-bold text-red-600 focus:ring-1 focus:ring-primary outline-none"
                 />
               </div>
 
@@ -1417,7 +1573,7 @@ export default function StudentPaymentDetails({
                   value={refundReason}
                   onChange={(e) => setRefundReason(e.target.value)}
                   placeholder={t("modalRefundReasonPlaceholder")}
-                  className="w-full border border-border rounded p-2"
+                  className="w-full border border-border rounded p-2 focus:ring-1 focus:ring-primary outline-none"
                 />
               </div>
 
@@ -1426,14 +1582,21 @@ export default function StudentPaymentDetails({
                   size="sm"
                   variant="danger"
                   onClick={handleExecuteRefund}
-                  disabled={isRefundPending || !refundAmount || Number(refundAmount) <= 0 || !refundReason || refundReason.trim().length < 3}
+                  disabled={
+                    isRefundPending ||
+                    !refundAmount ||
+                    Number(refundAmount) <= 0 ||
+                    Number(refundAmount) > (refundModal.maxRefundable ?? refundModal.remainingBalance) ||
+                    !refundReason ||
+                    refundReason.trim().length < 3
+                  }
                 >
                   {isRefundPending ? t("modalRefundSubmitting") : t("modalRefundConfirm")}
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => setRefundModal({ isOpen: false, remainingBalance: 0 })}
+                  onClick={() => setRefundModal({ isOpen: false, remainingBalance: 0, maxRefundable: 0, unconsumedSessions: 0 })}
                 >
                   {tCommon("cancel")}
                 </Button>

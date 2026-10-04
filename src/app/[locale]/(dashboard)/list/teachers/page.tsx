@@ -193,19 +193,10 @@ const TeacherListPage = async (
       className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
     >
       {/* 1. Full name */}
-      <td className="flex items-center gap-3.5 p-3.5">
-        <Image
-          src="/noAvatar.png"
-          alt=""
-          width={38}
-          height={38}
-          className="w-9 h-9 rounded-full object-cover border border-border shrink-0"
-        />
-        <div className="flex flex-col min-w-0">
-          <h4 className="text-table-body font-semibold text-gray-900 truncate">
-            {item.name}
-          </h4>
-        </div>
+      <td className="p-3.5">
+        <h4 className="text-table-body font-semibold text-gray-900 truncate">
+          {item.name}
+        </h4>
       </td>
 
       {/* 2. Subjects taught */}

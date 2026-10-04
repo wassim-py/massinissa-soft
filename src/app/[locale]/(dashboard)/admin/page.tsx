@@ -11,6 +11,8 @@ import TodayAttendanceChart, {
   TodayLessonAttendanceData,
 } from "@/components/dashboard/TodayAttendanceChart";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
+import { computeStudentConsumedSessions } from "@/lib/studentBilling";
+import { serializeForClient } from "@/lib/utils";
 
 const AdminPage = async () => {
   const session = await getAuthSession();
@@ -71,6 +73,7 @@ const AdminPage = async () => {
           lessons: {
             select: {
               id: true,
+              startsAt: true,
               isFree: true,
               attendances: {
                 select: {
@@ -241,23 +244,34 @@ const AdminPage = async () => {
         (v) => v.paymentType === "TUITION_4SESSION"
       );
 
-      const isWaivedSibling = Boolean(
+      const isSiblingDiscount = Boolean(
         student.family &&
           student.family.payerStudentId &&
           student.family.payerStudentId !== student.id
       );
+      const siblingDiscountPct = isSiblingDiscount
+        ? Number((student.family as any)?.discountPercentage ?? 50)
+        : 0;
+      const isSiblingWaived100 = siblingDiscountPct >= 100;
 
       const cyclePrice = Number(cls.pricePerCycle || 0);
-      const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+      const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+      const effectiveLessonPrice =
+        siblingDiscountPct > 0 && siblingDiscountPct < 100
+          ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+          : siblingDiscountPct >= 100
+          ? 0
+          : baseLessonPrice;
+
       let purchasedSessions = 0;
-      if (isWaivedSibling) {
+      if (isSiblingWaived100) {
         purchasedSessions = 16;
-      } else if (lessonPrice > 0) {
+      } else if (effectiveLessonPrice > 0) {
         const totalPaidTuition = tuitionVouchers.reduce(
           (sum, v) => sum + Math.max(0, Number(v.amount || 0)),
           0
         );
-        purchasedSessions = Math.floor(totalPaidTuition / lessonPrice);
+        purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
       } else {
         purchasedSessions = tuitionVouchers.length * 4;
       }
@@ -270,14 +284,17 @@ const AdminPage = async () => {
         0
       );
 
-      let attendedSessions = 0;
+      const studentAtts: Array<{ lessonId: number; status: string }> = [];
       cls.lessons.forEach((l) => {
-        if (!l.isFree) {
-          const att = l.attendances.find((a) => a.studentId === student.id);
-          if (att && att.status === "PRESENT") {
-            attendedSessions++;
-          }
+        const att = l.attendances.find((a) => a.studentId === student.id);
+        if (att) {
+          studentAtts.push({ lessonId: l.id, status: att.status });
         }
+      });
+
+      const attendedSessions = computeStudentConsumedSessions({
+        lessons: cls.lessons,
+        attendances: studentAtts,
       });
 
       const remainingSessions =
@@ -306,7 +323,12 @@ const AdminPage = async () => {
           phone: student.phone,
           registeredBranchId: student.registeredBranchId,
           family: student.family
-            ? { payerStudentId: student.family.payerStudentId }
+            ? {
+                payerStudentId: student.family.payerStudentId,
+                discountPercentage: (student.family as any).discountPercentage
+                  ? Number((student.family as any).discountPercentage)
+                  : 50,
+              }
             : null,
         },
         classData: {
@@ -374,7 +396,7 @@ const AdminPage = async () => {
         </div>
 
         {/* STUDENTS TO WATCH (PAYMENT REMINDER NUDGE) */}
-        <StudentsToWatch students={studentsToWatchList} />
+        <StudentsToWatch students={serializeForClient(studentsToWatchList)} />
 
         {/* TODAY'S ATTENDANCE CHART */}
         <TodayAttendanceChart

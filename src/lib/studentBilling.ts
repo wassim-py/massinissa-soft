@@ -23,6 +23,7 @@ export interface SessionFeeCalculation {
   schoolCut: number;
   payerStatus: StudentPayerStatus;
   isSiblingWaived: boolean;
+  siblingDiscountPercentage?: number;
 }
 
 export function normalizePayerStatus(status?: string | null): StudentPayerStatus {
@@ -39,11 +40,13 @@ export function computeStudentSessionFee({
   pricePerCycle,
   teacherPercentage,
   isSiblingWaived = false,
+  siblingDiscountPercentage,
 }: {
   payerStatus?: string | null;
   pricePerCycle: number;
   teacherPercentage?: number | null;
   isSiblingWaived?: boolean;
+  siblingDiscountPercentage?: number | null;
 }): SessionFeeCalculation {
   const normStatus = normalizePayerStatus(payerStatus);
   const baseCycleFee = Math.max(0, Number(pricePerCycle || 0));
@@ -58,8 +61,8 @@ export function computeStudentSessionFee({
   const normalTeacherCut = (baseSessionFee * tPercent) / 100;
   const schoolCut = (baseSessionFee * sPercent) / 100;
 
-  // 1. Sibling waiver or Non-payer: 0 student fee (§2.4 & §7.18)
-  if (isSiblingWaived || normStatus === "NON_PAYER") {
+  // 1. Non-payer status: 0 student fee (§7.18)
+  if (normStatus === "NON_PAYER") {
     return {
       baseSessionFee,
       baseCycleFee,
@@ -70,11 +73,56 @@ export function computeStudentSessionFee({
       teacherCut: 0, // Teacher does NOT get paid for non-paying students
       schoolCut: 0,
       payerStatus: normStatus,
-      isSiblingWaived,
+      isSiblingWaived: false,
+      siblingDiscountPercentage: 0,
     };
   }
 
-  // 2. School-fees-only (§7.18):
+  // 2. Sibling discount (percentage discount, default 50% / half-price)
+  const effectiveDiscount =
+    siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
+      ? Number(siblingDiscountPercentage)
+      : isSiblingWaived
+      ? 50
+      : 0;
+
+  if (effectiveDiscount >= 100) {
+    return {
+      baseSessionFee,
+      baseCycleFee,
+      teacherPercentage: tPercent,
+      schoolPercentage: sPercent,
+      studentSessionFee: 0,
+      studentCycleFee: 0,
+      teacherCut: 0,
+      schoolCut: 0,
+      payerStatus: normStatus,
+      isSiblingWaived: true,
+      siblingDiscountPercentage: 100,
+    };
+  }
+
+  if (effectiveDiscount > 0) {
+    const discountRate = effectiveDiscount / 100;
+    const studentCycleFee = baseCycleFee * (1 - discountRate);
+    const studentSessionFee = baseSessionFee * (1 - discountRate);
+
+    return {
+      baseSessionFee,
+      baseCycleFee,
+      teacherPercentage: tPercent,
+      schoolPercentage: sPercent,
+      studentSessionFee,
+      studentCycleFee,
+      teacherCut: normalTeacherCut,
+      schoolCut,
+      payerStatus: normStatus,
+      isSiblingWaived: false,
+      siblingDiscountPercentage: effectiveDiscount,
+    };
+  }
+
+  // 3. School-fees-only (§7.18):
   // Charge ONLY the school's percentage share (100% - TeacherPayRate.percentageOfSessionFee)
   // Teacher does NOT get paid for school-fees-only students
   if (normStatus === "SCHOOL_FEES_ONLY") {
@@ -90,11 +138,11 @@ export function computeStudentSessionFee({
       teacherCut: 0, // Teacher does NOT get paid for school-fees-only students
       schoolCut,
       payerStatus: normStatus,
-      isSiblingWaived,
+      isSiblingWaived: false,
     };
   }
 
-  // 3. Normal (§7.18): Standard tuition
+  // 4. Normal (§7.18): Standard tuition
   return {
     baseSessionFee,
     baseCycleFee,
@@ -105,7 +153,8 @@ export function computeStudentSessionFee({
     teacherCut: normalTeacherCut, // Teacher earns normal percentage
     schoolCut,
     payerStatus: normStatus,
-    isSiblingWaived,
+    isSiblingWaived: false,
+    siblingDiscountPercentage: 0,
   };
 }
 
@@ -118,12 +167,14 @@ export function computeStudentOwedForSessions({
   teacherPercentage,
   sessionCount,
   isSiblingWaived = false,
+  siblingDiscountPercentage,
 }: {
   payerStatus?: string | null;
   pricePerCycle: number;
   teacherPercentage?: number | null;
   sessionCount: number;
   isSiblingWaived?: boolean;
+  siblingDiscountPercentage?: number | null;
 }): number {
   if (sessionCount <= 0) return 0;
   const { studentSessionFee } = computeStudentSessionFee({
@@ -131,6 +182,7 @@ export function computeStudentOwedForSessions({
     pricePerCycle,
     teacherPercentage,
     isSiblingWaived,
+    siblingDiscountPercentage,
   });
   return studentSessionFee * sessionCount;
 }
@@ -314,7 +366,7 @@ export function classifyStudentAttendanceHistory({
         status: "ABSENT",
         isCatchUp: false,
         classification: "TRAILING_ABSENCE_HELD",
-        isConsumedCredit: false,
+        isConsumedCredit: true, // Consumes student session credit per §7.22
         isTeacherPayable: false, // Held back from this month's payroll
         isRefundable: true, // Refundable if student drops out
         isHeld: true,
@@ -323,6 +375,34 @@ export function classifyStudentAttendanceHistory({
   }
 
   return history;
+}
+
+/**
+ * Computes the total number of consumed sessions for a student in a class.
+ * Accounts for Massinissa School rules:
+ * - Free lessons (isFree: true) consume 0 credit.
+ * - Excused absences (NOT_DEFINED) consume 0 credit.
+ * - Absences before student's very first presence in the group (PRE_START_ABSENCE) consume 0 credit.
+ * - Presences and unexcused absences on/after first presence consume 1 credit each.
+ */
+export function computeStudentConsumedSessions({
+  lessons,
+  attendances,
+  catchUps = [],
+}: {
+  lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean }>;
+  attendances: Array<{ lessonId: number; status: string }>;
+  catchUps?: Array<{ missedLessonId: number; recordedAt?: Date | string }>;
+}): number {
+  if (!lessons || lessons.length === 0 || !attendances || attendances.length === 0) {
+    return 0;
+  }
+  const history = classifyStudentAttendanceHistory({
+    lessons,
+    attendances,
+    catchUps,
+  });
+  return history.filter((h) => h.isConsumedCredit).length;
 }
 
 /**

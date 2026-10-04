@@ -10,6 +10,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { DataTable, Column } from "@/components/ui/DataTable";
+import { TeacherAvatar } from "@/components/ui/UserAvatar";
 import TeacherPhotocopyRateWidget from "@/components/teachers/TeacherPhotocopyRateWidget";
 import TeacherPayrollPercentageWidget from "@/components/teachers/TeacherPayrollPercentageWidget";
 import TeacherPayrollSection from "@/components/teachers/TeacherPayrollSection";
@@ -309,12 +310,11 @@ const SingleTeacherPage = async (
           <CardContent className="p-6">
             <div className="flex flex-col sm:flex-row items-center gap-5 pb-5 border-b border-border/70">
               <div className="shrink-0">
-                <Image
-                  src="/noAvatar.png"
+                <TeacherAvatar
+                  gender={t.gender}
                   alt={t.name}
-                  width={88}
-                  height={88}
-                  className="rounded-full object-cover border-4 border-surface shadow-md"
+                  size={88}
+                  className="border-4 border-surface shadow-md"
                 />
               </div>
               <div className="text-center sm:text-start grow">

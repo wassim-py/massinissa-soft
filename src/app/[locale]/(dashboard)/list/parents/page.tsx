@@ -19,6 +19,8 @@ type ParentList = {
   phone: string;
   address: string;
   img?: string | null;
+  payerStudentId?: string | null;
+  discountPercentage?: number;
   students: { id: string; name: string; surname: string }[];
 };
 
@@ -97,12 +99,30 @@ const ParentListPage = async (
       </td>
       <td className="hidden md:table-cell text-muted-dark">
         {item.students.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {item.students.map((student) => (
-              <Badge key={student.id} variant="secondary" size="sm">
-                {student.surname ? `${student.surname} ${student.name}` : student.name}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {item.students.map((student) => {
+              const isPayer = student.id === item.payerStudentId;
+              return (
+                <Badge
+                  key={student.id}
+                  variant={isPayer ? "primary" : "secondary"}
+                  size="sm"
+                  className={isPayer ? "font-bold" : ""}
+                >
+                  {student.surname ? `${student.surname} ${student.name}` : student.name}
+                  {isPayer && (
+                    <span className="ms-1 text-[10px] opacity-80">
+                      ({locale === "ar" ? "الدافع" : "Payeur"})
+                    </span>
+                  )}
+                </Badge>
+              );
+            })}
+            {item.discountPercentage != null && (
+              <Badge variant="warning" size="sm" className="font-mono text-[10px]">
+                {locale === "ar" ? `خصم ${item.discountPercentage}%` : `-${item.discountPercentage}%`}
               </Badge>
-            ))}
+            )}
           </div>
         ) : (
           <span className="text-muted text-xs">-</span>
@@ -158,7 +178,7 @@ const ParentListPage = async (
 
     count = totalCount;
     data = families.map((f) => {
-      const familyName = t("familyNumber", { number: f.id });
+      const familyName = f.name || t("familyNumber", { number: f.id });
       const primaryPhone = f.students.find((s) => s.phone)?.phone || "-";
       return {
         id: String(f.id),
@@ -168,6 +188,8 @@ const ParentListPage = async (
         email: "-",
         phone: primaryPhone,
         address: "-",
+        payerStudentId: f.payerStudentId,
+        discountPercentage: Number(f.discountPercentage ?? 50),
         students: f.students.map((s) => ({ id: s.id, name: s.name, surname: "" })),
       };
     });

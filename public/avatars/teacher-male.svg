@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <!-- Clean pastel blue background -->
+  <circle cx="50" cy="50" r="48" fill="#DBEAFE" stroke="#BFDBFE" stroke-width="2"/>
+  
+  <!-- Head -->
+  <circle cx="50" cy="36" r="16" stroke="#1D4ED8" stroke-width="4" fill="none"/>
+  
+  <!-- Male Hair with Side-Part -->
+  <path d="M34 33 C34 20 42 19 50 19 C58 19 66 21 66 33" stroke="#1D4ED8" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M34 28 C39 23 48 23 52 25" stroke="#1D4ED8" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  
+  <!-- Teacher Glasses -->
+  <rect x="38" y="32" width="10" height="8" rx="2" stroke="#1D4ED8" stroke-width="3" fill="none"/>
+  <rect x="52" y="32" width="10" height="8" rx="2" stroke="#1D4ED8" stroke-width="3" fill="none"/>
+  <line x1="48" y1="36" x2="52" y2="36" stroke="#1D4ED8" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Shoulders & Torso -->
+  <path d="M22 84 C22 66 34 60 50 60 C66 60 78 66 78 84" stroke="#1D4ED8" stroke-width="4" stroke-linecap="round" fill="none"/>
+  
+  <!-- Collar -->
+  <path d="M43 60 L50 66 L57 60" stroke="#1D4ED8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Necktie -->
+  <polygon points="47.5,66 52.5,66 54,82 50,86 46,82" fill="#1D4ED8"/>
+</svg>

@@ -23,7 +23,7 @@ import { computeStudentSessionFee } from "@/lib/studentBilling";
 import { CheckCircle2, AlertCircle, Info, Printer } from "lucide-react";
 
 interface ExtendedStudent extends Student {
-  family?: { payerStudentId: string | null } | null;
+  family?: { payerStudentId: string | null; discountPercentage?: any } | null;
   enrollments?: Array<{ classId: number; payerStatus?: string }>;
 }
 
@@ -35,6 +35,7 @@ const PaymentForm = ({
   setOpen,
   sessionsForThisPayment,
   amountOwedByStudent,
+  defaultInscriptionFee,
 }: {
   student: ExtendedStudent;
   classData: Class;
@@ -43,15 +44,20 @@ const PaymentForm = ({
   setOpen: (isOpen: boolean) => void;
   sessionsForThisPayment?: number;
   amountOwedByStudent?: number;
+  defaultInscriptionFee?: number;
 }) => {
   const router = useRouter();
   const t = useTranslations("payments");
   const tCommon = useTranslations("common");
   const locale = useLocale();
 
-  const isSiblingWaived = Boolean(
+  const isSiblingDiscount = Boolean(
     student.family && student.family.payerStudentId && student.family.payerStudentId !== student.id
   );
+  const siblingDiscountPct = isSiblingDiscount
+    ? Number((student.family as any)?.discountPercentage ?? 50)
+    : 0;
+  const isSiblingWaived = siblingDiscountPct >= 100;
 
   const teacherPercentage = (classData as any)?.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
     ? Number((classData as any).teacher.TeacherPayRate[0].percentageOfSessionFee)
@@ -65,14 +71,23 @@ const PaymentForm = ({
     pricePerCycle: Number(classData.pricePerCycle || (classData as any).price || 0),
     teacherPercentage,
     isSiblingWaived,
+    siblingDiscountPercentage: siblingDiscountPct,
   });
+
+  const initialConfiguredFee =
+    Number(classData.inscriptionFee || 0) > 0
+      ? Number(classData.inscriptionFee)
+      : (defaultInscriptionFee || 0);
 
   // State for Multi-Item Creation Form
   const [isTuitionChecked, setIsTuitionChecked] = useState(true);
   const [tuitionAmount, setTuitionAmount] = useState<number>(feeCalc.studentCycleFee);
 
+  const [configuredFee, setConfiguredFee] = useState<number>(initialConfiguredFee);
   const [isInscriptionChecked, setIsInscriptionChecked] = useState(false);
-  const [inscriptionAmount, setInscriptionAmount] = useState<number>(Number(classData.inscriptionFee || 0));
+  const [inscriptionAmount, setInscriptionAmount] = useState<number | string>(
+    initialConfiguredFee > 0 ? initialConfiguredFee : ""
+  );
 
   const [isBookChecked, setIsBookChecked] = useState(false);
   const [bookAmount, setBookAmount] = useState<number>(Number(classData.bookFee || 0));
@@ -104,6 +119,8 @@ const PaymentForm = ({
     })
       .then((res) => {
         if (isMounted) {
+          const fee = res.configuredInscriptionFee || 0;
+          setConfiguredFee(fee);
           setInscriptionStatus({
             isLoading: false,
             isAlreadyPaidInThisClass: res.isAlreadyPaidInThisClass,
@@ -111,8 +128,12 @@ const PaymentForm = ({
             paidGroupsCount: res.paidGroupsCount,
           });
           // If not paid and not exempt, check inscription by default for convenience
+          // and populate the configured inscription fee into the field
           if (!res.isAlreadyPaidInThisClass && !res.hasPaidThreeInscriptions) {
             setIsInscriptionChecked(true);
+            setInscriptionAmount(fee);
+          } else {
+            setIsInscriptionChecked(false);
           }
         }
       })
@@ -129,19 +150,49 @@ const PaymentForm = ({
   }, [student?.id, classData?.id, type]);
 
   // Compute live total amount
-  const totalAmount =
-    (isTuitionChecked ? Math.max(0, Number(tuitionAmount || 0)) : 0) +
-    (isInscriptionChecked &&
+  const parsedTuition = isTuitionChecked ? Math.max(0, Number(tuitionAmount || 0)) : 0;
+  const parsedInscNum = Number(inscriptionAmount);
+  const parsedInscription =
+    isInscriptionChecked &&
     !inscriptionStatus.hasPaidThreeInscriptions &&
-    !inscriptionStatus.isAlreadyPaidInThisClass
-      ? Math.max(0, Number(inscriptionAmount || 0))
-      : 0) +
-    (isBookChecked && classData.hasBooks ? Math.max(0, Number(bookAmount || 0)) : 0);
+    !inscriptionStatus.isAlreadyPaidInThisClass &&
+    !isNaN(parsedInscNum) &&
+    parsedInscNum > 0
+      ? parsedInscNum
+      : 0;
+  const parsedBook = isBookChecked && classData.hasBooks ? Math.max(0, Number(bookAmount || 0)) : 0;
+
+  const totalAmount = parsedTuition + parsedInscription + parsedBook;
 
   const handleMultiItemSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Check if inscription fee was checked but left empty or <= 0
+    const rawInscNum = Number(inscriptionAmount);
+    const isInscEmptyOrZero =
+      inscriptionAmount === "" || isNaN(rawInscNum) || rawInscNum <= 0;
+
+    let effectiveInscriptionChecked = isInscriptionChecked;
+    if (isInscriptionChecked && isInscEmptyOrZero) {
+      // Auto uncheck the box and do not save inscription fees at all
+      setIsInscriptionChecked(false);
+      effectiveInscriptionChecked = false;
+    }
+
+    const effectiveTuition = isTuitionChecked ? Math.max(0, Number(tuitionAmount || 0)) : 0;
+    const effectiveBook = isBookChecked && classData.hasBooks ? Math.max(0, Number(bookAmount || 0)) : 0;
+    const effectiveInscription =
+      effectiveInscriptionChecked &&
+      !inscriptionStatus.hasPaidThreeInscriptions &&
+      !inscriptionStatus.isAlreadyPaidInThisClass &&
+      !isInscEmptyOrZero
+        ? rawInscNum
+        : 0;
+
+    const totalToSubmit = effectiveTuition + effectiveBook + effectiveInscription;
+
     if (
-      totalAmount <= 0 &&
+      totalToSubmit <= 0 &&
       !isSiblingWaived &&
       currentPayerStatus !== "NON_PAYER"
     ) {
@@ -160,17 +211,14 @@ const PaymentForm = ({
         classId: classData.id,
         items: {
           tuition: isTuitionChecked
-            ? { enabled: true, amount: Math.max(0, Number(tuitionAmount || 0)) }
+            ? { enabled: true, amount: effectiveTuition }
             : undefined,
-          inscription:
-            isInscriptionChecked &&
-            !inscriptionStatus.hasPaidThreeInscriptions &&
-            !inscriptionStatus.isAlreadyPaidInThisClass
-              ? { enabled: true, amount: Math.max(0, Number(inscriptionAmount || 0)) }
-              : undefined,
+          inscription: effectiveInscription > 0
+            ? { enabled: true, amount: effectiveInscription }
+            : undefined,
           book:
             isBookChecked && classData.hasBooks
-              ? { enabled: true, amount: Math.max(0, Number(bookAmount || 0)) }
+              ? { enabled: true, amount: effectiveBook }
               : undefined,
         },
         notes,
@@ -392,11 +440,23 @@ const PaymentForm = ({
         </div>
       </div>
 
-      {/* Sibling Waiver Alert */}
-      {isSiblingWaived && (
+      {/* Sibling Waiver / Discount Alert */}
+      {isSiblingDiscount && (
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed">
-          <p className="font-bold">{t("siblingDiscountAlertTitle")}</p>
-          {t("siblingDiscountAlertBody")}
+          <p className="font-bold">
+            {locale === "ar"
+              ? `تنبيه تخفيض الإخوة (${siblingDiscountPct}%):`
+              : `Alerte remise fratrie (${siblingDiscountPct}%) :`}
+          </p>
+          <p className="mt-0.5">
+            {locale === "ar"
+              ? isSiblingWaived
+                ? "هذا التلميذ معفى بنسبة 100% من معاليم التدريس (0 دج) لوجود دافع رئيسي للعائلة."
+                : `يستفيد هذا التلميذ من تخفيض بنسبة ${siblingDiscountPct}% على معاليم الحصص الدراسية (المبلغ المطلوب: ${feeCalc.studentCycleFee.toLocaleString()} دج بدل ${feeCalc.baseCycleFee.toLocaleString()} دج). رسوم التسجيل والكتب تبقى كاملة.`
+              : isSiblingWaived
+              ? "Cet élève bénéficie d'une exonération à 100% sur les cours (0 DZD)."
+              : `Cet élève bénéficie d'une réduction de ${siblingDiscountPct}% sur les cours (${feeCalc.studentCycleFee.toLocaleString()} DZD au lieu de ${feeCalc.baseCycleFee.toLocaleString()} DZD). Frais d'inscription et manuels plein tarif.`}
+          </p>
         </div>
       )}
 
@@ -466,7 +526,13 @@ const PaymentForm = ({
                   !inscriptionStatus.hasPaidThreeInscriptions &&
                   !inscriptionStatus.isAlreadyPaidInThisClass
                 }
-                onChange={(e) => setIsInscriptionChecked(e.target.checked)}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setIsInscriptionChecked(checked);
+                  if (checked && (!inscriptionAmount || Number(inscriptionAmount) <= 0)) {
+                    setInscriptionAmount(configuredFee || Number(classData.inscriptionFee || 0));
+                  }
+                }}
                 className="w-4 h-4 rounded text-primary focus:ring-primary/20 cursor-pointer disabled:cursor-not-allowed"
               />
               <span>{locale === "ar" ? "حقوق التسجيل" : "Frais d'inscription"}</span>
@@ -482,7 +548,7 @@ const PaymentForm = ({
               </Badge>
             ) : (
               <span className="text-xs font-mono font-semibold text-gray-600">
-                {Number(classData.inscriptionFee || 0).toLocaleString()} DZD
+                {Number(configuredFee || classData.inscriptionFee || 0).toLocaleString()} DZD
               </span>
             )}
           </div>
@@ -495,9 +561,10 @@ const PaymentForm = ({
                 <input
                   type="number"
                   step="any"
+                  min="0"
                   value={inscriptionAmount}
                   onChange={(e) =>
-                    setInscriptionAmount(e.target.value ? Number(e.target.value) : 0)
+                    setInscriptionAmount(e.target.value === "" ? "" : Number(e.target.value))
                   }
                   className="border border-border bg-surface px-2.5 py-1 text-xs rounded-lg font-mono w-32 focus:ring-2 focus:ring-primary/20 focus:outline-none"
                 />

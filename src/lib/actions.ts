@@ -42,7 +42,8 @@ import { canUserAccessBranch } from "./settings";
 import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from "./ledger";
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
-import { classifyStudentAttendanceHistory } from "./studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsumedSessions } from "./studentBilling";
+import { getFixedInscriptionFeeAction } from "./configurationActions";
 
 type CurrentState = { success: boolean; error: boolean; message?: string };
 
@@ -206,11 +207,13 @@ export const createClass = async (
           where: { teacherId, levelId },
         })
       : 0;
-    const hasBooks = bookCount > 0;
+    const hasBooks = Boolean(data.hasBooks) || bookCount > 0;
+    const bookFee = hasBooks && data.bookFee != null && data.bookFee > 0 ? data.bookFee : null;
+    const defaultInscFee = await getFixedInscriptionFeeAction();
 
     await prisma.$executeRaw`
-      INSERT INTO "Class" (name, "branchId", "pricePerCycle", "inscriptionFee", "hasBooks", "isFormation", "teacherId", "levelId")
-      VALUES (${data.name}, ${branchId}, ${pricePerCycle}, 0, ${hasBooks}, false, ${teacherId}, ${levelId})
+      INSERT INTO "Class" (name, "branchId", "pricePerCycle", "inscriptionFee", "hasBooks", "bookFee", "isFormation", "teacherId", "levelId")
+      VALUES (${data.name}, ${branchId}, ${pricePerCycle}, ${defaultInscFee}, ${hasBooks}, ${bookFee}, false, ${teacherId}, ${levelId})
     `;
 
     safeRevalidatePath("/list/classes");
@@ -227,14 +230,14 @@ export const updateClass = async (
 ) => {
   try {
     const session = await getAuthSession();
-    if (!session.isOwner) {
-      return { success: false, error: true, message: "Action réservée au propriétaire / فقط المالك يمكنه تعديل الفوج." };
+    if (!session.isOwner && !session.isBranchAdmin) {
+      return { success: false, error: true, message: "Non autorisé / غير مصرح لك بتعديل الفوج." };
     }
 
     if (!data.id) return { success: false, error: true, message: "Identifiant manquant / لا يوجد معرف للفوج." };
 
-    const existing = await prisma.$queryRaw<Array<{ branchId: number; teacherId: string | null; levelId: number | null }>>`
-      SELECT "branchId", "teacherId", "levelId" FROM "Class" WHERE id = ${data.id} LIMIT 1
+    const existing = await prisma.$queryRaw<Array<{ branchId: number; teacherId: string | null; levelId: number | null; hasBooks: boolean; bookFee: any }>>`
+      SELECT "branchId", "teacherId", "levelId", "hasBooks", "bookFee" FROM "Class" WHERE id = ${data.id} LIMIT 1
     `;
     if (existing.length === 0) {
       return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود." };
@@ -263,11 +266,14 @@ export const updateClass = async (
           where: { teacherId, levelId },
         })
       : 0;
-    const hasBooks = bookCount > 0;
+    const hasBooks = data.hasBooks !== undefined ? Boolean(data.hasBooks) : (Boolean(existing[0].hasBooks) || bookCount > 0);
+    const bookFee = hasBooks
+      ? (data.bookFee !== undefined ? (data.bookFee != null && data.bookFee > 0 ? data.bookFee : null) : (existing[0].bookFee != null ? Number(existing[0].bookFee) : null))
+      : null;
 
     await prisma.$executeRaw`
       UPDATE "Class"
-      SET name = ${data.name}, "branchId" = ${branchId}, "pricePerCycle" = ${pricePerCycle}, "teacherId" = ${teacherId}, "levelId" = ${levelId}, "hasBooks" = "hasBooks" OR ${hasBooks}
+      SET name = ${data.name}, "branchId" = ${branchId}, "pricePerCycle" = ${pricePerCycle}, "teacherId" = ${teacherId}, "levelId" = ${levelId}, "hasBooks" = ${hasBooks}, "bookFee" = ${bookFee}
       WHERE id = ${data.id}
     `;
 
@@ -548,9 +554,11 @@ export const createStudent = async (
     const address = data.address?.trim() || null;
     const sex = data.sex || "MALE";
 
+    const familyId = (data as any).familyId ? Number((data as any).familyId) : null;
+
     await prisma.$executeRaw`
-      INSERT INTO "Student" (id, "globalNumber", name, phone, "registeredBranchId", birthday, address, sex, "createdAt")
-      VALUES (${id}, ${globalNumber}, ${fullName}, ${phone}, ${branchId}, ${birthday}, ${address}, ${sex}, NOW())
+      INSERT INTO "Student" (id, "globalNumber", name, phone, "registeredBranchId", birthday, address, sex, "familyId", "createdAt")
+      VALUES (${id}, ${globalNumber}, ${fullName}, ${phone}, ${branchId}, ${birthday}, ${address}, ${sex}, ${familyId}, NOW())
     `;
 
     // Handle optional repeatable parent phone numbers (§7.2)
@@ -582,9 +590,18 @@ export const createStudent = async (
       }
     }
 
+    let familyData: any = null;
+    if (familyId) {
+      familyData = await prisma.family.findUnique({
+        where: { id: familyId },
+        select: { id: true, name: true, payerStudentId: true, discountPercentage: true },
+      });
+    }
+
     try {
       safeRevalidatePath("/list/students");
       safeRevalidatePath("/list/attendance");
+      safeRevalidatePath("/list/parents");
       if (data.classes && data.classes.length > 0) {
         for (const classId of data.classes) {
           safeRevalidatePath(`/list/attendance/class/${classId}`);
@@ -603,6 +620,8 @@ export const createStudent = async (
         name: fullName,
         phone,
         registeredBranchId: branchId,
+        familyId,
+        family: familyData,
       },
     };
   } catch (err: any) {
@@ -731,9 +750,37 @@ export const updateStudent = async (
       }
     }
 
+    // Handle family assignment
+    const rawFamilyId = (data as any).familyId;
+    if (rawFamilyId !== undefined) {
+      const newFamilyId =
+        rawFamilyId && rawFamilyId !== "" && !isNaN(Number(rawFamilyId))
+          ? Number(rawFamilyId)
+          : null;
+
+      const currentStudent = await prisma.student.findUnique({
+        where: { id: data.id },
+        select: { familyId: true, payerOfFamily: { select: { id: true } } },
+      });
+
+      if (currentStudent?.payerOfFamily && currentStudent.familyId !== newFamilyId) {
+        await prisma.family.update({
+          where: { id: currentStudent.payerOfFamily.id },
+          data: { payerStudentId: null },
+        });
+      }
+
+      await prisma.$executeRaw`
+        UPDATE "Student"
+        SET "familyId" = ${newFamilyId}
+        WHERE id = ${data.id}
+      `;
+    }
+
     try {
       safeRevalidatePath("/list/students");
       safeRevalidatePath(`/list/students/${data.id}`);
+      safeRevalidatePath("/list/parents");
     } catch {
       // Intentionally tolerated outside Next.js request context
     }
@@ -816,23 +863,46 @@ export const createParent = async (
   data: ParentSchema
 ) => {
   try {
-    const studentId = data.students?.[0] || null;
-    if (studentId) {
-      const families = await prisma.$queryRaw<Array<{ id: number }>>`
-        INSERT INTO "Family" ("payerStudentId") VALUES (${studentId}) RETURNING id
-      `;
-      if (families.length > 0) {
-        await prisma.$executeRaw`
-          UPDATE "Student" SET "familyId" = ${families[0].id} WHERE id = ${studentId}
-        `;
+    const studentIds = (data.students || []).filter(Boolean);
+    const payerStudentId =
+      data.payerStudentId && studentIds.includes(data.payerStudentId)
+        ? data.payerStudentId
+        : studentIds.length > 0
+        ? studentIds[0]
+        : null;
+
+    const discountPct =
+      data.discountPercentage != null && !isNaN(Number(data.discountPercentage))
+        ? Math.min(100, Math.max(0, Number(data.discountPercentage)))
+        : 50;
+
+    const familyName = [data.surname, data.name].filter(Boolean).join(" ").trim() || null;
+
+    await prisma.$transaction(async (tx) => {
+      const newFam = await tx.family.create({
+        data: {
+          name: familyName,
+          payerStudentId,
+          discountPercentage: discountPct,
+        },
+      });
+
+      if (studentIds.length > 0) {
+        await tx.student.updateMany({
+          where: { id: { in: studentIds } },
+          data: { familyId: newFam.id },
+        });
       }
-    }
+    });
 
     safeRevalidatePath("/list/parents");
-    return { success: true, error: false, message: "Parent créé avec succès / تم انشاء ولي الامر بنجاح." };
-  } catch (err) {
-    console.error(err);
-    return { success: false, error: true, message: "Échec de la création du parent / فشل في انشاء ولي الامر." };
+    safeRevalidatePath("/list/students");
+    safeRevalidatePath("/list/payments");
+    safeRevalidatePath("/list/attendance");
+    return { success: true, error: false, message: "Famille créée avec succès / تم انشاء العائلة بنجاح." };
+  } catch (err: any) {
+    console.error("createParent error:", err);
+    return { success: false, error: true, message: "Échec de la création de la famille / فشل في انشاء العائلة." };
   }
 };
 
@@ -840,8 +910,72 @@ export const updateParent = async (
   currentState: CurrentState,
   data: ParentSchema
 ) => {
-  safeRevalidatePath("/list/parents");
-  return { success: true, error: false, message: "Parent mis à jour avec succès / تم تحديث ولي الامر بنجاح." };
+  try {
+    const familyId = data.id ? parseInt(String(data.id), 10) : NaN;
+    if (isNaN(familyId)) {
+      return { success: false, error: true, message: "Identifiant de la famille manquant / معرف العائلة مفقود." };
+    }
+
+    const studentIds = (data.students || []).filter(Boolean);
+    const payerStudentId =
+      data.payerStudentId && studentIds.includes(data.payerStudentId)
+        ? data.payerStudentId
+        : studentIds.length > 0
+        ? studentIds[0]
+        : null;
+
+    const discountPct =
+      data.discountPercentage != null && !isNaN(Number(data.discountPercentage))
+        ? Math.min(100, Math.max(0, Number(data.discountPercentage)))
+        : 50;
+
+    const familyName = [data.surname, data.name].filter(Boolean).join(" ").trim() || null;
+
+    await prisma.$transaction(async (tx) => {
+      // Find current students linked to this family
+      const currentStudents = await tx.student.findMany({
+        where: { familyId },
+        select: { id: true },
+      });
+      const currentIds = currentStudents.map((s) => s.id);
+
+      // Unlink removed students
+      const toRemove = currentIds.filter((id) => !studentIds.includes(id));
+      if (toRemove.length > 0) {
+        await tx.student.updateMany({
+          where: { id: { in: toRemove } },
+          data: { familyId: null },
+        });
+      }
+
+      // Link newly selected students
+      if (studentIds.length > 0) {
+        await tx.student.updateMany({
+          where: { id: { in: studentIds } },
+          data: { familyId },
+        });
+      }
+
+      // Update Family record
+      await tx.family.update({
+        where: { id: familyId },
+        data: {
+          name: familyName,
+          payerStudentId,
+          discountPercentage: discountPct,
+        },
+      });
+    });
+
+    safeRevalidatePath("/list/parents");
+    safeRevalidatePath("/list/students");
+    safeRevalidatePath("/list/payments");
+    safeRevalidatePath("/list/attendance");
+    return { success: true, error: false, message: "Famille mise à jour avec succès / تم تحديث العائلة بنجاح." };
+  } catch (err: any) {
+    console.error("updateParent error:", err);
+    return { success: false, error: true, message: "Échec de la mise à jour de la famille / فشل في تحديث العائلة." };
+  }
 };
 
 export const deleteParent = async (
@@ -1536,39 +1670,71 @@ export const saveAttendance = async (
       select: { classId: true },
     });
 
-    await prisma.$transaction(async (tx) => {
-      const existingRecords = await tx.attendance.findMany({
-        where: { lessonId },
-        select: { id: true, studentId: true, status: true },
-      });
+    await prisma.$transaction(
+      async (tx) => {
+        const existingRecords = await tx.attendance.findMany({
+          where: { lessonId },
+          select: { id: true, studentId: true, status: true, justification: true },
+        });
 
-      const recordsMap = new Map(existingRecords.map((r) => [r.studentId, r]));
+        const recordsMap = new Map(existingRecords.map((r) => [r.studentId, r]));
 
-      for (const [key, value] of attendanceEntries) {
-        const studentId = key.substring(key.indexOf("[") + 1, key.indexOf("]"));
-        const status = value === "PRESENT" ? "PRESENT" : value === "NOT_DEFINED" ? "NOT_DEFINED" : "ABSENT";
-        const justification = status === "NOT_DEFINED" ? (data.get(`justification[${studentId}]`) as string)?.trim() || null : null;
-        const existingRecord = recordsMap.get(studentId);
+        const toCreate: Array<{
+          lessonId: number;
+          studentId: string;
+          status: string;
+          justification: string | null;
+        }> = [];
 
-        if (existingRecord) {
-          await tx.attendance.update({
-            where: { id: existingRecord.id },
-            data: {
-              status,
-              justification,
-            },
-          });
-        } else {
-          await tx.attendance.create({
-            data: {
+        const toUpdate: Array<{
+          id: number;
+          status: string;
+          justification: string | null;
+        }> = [];
+
+        for (const [key, value] of attendanceEntries) {
+          const studentId = key.substring(key.indexOf("[") + 1, key.indexOf("]"));
+          const status = value === "PRESENT" ? "PRESENT" : value === "NOT_DEFINED" ? "NOT_DEFINED" : "ABSENT";
+          const justification = status === "NOT_DEFINED" ? (data.get(`justification[${studentId}]`) as string)?.trim() || null : null;
+          const existingRecord = recordsMap.get(studentId);
+
+          if (existingRecord) {
+            if (existingRecord.status !== status || (existingRecord.justification || null) !== justification) {
+              toUpdate.push({
+                id: existingRecord.id,
+                status,
+                justification,
+              });
+            }
+          } else {
+            toCreate.push({
               lessonId,
               studentId,
               status,
               justification,
-            },
+            });
+          }
+        }
+
+        if (toCreate.length > 0) {
+          await tx.attendance.createMany({
+            data: toCreate,
           });
         }
-      }
+
+        if (toUpdate.length > 0) {
+          await Promise.all(
+            toUpdate.map((item) =>
+              tx.attendance.update({
+                where: { id: item.id },
+                data: {
+                  status: item.status,
+                  justification: item.justification,
+                },
+              })
+            )
+          );
+        }
 
       // Handle book distribution checkboxes (FIFO drop assignment per §2.11)
       const bookEntries = Array.from(data.entries()).filter(([key, val]) =>
@@ -1638,7 +1804,12 @@ export const saveAttendance = async (
           }
         }
       }
-    });
+    },
+    {
+      timeout: 30000,
+      maxWait: 10000,
+    }
+  );
 
     // Revalidate the path to the main attendance page, this lesson's roster, and the class records table
     safeRevalidatePath("/list/attendance");
@@ -2297,9 +2468,20 @@ export async function checkStudentInscriptionExemptionAction({
   isAlreadyPaidInThisClass: boolean;
   hasPaidThreeInscriptions: boolean;
   paidGroupsCount: number;
+  configuredInscriptionFee: number;
 }> {
   try {
-    const thisClassVoucher = await prisma.voucher.findFirst({
+    const configuredFee = await getFixedInscriptionFeeAction();
+    const targetClass = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { inscriptionFee: true },
+    });
+    const requiredFee =
+      targetClass?.inscriptionFee && Number(targetClass.inscriptionFee) > 0
+        ? Number(targetClass.inscriptionFee)
+        : configuredFee;
+
+    const thisClassVouchers = await prisma.voucher.findMany({
       where: {
         studentId,
         classId,
@@ -2308,19 +2490,37 @@ export async function checkStudentInscriptionExemptionAction({
       },
     });
 
-    const isAlreadyPaidInThisClass = Boolean(thisClassVoucher);
+    const totalPaidInThisClass = thisClassVouchers.reduce(
+      (sum, v) => sum + Number(v.amount || 0),
+      0
+    );
+    const isAlreadyPaidInThisClass = totalPaidInThisClass >= requiredFee && requiredFee > 0;
 
-    const distinctVouchers = await prisma.voucher.findMany({
+    const allInscVouchers = await prisma.voucher.findMany({
       where: {
         studentId,
         paymentType: "INSCRIPTION",
         isVoided: false,
       },
-      select: { classId: true },
-      distinct: ["classId"],
+      select: { classId: true, amount: true },
     });
 
-    const paidGroupsCount = distinctVouchers.filter((v) => v.classId !== null).length;
+    const classPaymentsMap = new Map<number, number>();
+    for (const v of allInscVouchers) {
+      if (v.classId) {
+        classPaymentsMap.set(
+          v.classId,
+          (classPaymentsMap.get(v.classId) || 0) + Number(v.amount || 0)
+        );
+      }
+    }
+
+    let paidGroupsCount = 0;
+    for (const [, amount] of classPaymentsMap.entries()) {
+      if (amount >= requiredFee) {
+        paidGroupsCount++;
+      }
+    }
     const hasPaidThreeInscriptions = paidGroupsCount >= 3;
 
     return {
@@ -2328,6 +2528,7 @@ export async function checkStudentInscriptionExemptionAction({
       isAlreadyPaidInThisClass,
       hasPaidThreeInscriptions,
       paidGroupsCount,
+      configuredInscriptionFee: requiredFee,
     };
   } catch (err) {
     console.error("checkStudentInscriptionExemptionAction error:", err);
@@ -2336,6 +2537,7 @@ export async function checkStudentInscriptionExemptionAction({
       isAlreadyPaidInThisClass: false,
       hasPaidThreeInscriptions: false,
       paidGroupsCount: 0,
+      configuredInscriptionFee: 1000,
     };
   }
 }
@@ -2437,7 +2639,10 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
     } catch {}
 
     const tuitionItem = payload.items.tuition?.enabled ? payload.items.tuition : null;
-    const inscriptionItem = payload.items.inscription?.enabled ? payload.items.inscription : null;
+    const inscriptionItem =
+      payload.items.inscription?.enabled && Number(payload.items.inscription.amount) > 0
+        ? payload.items.inscription
+        : null;
     const bookItem = payload.items.book?.enabled ? payload.items.book : null;
 
     if (!tuitionItem && !inscriptionItem && !bookItem) {
@@ -2496,31 +2701,31 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
       // 2. Process Inscription
       if (inscriptionItem) {
         const amt = Number(inscriptionItem.amount);
-        totalAmount += amt;
-        issuedItems.push({
-          type: "INSCRIPTION",
-          labelFr: "Frais d'inscription",
-          labelAr: "حقوق التسجيل",
-          amount: amt,
-        });
-
-        await tx.voucher.create({
-          data: {
-            seriesId: series!.id,
-            number: voucherNumber,
-            studentId: payload.studentId,
-            classId: payload.classId,
-            issuingBranchId,
-            targetBranchId,
-            paymentType: "INSCRIPTION",
-            amount: new Prisma.Decimal(amt),
-            issuedBy: session.userId || "admin",
-            isVoided: false,
-            trimesterId: activeTrimesterId,
-          },
-        });
-
         if (amt > 0) {
+          totalAmount += amt;
+          issuedItems.push({
+            type: "INSCRIPTION",
+            labelFr: "Frais d'inscription",
+            labelAr: "حقوق التسجيل",
+            amount: amt,
+          });
+
+          await tx.voucher.create({
+            data: {
+              seriesId: series!.id,
+              number: voucherNumber,
+              studentId: payload.studentId,
+              classId: payload.classId,
+              issuingBranchId,
+              targetBranchId,
+              paymentType: "INSCRIPTION",
+              amount: new Prisma.Decimal(amt),
+              issuedBy: session.userId || "admin",
+              isVoided: false,
+              trimesterId: activeTrimesterId,
+            },
+          });
+
           const ledgerType = resolveLedgerType("INSCRIPTION", targetClass.isFormation);
           await upsertDailyLedger(tx, {
             branchId: targetBranchId,
@@ -2528,25 +2733,25 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
             type: ledgerType,
             amount: amt,
           });
-        }
 
-        // Update enrollment inscription status
-        const existingEnrollment = await tx.enrollment.findFirst({
-          where: {
-            studentId: payload.studentId,
-            classId: payload.classId,
-            academicYearId: latestYear!.id,
-          },
-        });
-
-        if (existingEnrollment) {
-          await tx.enrollment.update({
-            where: { id: existingEnrollment.id },
-            data: {
-              inscriptionFeeCharged: amt > 0,
-              inscriptionFeeAmount: amt > 0 ? new Prisma.Decimal(amt) : null,
+          // Update enrollment inscription status
+          const existingEnrollment = await tx.enrollment.findFirst({
+            where: {
+              studentId: payload.studentId,
+              classId: payload.classId,
+              academicYearId: latestYear!.id,
             },
           });
+
+          if (existingEnrollment) {
+            await tx.enrollment.update({
+              where: { id: existingEnrollment.id },
+              data: {
+                inscriptionFeeCharged: true,
+                inscriptionFeeAmount: new Prisma.Decimal(amt),
+              },
+            });
+          }
         }
       }
 
@@ -2598,13 +2803,22 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
       });
 
       if (!enr) {
+        const configuredFee = await getFixedInscriptionFeeAction();
+        const requiredFee =
+          targetClass?.inscriptionFee && Number(targetClass.inscriptionFee) > 0
+            ? Number(targetClass.inscriptionFee)
+            : configuredFee;
+        const inscAmt = inscriptionItem ? Number(inscriptionItem.amount) : 0;
         await tx.enrollment.create({
           data: {
             studentId: payload.studentId,
             classId: payload.classId,
             academicYearId: latestYear!.id,
-            inscriptionFeeCharged: inscriptionItem ? Number(inscriptionItem.amount) > 0 : true,
-            inscriptionFeeAmount: inscriptionItem && Number(inscriptionItem.amount) > 0 ? new Prisma.Decimal(Number(inscriptionItem.amount)) : targetClass.inscriptionFee,
+            inscriptionFeeCharged: true,
+            inscriptionFeeAmount:
+              inscAmt > 0
+                ? new Prisma.Decimal(inscAmt)
+                : new Prisma.Decimal(requiredFee),
             payerStatus: "NORMAL",
           },
         });
@@ -2913,14 +3127,22 @@ export const issueVoucher = async (
     let feeOverridden = false;
     let feeOverrideNote = data.feeOverrideNote || null;
 
-    // RULE §2.4: Sibling discount — tuition fees waived for non-payer siblings; inscription and book fees unaffected
+    // RULE §2.4: Sibling discount — percentage discount for siblings of designated payer; inscription and book fees unaffected
     if (data.paymentType === "TUITION_4SESSION") {
       const family = student.family;
       if (family && family.payerStudentId && family.payerStudentId !== student.id) {
-        // This student is a sibling of the designated payer -> 100% tuition waiver!
-        finalAmount = 0;
-        isWaivedSibling = true;
-        noteAppend = "[إعفاء إخوة: معفى 100% من معاليم الحصص]";
+        const discountPct = Number(family.discountPercentage ?? 50);
+        if (discountPct >= 100) {
+          finalAmount = 0;
+          isWaivedSibling = true;
+          noteAppend = "[إعفاء إخوة: معفى 100% من معاليم الحصص]";
+        } else {
+          if (isNaN(finalAmount) || finalAmount <= 0) {
+            const basePrice = Number(targetClass.pricePerCycle || 0);
+            finalAmount = Math.max(0, basePrice * (1 - discountPct / 100));
+          }
+          noteAppend = `[خصم إخوة: تخفيض ${discountPct}%]`;
+        }
       }
     }
 
@@ -2950,7 +3172,12 @@ export const issueVoucher = async (
           isWaivedInscription = true;
           noteAppend = `[معفى تلقائياً: التسجيل رقم ${chargedCount + 1} في السنة الدراسية ${academicYear.label}]`;
         } else {
-          finalAmount = data.amount > 0 ? Number(data.amount) : Number(targetClass.inscriptionFee);
+          const defaultInscFee = await getFixedInscriptionFeeAction();
+          const effectiveFee =
+            Number(targetClass.inscriptionFee || 0) > 0
+              ? Number(targetClass.inscriptionFee)
+              : defaultInscFee;
+          finalAmount = data.amount > 0 ? Number(data.amount) : effectiveFee;
         }
       }
     }
@@ -3048,9 +3275,15 @@ export const issueVoucher = async (
         },
       });
 
+      const defaultInscFee = await getFixedInscriptionFeeAction();
+      const effectiveFee =
+        Number(targetClass.inscriptionFee || 0) > 0
+          ? Number(targetClass.inscriptionFee)
+          : defaultInscFee;
+
       const shouldChargeInscription =
         data.paymentType === "INSCRIPTION"
-          ? finalAmount > 0
+          ? finalAmount >= effectiveFee
           : feeOverridden
           ? finalAmount > 0
           : true;
@@ -3061,8 +3294,12 @@ export const issueVoucher = async (
             studentId: data.studentId,
             classId: data.classId,
             academicYearId: academicYear.id,
-            inscriptionFeeCharged: shouldChargeInscription,
-            inscriptionFeeAmount: shouldChargeInscription ? targetClass.inscriptionFee : null,
+            inscriptionFeeCharged: true,
+            inscriptionFeeAmount: new Prisma.Decimal(
+              data.paymentType === "INSCRIPTION" && finalAmount > 0
+                ? finalAmount
+                : effectiveFee
+            ),
             feeOverriddenByOwner: feeOverridden,
             feeOverrideNote: feeOverrideNote,
           },
@@ -3071,8 +3308,8 @@ export const issueVoucher = async (
         await tx.enrollment.update({
           where: { id: existingEnrollment.id },
           data: {
-            inscriptionFeeCharged: shouldChargeInscription,
-            inscriptionFeeAmount: shouldChargeInscription ? new Prisma.Decimal(finalAmount) : null,
+            inscriptionFeeCharged: true,
+            inscriptionFeeAmount: finalAmount > 0 ? new Prisma.Decimal(finalAmount) : null,
             feeOverriddenByOwner: feeOverridden || existingEnrollment.feeOverriddenByOwner,
             feeOverrideNote: feeOverrideNote || existingEnrollment.feeOverrideNote,
           },
@@ -3431,15 +3668,21 @@ export const transferEnrollmentCredit = async (
       const transferredInFrom = (fromEnrollment.transfersTo || []).reduce((sum, t) => sum + t.transferredSessions, 0);
       const transferredOutFrom = (fromEnrollment.transfersFrom || []).reduce((sum, t) => sum + t.transferredSessions, 0);
 
-      const attendedSessionsFrom = await tx.attendance.count({
+      const fromLessons = await tx.lesson.findMany({
+        where: { classId: fromEnrollment.classId, isFree: false },
+        select: { id: true, startsAt: true, isFree: true },
+        orderBy: { startsAt: "asc" },
+      });
+      const fromAttendances = await tx.attendance.findMany({
         where: {
           studentId: studentId,
-          status: "PRESENT",
-          lesson: {
-            classId: fromEnrollment.classId,
-            isFree: false,
-          },
+          lesson: { classId: fromEnrollment.classId, isFree: false },
         },
+        select: { lessonId: true, status: true },
+      });
+      const attendedSessionsFrom = computeStudentConsumedSessions({
+        lessons: fromLessons,
+        attendances: fromAttendances,
       });
 
       const availableSessionsFrom = Math.max(0, (purchasedSessionsFrom + transferredInFrom - transferredOutFrom) - attendedSessionsFrom);
@@ -3541,31 +3784,61 @@ export const createOrUpdateFamily = async (
     }
 
     let familyId = data.id;
+    const studentIds = (data.studentIds || []).filter(Boolean);
+    const discountPct =
+      data.discountPercentage != null && !isNaN(Number(data.discountPercentage))
+        ? Math.min(100, Math.max(0, Number(data.discountPercentage)))
+        : 50;
 
     await prisma.$transaction(async (tx) => {
       if (familyId) {
+        // Find existing students in this family and unlink removed ones
+        const currentStudents = await tx.student.findMany({
+          where: { familyId },
+          select: { id: true },
+        });
+        const currentIds = currentStudents.map((s) => s.id);
+        const toRemove = currentIds.filter((id) => !studentIds.includes(id));
+        if (toRemove.length > 0) {
+          await tx.student.updateMany({
+            where: { id: { in: toRemove } },
+            data: { familyId: null },
+          });
+        }
+
         await tx.family.update({
           where: { id: familyId },
-          data: { payerStudentId: data.payerStudentId || null },
+          data: {
+            name: data.name || null,
+            payerStudentId: data.payerStudentId || null,
+            discountPercentage: discountPct,
+          },
         });
       } else {
         const newFam = await tx.family.create({
-          data: { payerStudentId: data.payerStudentId || null },
+          data: {
+            name: data.name || null,
+            payerStudentId: data.payerStudentId || null,
+            discountPercentage: discountPct,
+          },
         });
         familyId = newFam.id;
       }
 
       // Associate all students with this family
-      if (data.studentIds && data.studentIds.length > 0) {
+      if (studentIds.length > 0) {
         await tx.student.updateMany({
-          where: { id: { in: data.studentIds } },
+          where: { id: { in: studentIds } },
           data: { familyId: familyId },
         });
       }
     });
 
+    safeRevalidatePath("/list/parents");
     safeRevalidatePath("/list/families");
     safeRevalidatePath("/list/students");
+    safeRevalidatePath("/list/payments");
+    safeRevalidatePath("/list/attendance");
     return { success: true, error: false, message: "تم حفظ بيانات العائلة والإخوة بنجاح." };
   } catch (err: any) {
     console.error("createOrUpdateFamily error:", err);
@@ -4584,7 +4857,8 @@ export const exportToExcel = async (
               },
               lessons: {
                 where: { isFree: false },
-                include: { attendances: { where: { status: 'PRESENT' } } },
+                include: { attendances: true },
+                orderBy: { startsAt: 'asc' },
               },
             },
         });
@@ -4614,6 +4888,8 @@ export const exportToExcel = async (
             { header: "الحالة", key: "status", width: 18 },
         ];
 
+        const defaultInscFee = await getFixedInscriptionFeeAction();
+        const requiredFee = Number(classTarget.inscriptionFee || 0) > 0 ? Number(classTarget.inscriptionFee) : defaultInscFee;
         const paymentExportData: any[] = [];
         classTarget.enrollments.forEach((enrollment) => {
             const student = enrollment.student;
@@ -4626,9 +4902,12 @@ export const exportToExcel = async (
             } else if (!enrollment.inscriptionFeeCharged) {
               inscriptionStatus = "معفى (4 فما فوق)";
             } else {
-              const inscVoucher = studentVouchers.find(v => v.paymentType === "INSCRIPTION");
-              if (inscVoucher) {
-                inscriptionStatus = `مدفوع (${Number(inscVoucher.amount).toFixed()} دج)`;
+              const inscVouchers = studentVouchers.filter(v => v.paymentType === "INSCRIPTION");
+              const totalPaid = inscVouchers.reduce((s, v) => s + Number(v.amount || 0), 0);
+              if (totalPaid >= requiredFee && requiredFee > 0) {
+                inscriptionStatus = `مدفوع (${totalPaid.toFixed()} دج)`;
+              } else if (totalPaid > 0) {
+                inscriptionStatus = `جزئي (${totalPaid.toFixed()} / ${requiredFee.toFixed()} دج)`;
               }
             }
 
@@ -4639,28 +4918,36 @@ export const exportToExcel = async (
               bookStatus = bookVoucher ? `مدفوع (${Number(bookVoucher.amount).toFixed()} دج)` : "غير مدفوع";
             }
 
-            // Sibling discount waiver
+            // Sibling discount waiver & percentage
             const family = student.family;
             const isWaivedSibling = Boolean(
               family && family.payerStudentId && family.payerStudentId !== student.id
             );
+            const siblingDiscountPct = isWaivedSibling ? Number(family?.discountPercentage ?? 50) : 0;
 
             // Tuition vouchers calculation
             const tuitionVouchers = studentVouchers.filter(v => v.paymentType === "TUITION_4SESSION");
             
             const cyclePrice = Number(classTarget.pricePerCycle || 0);
-            const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+            const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+            const effectiveLessonPrice =
+              siblingDiscountPct > 0 && siblingDiscountPct < 100
+                ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+                : siblingDiscountPct >= 100
+                ? 0
+                : baseLessonPrice;
+
             let totalTuitionSessions = 0;
-            if (isWaivedSibling) {
-              totalTuitionSessions = 16; // sibling has 100% tuition waiver
-            } else if (lessonPrice > 0) {
+            if (siblingDiscountPct >= 100) {
+              totalTuitionSessions = 16; // 100% full waiver
+            } else if (effectiveLessonPrice > 0) {
               let totalPaidTuition = 0;
               tuitionVouchers.forEach((v) => {
                 const vAmount = Number(v.amount || 0);
                 const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
                 totalPaidTuition += Math.max(0, vAmount - vRefunded);
               });
-              totalTuitionSessions = Math.floor(totalPaidTuition / lessonPrice);
+              totalTuitionSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
             } else {
               tuitionVouchers.forEach(() => {
                 totalTuitionSessions += 4;
@@ -4671,25 +4958,31 @@ export const exportToExcel = async (
             const outbound = enrollment.transfersFrom.reduce((sum, t) => sum + t.transferredSessions, 0);
             const inbound = enrollment.transfersTo.reduce((sum, t) => sum + t.transferredSessions, 0);
 
-            // Consumed sessions from non-free lessons attended
-            let consumed = 0;
+            // Consumed sessions from non-free lessons (accounting for Massinissa absence rules)
+            const studentAtts: Array<{ lessonId: number; status: string }> = [];
             classTarget.lessons.forEach(l => {
               const att = l.attendances.find(a => a.studentId === student.id);
-              if (att && att.status === "PRESENT") {
-                consumed++;
+              if (att) {
+                studentAtts.push({ lessonId: l.id, status: att.status });
               }
+            });
+            const consumed = computeStudentConsumedSessions({
+              lessons: classTarget.lessons,
+              attendances: studentAtts,
             });
 
             const remaining = (totalTuitionSessions + inbound - outbound) - consumed;
 
             // Status label
             let statusText = "غير دافع";
-            if (isWaivedSibling) {
+            if (siblingDiscountPct >= 100) {
               statusText = "معفى (خصم الإخوة)";
             } else if (remaining >= 2) {
-              statusText = "دافع";
+              statusText = isWaivedSibling ? `دافع (خصم إخوة ${siblingDiscountPct}%)` : "دافع";
             } else if (remaining === 1) {
-              statusText = "قريب الانتهاء";
+              statusText = isWaivedSibling ? `قريب الانتهاء (خصم إخوة ${siblingDiscountPct}%)` : "قريب الانتهاء";
+            } else if (isWaivedSibling) {
+              statusText = `غير دافع (خصم إخوة ${siblingDiscountPct}%)`;
             }
 
             // Other branches enrolled
@@ -4702,10 +4995,10 @@ export const exportToExcel = async (
             ).join(", ") || "لا يوجد";
 
             // Cycles representation
-            const c1 = isWaivedSibling ? "معفى" : (totalTuitionSessions >= 4 ? "مدفوع" : "غير مدفوع");
-            const c2 = isWaivedSibling ? "معفى" : (totalTuitionSessions >= 8 ? "مدفوع" : "غير مدفوع");
-            const c3 = isWaivedSibling ? "معفى" : (totalTuitionSessions >= 12 ? "مدفوع" : "غير مدفوع");
-            const c4 = isWaivedSibling ? "معفى" : (totalTuitionSessions >= 16 ? "مدفوع" : "غير مدفوع");
+            const c1 = siblingDiscountPct >= 100 ? "معفى" : (totalTuitionSessions >= 4 ? "مدفوع" : "غير مدفوع");
+            const c2 = siblingDiscountPct >= 100 ? "معفى" : (totalTuitionSessions >= 8 ? "مدفوع" : "غير مدفوع");
+            const c3 = siblingDiscountPct >= 100 ? "معفى" : (totalTuitionSessions >= 12 ? "مدفوع" : "غير مدفوع");
+            const c4 = siblingDiscountPct >= 100 ? "معفى" : (totalTuitionSessions >= 16 ? "مدفوع" : "غير مدفوع");
 
             paymentExportData.push({
               studentName: student.name,
@@ -4719,7 +5012,7 @@ export const exportToExcel = async (
               cycle3: c3,
               cycle4: c4,
               consumedSessions: consumed,
-              remainingSessions: isWaivedSibling ? "معفى" : remaining,
+              remainingSessions: siblingDiscountPct >= 100 ? "معفى" : remaining,
               status: statusText,
             });
         });
