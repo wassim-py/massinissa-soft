@@ -314,7 +314,7 @@ export default function PaymentGrid({
       attendances: studentAtts,
     });
 
-    const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions;
+    const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + Number((enrollment as any).creditResetOffset || 0);
 
     // Status
     let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" = "UNPAID";

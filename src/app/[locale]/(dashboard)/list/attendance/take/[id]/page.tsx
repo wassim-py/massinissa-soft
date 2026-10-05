@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
 import { getActiveTrimester, getFixedInscriptionFeeAction } from "@/lib/configurationActions";
+import { computeStudentConsumedSessions } from "@/lib/studentBilling";
 
 // This is the Server Component that fetches all the necessary data for taking attendance.
 const TakeAttendancePage = async (
@@ -193,7 +194,7 @@ const TakeAttendancePage = async (
       FROM "Student" s
       JOIN "Enrollment" e ON e."studentId" = s.id
       WHERE e."classId" = ${l.classId}
-        AND (e.status IS NULL OR e.status = 'ACTIVE')
+        AND (e.status IS NULL OR e.status = 'ACTIVE' OR e.status = 'SUSPENDED')
       ORDER BY s."globalNumber" ASC, s.name ASC
     `;
     // Deduplicate defensively
@@ -235,6 +236,9 @@ const TakeAttendancePage = async (
                 { classId: l.classId },
                 { paymentType: "INSCRIPTION" },
               ],
+            },
+            include: {
+              refunds: true,
             },
             orderBy: { issuedAt: "desc" },
           },
@@ -300,6 +304,82 @@ const TakeAttendancePage = async (
     studentReceivedMap.get(r.studentId)!.add(r.bookId);
   }
 
+  // Collect paying sibling IDs for any sibling-discounted students (Rule 3)
+  const payerSiblingIds = Array.from(
+    new Set(
+      studentsWithDetails
+        .map((s) => s.family?.payerStudentId)
+        .filter((pid): pid is string => Boolean(pid && !studentIds.includes(pid)))
+    )
+  );
+
+  let payerSiblingsWithDetails: any[] = [];
+  if (payerSiblingIds.length > 0) {
+    try {
+      payerSiblingsWithDetails = await prisma.student.findMany({
+        where: { id: { in: payerSiblingIds } },
+        include: {
+          family: true,
+          vouchers: {
+            where: {
+              isVoided: false,
+              classId: l.classId,
+              paymentType: "TUITION_4SESSION",
+            },
+            include: { refunds: true },
+          },
+          attendances: {
+            where: {
+              lesson: { classId: l.classId, isFree: false },
+            },
+            include: {
+              lesson: { select: { id: true, startsAt: true, isFree: true } },
+            },
+          },
+          enrollments: {
+            where: { classId: l.classId },
+            include: { transfersFrom: true, transfersTo: true },
+          },
+        },
+      });
+    } catch (e) {
+      console.warn("Could not fetch payer siblings details:", e);
+    }
+  }
+
+  const allRelevantStudents = [...studentsWithDetails, ...payerSiblingsWithDetails];
+  const payerRemainingMap = new Map<string, number>();
+
+  for (const s of allRelevantStudents) {
+    const cyclePrice = Number(rawLesson[0]?.pricePerCycle || rawLesson[0]?.classPrice || 0);
+    const lessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+    const tuitionVouchers = (s.vouchers || []).filter(
+      (v: any) => v.paymentType === "TUITION_4SESSION" && !v.isVoided && (v.classId === l.classId || !v.classId)
+    );
+
+    let purchased = 0;
+    if (lessonPrice > 0) {
+      let paid = 0;
+      tuitionVouchers.forEach((v: any) => {
+        const amt = Number(v.amount || 0);
+        const ref = v.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+        paid += Math.max(0, amt - ref);
+      });
+      purchased = Math.floor(paid / lessonPrice);
+    } else {
+      purchased = tuitionVouchers.length * 4;
+    }
+
+    const tIn = (s.enrollments?.[0]?.transfersTo || []).reduce((sum: number, t: any) => sum + Number(t.transferredSessions || 0), 0);
+    const tOut = (s.enrollments?.[0]?.transfersFrom || []).reduce((sum: number, t: any) => sum + Number(t.transferredSessions || 0), 0);
+    const totalCredit = purchased + tIn - tOut + Number(s.enrollments?.[0]?.creditResetOffset || 0);
+
+    const sLessons = (s.attendances || []).map((a: any) => a.lesson).filter(Boolean);
+    const sAtts = (s.attendances || []).map((a: any) => ({ lessonId: a.lessonId, status: a.status }));
+    const consumed = computeStudentConsumedSessions({ lessons: sLessons, attendances: sAtts });
+    payerRemainingMap.set(s.id, totalCredit - consumed);
+  }
+
   const studentsWithHistory = rawStudents.map((s) => {
     const details = detailsMap.get(s.id);
     const hasPaidBook = bookPaidStudentIds.has(s.id);
@@ -332,6 +412,9 @@ const TakeAttendancePage = async (
       : "UNPAID";
 
     const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
+    const enrollmentStatus = enrollment?.status || "ACTIVE";
+    const payerStudentId = details?.family?.payerStudentId;
+    const payerSessionsRemaining = payerStudentId ? payerRemainingMap.get(payerStudentId) : undefined;
 
     return {
       id: s.id,
@@ -340,10 +423,13 @@ const TakeAttendancePage = async (
       phone: s.phone ?? details?.phone ?? null,
       surname: "",
       payerStatus: effectivePayerStatus,
+      enrollmentStatus,
+      payerSessionsRemaining,
       vouchers: details?.vouchers || [],
       attendances: details?.attendances || [],
       transfersFrom: details?.enrollments?.[0]?.transfersFrom || [],
       transfersTo: details?.enrollments?.[0]?.transfersTo || [],
+      creditResetOffset: details?.enrollments?.[0]?.creditResetOffset || 0,
       family: details?.family || null,
       isBookEligible: hasPaidBook,
       hasPaidBook,

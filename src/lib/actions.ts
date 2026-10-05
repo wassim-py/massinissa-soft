@@ -42,8 +42,9 @@ import { canUserAccessBranch } from "./settings";
 import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from "./ledger";
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsumedSessions } from "./studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences } from "./studentBilling";
 import { getFixedInscriptionFeeAction } from "./configurationActions";
+import { splitFullName } from "./utils";
 
 type CurrentState = { success: boolean; error: boolean; message?: string };
 
@@ -876,7 +877,20 @@ export const createParent = async (
         ? Math.min(100, Math.max(0, Number(data.discountPercentage)))
         : 50;
 
-    const familyName = [data.surname, data.name].filter(Boolean).join(" ").trim() || null;
+    let familyName: string | null = (data.name || "").trim() || null;
+    if (!familyName && studentIds.length > 0) {
+      const student = await prisma.student.findUnique({
+        where: { id: payerStudentId || studentIds[0] },
+        select: { name: true },
+      });
+      if (student) {
+        const { surname } = splitFullName(student.name);
+        familyName = surname || student.name;
+      }
+    }
+    if (!familyName) {
+      familyName = [data.surname, data.name].filter(Boolean).join(" ").trim() || null;
+    }
 
     await prisma.$transaction(async (tx) => {
       const newFam = await tx.family.create({
@@ -929,7 +943,20 @@ export const updateParent = async (
         ? Math.min(100, Math.max(0, Number(data.discountPercentage)))
         : 50;
 
-    const familyName = [data.surname, data.name].filter(Boolean).join(" ").trim() || null;
+    let familyName: string | null = (data.name || "").trim() || null;
+    if (!familyName && studentIds.length > 0) {
+      const student = await prisma.student.findUnique({
+        where: { id: payerStudentId || studentIds[0] },
+        select: { name: true },
+      });
+      if (student) {
+        const { surname } = splitFullName(student.name);
+        familyName = surname || student.name;
+      }
+    }
+    if (!familyName) {
+      familyName = [data.surname, data.name].filter(Boolean).join(" ").trim() || null;
+    }
 
     await prisma.$transaction(async (tx) => {
       // Find current students linked to this family
@@ -1811,13 +1838,93 @@ export const saveAttendance = async (
     }
   );
 
-    // Revalidate the path to the main attendance page, this lesson's roster, and the class records table
-    safeRevalidatePath("/list/attendance");
-    safeRevalidatePath(`/list/attendance/take/${lessonId}`);
-    if (lessonInfo?.classId) {
-      safeRevalidatePath(`/list/attendance/class/${lessonInfo.classId}`);
+  // Auto-suspension and restoration logic (Rules 5 & 9)
+  if (lessonInfo?.classId) {
+    try {
+      const presentStudentIds: string[] = [];
+      const absentStudentIds: string[] = [];
+
+      for (const [key, value] of attendanceEntries) {
+        const studentId = key.substring(key.indexOf("[") + 1, key.indexOf("]"));
+        if (value === "PRESENT") presentStudentIds.push(studentId);
+        else if (value === "ABSENT") absentStudentIds.push(studentId);
+      }
+
+      // Restore ACTIVE status for attending students who were SUSPENDED
+      if (presentStudentIds.length > 0) {
+        await prisma.enrollment.updateMany({
+          where: {
+            studentId: { in: presentStudentIds },
+            classId: lessonInfo.classId,
+            status: "SUSPENDED",
+          },
+          data: { status: "ACTIVE" },
+        });
+      }
+
+      // Check for 3+ consecutive absences among absent students
+      if (absentStudentIds.length > 0) {
+        const [classLessons, allAttendances, allCatchUps] = await Promise.all([
+          prisma.lesson.findMany({
+            where: { classId: lessonInfo.classId, isFree: false },
+            select: { id: true, startsAt: true, isFree: true },
+            orderBy: { startsAt: "asc" },
+          }),
+          prisma.attendance.findMany({
+            where: {
+              studentId: { in: absentStudentIds },
+              lesson: { classId: lessonInfo.classId },
+            },
+            select: { studentId: true, lessonId: true, status: true },
+          }),
+          prisma.catchUpAttendance.findMany({
+            where: {
+              studentId: { in: absentStudentIds },
+              missedLesson: { classId: lessonInfo.classId },
+            },
+            select: { studentId: true, missedLessonId: true },
+          }),
+        ]);
+
+        const toSuspendStudentIds: string[] = [];
+        for (const sid of absentStudentIds) {
+          const sAtts = allAttendances.filter((a) => a.studentId === sid);
+          const sCatchUps = allCatchUps.filter((c) => c.studentId === sid);
+          const consecutive = computeStudentConsecutiveAbsences({
+            lessons: classLessons,
+            attendances: sAtts,
+            catchUps: sCatchUps,
+          });
+          if (consecutive >= 3) {
+            toSuspendStudentIds.push(sid);
+          }
+        }
+
+        if (toSuspendStudentIds.length > 0) {
+          await prisma.enrollment.updateMany({
+            where: {
+              studentId: { in: toSuspendStudentIds },
+              classId: lessonInfo.classId,
+              status: "ACTIVE",
+            },
+            data: { status: "SUSPENDED" },
+          });
+        }
+      }
+    } catch (autoErr) {
+      console.warn("Auto-suspension evaluation error:", autoErr);
     }
-    return { success: true, error: false, message: "Présences et distribution des livres enregistrées avec succès / تم حفظ بيانات الحضور وتوزيع الكتب بنجاح." };
+  }
+
+  // Revalidate the path to the main attendance page, this lesson's roster, and the class records table
+  safeRevalidatePath("/list/attendance");
+  safeRevalidatePath(`/list/attendance/take/${lessonId}`);
+  if (lessonInfo?.classId) {
+    safeRevalidatePath(`/list/attendance/class/${lessonInfo.classId}`);
+    safeRevalidatePath(`/list/payments/class/${lessonInfo.classId}`);
+  }
+  safeRevalidatePath("/list/students");
+  return { success: true, error: false, message: "Présences et distribution des livres enregistrées avec succès / تم حفظ بيانات الحضور وتوزيع الكتب بنجاح." };
 
   } catch (err: any) {
     console.error("saveAttendance error:", err);
@@ -1898,7 +2005,65 @@ export const markSingleAttendanceAction = async (input: {
     });
 
     if (lessonInfo?.classId) {
+      try {
+        if (input.status === "PRESENT") {
+          // Restore ACTIVE status if student was SUSPENDED
+          await prisma.enrollment.updateMany({
+            where: {
+              studentId: input.studentId,
+              classId: lessonInfo.classId,
+              status: "SUSPENDED",
+            },
+            data: { status: "ACTIVE" },
+          });
+        } else if (input.status === "ABSENT") {
+          // Check for >= 3 consecutive absences (Rules 5 & 9)
+          const [classLessons, studentAtts, studentCatchUps] = await Promise.all([
+            prisma.lesson.findMany({
+              where: { classId: lessonInfo.classId, isFree: false },
+              select: { id: true, startsAt: true, isFree: true },
+              orderBy: { startsAt: "asc" },
+            }),
+            prisma.attendance.findMany({
+              where: {
+                studentId: input.studentId,
+                lesson: { classId: lessonInfo.classId },
+              },
+              select: { lessonId: true, status: true },
+            }),
+            prisma.catchUpAttendance.findMany({
+              where: {
+                studentId: input.studentId,
+                missedLesson: { classId: lessonInfo.classId },
+              },
+              select: { missedLessonId: true },
+            }),
+          ]);
+
+          const consecutiveAbsences = computeStudentConsecutiveAbsences({
+            lessons: classLessons,
+            attendances: studentAtts,
+            catchUps: studentCatchUps,
+          });
+
+          if (consecutiveAbsences >= 3) {
+            await prisma.enrollment.updateMany({
+              where: {
+                studentId: input.studentId,
+                classId: lessonInfo.classId,
+                status: "ACTIVE",
+              },
+              data: { status: "SUSPENDED" },
+            });
+          }
+        }
+      } catch (autoErr) {
+        console.warn("Auto-suspension evaluation error in markSingleAttendance:", autoErr);
+      }
+
       safeRevalidatePath(`/list/attendance/class/${lessonInfo.classId}`);
+      safeRevalidatePath(`/list/payments/class/${lessonInfo.classId}`);
+      safeRevalidatePath(`/list/students/${input.studentId}`);
     }
 
     return {
@@ -1920,6 +2085,45 @@ export const markSingleAttendanceAction = async (input: {
     };
   }
 };
+
+/**
+ * Search students who are NOT enrolled in the current lesson's class,
+ * and fetch their uncaught-up missed lessons (Attendance status = 'ABSENT' in their own classes).
+ */
+function getArabicSearchVariants(word: string): string[] {
+  const base = word.replace(/[\u064B-\u065F\u0670]/g, "").trim();
+  if (!base) return [];
+
+  const variants = new Set<string>();
+  variants.add(base);
+
+  // If word contains alef variants, add bare alef and hamza variants
+  if (/[اأإآٱ]/.test(base)) {
+    const bare = base.replace(/[أإآٱ]/g, "ا");
+    variants.add(bare);
+    if (/^[اأإآٱ]/.test(base)) {
+      const rest = base.slice(1);
+      variants.add("أ" + rest);
+      variants.add("إ" + rest);
+      variants.add("آ" + rest);
+      variants.add("ا" + rest);
+    }
+  }
+
+  // Taa marbuta / Haa variants at end of word
+  if (/[ةه]$/.test(base)) {
+    variants.add(base.replace(/ة$/, "ه"));
+    variants.add(base.replace(/ه$/, "ة"));
+  }
+
+  // Yaa / Alef maqsura at end of word
+  if (/[يى]$/.test(base)) {
+    variants.add(base.replace(/ي$/, "ى"));
+    variants.add(base.replace(/ى$/, "ي"));
+  }
+
+  return Array.from(variants);
+}
 
 /**
  * Search students who are NOT enrolled in the current lesson's class,
@@ -1949,17 +2153,54 @@ export async function searchCatchUpCandidatesAction(
       return { success: true, candidates: [] };
     }
 
+    const cleanNumeric = trimmedQuery.replace(/[^0-9]/g, "");
+    const hasNumeric = cleanNumeric.length > 0;
+    const tokens = trimmedQuery.split(/\s+/).filter(Boolean);
+
+    const searchConditions: any[] = [];
+
+    // 1. Direct name phrase match
+    searchConditions.push({ name: { contains: trimmedQuery, mode: "insensitive" } });
+
+    // 2. Multi-word name match with Arabic letter tolerance
+    if (tokens.length > 1) {
+      const tokenConditions = tokens.map((tok) => {
+        const variants = getArabicSearchVariants(tok);
+        if (variants.length <= 1) {
+          return { name: { contains: tok, mode: "insensitive" as const } };
+        }
+        return {
+          OR: variants.map((v) => ({ name: { contains: v, mode: "insensitive" as const } })),
+        };
+      });
+      searchConditions.push({ AND: tokenConditions });
+    } else if (tokens.length === 1) {
+      const singleVariants = getArabicSearchVariants(tokens[0]);
+      if (singleVariants.length > 1) {
+        searchConditions.push({
+          OR: singleVariants.map((v) => ({ name: { contains: v, mode: "insensitive" as const } })),
+        });
+      }
+    }
+
+    // 3. Numeric matches: ID / globalNumber or phone
+    if (hasNumeric) {
+      const numVal = parseInt(cleanNumeric, 10);
+      if (!isNaN(numVal) && numVal > 0 && numVal <= 2147483647) {
+        searchConditions.push({ globalNumber: numVal });
+      }
+      if (cleanNumeric.length >= 2) {
+        searchConditions.push({ phone: { contains: cleanNumeric } });
+      }
+    } else {
+      searchConditions.push({ phone: { contains: trimmedQuery } });
+    }
+
     // Search students matching query who are NOT enrolled in currentLesson.classId
     const students = await prisma.student.findMany({
       where: {
         AND: [
-          {
-            OR: [
-              { name: { contains: trimmedQuery, mode: "insensitive" } },
-              ...(isNaN(Number(trimmedQuery)) ? [] : [{ globalNumber: Number(trimmedQuery) }]),
-              { phone: { contains: trimmedQuery } },
-            ],
-          },
+          { OR: searchConditions },
           {
             enrollments: {
               none: {
@@ -1974,6 +2215,9 @@ export async function searchCatchUpCandidatesAction(
         name: true,
         globalNumber: true,
         phone: true,
+        registeredBranch: {
+          select: { name: true },
+        },
         attendances: {
           where: {
             status: "ABSENT",
@@ -1981,8 +2225,12 @@ export async function searchCatchUpCandidatesAction(
           include: {
             lesson: {
               include: {
-                class: true,
-                teacher: true,
+                class: {
+                  select: { id: true, name: true },
+                },
+                teacher: {
+                  select: { id: true, name: true },
+                },
               },
             },
           },
@@ -1991,6 +2239,7 @@ export async function searchCatchUpCandidatesAction(
               startsAt: "desc",
             },
           },
+          take: 20,
         },
         catchUpAttendances: {
           select: {
@@ -1998,7 +2247,7 @@ export async function searchCatchUpCandidatesAction(
           },
         },
       },
-      take: 20,
+      take: 25,
     });
 
     // Filter missed lessons to only those not already caught up
@@ -2019,8 +2268,39 @@ export async function searchCatchUpCandidatesAction(
         name: s.name,
         globalNumber: s.globalNumber,
         phone: s.phone,
+        branchName: s.registeredBranch?.name || null,
         missedLessons: uncaughtUpAbsences,
       };
+    });
+
+    // Smart ranking:
+    // 1. Students WITH uncompensated absences first!
+    // 2. Exact globalNumber match at the top
+    // 3. Name starts with search query
+    // 4. Higher number of missed lessons first
+    const lowerQuery = trimmedQuery.toLowerCase();
+    const queryNum = hasNumeric ? parseInt(cleanNumeric, 10) : null;
+
+    candidates.sort((a, b) => {
+      const aHas = a.missedLessons.length > 0 ? 1 : 0;
+      const bHas = b.missedLessons.length > 0 ? 1 : 0;
+      if (aHas !== bHas) return bHas - aHas;
+
+      if (queryNum !== null) {
+        const aExact = a.globalNumber === queryNum ? 1 : 0;
+        const bExact = b.globalNumber === queryNum ? 1 : 0;
+        if (aExact !== bExact) return bExact - aExact;
+      }
+
+      const aStarts = a.name.toLowerCase().startsWith(lowerQuery) ? 1 : 0;
+      const bStarts = b.name.toLowerCase().startsWith(lowerQuery) ? 1 : 0;
+      if (aStarts !== bStarts) return bStarts - aStarts;
+
+      if (a.missedLessons.length !== b.missedLessons.length) {
+        return b.missedLessons.length - a.missedLessons.length;
+      }
+
+      return a.name.localeCompare(b.name);
     });
 
     return { success: true, candidates };
@@ -3953,6 +4233,8 @@ export const createRefund = async (
       };
     }
 
+    let trailingHeldLessonIds: number[] = [];
+
     // Validation 3: For class vouchers, enforce the cashback rule (§7.8)
     if (voucher.classId) {
       // Must be a tuition cycle voucher
@@ -4044,7 +4326,16 @@ export const createRefund = async (
         referenceDate: new Date(),
       });
 
-      const attendedSessions = classifiedHistory.filter((h) => h.isConsumedCredit).length;
+      trailingHeldLessonIds = classifiedHistory.filter((h) => h.isHeld).map((h) => h.lessonId);
+
+      // Settled consumed sessions (PRESENT, INTERLEAVED_ABSENCE, FORFEITED_DROPOUT) are non-refundable.
+      // Unresolved trailing absences (TRAILING_ABSENCE_HELD) and unconsumed sessions remain fully refund-eligible per Rule 5 & §7.22.
+      const settledConsumedSessions = classifiedHistory.filter(
+        (h) =>
+          h.classification === "PRESENT" ||
+          h.classification === "INTERLEAVED_ABSENCE" ||
+          h.classification === "FORFEITED_DROPOUT"
+      ).length;
 
       // Transfers
       const enrollment = await prisma.enrollment.findFirst({
@@ -4069,8 +4360,8 @@ export const createRefund = async (
         totalPurchased += Math.max(0, 4 - refundedSessions);
       }
 
-      const netSessions = (totalPurchased + transferredIn - transferredOut) - attendedSessions;
-      const unconsumedInCycle = Math.max(0, Math.min(4, netSessions));
+      const netRefundableSessions = (totalPurchased + transferredIn - transferredOut) - settledConsumedSessions;
+      const unconsumedInCycle = Math.max(0, Math.min(4, netRefundableSessions));
       const pricePerSession = voucherAmount / 4;
       const maxRefundableByConsumption = Math.round(unconsumedInCycle * pricePerSession);
       const maxRefundable = Math.min(remainingBalance, maxRefundableByConsumption);
@@ -4079,7 +4370,7 @@ export const createRefund = async (
         return {
           success: false,
           error: true,
-          message: "جميع حصص هذه الدورة قد تم استهلاكها بالفعل بالحضور. لا يمكن إجراء أي استرداد مالي. / Toutes les séances de ce cycle ont déjà été consommées. Aucun remboursement n'est possible.",
+          message: "جميع حصص هذه الدورة قد تم استهلاكها بالفعل بالحضور المؤكد. لا يمكن إجراء أي استرداد مالي. / Toutes les séances de ce cycle ont déjà été consommées de manière confirmée. Aucun remboursement n'est possible.",
         };
       }
 
@@ -4087,7 +4378,7 @@ export const createRefund = async (
         return {
           success: false,
           error: true,
-          message: `مبلغ الاسترداد المطلوب (${data.amount.toLocaleString()} دج) يتجاوز الحد الأقصى المسموح به للحصص المتبقية غير المستهلكة (${maxRefundable.toLocaleString()} دج - ${unconsumedInCycle} حصص متبقية). / Le montant demandé (${data.amount.toLocaleString()} DZD) dépasse le plafond autorisé pour les séances non consommées (${maxRefundable.toLocaleString()} DZD - ${unconsumedInCycle} séances restantes).`,
+          message: `مبلغ الاسترداد المطلوب (${data.amount.toLocaleString()} دج) يتجاوز الحد الأقصى المسموح به للحصص المتبقية القابلة للاسترداد (${maxRefundable.toLocaleString()} دج - ${unconsumedInCycle} حصص متبقية). / Le montant demandé (${data.amount.toLocaleString()} DZD) dépasse le plafond autorisé pour les séances restantes remboursables (${maxRefundable.toLocaleString()} DZD - ${unconsumedInCycle} séances restantes).`,
         };
       }
     } else {
@@ -4165,6 +4456,21 @@ export const createRefund = async (
           timestamp: new Date(),
         },
       });
+
+      // 6. When refunding a class cycle, resolve any trailing held absences for this student
+      // by setting status to NOT_DEFINED so they cannot be charged or paid retroactively.
+      if (trailingHeldLessonIds.length > 0) {
+        await tx.attendance.updateMany({
+          where: {
+            studentId: voucher.studentId,
+            lessonId: { in: trailingHeldLessonIds },
+          },
+          data: {
+            status: "NOT_DEFINED",
+            justification: `Remboursé au parent (${data.reason.trim()}) / مسترجع للولي`,
+          },
+        });
+      }
     });
 
     try {
@@ -6822,3 +7128,261 @@ export async function updateEnrollmentPayerStatusAction(
     };
   }
 }
+
+/**
+ * Toggle enrollment suspension status (ACTIVE/NORMAL <-> SUSPENDED).
+ * Suspended students will not appear on the Take Attendance page or in the Dashboard Paying Students section.
+ * When restored from SUSPENDED to NORMAL:
+ * - All historical records (attendance, vouchers) remain safely stored.
+ * - Previous lesson debts/credits are removed and lessons credit is strictly reset to 0.
+ */
+export async function toggleEnrollmentSuspensionAction(
+  studentId: string,
+  enrollmentId: number,
+  targetStatus: "SUSPENDED" | "NORMAL"
+): Promise<{
+  success: boolean;
+  error: boolean;
+  message: string;
+  status?: string;
+  payerStatus?: string;
+  enrollmentId?: number;
+}> {
+  try {
+    const session = await getAuthSession();
+    if (!session.userId && !session.isOwner && !session.isOwnerOrAdmin && !session.isBranchAdmin) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé / غير مصرح لك بهذا الإجراء",
+      };
+    }
+
+    const enrollment = await prisma.enrollment.findUnique({
+      where: { id: enrollmentId },
+      include: {
+        class: {
+          include: {
+            branch: true,
+            lessons: {
+              where: { isFree: false },
+              select: { id: true, startsAt: true, isFree: true },
+            },
+            vouchers: {
+              where: { studentId, isVoided: false },
+              include: { refunds: true },
+            },
+          },
+        },
+        student: {
+          select: {
+            id: true,
+            name: true,
+            registeredBranchId: true,
+            payerStatus: true,
+            family: true,
+            attendances: {
+              where: {
+                lesson: {
+                  classId: { not: undefined },
+                  isFree: false,
+                },
+              },
+              include: {
+                lesson: {
+                  select: { id: true, startsAt: true, isFree: true, classId: true },
+                },
+              },
+            },
+          },
+        },
+        transfersFrom: true,
+        transfersTo: true,
+      },
+    });
+
+    if (!enrollment || enrollment.studentId !== studentId) {
+      return {
+        success: false,
+        error: true,
+        message: "Inscription introuvable / التسجيل غير موجود",
+      };
+    }
+
+    const branchId = enrollment.class.branchId;
+    if (!session.isOwner && !session.isBranchAdmin && !session.isOwnerOrAdmin) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé / غير مصرح لك بتعديل أفواج هذا الفرع",
+      };
+    }
+
+    const oldStatus = enrollment.status || "ACTIVE";
+    const oldPayerStatus = enrollment.payerStatus || "NORMAL";
+
+    if (targetStatus === "SUSPENDED") {
+      // Mark as SUSPENDED
+      await prisma.enrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          status: "SUSPENDED",
+        },
+      });
+
+      // Audit log
+      try {
+        await prisma.auditLog.create({
+          data: {
+            entityType: "ENROLLMENT",
+            entityId: String(enrollmentId),
+            action: "SUSPEND_ENROLLMENT",
+            branchId: branchId,
+            userId: session.userId || session.rawRole || "system",
+            userName: session.userId || session.rawRole || "Admin",
+            oldValue: oldStatus,
+            newValue: "SUSPENDED",
+            details: `Élève suspendu du groupe "${enrollment.class.name}" / تم تعليق التلميذ من فوج "${enrollment.class.name}"`,
+          },
+        });
+      } catch (auditErr) {
+        console.warn("Audit log creation skipped:", auditErr);
+      }
+
+      safeRevalidatePath(`/list/students/${studentId}`);
+      safeRevalidatePath("/list/students");
+      safeRevalidatePath("/list/payments");
+      safeRevalidatePath(`/list/payments/class/${enrollment.classId}`);
+      safeRevalidatePath(`/list/classes/${enrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/class/${enrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/take/${enrollment.classId}`);
+      safeRevalidatePath("/admin");
+
+      return {
+        success: true,
+        error: false,
+        message: `Groupe "${enrollment.class.name}" : élève suspendu avec succès / فوج "${enrollment.class.name}": تم تعليق التلميذ بنجاح`,
+        status: "SUSPENDED",
+        payerStatus: oldPayerStatus,
+        enrollmentId,
+      };
+    } else {
+      // Restoring to NORMAL:
+      // 1. Calculate raw credit and debts
+      const c = enrollment.class;
+      const student = enrollment.student;
+      const classVouchers = c.vouchers.filter(
+        (v) => v.classId === c.id || !v.classId
+      );
+      const tuitionVouchers = classVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
+
+      const family = student.family;
+      const isSiblingDiscount = Boolean(
+        family &&
+          family.payerStudentId &&
+          family.payerStudentId !== student.id
+      );
+      const siblingDiscountPct = isSiblingDiscount
+        ? Number((family as any)?.discountPercentage ?? 50)
+        : 0;
+      const isSiblingWaived100 = siblingDiscountPct >= 100;
+
+      const cyclePrice = Number(c.pricePerCycle || 0);
+      const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+      const effectiveLessonPrice =
+        siblingDiscountPct > 0 && siblingDiscountPct < 100
+          ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+          : siblingDiscountPct >= 100
+          ? 0
+          : baseLessonPrice;
+
+      let purchasedSessions = 0;
+      if (isSiblingWaived100) {
+        purchasedSessions = 16;
+      } else if (effectiveLessonPrice > 0) {
+        let totalPaidTuition = 0;
+        tuitionVouchers.forEach((v) => {
+          const vAmount = Number(v.amount || 0);
+          const vRefunded = v.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+          totalPaidTuition += Math.max(0, vAmount - vRefunded);
+        });
+        purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
+      } else {
+        purchasedSessions = tuitionVouchers.length * 4;
+      }
+
+      const transferredOut = enrollment.transfersFrom.reduce((sum, t) => sum + t.transferredSessions, 0);
+      const transferredIn = enrollment.transfersTo.reduce((sum, t) => sum + t.transferredSessions, 0);
+
+      const classAtts = student.attendances.filter(
+        (att) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
+      );
+      const classLessons = classAtts.map((att) => att.lesson);
+      const attendedSessions = computeStudentConsumedSessions({
+        lessons: classLessons,
+        attendances: classAtts.map((att) => ({ lessonId: att.lesson.id, status: att.status })),
+      });
+
+      const currentOffset = enrollment.creditResetOffset || 0;
+      const rawCredit = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + currentOffset;
+
+      // To strictly set lesson credit to 0:
+      // (purchased + in - out) - attended + newOffset = 0 => newOffset = currentOffset - rawCredit
+      const newCreditResetOffset = currentOffset - rawCredit;
+
+      await prisma.enrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          status: "ACTIVE",
+          payerStatus: "NORMAL",
+          creditResetOffset: newCreditResetOffset,
+        },
+      });
+
+      // Audit trail
+      try {
+        await prisma.auditLog.create({
+          data: {
+            entityType: "ENROLLMENT",
+            entityId: String(enrollmentId),
+            action: "REINSTATE_ENROLLMENT",
+            branchId: branchId,
+            userId: session.userId || session.rawRole || "system",
+            userName: session.userId || session.rawRole || "Admin",
+            oldValue: `status:${oldStatus},rawCredit:${rawCredit}`,
+            newValue: `status:ACTIVE,payerStatus:NORMAL,credit:0,creditResetOffset:${newCreditResetOffset}`,
+            details: `Élève réinscrit en statut normal dans "${c.name}". Toutes les dettes précédentes (${rawCredit < 0 ? Math.abs(rawCredit) + " séances" : "0"}) ont été effacées et le crédit réinitialisé à 0.`,
+          },
+        });
+      } catch (auditErr) {
+        console.warn("Audit log creation skipped:", auditErr);
+      }
+
+      safeRevalidatePath(`/list/students/${studentId}`);
+      safeRevalidatePath("/list/students");
+      safeRevalidatePath("/list/payments");
+      safeRevalidatePath(`/list/payments/class/${enrollment.classId}`);
+      safeRevalidatePath(`/list/classes/${enrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/class/${enrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/take/${enrollment.classId}`);
+      safeRevalidatePath("/admin");
+
+      return {
+        success: true,
+        error: false,
+        message: `Groupe "${c.name}" : réinscrit en statut Normal. Dettes effacées et crédit réinitialisé à 0 حصة / تم إعادة التلميذ للحالة العادية وتصفير الديون بنجاح`,
+        status: "ACTIVE",
+        payerStatus: "NORMAL",
+        enrollmentId,
+      };
+    }
+  } catch (err: any) {
+    console.error("toggleEnrollmentSuspensionAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err.message || "Erreur lors de la mise à jour du statut / حدث خطأ أثناء تحديث الحالة",
+    };
+  }
+}
+

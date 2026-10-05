@@ -154,6 +154,8 @@ export default async function PayslipDetailPage(props: PageProps) {
     sessionsCount: payslip.sessionsCount || sessionItems.length,
     freeSessionsCount,
     grossAmount: Number(payslip.grossAmount),
+    bookRevenue: payrollCalc?.bookRevenue || 0,
+    bookRevenueDetails: payrollCalc?.bookRevenueDetails || [],
     advances: Number(payslip.advances),
     photocopyDeductions: Number(payslip.photocopyDeductions),
     netAmount: Number(payslip.netAmount),

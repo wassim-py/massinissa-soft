@@ -1,7 +1,7 @@
 import prisma from "@/lib/prisma";
 import FormModal from "./FormModal";
 import { getAuthSession } from "@/lib/auth";
-import { serializeForClient } from "@/lib/utils";
+import { serializeForClient, splitFullName } from "@/lib/utils";
 
 // UPDATED: This type now includes "workshop"
 export type FormContainerProps = {
@@ -203,7 +203,15 @@ const FormContainer = async ({
             SELECT id, name FROM "Student" ORDER BY name ASC
           `;
           finalRelatedData = {
-            students: students.map((s) => ({ id: s.id, name: s.name, surname: "" })),
+            students: students.map((s) => {
+              const { surname, name: firstName } = splitFullName(s.name);
+              return {
+                id: s.id,
+                name: firstName,
+                surname: surname,
+                fullName: s.name,
+              };
+            }),
           };
           break;
         }

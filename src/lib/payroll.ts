@@ -38,6 +38,15 @@ export interface TeacherPayrollCalculation {
     isRetroactive?: boolean;
     retroactiveNote?: string;
   }>;
+  bookRevenue?: number;
+  bookRevenueDetails?: Array<{
+    voucherId: number;
+    bookTitle?: string;
+    studentName?: string;
+    amount: number;
+    date: Date;
+    branchName?: string;
+  }>;
   salaryAdvanceDetails: Array<{
     id: number;
     amount: number;
@@ -130,6 +139,16 @@ export async function calculateTeacherPayroll(
             select: {
               studentId: true,
               payerStatus: true,
+              student: {
+                select: {
+                  family: {
+                    select: {
+                      payerStudentId: true,
+                      discountPercentage: true,
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -247,6 +266,53 @@ export async function calculateTeacherPayroll(
     });
   });
 
+  // Fetch Catch-Up visitors hosted in any lesson taught by this teacher in this period (Rule 8)
+  const lessonIds = lessons.map((l) => l.id);
+  const catchUpVisitors = lessonIds.length > 0
+    ? await prisma.catchUpAttendance.findMany({
+        where: { catchUpLessonId: { in: lessonIds } },
+        include: {
+          student: {
+            select: {
+              id: true,
+              name: true,
+              family: {
+                select: {
+                  payerStudentId: true,
+                  discountPercentage: true,
+                },
+              },
+              enrollments: {
+                where: { class: { teacherId: teacher.id } },
+                select: { payerStatus: true },
+              },
+            },
+          },
+        },
+      })
+    : [];
+
+  // Fetch all non-voided BOOK vouchers issued during [startDate, endDate] for this teacher (100% Teacher Revenue)
+  const bookVouchers = await prisma.voucher.findMany({
+    where: {
+      paymentType: "BOOK",
+      isVoided: false,
+      issuedAt: {
+        gte: startDate,
+        lte: endDate,
+      },
+      OR: [
+        { class: { teacherId: teacher.id } },
+        { classId: { in: classIds } },
+      ],
+    },
+    include: {
+      class: { select: { id: true, name: true, branchId: true } },
+      student: { select: { id: true, name: true } },
+      refunds: true,
+    },
+  });
+
   let totalSessions = 0;
   let totalPresentAttendances = 0;
   let calculatedGross = 0;
@@ -267,25 +333,62 @@ export async function calculateTeacherPayroll(
       existing.freeSessions += 1;
     }
 
-    // Actual student attendance (PRESENT only)
+    // Actual student attendance (PRESENT regular attendees + catch-up visitors hosted)
     const presentAttendances = lesson.attendances.filter((a) => a.status === "PRESENT");
-    const presentCount = presentAttendances.length;
+    const regularPresentCount = presentAttendances.length;
+    const visitorsInLesson = catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id);
+    const visitorCount = visitorsInLesson.length;
+    const presentCount = regularPresentCount + visitorCount;
+
     existing.totalPresentAttendances += presentCount;
     totalPresentAttendances += presentCount;
 
     // Filter students whose payer status entitles teacher to payment:
     // Paying attendees include PRESENT + INTERLEAVED_ABSENCE
     // (Excludes NOT_DEFINED, PRE_START_ABSENCE, TRAILING_ABSENCE_HELD, and FORFEITED_DROPOUT)
-    let payingCount = 0;
+    // Rule 1: Sibling discount is split proportionally (Option 2)
+    // Rule 2: 100% waived sibling earns teacher 0 DZD
+    // Rules 3 & 4: NON_PAYER and SCHOOL_FEES_ONLY earn teacher 0 DZD
+    let payingWeight = 0;
     if (!lesson.isFree) {
       lesson.attendances.forEach((att) => {
         const enrollment = lesson.class?.enrollments?.find((e) => e.studentId === att.studentId);
         const payerStatus = enrollment?.payerStatus || "NORMAL";
-        if (payerStatus !== "NORMAL") return;
+        if (payerStatus === "NON_PAYER" || payerStatus === "SCHOOL_FEES_ONLY") return;
 
         const classification = studentStatusAtEnd.get(`${att.studentId}_${lesson.id}`);
         if (classification && classification.isTeacherPayable) {
-          payingCount += 1;
+          const fam = enrollment?.student?.family;
+          const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== att.studentId);
+          const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
+
+          if (siblingDiscountPct >= 100) {
+            // 100% waived sibling -> teacher earns 0 DZD (Rule 2)
+            return;
+          }
+          if (siblingDiscountPct > 0) {
+            // Proportional split (Rule 1 / Option 2)
+            payingWeight += (1 - siblingDiscountPct / 100);
+          } else {
+            payingWeight += 1;
+          }
+        }
+      });
+
+      // Catch-up visitors hosted in this lesson are paid as PRESENT (Rule 8)
+      visitorsInLesson.forEach((cv) => {
+        const vPayerStatus = cv.student?.enrollments?.[0]?.payerStatus || "NORMAL";
+        if (vPayerStatus === "NON_PAYER" || vPayerStatus === "SCHOOL_FEES_ONLY") return;
+
+        const fam = cv.student?.family;
+        const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== cv.student.id);
+        const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
+
+        if (siblingDiscountPct >= 100) return;
+        if (siblingDiscountPct > 0) {
+          payingWeight += (1 - siblingDiscountPct / 100);
+        } else {
+          payingWeight += 1;
         }
       });
     }
@@ -301,7 +404,7 @@ export async function calculateTeacherPayroll(
         lessonAmount = effectiveRateForSession;
       } else if (percentageOfSessionFee !== null && percentageOfSessionFee > 0) {
         effectiveRateForSession = (sessionPrice * percentageOfSessionFee) / 100;
-        lessonAmount = payingCount * effectiveRateForSession;
+        lessonAmount = payingWeight * effectiveRateForSession;
       } else if (defaultSessionRate > 0) {
         effectiveRateForSession = defaultSessionRate;
         lessonAmount = defaultSessionRate;
@@ -318,7 +421,7 @@ export async function calculateTeacherPayroll(
       className: lesson.class?.name || "فوج",
       branchName: lesson.branch.name,
       presentCount,
-      payingCount,
+      payingCount: Math.round(payingWeight * 100) / 100,
       pricePerCycle,
       sessionPrice,
       teacherCut: effectiveRateForSession,
@@ -327,6 +430,45 @@ export async function calculateTeacherPayroll(
       isExtra: lesson.isExtra,
       isCatchUp: lesson.isCatchUp,
     });
+  });
+
+  // Process 100% Teacher Book Revenue (Rule: 100% for the teacher, 0% school cut)
+  let totalBookRevenue = 0;
+  const bookRevenueDetails: NonNullable<TeacherPayrollCalculation["bookRevenueDetails"]> = [];
+
+  bookVouchers.forEach((bv) => {
+    const refunded = bv.refunds?.reduce((sum, r) => sum + Number(r.amount), 0) || 0;
+    const netBookAmount = Math.max(0, Number(bv.amount) - refunded);
+    if (netBookAmount > 0) {
+      totalBookRevenue += netBookAmount;
+      calculatedGross += netBookAmount;
+
+      const targetBranchId = bv.targetBranchId || bv.class?.branchId || teacher.TeacherBranch[0]?.branchId || 1;
+      const resolvedBranchName =
+        branchSessionsMap.get(targetBranchId)?.branchName ||
+        teacher.TeacherBranch.find((tb) => tb.branchId === targetBranchId)?.Branch.name ||
+        bv.class?.name ||
+        "Siège";
+
+      const bEntry = branchSessionsMap.get(targetBranchId) || {
+        branchName: resolvedBranchName,
+        totalSessions: 0,
+        freeSessions: 0,
+        amount: 0,
+        totalPresentAttendances: 0,
+      };
+      bEntry.amount += netBookAmount;
+      branchSessionsMap.set(targetBranchId, bEntry);
+
+      bookRevenueDetails.push({
+        voucherId: bv.id,
+        bookTitle: bv.class?.name || "Livre",
+        studentName: bv.student?.name || "Élève",
+        amount: netBookAmount,
+        date: bv.issuedAt,
+        branchName: resolvedBranchName,
+      });
+    }
   });
 
   // 2. Retroactive catch-up payouts: Prior trailing absences that were held back,
@@ -522,6 +664,8 @@ export async function calculateTeacherPayroll(
       date: c.date,
       recordedBy: c.recordedBy,
     })),
+    bookRevenue: totalBookRevenue,
+    bookRevenueDetails,
   };
 }
 

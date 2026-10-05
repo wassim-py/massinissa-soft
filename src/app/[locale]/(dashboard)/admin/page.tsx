@@ -233,6 +233,9 @@ const AdminPage = async () => {
     })}`;
 
     for (const enr of cls.enrollments) {
+      if ((enr as any).status === "SUSPENDED" || (enr as any).status === "UNENROLLED" || (enr as any).status === "TRANSFERRED") {
+        continue;
+      }
       const key = `${enr.studentId}-${cls.id}`;
       if (studentsToWatchMap.has(key)) continue;
 
@@ -298,7 +301,7 @@ const AdminPage = async () => {
       });
 
       const remainingSessions =
-        purchasedSessions + transferredIn - transferredOut - attendedSessions;
+        purchasedSessions + transferredIn - transferredOut - attendedSessions + ((enr as any).creditResetOffset || 0);
 
       let status: "PAID" | "EXPIRING" | "UNPAID" = "PAID";
       if (remainingSessions <= 0) {
@@ -377,7 +380,10 @@ const AdminPage = async () => {
 
   const totalPresent = lessonsAttendanceData.reduce((sum, item) => sum + item.present, 0);
   const totalAbsent = lessonsAttendanceData.reduce((sum, item) => sum + item.absent, 0);
-  const totalExpected = thisBranchTodaysLessons.reduce((sum, l) => sum + l.class.enrollments.length, 0);
+  const totalExpected = thisBranchTodaysLessons.reduce(
+    (sum, l) => sum + l.class.enrollments.filter((e: any) => e.status === "ACTIVE" || !e.status).length,
+    0
+  );
 
   const recordedTotal = totalPresent + totalAbsent;
   const overallRate =

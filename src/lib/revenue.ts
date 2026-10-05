@@ -538,6 +538,7 @@ export interface DailyBranchLedgerData {
   todayVouchers: Array<{
     id: number;
     number: number;
+    studentId?: string | null;
     studentName: string;
     className: string;
     paymentType: string;
@@ -548,6 +549,7 @@ export interface DailyBranchLedgerData {
   }>;
   todayTransfers: Array<{
     id: number;
+    studentId?: string | null;
     studentName: string;
     fromClassName: string;
     fromBranchName: string;
@@ -612,7 +614,7 @@ export async function getDailyBranchLedgerData(
         isVoided: false,
       },
       include: {
-        student: { select: { name: true } },
+        student: { select: { id: true, name: true } },
         class: { select: { name: true } },
         workshop: { select: { title: true } },
       },
@@ -629,13 +631,13 @@ export async function getDailyBranchLedgerData(
       include: {
         fromEnrollment: {
           include: {
-            student: { select: { name: true } },
+            student: { select: { id: true, name: true } },
             class: { include: { branch: { select: { id: true, name: true } } } },
           },
         },
         toEnrollment: {
           include: {
-            student: { select: { name: true } },
+            student: { select: { id: true, name: true } },
             class: { include: { branch: { select: { id: true, name: true } } } },
           },
         },
@@ -720,6 +722,7 @@ export async function getDailyBranchLedgerData(
     todayVouchers: todayVouchers.map((v) => ({
       id: v.id,
       number: v.number,
+      studentId: v.student?.id || v.studentId || null,
       studentName: v.student?.name || "—",
       className: v.class?.name || v.workshop?.title || "—",
       paymentType: v.paymentType,
@@ -745,6 +748,7 @@ export async function getDailyBranchLedgerData(
 
         return {
           id: t.id,
+          studentId: t.fromEnrollment?.student?.id || t.toEnrollment?.student?.id || null,
           studentName: t.fromEnrollment.student.name || t.toEnrollment.student.name || "—",
           fromClassName: t.fromEnrollment.class.name,
           fromBranchName: t.fromEnrollment.class.branch.name,

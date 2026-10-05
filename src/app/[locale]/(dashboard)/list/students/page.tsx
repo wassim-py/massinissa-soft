@@ -18,7 +18,7 @@ type StudentList = {
   name: string;
   phone: string | null;
   level: string;
-  classes: { id: number; name: string }[];
+  classes: { id: number; name: string; isSuspended?: boolean }[];
   registeredBranchId: number;
   branchName?: string | null;
 };
@@ -28,6 +28,8 @@ const StudentListPage = async (props: {
   searchParams: Promise<{ [key: string]: string | undefined }>;
 }) => {
   const searchParams = await props.searchParams;
+  const params = await props.params;
+  const locale = params.locale;
 
   const t = await getTranslations("students");
   const tSearch = await getTranslations("search");
@@ -49,16 +51,21 @@ const StudentListPage = async (props: {
     >
       {/* 1. ID Number (permanent globalNumber from §2.10) */}
       <td className="p-3.5 font-mono text-xs font-semibold text-gray-900">
-        <span className="bg-surface-subtle px-2.5 py-1 rounded-md border border-border/70 text-primary font-bold inline-block">
-          #{item.globalNumber}
-        </span>
+        <Link href={`/list/students/${item.id}`}>
+          <span className="bg-surface-subtle px-2.5 py-1 rounded-md border border-border/70 text-primary font-bold inline-block hover:border-primary transition-colors cursor-pointer">
+            #{item.globalNumber}
+          </span>
+        </Link>
       </td>
 
       {/* 2. Full Name */}
       <td className="p-3.5">
-        <span className="font-semibold text-gray-900 text-table-body">
+        <Link
+          href={`/list/students/${item.id}`}
+          className="font-semibold text-gray-900 text-table-body hover:text-primary hover:underline transition-colors cursor-pointer"
+        >
           {item.name}
-        </span>
+        </Link>
       </td>
 
       {/* 3. Level */}
@@ -81,8 +88,8 @@ const StudentListPage = async (props: {
         {item.classes.length > 0 ? (
           <div className="flex flex-wrap gap-1">
             {item.classes.map((c) => (
-              <Badge key={c.id} variant="secondary" size="sm">
-                {c.name}
+              <Badge key={c.id} variant={c.isSuspended ? "danger" : "secondary"} size="sm">
+                {c.name}{c.isSuspended ? ` (${locale === "ar" ? "معلّق" : "Suspendu"})` : ""}
               </Badge>
             ))}
           </div>
@@ -272,12 +279,16 @@ const StudentListPage = async (props: {
 
     data = rows.map((r) => {
       const sEnrollments = enrollmentsByStudent.get(r.id) || [];
-      const uniqueClassesMap = new Map<number, { id: number; name: string }>();
+      const uniqueClassesMap = new Map<number, { id: number; name: string; isSuspended?: boolean }>();
       const levelsSet = new Set<string>();
 
       for (const enr of sEnrollments) {
         if (!uniqueClassesMap.has(enr.class.id)) {
-          uniqueClassesMap.set(enr.class.id, { id: enr.class.id, name: enr.class.name });
+          uniqueClassesMap.set(enr.class.id, {
+            id: enr.class.id,
+            name: enr.class.name,
+            isSuspended: enr.status === "SUSPENDED",
+          });
         }
         const lvlName = enr.class.level?.name || enr.class.FormationLevel?.name;
         if (lvlName) {

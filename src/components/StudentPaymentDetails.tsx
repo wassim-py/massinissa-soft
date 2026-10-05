@@ -14,7 +14,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
-import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, ArrowRightLeft } from "lucide-react";
+import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, ArrowRightLeft, ChevronDown, ChevronUp } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
 export type ExtendedTransferItem = {
@@ -182,6 +182,8 @@ export default function StudentPaymentDetails({
   }>({ isOpen: false });
 
   const [historyTab, setHistoryTab] = useState<"all" | "vouchers" | "transfers">("all");
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
+  const INITIAL_HISTORY_COUNT = 5;
 
   const [refundModal, setRefundModal] = useState<{
     isOpen: boolean;
@@ -284,6 +286,10 @@ export default function StudentPaymentDetails({
   }
   combinedItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+  const displayedHistoryItems = isHistoryExpanded
+    ? combinedItems
+    : combinedItems.slice(0, INITIAL_HISTORY_COUNT);
+
   // Calculate per-class metrics
   const allClassMetrics = allEnrollments.map((enr) => {
     const c = enr.class;
@@ -336,7 +342,7 @@ export default function StudentPaymentDetails({
       attendances: classAtts.map((att: any) => ({ lessonId: att.lessonId, status: att.status })),
     });
 
-    const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions;
+    const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + Number((enr as any).creditResetOffset || 0);
     const unconsumedInCycle = Math.max(0, Math.min(4, netSessions));
 
     // Identify the student's most recent active cycle for this class (§7.8)
@@ -677,18 +683,22 @@ export default function StudentPaymentDetails({
             {sortedClassMetrics.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {sortedClassMetrics.map((cm) => {
+                  const isSuspended = cm.enrollment.status === "SUSPENDED";
                   const isTransferred = cm.enrollment.status === "TRANSFERRED";
                   const isUnenrolled = cm.enrollment.status === "UNENROLLED";
-                  const isPaid = !isTransferred && !isUnenrolled && cm.status === "PAID";
-                  const isExpiring = !isTransferred && !isUnenrolled && (cm.status === "EXPIRING" || cm.netSessions === 1);
-                  const isUnpaid = !isTransferred && !isUnenrolled && cm.status === "UNPAID";
-                  const isSibling = !isTransferred && !isUnenrolled && cm.status === "SIBLING_WAIVED";
+                  const isInactive = isSuspended || isTransferred || isUnenrolled;
+                  const isPaid = !isInactive && cm.status === "PAID";
+                  const isExpiring = !isInactive && (cm.status === "EXPIRING" || cm.netSessions === 1);
+                  const isUnpaid = !isInactive && cm.status === "UNPAID";
+                  const isSibling = !isInactive && cm.status === "SIBLING_WAIVED";
 
                   return (
                     <Card
                       key={cm.class.id}
                       className={`border p-4 transition-all rounded-xl ${
-                        isTransferred || isUnenrolled
+                        isSuspended
+                          ? "border-rose-300 bg-rose-50/40"
+                          : isTransferred || isUnenrolled
                           ? "border-dashed border-gray-300 bg-gray-50/50 opacity-80"
                           : isExpiring
                           ? "border-amber-400 bg-amber-50/40 ring-2 ring-amber-300/80 shadow-xs"
@@ -759,7 +769,11 @@ export default function StudentPaymentDetails({
                               </span>
                             </Badge>
                           )}
-                          {isTransferred ? (
+                          {isSuspended ? (
+                            <Badge variant="danger" size="sm" withDot>
+                              {locale === "ar" ? "معلّق" : "Suspendu"}
+                            </Badge>
+                          ) : isTransferred ? (
                             <Badge variant="secondary" size="sm" withDot>
                               {locale === "ar" ? "رصيد منقول (غير مسجل)" : "Transféré (Désinscrit)"}
                             </Badge>
@@ -926,7 +940,10 @@ export default function StudentPaymentDetails({
               <div className="flex items-center bg-surface-muted p-1 rounded-xl border border-border text-xs font-semibold self-start sm:self-auto">
                 <button
                   type="button"
-                  onClick={() => setHistoryTab("all")}
+                  onClick={() => {
+                    setHistoryTab("all");
+                    setIsHistoryExpanded(false);
+                  }}
                   className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
                     historyTab === "all"
                       ? "bg-primary text-white shadow-xs"
@@ -937,7 +954,10 @@ export default function StudentPaymentDetails({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setHistoryTab("vouchers")}
+                  onClick={() => {
+                    setHistoryTab("vouchers");
+                    setIsHistoryExpanded(false);
+                  }}
                   className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
                     historyTab === "vouchers"
                       ? "bg-primary text-white shadow-xs"
@@ -948,7 +968,10 @@ export default function StudentPaymentDetails({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setHistoryTab("transfers")}
+                  onClick={() => {
+                    setHistoryTab("transfers");
+                    setIsHistoryExpanded(false);
+                  }}
                   className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
                     historyTab === "transfers"
                       ? "bg-primary text-white shadow-xs"
@@ -975,7 +998,7 @@ export default function StudentPaymentDetails({
                 </thead>
                 <tbody className="divide-y divide-border/60">
                   {combinedItems.length > 0 ? (
-                    combinedItems.map((item) => {
+                    displayedHistoryItems.map((item) => {
                       if (item.kind === "transfer") {
                         const trf = item.transfer;
                         return (
@@ -1217,6 +1240,31 @@ export default function StudentPaymentDetails({
                 </tbody>
               </table>
             </div>
+
+            {/* See more / See less button */}
+            {combinedItems.length > INITIAL_HISTORY_COUNT && (
+              <div className="pt-1 flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-primary hover:bg-primary-soft/30 border-dashed cursor-pointer"
+                  onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
+                  leftIcon={
+                    isHistoryExpanded ? (
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    )
+                  }
+                >
+                  {isHistoryExpanded
+                    ? t("seeLess")
+                    : t("seeMore", {
+                        count: combinedItems.length - INITIAL_HISTORY_COUNT,
+                      })}
+                </Button>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

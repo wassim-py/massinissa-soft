@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { getTranslations, getLocale } from "next-intl/server";
+import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences } from "@/lib/studentBilling";
 
 // This type will represent a unique column in our grid
 export type LessonInstance = {
@@ -23,6 +24,7 @@ export type LessonInstance = {
 export type AttendanceCellDetail = {
     status: "PRESENT" | "ABSENT" | "NOT_DEFINED";
     justification?: string | null;
+    isPreStart?: boolean;
     catchUp?: {
         catchUpDate: string;
         catchUpGroupName: string;
@@ -267,14 +269,34 @@ const ClassAttendancePage = async (
         const studentRecords = new Map<string, AttendanceCellDetail>();
         const studentCatchUps = catchUpsByStudent.get(student.id) || [];
 
+        const studentLessons = (student.attendances || []).map((a: any) => ({
+            id: a.lessonId,
+            startsAt: a.date,
+            isFree: false,
+        }));
+
+        const classified = classifyStudentAttendanceHistory({
+            lessons: studentLessons,
+            attendances: (student.attendances || []).map((a: any) => ({
+                lessonId: a.lessonId,
+                status: a.status || (a.present ? "PRESENT" : "ABSENT"),
+            })),
+            catchUps: studentCatchUps.map((c: any) => ({ missedLessonId: c.missedLessonId })),
+        });
+
+        const classificationMap = new Map<number, string>();
+        classified.forEach((item) => classificationMap.set(item.lessonId, item.classification));
+
         student.attendances.forEach((record: any) => {
             const dateKey = new Date(record.date).toISOString().split('T')[0];
             const instanceKey = `${record.lessonId}-${dateKey}`;
             const catchUpInfo = studentCatchUps.find((cu) => cu.missedLessonId === record.lessonId);
+            const isPreStart = classificationMap.get(record.lessonId) === "PRE_START_ABSENCE";
 
             studentRecords.set(instanceKey, {
                 status: record.status || (record.present ? "PRESENT" : "ABSENT"),
                 justification: record.justification || null,
+                isPreStart,
                 catchUp: catchUpInfo ? {
                     catchUpDate: catchUpInfo.catchUpDate,
                     catchUpGroupName: catchUpInfo.catchUpGroupName,

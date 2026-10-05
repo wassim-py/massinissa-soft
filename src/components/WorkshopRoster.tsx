@@ -2,6 +2,7 @@
 
 import { Workshop, WorkshopParticipant } from "@prisma/client";
 import { useState, Fragment } from "react";
+import { Link } from "@/i18n/navigation";
 import Image from "next/image";
 import WorkshopParticipantForm from "./forms/WorkshopParticipantForm";
 import DeleteButton from "./DeleteButton";
@@ -182,7 +183,16 @@ const WorkshopRoster = ({
                             className="rounded-full flex-shrink-0"
                           />
                           <div>
-                            <p className="font-semibold text-gray-900">{participantName}</p>
+                            {participant.studentId ? (
+                              <Link
+                                href={`/list/students/${participant.studentId}`}
+                                className="font-semibold text-gray-900 hover:text-primary hover:underline transition-colors block"
+                              >
+                                {participantName}
+                              </Link>
+                            ) : (
+                              <p className="font-semibold text-gray-900">{participantName}</p>
+                            )}
                             {participantPhone && (
                               <p className="text-xs text-gray-500">{participantPhone}</p>
                             )}

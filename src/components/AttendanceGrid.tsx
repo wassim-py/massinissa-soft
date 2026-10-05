@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Student } from "@prisma/client";
 import Image from "next/image";
+import { Link } from "@/i18n/navigation";
 import { LessonInstance, AttendanceCellDetail } from "@/app/[locale]/(dashboard)/list/attendance/class/[id]/page";
 import { useTranslations, useLocale } from "next-intl";
 
@@ -17,6 +18,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
     const locale = useLocale();
 
     const [selectedJustification, setSelectedJustification] = useState<{
+        studentId: string;
         studentName: string;
         lessonName: string;
         date: string;
@@ -59,6 +61,10 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                     <div className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded-full bg-amber-500 inline-block shadow-2xs"></span>
                         <span>{t("legendJustified")}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-slate-200 border border-slate-400 inline-block shadow-2xs"></span>
+                        <span>{locale === "ar" ? "غياب قبل البدء (محايد)" : "Absence pré-début (neutre)"}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded-full bg-blue-600 inline-block shadow-2xs"></span>
@@ -106,18 +112,21 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                     className={`${rowBg} hover:bg-surface-subtle/80 transition-colors`}
                                 >
                                     <td className={`p-2 sm:p-3 text-table-body font-medium text-gray-900 border-e border-border sticky start-0 z-10 w-40 sm:w-64 min-w-[140px] sm:min-w-[200px] ${rowBg}`}>
-                                        <div className="flex items-center gap-2 sm:gap-3">
+                                        <Link
+                                            href={`/list/students/${student.id}`}
+                                            className="flex items-center gap-2 sm:gap-3 group hover:text-primary transition-colors min-w-0"
+                                        >
                                             <Image
                                                 src="/noAvatar.png"
                                                 alt={student.name}
                                                 width={28}
                                                 height={28}
-                                                className="rounded-full object-cover shrink-0 border border-border"
+                                                className="rounded-full object-cover shrink-0 border border-border group-hover:border-primary transition-colors"
                                             />
-                                            <span className="truncate max-w-[100px] sm:max-w-none">
+                                            <span className="truncate max-w-[100px] sm:max-w-none group-hover:underline">
                                                 {student.name}
                                             </span>
-                                        </div>
+                                        </Link>
                                     </td>
                                     {[...lessonInstances].reverse().map((instance) => {
                                         const studentRecords = attendanceMap.get(student.id);
@@ -168,6 +177,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         type="button"
                                                         onClick={() =>
                                                             setSelectedJustification({
+                                                                studentId: student.id,
                                                                 studentName: student.name,
                                                                 lessonName: instance.lessonName,
                                                                 date: formatDateHeader(instance.date),
@@ -222,6 +232,21 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                             );
                                         }
 
+                                        if (record.isPreStart) {
+                                            // Neutral grayed circle: pre-start absence (Rule 10)
+                                            return (
+                                                <td
+                                                    key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                    className="p-3 text-center"
+                                                >
+                                                    <div
+                                                        className="w-5 h-5 mx-auto rounded-full bg-slate-200 border-2 border-slate-400/80 shadow-2xs"
+                                                        title={locale === "ar" ? "غياب قبل أول حضور (محايد)" : "Absence avant premier cours (neutre)"}
+                                                    />
+                                                </td>
+                                            );
+                                        }
+
                                         // Red circle: absent, no catch-up recorded
                                         return (
                                             <td
@@ -264,7 +289,13 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                         {t("justifiedAbsenceTitle")}
                                     </h3>
                                     <p className="text-xs text-gray-500">
-                                        {selectedJustification.studentName} • {selectedJustification.date}
+                                        <Link
+                                            href={`/list/students/${selectedJustification.studentId}`}
+                                            className="hover:text-primary hover:underline transition-colors font-semibold text-gray-700"
+                                        >
+                                            {selectedJustification.studentName}
+                                        </Link>{" "}
+                                        • {selectedJustification.date}
                                     </p>
                                 </div>
                             </div>

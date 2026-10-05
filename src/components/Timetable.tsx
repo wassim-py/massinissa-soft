@@ -35,6 +35,7 @@ export type TimetableLesson = {
   teacher?: { id?: string; name: string; surname?: string } | null;
   classroom?: { id?: number; name: string } | null;
   forChildren?: string[];
+  level?: { id?: number; name?: string } | null;
 };
 
 const daysOfWeek: Day[] = [

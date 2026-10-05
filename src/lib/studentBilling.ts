@@ -106,6 +106,9 @@ export function computeStudentSessionFee({
     const discountRate = effectiveDiscount / 100;
     const studentCycleFee = baseCycleFee * (1 - discountRate);
     const studentSessionFee = baseSessionFee * (1 - discountRate);
+    // Option 2 (Proportional split): Teacher and school share the sibling discount proportionally
+    const discountedTeacherCut = (studentSessionFee * tPercent) / 100;
+    const discountedSchoolCut = (studentSessionFee * sPercent) / 100;
 
     return {
       baseSessionFee,
@@ -114,8 +117,8 @@ export function computeStudentSessionFee({
       schoolPercentage: sPercent,
       studentSessionFee,
       studentCycleFee,
-      teacherCut: normalTeacherCut,
-      schoolCut,
+      teacherCut: discountedTeacherCut,
+      schoolCut: discountedSchoolCut,
       payerStatus: normStatus,
       isSiblingWaived: false,
       siblingDiscountPercentage: effectiveDiscount,
@@ -419,7 +422,8 @@ export function computeStudentCycleConsumption({
   const heldSessions = history.filter((h) => h.isHeld).length;
   const forfeitedSessions = history.filter((h) => h.classification === "FORFEITED_DROPOUT").length;
   const remainingSessions = Math.max(0, totalPurchasedSessions - consumedSessions);
-  const refundableSessions = Math.min(totalPurchasedSessions, remainingSessions);
+  // Held sessions (unresolved trailing absences where teacher was NOT paid) remain refund-eligible per Rule 5 & §7.22
+  const refundableSessions = Math.min(totalPurchasedSessions, remainingSessions + heldSessions);
 
   return {
     totalPurchasedSessions,
@@ -429,4 +433,67 @@ export function computeStudentCycleConsumption({
     remainingSessions,
     refundableSessions,
   };
+}
+
+/**
+ * Computes the exact refundable sessions count for a student in a cycle.
+ */
+export function computeStudentRefundableSessions({
+  totalPurchasedSessions,
+  history,
+}: {
+  totalPurchasedSessions: number;
+  history: StudentAttendanceHistoryItem[];
+}) {
+  const consumedSessions = history.filter((h) => h.isConsumedCredit).length;
+  const heldSessions = history.filter((h) => h.isHeld).length;
+  const remainingSessions = Math.max(0, totalPurchasedSessions - consumedSessions);
+  const refundableSessions = Math.min(totalPurchasedSessions, remainingSessions + heldSessions);
+
+  return {
+    remainingSessions,
+    heldSessions,
+    refundableSessions,
+  };
+}
+
+/**
+ * Computes the number of consecutive unexcused trailing absences for a student.
+ * Breaks on PRESENT or CatchUp attendance. Passes through NOT_DEFINED.
+ */
+export function computeStudentConsecutiveAbsences({
+  lessons,
+  attendances,
+  catchUps = [],
+}: {
+  lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean }>;
+  attendances: Array<{ lessonId: number; status: string }>;
+  catchUps?: Array<{ missedLessonId: number }>;
+}): number {
+  if (!lessons || lessons.length === 0 || !attendances || attendances.length === 0) {
+    return 0;
+  }
+  const sortedLessons = [...lessons]
+    .filter((l) => !l.isFree)
+    .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+
+  const attendanceMap = new Map<number, string>();
+  attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
+  const catchUpSet = new Set<number>();
+  catchUps.forEach((c) => catchUpSet.add(c.missedLessonId));
+
+  let consecutiveAbsences = 0;
+  for (let i = sortedLessons.length - 1; i >= 0; i--) {
+    const l = sortedLessons[i];
+    const status = attendanceMap.get(l.id);
+    if (!status) continue;
+    if (status === "NOT_DEFINED") continue;
+    if (status === "PRESENT" || catchUpSet.has(l.id)) {
+      break;
+    }
+    if (status === "ABSENT") {
+      consecutiveAbsences++;
+    }
+  }
+  return consecutiveAbsences;
 }

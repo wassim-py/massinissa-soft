@@ -9,7 +9,7 @@ import Pagination from "@/components/Pagination";
 import { ITEM_PER_PAGE } from "@/lib/settings";
 import DeclareMissingMoneyModal from "@/components/daily-ledger/DeclareMissingMoneyModal";
 import DeclareSurplusMoneyModal from "@/components/daily-ledger/DeclareSurplusMoneyModal";
-import Link from "next/link";
+import { Link } from "@/i18n/navigation";
 import { format } from "date-fns";
 import { arDZ } from "date-fns/locale";
 import { getTranslations, getLocale } from "next-intl/server";
@@ -507,7 +507,16 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                       #{v.number}
                     </td>
                     <td className="p-3.5 font-semibold text-gray-900">
-                      {v.studentName}
+                      {v.studentId ? (
+                        <Link
+                          href={`/list/students/${v.studentId}`}
+                          className="hover:text-primary hover:underline transition-colors cursor-pointer"
+                        >
+                          {v.studentName}
+                        </Link>
+                      ) : (
+                        v.studentName
+                      )}
                     </td>
                     <td className="p-3.5 text-gray-700">{v.className}</td>
                     <td className="p-3.5">
@@ -600,7 +609,16 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                   className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
                 >
                   <td className="p-3.5 font-semibold text-gray-900">
-                    {item.studentName}
+                    {item.studentId ? (
+                      <Link
+                        href={`/list/students/${item.studentId}`}
+                        className="hover:text-primary hover:underline transition-colors cursor-pointer"
+                      >
+                        {item.studentName}
+                      </Link>
+                    ) : (
+                      item.studentName
+                    )}
                   </td>
                   <td className="p-3.5 text-xs text-gray-700">
                     <div>{item.fromClassName}</div>

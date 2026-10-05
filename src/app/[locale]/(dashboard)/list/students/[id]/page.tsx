@@ -247,7 +247,7 @@ const SingleStudentPage = async (
         attendances: classAtts.map((att: any) => ({ lessonId: att.lesson.id, status: att.status })),
       });
 
-      const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions;
+      const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + Number((enr as any).creditResetOffset || 0);
 
       const teacherPercentage = (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
         ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
@@ -481,8 +481,15 @@ const SingleStudentPage = async (
                   </Badge>
                 )}
 
+                {/* At-a-glance Suspended Badges per group */}
+                {groupSummaries.filter((g) => g.status === "SUSPENDED").map((g) => (
+                  <Badge key={`susp-${g.enrollmentId}`} variant="danger" size="sm" withDot className="font-bold">
+                    <span>{locale === "ar" ? "معلّق" : "Suspendu"}: {g.className}</span>
+                  </Badge>
+                ))}
+
                 {/* At-a-glance Student Payer Status Badges per group (§7.18) */}
-                {groupSummaries.filter((g) => g.payerStatus === "NON_PAYER").map((g) => (
+                {groupSummaries.filter((g) => g.status !== "SUSPENDED" && g.payerStatus === "NON_PAYER").map((g) => (
                   <Badge key={`np-${g.enrollmentId}`} variant="success" size="sm" withDot className="font-bold">
                     <Sparkles className="w-3 h-3 text-success" />
                     <span>{t("badgeNonPayer")}: {g.className}</span>
@@ -558,6 +565,7 @@ const SingleStudentPage = async (
                   className: g.className,
                   branchName: g.branchName,
                   payerStatus: g.payerStatus,
+                  status: g.status,
                 }))}
                 currentStatus={s.payerStatus || "NORMAL"}
                 canEdit={canEditStatus}
@@ -587,6 +595,7 @@ const SingleStudentPage = async (
                 <div className="space-y-2 max-h-[190px] overflow-y-auto pe-1">
                   {sortedGroupSummaries.length > 0 ? (
                     sortedGroupSummaries.map((g) => {
+                      const isSuspended = g.status === "SUSPENDED";
                       const isTransferred = g.status === "TRANSFERRED";
                       const isUnenrolled = g.status === "UNENROLLED";
                       const isOne = g.status === "ACTIVE" && g.netSessions === 1;
@@ -597,7 +606,9 @@ const SingleStudentPage = async (
                         <div
                           key={g.enrollmentId}
                           className={`p-2.5 rounded-lg border transition-all flex items-center justify-between gap-2 text-xs ${
-                            isTransferred || isUnenrolled
+                            isSuspended
+                              ? "border-rose-300 bg-rose-50/60"
+                              : isTransferred || isUnenrolled
                               ? "border-dashed border-gray-300 bg-gray-50/60 opacity-80"
                               : isOne
                               ? "border-amber-400 bg-amber-50/70 ring-1 ring-amber-300"
@@ -638,7 +649,11 @@ const SingleStudentPage = async (
 
                           {/* Status badge with distinct visual flag for 1-session left / transferred */}
                           <div className="shrink-0 flex items-center gap-1.5">
-                            {isTransferred ? (
+                            {isSuspended ? (
+                              <Badge variant="danger" size="sm" withDot className="font-bold">
+                                {locale === "ar" ? "معلّق" : "Suspendu"}
+                              </Badge>
+                            ) : isTransferred ? (
                               <Badge variant="secondary" size="sm" withDot>
                                 {locale === "ar" ? "رصيد منقول" : "Transféré"}
                               </Badge>

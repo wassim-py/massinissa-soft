@@ -25,6 +25,7 @@ type TimetableLesson = {
   workshopId?: number;
   workshopSessionId?: number;
   classId?: number;
+  level?: { id?: number; name?: string } | null;
 };
 
 const LessonDetailModal = ({
@@ -87,6 +88,22 @@ const LessonDetailModal = ({
               {(lesson.teacher?.surname ? `${lesson.teacher.surname} ${lesson.teacher.name}` : lesson.teacher?.name) || t("unspecified")}
             </span>
           </div>
+          {lesson.level?.name && (
+            <div className="flex justify-between">
+              <span className="font-semibold text-gray-600">{t("level")}:</span>
+              <span className="text-gray-800 font-medium">
+                {lesson.level.name}
+              </span>
+            </div>
+          )}
+          {lesson.subject?.name && (
+            <div className="flex justify-between">
+              <span className="font-semibold text-gray-600">{t("subject")}:</span>
+              <span className="text-gray-800 font-medium">
+                {lesson.subject.name}
+              </span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span className="font-semibold text-gray-600">{t("branch")}:</span>
             <span className="text-gray-800 font-medium">

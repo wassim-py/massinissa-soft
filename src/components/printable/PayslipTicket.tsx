@@ -29,6 +29,15 @@ export interface PayslipPrintData {
   sessionsCount: number;
   freeSessionsCount?: number;
   grossAmount: number;
+  bookRevenue?: number;
+  bookRevenueDetails?: Array<{
+    voucherId: number;
+    bookTitle?: string;
+    studentName?: string;
+    amount: number;
+    date: string | Date;
+    branchName?: string;
+  }>;
   advances: number;
   photocopyDeductions: number;
   netAmount: number;
@@ -399,6 +408,49 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </div>
       )}
 
+      {/* Section 4b: Book Revenue Details (100% Enseignant) */}
+      {data.bookRevenueDetails && data.bookRevenueDetails.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xs font-bold text-gray-700 mb-2">
+            Détail des ventes de livres (100% Enseignant) :
+          </h2>
+          <table className="w-full border-collapse text-xs text-left">
+            <thead>
+              <tr className="bg-purple-50 border border-purple-200 text-purple-900">
+                <th className="p-1.5 border border-purple-200">Date</th>
+                <th className="p-1.5 border border-purple-200">Livre</th>
+                <th className="p-1.5 border border-purple-200">Élève</th>
+                <th className="p-1.5 border border-purple-200">Siège</th>
+                <th className="p-1.5 border border-purple-200 text-right">Montant (100%)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.bookRevenueDetails.map((b, idx) => (
+                <tr key={idx} className="border border-gray-200">
+                  <td className="p-1.5 border border-gray-200 font-mono">{formatDate(b.date)}</td>
+                  <td className="p-1.5 border border-gray-200 font-bold">{b.bookTitle || "Livre"}</td>
+                  <td className="p-1.5 border border-gray-200">{b.studentName || "Élève"}</td>
+                  <td className="p-1.5 border border-gray-200">{b.branchName || "-"}</td>
+                  <td className="p-1.5 border border-gray-200 font-mono text-purple-800 text-right font-bold">
+                    {formatDZD(Number(b.amount))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-purple-100 font-bold text-purple-950">
+                <td colSpan={4} className="p-1.5 border border-purple-200">
+                  Total des ventes de livres (100% Enseignant)
+                </td>
+                <td className="p-1.5 border border-purple-200 text-right font-mono font-black">
+                  {formatDZD(Number(data.bookRevenue || 0))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
       {/* Section 5: Final Consolidated Net Calculation */}
       <div className="border-2 border-gray-900 rounded-lg p-4 bg-gray-50 mb-6">
         <h2 className="text-sm font-bold text-gray-900 mb-3 border-b border-gray-300 pb-1">
@@ -406,8 +458,24 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </h2>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between items-center text-gray-800">
-            <span className="font-semibold">1. Salaire brut total :</span>
+            <span className="font-semibold">1. Rémunération des cours :</span>
             <span className="font-mono font-bold text-base">
+              {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}
+            </span>
+          </div>
+
+          {(data.bookRevenue ?? 0) > 0 && (
+            <div className="flex justify-between items-center text-purple-900 font-semibold">
+              <span>+ Vente de livres (100% Enseignant) :</span>
+              <span className="font-mono font-bold text-purple-900">
+                + {formatDZD(Number(data.bookRevenue))}
+              </span>
+            </div>
+          )}
+
+          <div className="flex justify-between items-center text-gray-900 border-t border-gray-200 pt-1 font-bold">
+            <span>Total Brut :</span>
+            <span className="font-mono font-bold">
               {formatDZD(Number(data.grossAmount))}
             </span>
           </div>

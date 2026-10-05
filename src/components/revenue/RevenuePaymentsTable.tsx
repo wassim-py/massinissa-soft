@@ -292,7 +292,7 @@ export default function RevenuePaymentsTable({ vouchers }: RevenuePaymentsTableP
                     <td className="p-3.5">
                       <Link
                         href={`/list/students/${v.studentId}`}
-                        className="font-semibold text-gray-900 hover:text-primary transition-colors block"
+                        className="font-semibold text-gray-900 hover:text-primary hover:underline transition-colors block"
                       >
                         {v.studentName}
                       </Link>

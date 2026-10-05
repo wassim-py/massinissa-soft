@@ -4,7 +4,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { TeacherPayrollCalculation } from "@/lib/payroll";
-import { Coins, CheckCircle2, Building2 } from "lucide-react";
+import { Coins, CheckCircle2, Building2, BookOpen } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
 interface TeacherPayrollSectionProps {
@@ -57,7 +57,7 @@ export default function TeacherPayrollSection({
     { header: t("colGroup"), accessor: "className" },
     { header: t("colBranch"), accessor: "branchName" },
     { header: t("colType"), accessor: "type", align: "center" },
-    { header: t("colStudentsPresent"), accessor: "presentCount", align: "center" },
+    { header: locale === "ar" ? "الحضور / الدفع" : "Présents / Payants", accessor: "presentCount", align: "center" },
     { header: t("colSessionPrice"), accessor: "sessionPrice", align: "end" },
     { header: t("colTeacherCut"), accessor: "teacherCut", align: "end" },
     { header: t("colSchoolCut"), accessor: "schoolCut", align: "end" },
@@ -92,7 +92,7 @@ export default function TeacherPayrollSection({
 
       <CardContent className="space-y-6 pt-2">
         {/* KPI Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3.5">
+        <div className={`grid grid-cols-2 ${(payroll.bookRevenue ?? 0) > 0 ? "lg:grid-cols-7" : "lg:grid-cols-6"} gap-3.5`}>
           {/* Sessions count */}
           <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
             <span className="text-xs text-muted font-medium">{t("completedSessions")}</span>
@@ -124,6 +124,24 @@ export default function TeacherPayrollSection({
               </span>
             </div>
           </div>
+
+          {/* 100% Book Revenue KPI Card */}
+          {(payroll.bookRevenue ?? 0) > 0 && (
+            <div className="bg-purple-50/70 p-4 rounded-xl border border-purple-200/80 flex flex-col justify-between shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-purple-900 font-bold flex items-center gap-1">
+                  <BookOpen className="w-3.5 h-3.5 text-purple-700" />
+                  <span>{locale === "ar" ? "الكتب (100%)" : "Livres (100%)"}</span>
+                </span>
+                <Badge variant="secondary" size="sm" className="bg-purple-200 text-purple-900 font-bold">100%</Badge>
+              </div>
+              <div className="mt-2 flex items-baseline gap-1">
+                <span className="text-2xl font-bold text-purple-900">
+                  {formatDZD(payroll.bookRevenue || 0)}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* School Share Card */}
           <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200/80 flex flex-col justify-between shadow-xs">
@@ -212,8 +230,15 @@ export default function TeacherPayrollSection({
                     <Badge variant="neutral" size="sm">{t("lessonTypeNormal")}</Badge>
                   )}
                 </td>
-                <td className="p-3.5 text-center font-bold text-primary">
-                  {s.presentCount} {t("presentUnit")}
+                <td className="p-3.5 text-center">
+                  <div className="flex flex-col items-center">
+                    <span className="font-bold text-primary">{s.presentCount} {t("presentUnit")}</span>
+                    {s.payingCount !== undefined && s.payingCount !== s.presentCount && (
+                      <span className="text-[11px] text-muted font-medium">
+                        ({s.payingCount} {locale === "ar" ? "دافع" : "payant"})
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="p-3.5 text-end text-gray-700">
                   {formatDZD(s.sessionPrice)}
@@ -233,6 +258,45 @@ export default function TeacherPayrollSection({
             emptyDescription={t("emptyPayrollDesc")}
           />
         </div>
+
+        {/* Book Revenue Details (Rule: 100% Enseignant) */}
+        {payroll.bookRevenueDetails && payroll.bookRevenueDetails.length > 0 && (
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                <BookOpen className="w-4 h-4 text-purple-600" />
+                <span>{locale === "ar" ? "مبيعات الكتب (100% للأستاذ)" : "Ventes de livres (100% Enseignant)"}</span>
+              </h4>
+              <Badge variant="secondary" className="bg-purple-100 text-purple-900 font-bold border-purple-300">
+                {formatDZD(payroll.bookRevenue || 0)}
+              </Badge>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-border">
+              <table className="w-full text-xs text-start">
+                <thead className="bg-surface-subtle text-muted border-b border-border">
+                  <tr>
+                    <th className="p-2.5 text-start font-semibold">{locale === "ar" ? "التاريخ" : "Date"}</th>
+                    <th className="p-2.5 text-start font-semibold">{locale === "ar" ? "الكتاب" : "Livre"}</th>
+                    <th className="p-2.5 text-start font-semibold">{locale === "ar" ? "التلميذ" : "Élève"}</th>
+                    <th className="p-2.5 text-start font-semibold">{locale === "ar" ? "الفرع" : "Siège"}</th>
+                    <th className="p-2.5 text-end font-semibold">{locale === "ar" ? "المبلغ (100%)" : "Montant (100%)"}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {payroll.bookRevenueDetails.map((b, idx) => (
+                    <tr key={idx} className="hover:bg-surface-subtle/60 transition-colors">
+                      <td className="p-2.5 text-gray-700 font-medium">{formatDate(b.date)}</td>
+                      <td className="p-2.5 font-bold text-gray-900">{b.bookTitle || "Livre"}</td>
+                      <td className="p-2.5 text-gray-800">{b.studentName || "Élève"}</td>
+                      <td className="p-2.5 text-muted">{b.branchName || "-"}</td>
+                      <td className="p-2.5 text-end font-bold text-purple-700">{formatDZD(b.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Consolidated Branch Breakdown (§1.3) */}
         {payroll.branchBreakdown.length > 0 && (

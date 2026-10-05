@@ -3,6 +3,7 @@
 import { Student, Attendance, Voucher, Lesson, Class, Teacher } from "@prisma/client";
 import { useState, useEffect, useRef, useMemo, startTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Link } from "@/i18n/navigation";
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useFormStatus } from "react-dom";
@@ -10,7 +11,7 @@ import { useActionState } from "react";
 import { saveAttendance, removeCatchUpAttendanceAction, markSingleAttendanceAction } from "@/lib/actions";
 import { executeWithRetry } from "@/lib/retryUtils";
 import { toast } from "react-toastify";
-import { computeStudentConsumedSessions } from "@/lib/studentBilling";
+import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences } from "@/lib/studentBilling";
 import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
@@ -64,6 +65,8 @@ type FullStudent = Student & {
   vouchers: Voucher[];
   attendances: Attendance[];
   payerStatus?: string;
+  enrollmentStatus?: string;
+  payerSessionsRemaining?: number;
   transfersFrom?: Array<{ id?: number; transferredSessions: number }>;
   transfersTo?: Array<{ id?: number; transferredSessions: number }>;
   family?: { payerStudentId: string | null } | null;
@@ -73,6 +76,7 @@ type FullStudent = Student & {
   outstandingBooks?: Array<{ id: number; title: string }>;
   bookDetails?: Array<{ id: number; title: string; received: boolean; receivedAt?: string | Date | null }>;
   inscriptionStatus?: "PAID" | "WAIVED" | "UNPAID";
+  creditResetOffset?: number;
 };
 
 type FullLesson = Lesson & {
@@ -591,7 +595,12 @@ const AttendanceRoster = ({
             const payerStatus = student.payerStatus || "NORMAL";
             const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
             const isSchoolFeesOnly = payerStatus === "SCHOOL_FEES_ONLY";
-            const isWaivedTuition = isSiblingWaived100 || isNonPayer;
+
+            // Rule 3: Waived sibling pass strictly follows paying sibling's remaining credit
+            const isPayerSiblingPaid = isSiblingWaived100
+              ? (student.payerSessionsRemaining !== undefined ? student.payerSessionsRemaining > 0 : true)
+              : true;
+            const isWaivedTuition = isNonPayer || (isSiblingWaived100 && isPayerSiblingPaid);
 
             const activeTuitionVouchers = (student.vouchers || []).filter(
               (v) => !v.isVoided && v.paymentType === "TUITION_4SESSION"
@@ -606,11 +615,17 @@ const AttendanceRoster = ({
                 : baseLessonPrice;
 
             let sessionsPurchased = 0;
-            if (isWaivedTuition) {
+            if (isNonPayer) {
               sessionsPurchased = 16;
+            } else if (isSiblingWaived100) {
+              sessionsPurchased = isPayerSiblingPaid ? 16 : 0;
             } else if (effectiveLessonPrice > 0) {
               const totalPaidTuition = activeTuitionVouchers.reduce(
-                (sum, v) => sum + Math.max(0, Number(v.amount || 0)),
+                (sum, v) => {
+                  const vAmount = Number(v.amount || 0);
+                  const refunded = (v as any).refunds?.reduce((rSum: number, r: any) => rSum + Number(r.amount || 0), 0) || 0;
+                  return sum + Math.max(0, vAmount - refunded);
+                },
                 0
               );
               sessionsPurchased = Math.floor(totalPaidTuition / effectiveLessonPrice);
@@ -626,7 +641,7 @@ const AttendanceRoster = ({
               (sum, t) => sum + Number(t.transferredSessions || 0),
               0
             );
-            const totalCreditSessions = sessionsPurchased + transferredIn - transferredOut;
+            const totalCreditSessions = sessionsPurchased + transferredIn - transferredOut + Number(student.creditResetOffset || 0);
 
             const studentLessons = (student.attendances || [])
               .map((a: any) => a.lesson)
@@ -641,9 +656,21 @@ const AttendanceRoster = ({
             });
             const sessionsRemaining = totalCreditSessions - sessionsConsumed;
 
+            // Consecutive absences and suspension checks (Rules 5 & 9)
+            const consecutiveAbsences = computeStudentConsecutiveAbsences({
+              lessons: studentLessons,
+              attendances: studentAtts,
+            });
+            const isSuspended = student.enrollmentStatus === "SUSPENDED";
+            const hasConsecutiveAbsenceAlert = consecutiveAbsences >= 3;
+
             let statusBubble = { text: t("unpaidDue"), color: "bg-red-500" };
             if (isSiblingWaived100) {
-              statusBubble = { text: t("waivedSibling"), color: "bg-amber-600" };
+              if (!isPayerSiblingPaid) {
+                statusBubble = { text: locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)", color: "bg-red-500" };
+              } else {
+                statusBubble = { text: t("waivedSibling"), color: "bg-amber-600" };
+              }
             } else if (isNonPayer) {
               statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
             } else if (isSchoolFeesOnly) {
@@ -734,17 +761,28 @@ const AttendanceRoster = ({
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
                         {isWaivedTuition ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-amber-100 text-amber-950 border border-amber-300/90 font-bold text-sm shadow-2xs ring-1 ring-amber-400/30">
+                          <Link
+                            href={`/list/students/${student.id}`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-amber-100 text-amber-950 border border-amber-300/90 font-bold text-sm shadow-2xs ring-1 ring-amber-400/30 hover:border-amber-400 transition-colors"
+                          >
                             <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
-                            <span>{student.name}</span>
-                          </span>
+                            <span className="hover:underline">{student.name}</span>
+                          </Link>
                         ) : isSchoolFeesOnly ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-sky-100 text-sky-950 border border-sky-300/90 font-bold text-sm shadow-2xs ring-1 ring-sky-400/30">
+                          <Link
+                            href={`/list/students/${student.id}`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-sky-100 text-sky-950 border border-sky-300/90 font-bold text-sm shadow-2xs ring-1 ring-sky-400/30 hover:border-sky-400 transition-colors"
+                          >
                             <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
-                            <span>{student.name}</span>
-                          </span>
+                            <span className="hover:underline">{student.name}</span>
+                          </Link>
                         ) : (
-                          <span className="font-bold text-gray-900 text-sm">{student.name}</span>
+                          <Link
+                            href={`/list/students/${student.id}`}
+                            className="font-bold text-gray-900 text-sm hover:text-primary hover:underline transition-colors"
+                          >
+                            {student.name}
+                          </Link>
                         )}
 
                         {/* Status Badges for Not-Normal Students */}
@@ -765,6 +803,19 @@ const AttendanceRoster = ({
                             {locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls"}
                           </Badge>
                         ) : null}
+
+                        {hasConsecutiveAbsenceAlert && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-950 border border-amber-300 text-[11px] font-bold shadow-2xs">
+                            <span>⚠️</span>
+                            <span>{locale === "ar" ? `${consecutiveAbsences} غيابات متتالية` : `${consecutiveAbsences}x Absences`}</span>
+                          </span>
+                        )}
+                        {isSuspended && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 text-rose-950 border border-rose-300 text-[11px] font-bold shadow-2xs">
+                            <span>⛔</span>
+                            <span>{locale === "ar" ? "معلق" : "Suspendu"}</span>
+                          </span>
+                        )}
 
                         <span className={`w-2 h-2 rounded-full ${statusBubble.color}`}></span>
                         {/* Inscription Fee Status Badge */}
@@ -792,7 +843,9 @@ const AttendanceRoster = ({
                         <span>•</span>
                         <span>
                           {isSiblingWaived100
-                            ? t("tuitionWaivedSibling")
+                            ? (!isPayerSiblingPaid
+                                ? (locale === "ar" ? "الأخ الدافع غير مسدد" : "Frère payeur non soldé")
+                                : t("tuitionWaivedSibling"))
                             : isNonPayer
                             ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
                             : isSchoolFeesOnly
@@ -1081,7 +1134,12 @@ const AttendanceRoster = ({
                     </div>
                     <div className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-bold text-gray-900 text-sm">{visitor.studentName}</p>
+                        <Link
+                          href={`/list/students/${visitor.studentId}`}
+                          className="font-bold text-gray-900 text-sm hover:text-primary hover:underline transition-colors"
+                        >
+                          {visitor.studentName}
+                        </Link>
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-600 text-white">
                           {t("visitorBadge")}
                         </span>

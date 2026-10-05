@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Link } from "@/i18n/navigation";
 import Image from "next/image";
 import EnrollStudentModal from "./EnrollStudentModal";
 import FormationPaymentModal from "./FormationPaymentModal";
@@ -168,14 +169,20 @@ export default function FormationRoster({
                 <div key={enr.id} className="bg-gray-50 rounded-md border">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 gap-3">
                     <div className="flex items-center gap-3 flex-grow min-w-0">
-                      <div
-                        className="w-9 h-9 rounded-full bg-primary/10 text-primary border border-primary/20 flex items-center justify-center shrink-0 font-mono text-xs font-bold tracking-tight select-none shadow-2xs"
+                      <Link
+                        href={`/list/students/${student.id}`}
+                        className="w-9 h-9 rounded-full bg-primary/10 text-primary border border-primary/20 flex items-center justify-center shrink-0 font-mono text-xs font-bold tracking-tight select-none shadow-2xs hover:border-primary transition-colors cursor-pointer"
                         title={`ID: #${student.globalNumber ?? student.id}`}
                       >
                         {idDisplay}
-                      </div>
+                      </Link>
                       <div>
-                        <p className="font-medium">{student.name}</p>
+                        <Link
+                          href={`/list/students/${student.id}`}
+                          className="font-medium text-gray-900 hover:text-primary hover:underline transition-colors block"
+                        >
+                          {student.name}
+                        </Link>
                         <div className="flex items-center gap-2 text-xs">
                           <span
                             className={`font-semibold ${

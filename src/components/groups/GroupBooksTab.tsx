@@ -2,6 +2,7 @@
 
 import React, { useState, useTransition, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { Link } from "@/i18n/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -938,9 +939,12 @@ export default function GroupBooksTab({
                         </td>
                         <td className="p-3">
                           <div className="flex flex-col">
-                            <span className="font-bold text-gray-900 text-sm">
+                            <Link
+                              href={`/list/students/${student.id}`}
+                              className="font-bold text-gray-900 text-sm hover:text-primary hover:underline transition-colors w-fit"
+                            >
                               {student.name}
-                            </span>
+                            </Link>
                             <div className="flex items-center gap-2 text-[11px] text-muted mt-0.5">
                               {student.phone ? (
                                 <span className="flex items-center gap-1">

@@ -343,7 +343,7 @@ export default function TransferredMoneySection({
                   <div className="flex flex-col">
                     <Link
                       href={`/list/students/${item.studentId}`}
-                      className="font-bold text-gray-900 hover:text-primary transition-colors flex items-center gap-1.5"
+                      className="font-bold text-gray-900 hover:text-primary hover:underline transition-colors flex items-center gap-1.5"
                     >
                       <User className="w-3.5 h-3.5 text-muted" />
                       <span>{item.studentName}</span>

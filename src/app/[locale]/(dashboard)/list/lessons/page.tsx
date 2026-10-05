@@ -37,6 +37,7 @@ type TimetableLesson = {
   teacher: Teacher | { id: string; name: string; surname: string };
   classroom: Classroom | { id: number; name: string } | null;
   forChildren?: string[];
+  level?: { id: number; name: string } | null;
 };
 
 const dayNames: Day[] = [
@@ -59,7 +60,7 @@ const LessonListPage = async (props: {
   const canManage = session.isOwnerOrAdmin;
   const t = await getTranslations("lessons");
 
-  const { search, teacherId, classId, branchId, weekOffset } = searchParams;
+  const { search, levelId, subjectId, teacherId, classId, branchId, weekOffset } = searchParams;
 
   // Calculate Saturday-to-Friday week boundaries based on weekOffset
   const offset = weekOffset ? parseInt(weekOffset, 10) : 0;
@@ -92,6 +93,8 @@ const LessonListPage = async (props: {
   } else if (!session.isOwner) {
     selectedBranchId = activeBranchId || null;
   }
+  const selectedLevelId = levelId && levelId !== "all" ? parseInt(levelId, 10) : null;
+  const selectedSubjectId = subjectId && subjectId !== "all" ? parseInt(subjectId, 10) : null;
   const selectedClassId = classId && classId !== "all" ? parseInt(classId, 10) : null;
   const selectedTeacherId = teacherId && teacherId !== "all" ? teacherId : null;
 
@@ -99,31 +102,78 @@ const LessonListPage = async (props: {
   let classes: any[] = [];
   let classrooms: any[] = [];
   let branches: any[] = [];
+  let levels: any[] = [];
+  let subjects: any[] = [];
+  let subjectSettings: any[] = [];
 
   try {
-    const rawTeachers = await prisma.teacher.findMany({
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    });
-    const rawClasses = await prisma.class.findMany({
-      select: { id: true, name: true, teacherId: true, branchId: true },
-      orderBy: { name: "asc" },
-    });
-    const rawClassrooms = await prisma.classroom.findMany({
-      select: { id: true, name: true, branchId: true },
-      orderBy: { name: "asc" },
-    });
-    const rawBranches = await prisma.branch.findMany({
-      select: { id: true, name: true },
-      orderBy: { id: "asc" },
-    });
+    const [rawTeachers, rawClasses, rawClassrooms, rawBranches, rawLevels, rawLanguages, rawSubjectSettings] =
+      await Promise.all([
+        prisma.teacher.findMany({
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        }),
+        prisma.class.findMany({
+          select: { id: true, name: true, teacherId: true, branchId: true, levelId: true, formationLevelId: true },
+          orderBy: { name: "asc" },
+        }),
+        prisma.classroom.findMany({
+          select: { id: true, name: true, branchId: true },
+          orderBy: { name: "asc" },
+        }),
+        prisma.branch.findMany({
+          select: { id: true, name: true },
+          orderBy: { id: "asc" },
+        }),
+        prisma.level.findMany({
+          select: { id: true, name: true },
+          orderBy: { id: "asc" },
+        }),
+        prisma.language.findMany({
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        }),
+        prisma.setting.findMany({
+          where: { id: { startsWith: "subject_teachers_" } },
+        }),
+      ]);
 
     teachers = Array.isArray(rawTeachers) ? rawTeachers.map((item) => ({ id: item.id, name: item.name, surname: "" })) : [];
     classes = Array.isArray(rawClasses) ? rawClasses : [];
     classrooms = Array.isArray(rawClassrooms) ? rawClassrooms : [];
     branches = Array.isArray(rawBranches) ? rawBranches : [];
+    levels = Array.isArray(rawLevels) ? rawLevels : [];
+    subjects = Array.isArray(rawLanguages) ? rawLanguages : [];
+    subjectSettings = Array.isArray(rawSubjectSettings) ? rawSubjectSettings : [];
   } catch (e) {
     console.error("Error fetching related timetable data:", e);
+  }
+
+  const langMap = new Map<number, string>(subjects.map((s) => [s.id, s.name]));
+  const teacherToSubjectsMap = new Map<string, Array<{ id: number; name: string }>>();
+  let teacherIdsForSelectedSubject: string[] = [];
+
+  for (const s of subjectSettings) {
+    const subId = parseInt(s.id.replace("subject_teachers_", ""), 10);
+    const subName = langMap.get(subId);
+    if (!subName) continue;
+    try {
+      const list = JSON.parse(s.value);
+      if (Array.isArray(list)) {
+        for (const tId of list) {
+          if (typeof tId === "string") {
+            if (!teacherToSubjectsMap.has(tId)) {
+              teacherToSubjectsMap.set(tId, []);
+            }
+            teacherToSubjectsMap.get(tId)!.push({ id: subId, name: subName });
+
+            if (selectedSubjectId === subId) {
+              teacherIdsForSelectedSubject.push(tId);
+            }
+          }
+        }
+      }
+    } catch {}
   }
 
   let lessons: TimetableLesson[] = [];
@@ -148,6 +198,37 @@ const LessonListPage = async (props: {
     if (selectedBranchId) {
       whereConditions.push(Prisma.sql`l."branchId" = ${selectedBranchId}`);
     }
+    if (selectedLevelId) {
+      whereConditions.push(Prisma.sql`c."levelId" = ${selectedLevelId}`);
+    }
+    if (selectedSubjectId) {
+      const subjectOrConditions: Prisma.Sql[] = [];
+
+      if (teacherIdsForSelectedSubject.length > 0) {
+        subjectOrConditions.push(
+          Prisma.sql`l."teacherId" IN (${Prisma.join(teacherIdsForSelectedSubject)})`
+        );
+      }
+
+      subjectOrConditions.push(
+        Prisma.sql`c."formationLevelId" IN (SELECT fl.id FROM "FormationLevel" fl WHERE fl."languageId" = ${selectedSubjectId})`
+      );
+
+      const selectedLangName = langMap.get(selectedSubjectId);
+      if (selectedLangName) {
+        subjectOrConditions.push(
+          Prisma.sql`c.name ILIKE ${'%' + selectedLangName + '%'}`
+        );
+      }
+
+      if (subjectOrConditions.length > 0) {
+        whereConditions.push(
+          Prisma.sql`(${Prisma.join(subjectOrConditions, " OR ")})`
+        );
+      } else {
+        whereConditions.push(Prisma.sql`1=0`);
+      }
+    }
 
     const whereClause =
       whereConditions.length > 0
@@ -157,9 +238,14 @@ const LessonListPage = async (props: {
     const rawLessons = await prisma.$queryRaw<any[]>`
       SELECT l.id, l."startsAt", l."endsAt", l."classId", l."teacherId", l."classroomId", l."branchId",
              l."isExtra", l."isCatchUp", l."isFree", l."extraFee",
-             c.name as "className", c."isFormation", t.name as "teacherName", cr.name as "classroomName", b.name as "branchName"
+             c.name as "className", c."isFormation", c."levelId", lvl.name as "levelName",
+             t.name as "teacherName", cr.name as "classroomName", b.name as "branchName",
+             fl."languageId" as "formationLanguageId", flLang.name as "formationLanguageName"
       FROM "Lesson" l
       LEFT JOIN "Class" c ON c.id = l."classId"
+      LEFT JOIN "Level" lvl ON lvl.id = c."levelId"
+      LEFT JOIN "FormationLevel" fl ON fl.id = c."formationLevelId"
+      LEFT JOIN "Language" flLang ON flLang.id = fl."languageId"
       LEFT JOIN "Teacher" t ON t.id = l."teacherId"
       LEFT JOIN "Classroom" cr ON cr.id = l."classroomId"
       LEFT JOIN "Branch" b ON b.id = l."branchId"
@@ -185,6 +271,14 @@ const LessonListPage = async (props: {
         weekday: "long",
         timeZone: "Africa/Algiers",
       }).format(d).toUpperCase() as Day;
+
+      const teacherSubs = r.teacherId ? teacherToSubjectsMap.get(r.teacherId) || [] : [];
+      const resolvedSubject = r.formationLanguageName
+        ? { id: r.formationLanguageId, name: r.formationLanguageName }
+        : teacherSubs.length > 0
+        ? teacherSubs[0]
+        : { id: r.classId || 1, name: r.className || t("subject") };
+
       return {
         id: r.id,
         name: r.className || t("group"),
@@ -204,17 +298,18 @@ const LessonListPage = async (props: {
         isFormation: Boolean(r.isFormation),
         isWorkshop: false,
         extraFee: r.extraFee != null ? Number(r.extraFee) : null,
-        subject: { id: r.classId || 1, name: r.className || t("subject") } as any,
+        subject: resolvedSubject,
         class: { id: r.classId, name: r.className || t("group") } as any,
         teacher: { id: r.teacherId, name: r.teacherName || t("teacher"), surname: "" } as any,
         classroom: r.classroomId
           ? ({ id: r.classroomId, name: r.classroomName || t("room") } as any)
           : null,
+        level: r.levelId ? { id: r.levelId, name: r.levelName || "" } : null,
       };
     });
 
     // Centralize Dawarat / Workshop sessions (§7.13)
-    if (!selectedClassId) {
+    if (!selectedClassId && !selectedLevelId) {
       try {
         const wsWhereConditions: Prisma.Sql[] = [
           Prisma.sql`ws."startsAt" >= ${startOfWeek} AND ws."startsAt" <= ${endOfWeek}`,
@@ -229,6 +324,17 @@ const LessonListPage = async (props: {
           if (selectedTeacherObj) {
             wsWhereConditions.push(
               Prisma.sql`w."guestTeacher" ILIKE ${'%' + selectedTeacherObj.name + '%'}`
+            );
+          } else {
+            wsWhereConditions.push(Prisma.sql`1=0`);
+          }
+        }
+
+        if (selectedSubjectId) {
+          const selectedLangName = langMap.get(selectedSubjectId);
+          if (selectedLangName) {
+            wsWhereConditions.push(
+              Prisma.sql`w.title ILIKE ${'%' + selectedLangName + '%'}`
             );
           } else {
             wsWhereConditions.push(Prisma.sql`1=0`);
@@ -388,8 +494,8 @@ const LessonListPage = async (props: {
           <div className="flex flex-wrap items-center gap-3">
             <TableSearch placeholder={t("searchPlaceholder")} />
             <TimetableFilters
-              teachers={teachers}
-              classes={classes}
+              levels={levels}
+              subjects={subjects}
               branches={branches}
               defaultBranchId={session.isOwner ? (selectedBranchId ?? undefined) : (activeBranchId || undefined)}
               currentWeekRange={{

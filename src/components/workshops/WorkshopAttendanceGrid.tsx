@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { Link } from "@/i18n/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -23,7 +24,7 @@ export type WorkshopSessionItem = {
 
 export type WorkshopParticipantItem = {
   id: number;
-  studentId: string;
+  studentId?: string | null;
   chairNumber?: number | null;
   gender?: string;
   name: string;
@@ -184,7 +185,7 @@ export default function WorkshopAttendanceGrid({
             {filteredParticipants.map((participant, pIndex) => {
               const rowBg = pIndex % 2 === 0 ? "bg-surface" : "bg-surface-muted/30";
               const isGirl = participant.gender === "FEMALE";
-              const studentRecords = attendanceMap.get(participant.studentId);
+              const studentRecords = participant.studentId ? attendanceMap.get(participant.studentId) : undefined;
 
               // Calculate attended count for this student
               let attendedCount = 0;
@@ -225,9 +226,18 @@ export default function WorkshopAttendanceGrid({
                       )}
 
                       <div className="truncate">
-                        <p className="font-bold text-gray-900 text-xs sm:text-sm truncate">
-                          {participant.name}
-                        </p>
+                        {participant.studentId ? (
+                          <Link
+                            href={`/list/students/${participant.studentId}`}
+                            className="font-bold text-gray-900 text-xs sm:text-sm truncate hover:text-primary hover:underline transition-colors block"
+                          >
+                            {participant.name}
+                          </Link>
+                        ) : (
+                          <p className="font-bold text-gray-900 text-xs sm:text-sm truncate">
+                            {participant.name}
+                          </p>
+                        )}
                         {participant.phone && (
                           <p className="text-[11px] text-muted font-mono" dir="ltr">
                             {participant.phone}
@@ -326,7 +336,7 @@ export default function WorkshopAttendanceGrid({
               sessionId={selectedSessionForModal.id}
               participants={participants.map((p) => ({
                 id: p.id,
-                studentId: p.studentId,
+                studentId: p.studentId || "",
                 gender: p.gender || "MALE",
                 chairNumber: p.chairNumber ?? null,
                 name: p.name,

@@ -3,12 +3,14 @@ import Pagination from "@/components/Pagination";
 import prisma from "@/lib/prisma";
 import { ITEM_PER_PAGE } from "@/lib/settings";
 import Image from "next/image";
+import { Link } from "@/i18n/navigation";
 import { getAuthRole } from "@/lib/auth";
 import PageHeader from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/Card";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
+import { splitFullName } from "@/lib/utils";
 
 type ParentList = {
   id: string;
@@ -66,11 +68,6 @@ const ParentListPage = async (
       className: "hidden lg:table-cell",
     },
     {
-      header: t("address"),
-      accessor: "address",
-      className: "hidden lg:table-cell",
-    },
-    {
       header: t("actions"),
       accessor: "action",
       align: "end",
@@ -84,17 +81,16 @@ const ParentListPage = async (
     >
       <td className="flex items-center gap-3.5 p-3.5">
         <Image
-          src={item.img || "/noAvatar.png"}
+          src={item.img || "/parent.png"}
           alt=""
           width={40}
           height={40}
-          className="md:hidden xl:block w-10 h-10 rounded-full object-cover border border-border shrink-0"
+          className="md:hidden xl:block w-10 h-10 rounded-full object-cover border border-border shrink-0 p-1 bg-surface-subtle"
         />
         <div className="flex flex-col min-w-0">
           <h4 className="text-table-body font-semibold text-gray-900 truncate">
-            {item.surname ? `${item.surname} ${item.name}` : item.name}
+            {item.name}
           </h4>
-          <span className="text-form-helper text-muted truncate">{item?.email}</span>
         </div>
       </td>
       <td className="hidden md:table-cell text-muted-dark">
@@ -102,20 +98,24 @@ const ParentListPage = async (
           <div className="flex flex-wrap items-center gap-1.5">
             {item.students.map((student) => {
               const isPayer = student.id === item.payerStudentId;
+              const displayName =
+                (student as any).fullName ||
+                (student.surname ? `${student.surname} ${student.name}` : student.name);
               return (
-                <Badge
-                  key={student.id}
-                  variant={isPayer ? "primary" : "secondary"}
-                  size="sm"
-                  className={isPayer ? "font-bold" : ""}
-                >
-                  {student.surname ? `${student.surname} ${student.name}` : student.name}
-                  {isPayer && (
-                    <span className="ms-1 text-[10px] opacity-80">
-                      ({locale === "ar" ? "الدافع" : "Payeur"})
-                    </span>
-                  )}
-                </Badge>
+                <Link key={student.id} href={`/list/students/${student.id}`}>
+                  <Badge
+                    variant={isPayer ? "primary" : "secondary"}
+                    size="sm"
+                    className={`cursor-pointer hover:opacity-80 transition-opacity ${isPayer ? "font-bold" : ""}`}
+                  >
+                    {displayName}
+                    {isPayer && (
+                      <span className="ms-1 text-[10px] opacity-80">
+                        ({locale === "ar" ? "الدافع" : "Payeur"})
+                      </span>
+                    )}
+                  </Badge>
+                </Link>
               );
             })}
             {item.discountPercentage != null && (
@@ -129,7 +129,6 @@ const ParentListPage = async (
         )}
       </td>
       <td className="hidden md:table-cell text-muted-dark">{item.phone}</td>
-      <td className="hidden md:table-cell text-muted-dark">{item.address}</td>
       <td className="text-end pe-3.5">
         <div className="flex items-center justify-end gap-2">
           <FormContainer table="parent" type="update" data={item} />
@@ -190,7 +189,10 @@ const ParentListPage = async (
         address: "-",
         payerStudentId: f.payerStudentId,
         discountPercentage: Number(f.discountPercentage ?? 50),
-        students: f.students.map((s) => ({ id: s.id, name: s.name, surname: "" })),
+        students: f.students.map((s) => {
+          const { surname, name: firstName } = splitFullName(s.name);
+          return { id: s.id, name: firstName, surname, fullName: s.name };
+        }),
       };
     });
   } catch {

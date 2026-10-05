@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { Link } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -14,6 +15,8 @@ import {
   Calendar,
   AlertCircle,
   X,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 export interface StudentToWatchItem {
@@ -39,10 +42,13 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
     "expiring_only"
   );
   const [searchTerm, setSearchTerm] = useState("");
+  const [isExpanded, setIsExpanded] = useState(false);
   const [paymentModal, setPaymentModal] = useState<{
     isOpen: boolean;
     item: StudentToWatchItem | null;
   }>({ isOpen: false, item: null });
+
+  const INITIAL_VISIBLE_COUNT = 5;
 
   const t = useTranslations("dashboard.studentsToWatch");
 
@@ -56,6 +62,10 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
       s.className.toLowerCase().includes(searchTerm.toLowerCase()) ||
       s.teacherName.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const displayed = isExpanded
+    ? filtered
+    : filtered.slice(0, INITIAL_VISIBLE_COUNT);
 
   return (
     <>
@@ -78,7 +88,10 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center bg-surface-subtle p-0.5 rounded-lg border border-border/80 text-xs">
               <button
-                onClick={() => setFilterMode("expiring_only")}
+                onClick={() => {
+                  setFilterMode("expiring_only");
+                  setIsExpanded(false);
+                }}
                 className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
                   filterMode === "expiring_only"
                     ? "bg-surface text-amber-700 shadow-xs font-semibold"
@@ -88,7 +101,10 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
                 {t("filterExpiring", { count: criticalStudents.length })}
               </button>
               <button
-                onClick={() => setFilterMode("all")}
+                onClick={() => {
+                  setFilterMode("all");
+                  setIsExpanded(false);
+                }}
                 className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
                   filterMode === "all"
                     ? "bg-surface text-primary shadow-xs font-semibold"
@@ -110,7 +126,10 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
                 type="text"
                 placeholder={t("studentName")}
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setIsExpanded(false);
+                }}
                 className="w-full pl-8.5 pr-3 py-1.5 text-xs rounded-lg border border-border bg-surface-subtle/50 focus:bg-surface focus:outline-hidden focus:border-primary transition-all"
               />
             </div>
@@ -124,8 +143,9 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
               </p>
             </div>
           ) : (
-            <div className="space-y-2.5">
-              {filtered.map((item) => {
+            <>
+              <div className="space-y-2.5">
+              {displayed.map((item) => {
                 const isLastSession = item.remainingSessions === 1;
                 const isUnpaid = item.remainingSessions <= 0;
 
@@ -143,9 +163,12 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
                     {/* Left: Student & Group Info */}
                     <div className="flex flex-col gap-1 min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-bold text-gray-900">
+                        <Link
+                          href={`/list/students/${item.studentId}`}
+                          className="text-sm font-bold text-gray-900 hover:text-primary hover:underline transition-colors"
+                        >
                           {item.studentName}
-                        </span>
+                        </Link>
                         {item.phone && (
                           <span className="text-xs text-muted font-mono">
                             ({item.phone})
@@ -211,7 +234,33 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
                 );
               })}
             </div>
-          )}
+
+            {/* See more / See less button */}
+            {filtered.length > INITIAL_VISIBLE_COUNT && (
+              <div className="pt-1 flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-semibold text-primary hover:bg-primary-soft/30 border-dashed cursor-pointer"
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  leftIcon={
+                    isExpanded ? (
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    )
+                  }
+                >
+                  {isExpanded
+                    ? t("seeLess")
+                    : t("seeMore", {
+                        count: filtered.length - INITIAL_VISIBLE_COUNT,
+                      })}
+                </Button>
+              </div>
+            )}
+          </>
+        )}
         </CardContent>
       </Card>
 

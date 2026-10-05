@@ -4,14 +4,12 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import { useTranslations, useLocale } from "next-intl";
 
-// Define simpler types that match the actual data being passed
-type TeacherForFilter = {
-  id: string;
+type LevelForFilter = {
+  id: number;
   name: string;
-  surname: string;
 };
 
-type ClassForFilter = {
+type SubjectForFilter = {
   id: number;
   name: string;
 };
@@ -21,15 +19,28 @@ type BranchForFilter = {
   name: string;
 };
 
+type TeacherForFilter = {
+  id: string;
+  name: string;
+  surname?: string;
+};
+
+type ClassForFilter = {
+  id: number;
+  name: string;
+};
+
 const TimetableFilters = ({
-  teachers = [],
-  classes = [],
+  levels = [],
+  subjects = [],
   branches = [],
   defaultBranchId,
   currentWeekRange,
+  teachers = [],
+  classes = [],
 }: {
-  teachers?: TeacherForFilter[];
-  classes?: ClassForFilter[];
+  levels?: LevelForFilter[];
+  subjects?: SubjectForFilter[];
   branches?: BranchForFilter[];
   defaultBranchId?: number;
   currentWeekRange?: {
@@ -37,6 +48,8 @@ const TimetableFilters = ({
     end: Date;
     offset: number;
   };
+  teachers?: TeacherForFilter[];
+  classes?: ClassForFilter[];
 }) => {
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -44,27 +57,31 @@ const TimetableFilters = ({
   const t = useTranslations("lessons");
   const locale = useLocale();
 
-  const safeTeachers = Array.isArray(teachers) ? teachers : [];
-  const safeClasses = Array.isArray(classes) ? classes : [];
+  const safeLevels = Array.isArray(levels) ? levels : [];
+  const safeSubjects = Array.isArray(subjects) ? subjects : [];
   const safeBranches = Array.isArray(branches) ? branches : [];
 
-  // --- START: State for the custom teacher dropdown ---
-  const [isTeacherDropdownOpen, setIsTeacherDropdownOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const teacherDropdownRef = useRef<HTMLDivElement>(null);
-  // --- END: State for the custom teacher dropdown ---
+  // --- START: State for the custom level dropdown ---
+  const [isLevelDropdownOpen, setIsLevelDropdownOpen] = useState(false);
+  const [levelSearchTerm, setLevelSearchTerm] = useState("");
+  const levelDropdownRef = useRef<HTMLDivElement>(null);
+  // --- END: State for the custom level dropdown ---
 
-  // --- START: State for the custom group dropdown ---
-  const [isClassDropdownOpen, setIsClassDropdownOpen] = useState(false);
-  const [classSearchTerm, setClassSearchTerm] = useState("");
-  const classDropdownRef = useRef<HTMLDivElement>(null);
-  // --- END: State for the custom group dropdown ---
+  // --- START: State for the custom subject dropdown ---
+  const [isSubjectDropdownOpen, setIsSubjectDropdownOpen] = useState(false);
+  const [subjectSearchTerm, setSubjectSearchTerm] = useState("");
+  const subjectDropdownRef = useRef<HTMLDivElement>(null);
+  // --- END: State for the custom subject dropdown ---
 
   const handleFilterChange = (
     value: string,
     filterName: string
   ) => {
     const params = new URLSearchParams(searchParams);
+    // Remove obsolete filter params if present
+    params.delete("teacherId");
+    params.delete("classId");
+
     if (filterName === "branchId") {
       if (value) {
         params.set("branchId", value);
@@ -97,17 +114,16 @@ const TimetableFilters = ({
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
-        teacherDropdownRef.current &&
-        !teacherDropdownRef.current.contains(event.target as Node)
+        levelDropdownRef.current &&
+        !levelDropdownRef.current.contains(event.target as Node)
       ) {
-        setIsTeacherDropdownOpen(false);
+        setIsLevelDropdownOpen(false);
       }
       if (
-        classDropdownRef.current &&
-        !classDropdownRef.current.contains(event.target as Node)
+        subjectDropdownRef.current &&
+        !subjectDropdownRef.current.contains(event.target as Node)
       ) {
-        setIsClassDropdownOpen(false);
-        setClassSearchTerm("");
+        setIsSubjectDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -116,23 +132,19 @@ const TimetableFilters = ({
     };
   }, []);
 
-  // Filter teachers based on the search term
-  const filteredTeachers = safeTeachers.filter((teacher) =>
-    `${teacher.surname ? `${teacher.surname} ${teacher.name}` : teacher.name}`
-      .toLowerCase()
-      .includes(searchTerm.toLowerCase())
+  // Filter levels based on the search term
+  const filteredLevels = safeLevels.filter((lvl) =>
+    lvl.name.toLowerCase().includes(levelSearchTerm.toLowerCase())
   );
-  
-  const selectedTeacherId = searchParams.get("teacherId");
-  const selectedTeacher = safeTeachers.find(t => t.id === selectedTeacherId);
+  const selectedLevelId = searchParams.get("levelId");
+  const selectedLevel = safeLevels.find((l) => l.id.toString() === selectedLevelId);
 
-  // Filter groups based on the class search term
-  const filteredClasses = safeClasses.filter((c) =>
-    c.name.toLowerCase().includes(classSearchTerm.toLowerCase())
+  // Filter subjects based on the search term
+  const filteredSubjects = safeSubjects.filter((sub) =>
+    sub.name.toLowerCase().includes(subjectSearchTerm.toLowerCase())
   );
-
-  const selectedClassId = searchParams.get("classId");
-  const selectedClass = safeClasses.find((c) => c.id.toString() === selectedClassId);
+  const selectedSubjectId = searchParams.get("subjectId");
+  const selectedSubject = safeSubjects.find((s) => s.id.toString() === selectedSubjectId);
 
   const selectedBranchParam = searchParams.get("branchId");
   const currentBranchValue =
@@ -151,7 +163,7 @@ const TimetableFilters = ({
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      {/* --- Branch Filter (Requirement 4) --- */}
+      {/* --- Branch Filter --- */}
       {safeBranches.length > 0 && (
         <div className="flex flex-col gap-1">
           <select
@@ -170,85 +182,20 @@ const TimetableFilters = ({
         </div>
       )}
 
-      {/* --- Custom Searchable Dropdown for Teachers --- */}
-      <div className="relative" ref={teacherDropdownRef}>
-        <button
-          type="button"
-          onClick={() => setIsTeacherDropdownOpen((prev) => !prev)}
-          className="ring-[1.5px] ring-gray-300 px-3 py-2 rounded-full text-sm w-48 flex items-center justify-between bg-white text-gray-800"
-        >
-          <span className="truncate">
-            {selectedTeacher ? (selectedTeacher.surname ? `${selectedTeacher.surname} ${selectedTeacher.name}` : selectedTeacher.name) : t("filterByTeacher")}
-          </span>
-          <svg
-            className={`w-4 h-4 transition-transform shrink-0 ${
-              isTeacherDropdownOpen ? "transform rotate-180" : ""
-            }`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M19 9l-7 7-7-7"
-            ></path>
-          </svg>
-        </button>
-        {isTeacherDropdownOpen && (
-          <div className="absolute top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-30">
-            <div className="p-2 border-b border-gray-200">
-              <input
-                type="text"
-                placeholder={t("searchTeacherPlaceholder")}
-                className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <ul className="max-h-48 overflow-y-auto">
-              <li
-                onClick={() => {
-                  handleFilterChange("all", "teacherId");
-                  setIsTeacherDropdownOpen(false);
-                }}
-                className="p-2 hover:bg-gray-100 cursor-pointer text-sm font-medium"
-              >
-                {t("allTeachers")}
-              </li>
-              {filteredTeachers.map((teacher) => (
-                <li
-                  key={teacher.id}
-                  onClick={() => {
-                    handleFilterChange(teacher.id, "teacherId");
-                    setIsTeacherDropdownOpen(false);
-                  }}
-                  className="p-2 hover:bg-gray-100 cursor-pointer text-sm"
-                >
-                  {teacher.surname ? `${teacher.surname} ${teacher.name}` : teacher.name}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-
-      {/* --- Custom Searchable Dropdown for Groups --- */}
-      {safeClasses.length > 0 && (
-        <div className="relative" ref={classDropdownRef}>
+      {/* --- Custom Searchable Dropdown for Levels --- */}
+      {safeLevels.length > 0 && (
+        <div className="relative" ref={levelDropdownRef}>
           <button
             type="button"
-            onClick={() => setIsClassDropdownOpen((prev) => !prev)}
+            onClick={() => setIsLevelDropdownOpen((prev) => !prev)}
             className="ring-[1.5px] ring-gray-300 px-3 py-2 rounded-full text-sm w-48 flex items-center justify-between bg-white text-gray-800"
           >
             <span className="truncate">
-              {selectedClass ? selectedClass.name : t("filterByGroup")}
+              {selectedLevel ? selectedLevel.name : t("filterByLevel")}
             </span>
             <svg
               className={`w-4 h-4 transition-transform shrink-0 ${
-                isClassDropdownOpen ? "transform rotate-180" : ""
+                isLevelDropdownOpen ? "transform rotate-180" : ""
               }`}
               fill="none"
               stroke="currentColor"
@@ -263,43 +210,51 @@ const TimetableFilters = ({
               ></path>
             </svg>
           </button>
-          {isClassDropdownOpen && (
+          {isLevelDropdownOpen && (
             <div className="absolute top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-30">
               <div className="p-2 border-b border-gray-200">
                 <input
                   type="text"
-                  placeholder={t("searchGroupPlaceholder")}
+                  placeholder={t("searchLevelPlaceholder")}
                   className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full"
-                  value={classSearchTerm}
-                  onChange={(e) => setClassSearchTerm(e.target.value)}
+                  value={levelSearchTerm}
+                  onChange={(e) => setLevelSearchTerm(e.target.value)}
                   autoFocus
                 />
               </div>
               <ul className="max-h-48 overflow-y-auto">
                 <li
                   onClick={() => {
-                    handleFilterChange("all", "classId");
-                    setIsClassDropdownOpen(false);
+                    handleFilterChange("all", "levelId");
+                    setIsLevelDropdownOpen(false);
+                    setLevelSearchTerm("");
                   }}
-                  className="p-2 hover:bg-gray-100 cursor-pointer text-sm font-medium"
+                  className={`p-2 hover:bg-gray-100 cursor-pointer text-sm font-medium ${
+                    !selectedLevelId ? "bg-blue-50 text-blue-700" : ""
+                  }`}
                 >
-                  {t("allClasses")}
+                  {t("allLevels")}
                 </li>
-                {filteredClasses.map((cls) => (
+                {filteredLevels.map((lvl) => (
                   <li
-                    key={cls.id}
+                    key={lvl.id}
                     onClick={() => {
-                      handleFilterChange(cls.id.toString(), "classId");
-                      setIsClassDropdownOpen(false);
+                      handleFilterChange(lvl.id.toString(), "levelId");
+                      setIsLevelDropdownOpen(false);
+                      setLevelSearchTerm("");
                     }}
-                    className="p-2 hover:bg-gray-100 cursor-pointer text-sm"
+                    className={`p-2 hover:bg-gray-100 cursor-pointer text-sm ${
+                      selectedLevelId === lvl.id.toString()
+                        ? "bg-blue-50 text-blue-700 font-semibold"
+                        : ""
+                    }`}
                   >
-                    {cls.name}
+                    {lvl.name}
                   </li>
                 ))}
-                {filteredClasses.length === 0 && (
+                {filteredLevels.length === 0 && (
                   <li className="p-2 text-center text-xs text-gray-400">
-                    {t("noGroupsFound")}
+                    {t("noLevelsFound")}
                   </li>
                 )}
               </ul>
@@ -308,8 +263,88 @@ const TimetableFilters = ({
         </div>
       )}
 
+      {/* --- Custom Searchable Dropdown for Subjects --- */}
+      {safeSubjects.length > 0 && (
+        <div className="relative" ref={subjectDropdownRef}>
+          <button
+            type="button"
+            onClick={() => setIsSubjectDropdownOpen((prev) => !prev)}
+            className="ring-[1.5px] ring-gray-300 px-3 py-2 rounded-full text-sm w-48 flex items-center justify-between bg-white text-gray-800"
+          >
+            <span className="truncate">
+              {selectedSubject ? selectedSubject.name : t("filterBySubject")}
+            </span>
+            <svg
+              className={`w-4 h-4 transition-transform shrink-0 ${
+                isSubjectDropdownOpen ? "transform rotate-180" : ""
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M19 9l-7 7-7-7"
+              ></path>
+            </svg>
+          </button>
+          {isSubjectDropdownOpen && (
+            <div className="absolute top-full mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg z-30">
+              <div className="p-2 border-b border-gray-200">
+                <input
+                  type="text"
+                  placeholder={t("searchSubjectPlaceholder")}
+                  className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full"
+                  value={subjectSearchTerm}
+                  onChange={(e) => setSubjectSearchTerm(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <ul className="max-h-48 overflow-y-auto">
+                <li
+                  onClick={() => {
+                    handleFilterChange("all", "subjectId");
+                    setIsSubjectDropdownOpen(false);
+                    setSubjectSearchTerm("");
+                  }}
+                  className={`p-2 hover:bg-gray-100 cursor-pointer text-sm font-medium ${
+                    !selectedSubjectId ? "bg-blue-50 text-blue-700" : ""
+                  }`}
+                >
+                  {t("allSubjects")}
+                </li>
+                {filteredSubjects.map((sub) => (
+                  <li
+                    key={sub.id}
+                    onClick={() => {
+                      handleFilterChange(sub.id.toString(), "subjectId");
+                      setIsSubjectDropdownOpen(false);
+                      setSubjectSearchTerm("");
+                    }}
+                    className={`p-2 hover:bg-gray-100 cursor-pointer text-sm ${
+                      selectedSubjectId === sub.id.toString()
+                        ? "bg-blue-50 text-blue-700 font-semibold"
+                        : ""
+                    }`}
+                  >
+                    {sub.name}
+                  </li>
+                ))}
+                {filteredSubjects.length === 0 && (
+                  <li className="p-2 text-center text-xs text-gray-400">
+                    {t("noSubjectsFound")}
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* --- Week Navigator Controls (Requirement 3) --- */}
+      {/* --- Week Navigator Controls --- */}
       {currentWeekRange && (
         <div className="flex items-center gap-1.5 bg-gray-100 p-1 rounded-full border border-gray-200 text-xs">
           <button
