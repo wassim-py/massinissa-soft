@@ -6,7 +6,12 @@ import Link from "next/link";
 import { Voucher, VoucherEdit, Refund } from "@prisma/client";
 import PaymentForm from "./forms/PaymentForm";
 import PrintTicketButton from "./PrintTicketButton";
-import { formatVoucherDisplay } from "@/lib/voucherUtils";
+import {
+  formatVoucherDisplay,
+  formatPaymentDate,
+  formatPaymentTime,
+  formatPaymentDateTime,
+} from "@/lib/voucherUtils";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
 import { computeStudentSessionFee, computeStudentConsumedSessions } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
@@ -284,7 +289,13 @@ export default function StudentPaymentDetails({
       combinedItems.push({ kind: "transfer", date: t.transferredAt, transfer: t });
     });
   }
-  combinedItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  combinedItems.sort((a, b) => {
+    const diff = new Date(b.date).getTime() - new Date(a.date).getTime();
+    if (diff !== 0) return diff;
+    const aId = a.kind === "voucher" ? a.voucher.id : a.transfer.id;
+    const bId = b.kind === "voucher" ? b.voucher.id : b.transfer.id;
+    return bId - aId;
+  });
 
   const displayedHistoryItems = isHistoryExpanded
     ? combinedItems
@@ -294,7 +305,7 @@ export default function StudentPaymentDetails({
   const allClassMetrics = allEnrollments.map((enr) => {
     const c = enr.class;
     const classVouchers = allVouchers.filter((v) => v.classId === c.id || (v.class && v.class.id === c.id));
-    const activeClassVouchers = classVouchers.filter((v) => !v.isVoided);
+    const activeClassVouchers = classVouchers.filter((v) => !v.isVoided && !v.isRefund);
 
     const inscVouchers = activeClassVouchers.filter((v) => v.paymentType === "INSCRIPTION");
     const totalInscPaid = inscVouchers.reduce((sum, v) => sum + Number(v.amount || 0), 0);
@@ -1043,8 +1054,14 @@ export default function StudentPaymentDetails({
                             </td>
 
                             {/* Date */}
-                            <td className="p-3 text-muted font-mono text-start" dir="ltr">
-                              {new Date(trf.transferredAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                            <td className="p-3 text-muted font-mono text-start whitespace-nowrap" dir="ltr">
+                              <div>{formatPaymentDate(trf.transferredAt)}</div>
+                              {(() => {
+                                const time = formatPaymentTime(trf.transferredAt);
+                                return time && time !== "00:00" && time !== "12:00" ? (
+                                  <div className="text-[10px] text-muted">{time}</div>
+                                ) : null;
+                              })()}
                             </td>
 
                             {/* Sessions & Amount */}
@@ -1083,6 +1100,7 @@ export default function StudentPaymentDetails({
                       }
 
                       const v = item.voucher;
+                      const isRefundVoucher = Boolean(v.isRefund);
                       const totalRefunded = v.refunds?.reduce((sum, r) => sum + Number(r.amount), 0) || 0;
                       const remainingBalance = Number(v.remainingBalance ?? (Number(v.amount) - totalRefunded));
                       const isVoidedOrFullyRefunded = v.isVoided || remainingBalance <= 0;
@@ -1097,7 +1115,7 @@ export default function StudentPaymentDetails({
                       let maxRefundable = 0;
                       let unconsumedSessions: number | undefined = undefined;
 
-                      if (targetClassId && classMetric) {
+                      if (!isRefundVoucher && targetClassId && classMetric) {
                         const isMostRecentCycle = Boolean(
                           classMetric.mostRecentActiveCycle && classMetric.mostRecentActiveCycle.id === v.id
                         );
@@ -1112,7 +1130,7 @@ export default function StudentPaymentDetails({
                           !isVoidedOrFullyRefunded &&
                           remainingBalance > 0 &&
                           maxRefundable > 0;
-                      } else if (!targetClassId) {
+                      } else if (!isRefundVoucher && !targetClassId) {
                         // Non-class voucher (e.g. workshop / formation)
                         maxRefundable = remainingBalance;
                         canRefund = !isVoidedOrFullyRefunded && remainingBalance > 0 && v.paymentType !== "INSCRIPTION";
@@ -1122,12 +1140,23 @@ export default function StudentPaymentDetails({
                         <tr
                           key={v.id}
                           className={`hover:bg-surface-subtle/80 transition-colors ${
-                            isVoidedOrFullyRefunded ? "bg-red-50/30 line-through text-muted" : ""
+                            isRefundVoucher
+                              ? "bg-red-50/40"
+                              : isVoidedOrFullyRefunded
+                              ? "bg-red-50/30 line-through text-muted"
+                              : ""
                           }`}
                         >
                           {/* Formatted Number strictly per specification */}
                           <td className="p-3 font-mono font-bold text-gray-900 text-start" dir="ltr">
-                            {formattedLabel}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span>{formattedLabel}</span>
+                              {isRefundVoucher && (
+                                <Badge variant="danger" size="sm">
+                                  {locale === "ar" ? "استرداد" : "Remboursement"}
+                                </Badge>
+                              )}
+                            </div>
                           </td>
 
                           {/* Class Name */}
@@ -1137,24 +1166,34 @@ export default function StudentPaymentDetails({
 
                           {/* Payment Type */}
                           <td className="p-3 text-start">
-                            <Badge variant="neutral" size="sm">
+                            <Badge variant={isRefundVoucher ? "danger" : "neutral"} size="sm">
                               {getPaymentTypeLabel(v.paymentType)}
                             </Badge>
                           </td>
 
                           {/* Date */}
-                          <td className="p-3 text-muted font-mono text-start" dir="ltr">
-                            {new Date(v.issuedAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                          <td className="p-3 text-muted font-mono text-start whitespace-nowrap" dir="ltr">
+                            <div>{formatPaymentDate(v.issuedAt)}</div>
+                            {(() => {
+                              const time = formatPaymentTime(v.issuedAt);
+                              return time && time !== "00:00" && time !== "12:00" ? (
+                                <div className="text-[10px] text-muted">{time}</div>
+                              ) : null;
+                            })()}
                           </td>
 
                           {/* Amount */}
-                          <td className="p-3 font-mono font-bold text-end text-gray-900">
-                            {Number(v.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
+                          <td className={`p-3 font-mono font-bold text-end ${isRefundVoucher ? "text-danger" : "text-gray-900"}`}>
+                            {isRefundVoucher ? "-" : ""}{Number(v.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
                           </td>
 
                           {/* Status */}
                           <td className="p-3 text-center">
-                            {v.isVoided ? (
+                            {isRefundVoucher ? (
+                              <Badge variant="danger" size="sm">
+                                {locale === "ar" ? "وصل استرداد" : "Remboursement"}
+                              </Badge>
+                            ) : v.isVoided ? (
                               <Badge variant="danger" size="sm">
                                 {t("statusVoided")}
                               </Badge>
@@ -1177,7 +1216,7 @@ export default function StudentPaymentDetails({
                           <td className="p-3 text-end">
                             <div className="flex items-center justify-end gap-1.5">
                               {/* Edit Voucher button */}
-                              {!v.isVoided && remainingBalance > 0 && (
+                              {!isRefundVoucher && !v.isVoided && remainingBalance > 0 && (
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -1448,8 +1487,8 @@ export default function StudentPaymentDetails({
 
                     <div className="flex justify-between items-center py-1">
                       <span className="text-muted">{locale === "ar" ? "تاريخ ووقت التحويل :" : "Date et heure du transfert :"}</span>
-                      <span className="font-mono text-gray-800">
-                        {new Date(auditModal.transfer.transferredAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                      <span className="font-mono text-gray-800" dir="ltr">
+                        {formatPaymentDateTime(auditModal.transfer.transferredAt)}
                       </span>
                     </div>
                   </div>
@@ -1484,7 +1523,7 @@ export default function StudentPaymentDetails({
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted">{t("modalAuditIssuedAt")}</span>
-                      <span className="font-mono">{new Date(auditModal.voucher.issuedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}</span>
+                      <span className="font-mono" dir="ltr">{formatPaymentDateTime(auditModal.voucher.issuedAt)}</span>
                     </div>
                   </div>
 
@@ -1504,7 +1543,7 @@ export default function StudentPaymentDetails({
                           <div className="text-muted text-[10px] mt-0.5">
                             {t("modalAuditEditedBy", {
                               user: ed.editedBy,
-                              date: new Date(ed.editedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
+                              date: formatPaymentDateTime(ed.editedAt),
                             })}
                           </div>
                           {ed.reason && <p className="text-gray-600 italic mt-0.5">{t("modalAuditEditReason", { reason: ed.reason })}</p>}
@@ -1521,7 +1560,7 @@ export default function StudentPaymentDetails({
                         <div key={rf.id} className="bg-red-50 p-2.5 rounded border border-red-200">
                           <div className="flex justify-between font-bold text-red-700">
                             <span>{t("modalAuditRefundItem", { amount: Number(rf.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ") })}</span>
-                            <span className="text-muted text-[10px] font-normal">{new Date(rf.refundedAt).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}</span>
+                            <span className="text-muted text-[10px] font-normal" dir="ltr">{formatPaymentDateTime(rf.refundedAt)}</span>
                           </div>
                           <div className="mt-1 text-gray-700">{t("modalAuditRefundReason", { reason: rf.reason })}</div>
                           <div className="text-[10px] text-muted mt-0.5">{t("modalAuditRefundBy", { user: rf.refundedBy })}</div>

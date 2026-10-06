@@ -17,6 +17,8 @@ export interface VoucherDisplayData {
   number: number | string;
   issuedAt?: Date | string | null;
   paymentType?: string;
+  isRefund?: boolean | null;
+  refundForVoucherId?: number | null;
   workshopId?: number | null;
   issuingBranchId?: number | null;
   targetBranchId?: number | null;
@@ -55,17 +57,71 @@ const BRANCH_NAME_MAP: Record<number, string> = {
 };
 
 /**
- * Formats a date into (DD/MM/YYYY) format.
+ * Formats a payment date strictly as DD/MM/YYYY in the school's Africa/Algiers timezone.
+ * Returns pure ASCII digits without bidirectional marks so it displays correctly in any locale/direction.
+ */
+export function formatPaymentDate(dateInput?: Date | string | null): string {
+  if (!dateInput) return "01/01/2026";
+  const d = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
+  if (isNaN(d.getTime())) return "01/01/2026";
+
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Algiers",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).formatToParts(d);
+    const day = parts.find((p) => p.type === "day")?.value || String(d.getDate()).padStart(2, "0");
+    const month = parts.find((p) => p.type === "month")?.value || String(d.getMonth() + 1).padStart(2, "0");
+    const year = parts.find((p) => p.type === "year")?.value || String(d.getFullYear());
+    return `${day}/${month}/${year}`;
+  } catch {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const year = d.getFullYear();
+    return `${day}/${month}/${year}`;
+  }
+}
+
+/**
+ * Formats a payment time strictly as HH:mm in the school's Africa/Algiers timezone.
+ */
+export function formatPaymentTime(dateInput?: Date | string | null): string {
+  if (!dateInput) return "";
+  const d = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
+  if (isNaN(d.getTime())) return "";
+
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Algiers",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(d);
+  } catch {
+    const hours = String(d.getHours()).padStart(2, "0");
+    const minutes = String(d.getMinutes()).padStart(2, "0");
+    return `${hours}:${minutes}`;
+  }
+}
+
+/**
+ * Formats date and time strictly as "DD/MM/YYYY HH:mm" in the school's Africa/Algiers timezone.
+ */
+export function formatPaymentDateTime(dateInput?: Date | string | null): string {
+  if (!dateInput) return "01/01/2026 00:00";
+  const dateStr = formatPaymentDate(dateInput);
+  const timeStr = formatPaymentTime(dateInput);
+  return timeStr ? `${dateStr} ${timeStr}` : dateStr;
+}
+
+/**
+ * Formats a date into (DD/MM/YYYY) format in the school's Africa/Algiers timezone.
  */
 export function formatVoucherDate(dateInput?: Date | string | null): string {
-  if (!dateInput) return "(01/01/2026)";
-  const d = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
-  if (isNaN(d.getTime())) return "(01/01/2026)";
-
-  const day = String(d.getDate()).padStart(2, "0");
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const year = d.getFullYear();
-  return `(${day}/${month}/${year})`;
+  const formatted = formatPaymentDate(dateInput);
+  return `(${formatted})`;
 }
 
 /**
@@ -165,6 +221,7 @@ export function formatVoucherDisplay(
     paymentType?: string;
     isWorkshop?: boolean;
     isFormation?: boolean;
+    isRefund?: boolean;
   }
 ): string {
   if (!voucher) return "BON 0 (01/01/2026)";
@@ -172,6 +229,12 @@ export function formatVoucherDisplay(
   const branch = resolvePaymentBranch(voucher, fallbackContext?.branchName);
   const dateStr = formatVoucherDate(voucher.issuedAt);
   const num = voucher.number;
+
+  const isRefund = Boolean(
+    voucher.isRefund ||
+    (voucher as any).status === "REFUND" ||
+    fallbackContext?.isRefund
+  );
 
   const isDawarat =
     voucher.paymentType === "WORKSHOP" ||
@@ -195,5 +258,6 @@ export function formatVoucherDisplay(
   }
 
   const segmentPart = middleSegment ? ` ${middleSegment}` : "";
-  return `${branch}${segmentPart} BON ${num} ${dateStr}`;
+  const bonKeyword = isRefund ? "BON REMBOURSEMENT" : "BON";
+  return `${branch}${segmentPart} ${bonKeyword} ${num} ${dateStr}`;
 }

@@ -1,7 +1,7 @@
 import React from 'react';
-import { Voucher, Student, Class } from "@prisma/client";
 import Image from 'next/image';
-import { formatVoucherDisplay } from "@/lib/voucherUtils";
+import { Voucher, Student, Class } from "@prisma/client";
+import { formatVoucherDisplay, formatPaymentDateTime } from "@/lib/voucherUtils";
 
 const PAYMENT_TYPE_LABELS_AR: Record<string, string> = {
   INSCRIPTION: "حقوق التسجيل",
@@ -83,7 +83,7 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
           </div>
           <div className="flex justify-between">
             <span>{isAr ? "التاريخ:" : "Date :"}</span>
-            <span>{new Date(voucher.issuedAt).toLocaleString(isAr ? "ar-DZ" : "fr-DZ")}</span>
+            <span className="font-mono" dir="ltr">{formatPaymentDateTime(voucher.issuedAt)}</span>
           </div>
           {voucher.issuingBranchId !== voucher.targetBranchId && (
             <div className="flex justify-between text-blue-700 font-semibold">

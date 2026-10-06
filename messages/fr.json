@@ -1984,6 +1984,7 @@
     "groupName": "Nom du groupe",
     "teacherName": "Enseignant",
     "branch": "Siège",
+    "selectBranch": "Sélectionner le siège",
     "pricePerCycle": "Prix / cycle (4 séances)",
     "actions": "Actions",
     "noGroups": "Aucun groupe enregistré",

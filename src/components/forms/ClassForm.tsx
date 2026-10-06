@@ -39,6 +39,7 @@ const ClassForm = ({
           ...data,
           supervisorId: data.teacherId || data.supervisorId || "",
           gradeId: data.levelId || data.gradeId || "",
+          branchId: data.branchId ? Number(data.branchId) : undefined,
           hasBooks: Boolean(data.hasBooks),
           bookFee: data.bookFee != null ? Number(data.bookFee) : undefined,
         }
@@ -79,7 +80,7 @@ const ClassForm = ({
     }
   }, [state, type, setOpen, tClasses, router]);
 
-  const { teachers, grades } = relatedData;
+  const { teachers = [], grades = [], branches = [] } = relatedData || {};
 
   return (
     <form className="flex flex-col gap-6" onSubmit={onSubmit}>
@@ -148,6 +149,26 @@ const ClassForm = ({
           {errors.gradeId?.message && (
             <p className="text-xs text-red-400">
               {errors.gradeId.message.toString()}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col gap-2 w-full md:w-1/4">
+          <label className="text-xs text-gray-500">{tClasses("branch")}</label>
+          <select
+            className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px]"
+            {...register("branchId")}
+            defaultValue={data?.branchId || ""}
+          >
+            <option value="">{tClasses("selectBranch")}</option>
+            {branches.map((branch: { id: number; name: string }) => (
+              <option value={branch.id} key={branch.id}>
+                {branch.name}
+              </option>
+            ))}
+          </select>
+          {errors.branchId?.message && (
+            <p className="text-xs text-red-400">
+              {errors.branchId.message.toString()}
             </p>
           )}
         </div>

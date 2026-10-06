@@ -179,6 +179,7 @@ const FormationForm = ({
         const res = await updateFormationWithLevels({
           id: Number(data.id),
           name: groupName.trim(),
+          branchId: Number(branchId),
           teacherId: teacherId || null,
           ageGroup: ageGroup.trim(),
           hasBooks,
@@ -486,7 +487,22 @@ const FormationForm = ({
             />
           </div>
 
-          <div className="flex flex-col gap-2 w-full md:w-[48%]">
+          <div className="flex flex-col gap-2 w-full md:w-[31%]">
+            <label className="text-xs text-gray-500">{t("branch")}</label>
+            <select
+              value={branchId}
+              onChange={(e) => setBranchId(Number(e.target.value))}
+              className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
+            >
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-2 w-full md:w-[31%]">
             <label className="text-xs text-gray-500">{t("teacher")}</label>
             <select
               value={teacherId}
@@ -502,7 +518,7 @@ const FormationForm = ({
             </select>
           </div>
 
-          <div className="flex flex-col gap-2 w-full md:w-[48%]">
+          <div className="flex flex-col gap-2 w-full md:w-[31%]">
             <label className="text-xs text-gray-500">{t("ageGroup")}</label>
             <input
               type="text"

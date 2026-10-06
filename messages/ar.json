@@ -1984,6 +1984,7 @@
     "groupName": "اسم الفوج",
     "teacherName": "الأستاذ",
     "branch": "الفرع",
+    "selectBranch": "حدد الفرع",
     "pricePerCycle": "السعر (لـ 4 حصص)",
     "actions": "الإجراءات",
     "noGroups": "لا توجد أفواج مسجلة",

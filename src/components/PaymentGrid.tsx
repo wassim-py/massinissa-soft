@@ -233,7 +233,7 @@ export default function PaymentGrid({
   const processedStudents = uniqueEnrollments.map((enrollment) => {
     const student = enrollment.student;
     const studentVouchers = classData.vouchers.filter((v) => v.studentId === student.id);
-    const activeVouchers = studentVouchers.filter((v) => !v.isVoided);
+    const activeVouchers = studentVouchers.filter((v) => !v.isVoided && !v.isRefund);
 
     // Inscription fee
     const inscVouchers = activeVouchers.filter((v) => v.paymentType === "INSCRIPTION");
@@ -483,6 +483,28 @@ export default function PaymentGrid({
 
     // Add vouchers
     item.studentVouchers.forEach((v: any) => {
+      if (v.isRefund) {
+        records.push({
+          id: `voucher-${v.id}`,
+          type: "CASHBACK",
+          title: formatVoucherDisplay(v, {
+            branchName: classData.branch.name,
+            levelName: (classData as any).level?.name,
+          }),
+          subtitle: t("recordTypeCashback"),
+          amount: -Number(v.amount),
+          date: v.issuedAt,
+          user: v.issuedBy,
+          badgeVariant: "danger",
+          details: t("recordTypeCashback"),
+          rawVoucher: v,
+          canRefund: false,
+          maxRefundable: 0,
+          unconsumedInCycle: 0,
+        });
+        return;
+      }
+
       const isVirement = Boolean(v.isPartial || v.completesVoucherId);
       const totalRefunded = v.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount), 0) || 0;
       const rem = Number(v.remainingBalance ?? (Number(v.amount) - totalRefunded));
@@ -491,7 +513,7 @@ export default function PaymentGrid({
       const isMostRecentCycle = Boolean(mostRecentActiveCycle && mostRecentActiveCycle.id === v.id);
       const pricePerSession = Number(v.amount) / 4;
       const maxRefundable = Math.min(rem, Math.round(unconsumedInCycle * pricePerSession));
-      const canRefund = !item.isWaivedSibling && isMostRecentCycle && !isVoidedOrRefunded && maxRefundable > 0 && v.paymentType === "TUITION_4SESSION";
+      const canRefund = !v.isRefund && !item.isWaivedSibling && isMostRecentCycle && !isVoidedOrRefunded && maxRefundable > 0 && v.paymentType === "TUITION_4SESSION";
 
       records.push({
         id: `voucher-${v.id}`,
@@ -516,24 +538,27 @@ export default function PaymentGrid({
         unconsumedInCycle,
       });
 
-      // Add cashbacks / refunds linked to this voucher
+      // Add legacy cashbacks / refunds linked to this voucher only if not already represented as a separate refund voucher
       if (v.refunds && v.refunds.length > 0) {
-        v.refunds.forEach((r: any) => {
-          records.push({
-            id: `refund-${r.id}`,
-            type: "CASHBACK",
-            title: `${t("recordTypeCashback")} (${formatVoucherDisplay(v, {
-              branchName: classData.branch.name,
-              levelName: (classData as any).level?.name,
-            })})`,
-            subtitle: r.reason,
-            amount: -Number(r.amount),
-            date: r.refundedAt,
-            user: r.refundedBy,
-            badgeVariant: "danger",
-            details: r.reason,
+        const hasRefundVouchers = item.studentVouchers.some((sv: any) => sv.refundForVoucherId === v.id);
+        if (!hasRefundVouchers) {
+          v.refunds.forEach((r: any) => {
+            records.push({
+              id: `refund-${r.id}`,
+              type: "CASHBACK",
+              title: `${t("recordTypeCashback")} (${formatVoucherDisplay(v, {
+                branchName: classData.branch.name,
+                levelName: (classData as any).level?.name,
+              })})`,
+              subtitle: r.reason,
+              amount: -Number(r.amount),
+              date: r.refundedAt,
+              user: r.refundedBy,
+              badgeVariant: "danger",
+              details: r.reason,
+            });
           });
-        });
+        }
       }
 
       // Add audit edits

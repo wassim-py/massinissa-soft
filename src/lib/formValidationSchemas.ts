@@ -23,6 +23,7 @@ export const classSchema = z.object({
     .min(0, { message: "لا يمكن أن تكون رسوم الكتب سالبة." })
     .optional()
     .nullable(),
+  branchId: z.coerce.number().optional(),
 });
 
 export type ClassSchema = z.infer<typeof classSchema>;

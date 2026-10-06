@@ -128,6 +128,7 @@ const PaymentsListPage = async (props: {
                 paymentType: true,
                 amount: true,
                 isVoided: true,
+                isRefund: true,
                 issuedAt: true,
                 class: { select: { id: true, name: true, branch: { select: { id: true, name: true } }, level: { select: { id: true, name: true } } } },
                 series: { select: { scope: true, id: true, level: { select: { id: true, name: true } }, issuingBranch: { select: { id: true, name: true } }, targetBranch: { select: { id: true, name: true } } } },
@@ -148,7 +149,7 @@ const PaymentsListPage = async (props: {
       description: v.class?.name || v.workshop?.title || "ورشة عمل / دورة",
       date: v.issuedAt,
       amount: Number(v.amount),
-      isRefund: v.isVoided,
+      isRefund: v.isVoided || v.isRefund,
     }));
 
     const totalPaid = allTransactions

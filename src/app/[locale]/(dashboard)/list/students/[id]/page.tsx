@@ -203,7 +203,7 @@ const SingleStudentPage = async (
     const groupSummaries = (studentPaymentData?.enrollments || []).map((enr) => {
       const c = enr.class;
       const classVouchers = (studentPaymentData?.vouchers || []).filter(
-        (v) => !v.isVoided && (v.classId === c.id || v.class?.id === c.id)
+        (v) => !v.isVoided && !v.isRefund && (v.classId === c.id || v.class?.id === c.id)
       );
       const tuitionVouchers = classVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
       const cyclePrice = Number(c?.pricePerCycle || 0);

@@ -193,7 +193,11 @@ export const createClass = async (
     }
 
     const activeBranchId = await getActiveBranchId();
-    const branchId = (data as any).branchId || activeBranchId;
+    const branchId = data.branchId && Number(data.branchId) > 0
+      ? Number(data.branchId)
+      : (data as any).branchId && Number((data as any).branchId) > 0
+      ? Number((data as any).branchId)
+      : activeBranchId;
 
     if (!canUserAccessBranch(session.rawRole, session.branchIds, branchId)) {
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بإنشاء فوج في هذا الفرع." };
@@ -247,7 +251,11 @@ export const updateClass = async (
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بتعديل فوج في هذا الفرع." };
     }
 
-    const branchId = (data as any).branchId || existing[0].branchId || 1;
+    const branchId = data.branchId && Number(data.branchId) > 0
+      ? Number(data.branchId)
+      : (data as any).branchId && Number((data as any).branchId) > 0
+      ? Number((data as any).branchId)
+      : existing[0].branchId || 1;
     if (!canUserAccessBranch(session.rawRole, session.branchIds, branchId)) {
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بنقل الفوج إلى هذا الفرع." };
     }
@@ -1967,7 +1975,7 @@ export const markSingleAttendanceAction = async (input: {
           where: { id: existing.id },
           data: {
             status: input.status,
-            justification: input.status === "NOT_DEFINED" ? input.justification?.trim() || null : null,
+            justification: input.justification?.trim() || null,
           },
         });
       } else {
@@ -1976,7 +1984,7 @@ export const markSingleAttendanceAction = async (input: {
             lessonId: input.lessonId,
             studentId: input.studentId,
             status: input.status,
-            justification: input.status === "NOT_DEFINED" ? input.justification?.trim() || null : null,
+            justification: input.justification?.trim() || null,
           },
         });
       }
@@ -2970,7 +2978,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
         if (amt > 0) {
           const ledgerType = resolveLedgerType("TUITION_4SESSION", targetClass.isFormation);
           await upsertDailyLedger(tx, {
-            branchId: targetBranchId,
+            branchId: issuingBranchId,
             date: new Date(),
             type: ledgerType,
             amount: amt,
@@ -3008,7 +3016,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
 
           const ledgerType = resolveLedgerType("INSCRIPTION", targetClass.isFormation);
           await upsertDailyLedger(tx, {
-            branchId: targetBranchId,
+            branchId: issuingBranchId,
             date: new Date(),
             type: ledgerType,
             amount: amt,
@@ -3046,26 +3054,26 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
           amount: amt,
         });
 
-        await tx.voucher.create({
-          data: {
-            seriesId: series!.id,
-            number: voucherNumber,
-            studentId: payload.studentId,
-            classId: payload.classId,
-            issuingBranchId,
-            targetBranchId,
-            paymentType: "BOOK",
-            amount: new Prisma.Decimal(amt),
-            issuedBy: session.userId || "admin",
-            isVoided: false,
-            trimesterId: activeTrimesterId,
-          },
-        });
+          await tx.voucher.create({
+            data: {
+              seriesId: series!.id,
+              number: voucherNumber,
+              studentId: payload.studentId,
+              classId: payload.classId,
+              issuingBranchId,
+              targetBranchId,
+              paymentType: "BOOK",
+              amount: new Prisma.Decimal(amt),
+              issuedBy: session.userId || "admin",
+              isVoided: false,
+              trimesterId: activeTrimesterId,
+            },
+          });
 
         if (amt > 0) {
           const ledgerType = resolveLedgerType("BOOK", targetClass.isFormation);
           await upsertDailyLedger(tx, {
-            branchId: targetBranchId,
+            branchId: issuingBranchId,
             date: new Date(),
             type: ledgerType,
             amount: amt,
@@ -3534,12 +3542,12 @@ export const issueVoucher = async (
         },
       });
 
-      // Update DailyLedger at target branch (cross-branch voucher lands on TARGET branch revenue §1.1)
+      // Update DailyLedger at issuing branch where cash is physically collected
       if (finalAmount > 0) {
         const ledgerCategory = resolveLedgerType(data.paymentType, targetClass?.isFormation ?? false);
 
         await upsertDailyLedger(tx, {
-          branchId: targetBranchId,
+          branchId: issuingBranchId,
           date: new Date(),
           type: ledgerCategory,
           amount: finalAmount,
@@ -3738,7 +3746,7 @@ export const editVoucher = async (
       if (wasVoided !== isNowVoided || oldAmount !== newAmount || oldType !== newType) {
         if (!wasVoided && oldAmount > 0) {
           await upsertDailyLedger(tx, {
-            branchId: voucher.targetBranchId,
+            branchId: voucher.issuingBranchId,
             date: voucher.issuedAt,
             type: oldType,
             amount: -oldAmount,
@@ -3746,7 +3754,7 @@ export const editVoucher = async (
         }
         if (!isNowVoided && newAmount > 0) {
           await upsertDailyLedger(tx, {
-            branchId: voucher.targetBranchId,
+            branchId: voucher.issuingBranchId,
             date: voucher.issuedAt,
             type: newType,
             amount: newAmount,
@@ -4393,11 +4401,64 @@ export const createRefund = async (
     }
 
     const newRemainingBalance = remainingBalance - data.amount;
-    const isFullRefund = newRemainingBalance <= 0;
+    const newOriginalAmount = Math.max(0, voucherAmount - data.amount);
+    const isFullRefund = newRemainingBalance <= 0 || newOriginalAmount <= 0;
     const userIdentifier = session.userId || "admin";
+    let createdRefundVoucherNumber: number | null = null;
 
     await prisma.$transaction(async (tx) => {
-      // 1. Create Refund record
+      // 1. Resolve or create dedicated Refund VoucherSeries (§2.3 & refund specification)
+      const refundBranchId = voucher.issuingBranchId;
+      let refundSeries = await tx.voucherSeries.findFirst({
+        where: {
+          issuingBranchId: refundBranchId,
+          scope: "REFUND",
+        },
+        orderBy: { id: "asc" },
+      });
+
+      if (!refundSeries) {
+        refundSeries = await tx.voucherSeries.create({
+          data: {
+            issuingBranchId: refundBranchId,
+            scope: "REFUND",
+            targetBranchId: voucher.targetBranchId !== refundBranchId ? voucher.targetBranchId : null,
+            currentNumber: 0,
+          },
+        });
+      }
+
+      const updatedRefundSeries = await tx.voucherSeries.update({
+        where: { id: refundSeries.id },
+        data: { currentNumber: { increment: 1 } },
+      });
+      const refundVoucherNumber = updatedRefundSeries.currentNumber;
+      createdRefundVoucherNumber = refundVoucherNumber;
+
+      // 2. Create the flagged Refund Voucher
+      await tx.voucher.create({
+        data: {
+          seriesId: refundSeries.id,
+          number: refundVoucherNumber,
+          studentId: voucher.studentId,
+          classId: voucher.classId,
+          workshopId: voucher.workshopId,
+          issuingBranchId: voucher.issuingBranchId,
+          targetBranchId: voucher.targetBranchId,
+          paymentType: voucher.paymentType,
+          amount: new Prisma.Decimal(data.amount),
+          isPartial: false,
+          isRefund: true,
+          refundForVoucherId: voucher.id,
+          issuedBy: userIdentifier,
+          issuedAt: new Date(),
+          isVoided: false,
+          status: "REFUND",
+          trimesterId: voucher.trimesterId,
+        },
+      });
+
+      // 3. Create Refund record for backward compatibility & audit trail
       await tx.refund.create({
         data: {
           voucherId: voucher.id,
@@ -4408,11 +4469,11 @@ export const createRefund = async (
         },
       });
 
-      // 2. Update Voucher
+      // 4. Update Original Voucher: remainingBalance reduced per refund
       await tx.voucher.update({
         where: { id: voucher.id },
         data: {
-          remainingBalance: new Prisma.Decimal(newRemainingBalance),
+          remainingBalance: new Prisma.Decimal(Math.max(0, newRemainingBalance)),
           isVoided: isFullRefund ? true : voucher.isVoided,
           status: isFullRefund ? "REFUNDED" : "PARTIALLY_REFUNDED",
           lastEditedAt: new Date(),
@@ -4420,7 +4481,7 @@ export const createRefund = async (
         },
       });
 
-      // 3. Create VoucherEdit audit log
+      // 5. Create VoucherEdit audit log
       await tx.voucherEdit.create({
         data: {
           voucherId: voucher.id,
@@ -4428,14 +4489,14 @@ export const createRefund = async (
           editedAt: new Date(),
           fieldName: isFullRefund ? "refund_full" : "refund_partial",
           oldValue: `الرصيد المتبقي: ${remainingBalance.toLocaleString()} دج`,
-          newValue: `الرصيد المتبقي: ${newRemainingBalance.toLocaleString()} دج (استرداد ${data.amount.toLocaleString()} دج)`,
+          newValue: `الرصيد المتبقي: ${Math.max(0, newRemainingBalance).toLocaleString()} دج (استرداد ${data.amount.toLocaleString()} دج عبر وصل استرداد #${refundVoucherNumber})`,
           reason: data.reason.trim(),
         },
       });
 
       // 4. Record refund in DailyLedger (§1.1, Phase 6)
       await upsertDailyLedger(tx, {
-        branchId: voucher.targetBranchId,
+        branchId: voucher.issuingBranchId,
         date: new Date(),
         type: "REFUND",
         amount: data.amount,
@@ -4451,8 +4512,8 @@ export const createRefund = async (
           userId: userIdentifier,
           userName: userIdentifier,
           oldValue: String(remainingBalance),
-          newValue: String(newRemainingBalance),
-          details: `استرداد ${isFullRefund ? "كامل" : "جزئي"} بمبلغ ${data.amount} دج للوصل #${voucher.number}. السبب: ${data.reason.trim()}`,
+          newValue: String(Math.max(0, newRemainingBalance)),
+          details: `استرداد ${isFullRefund ? "كامل" : "جزئي"} بمبلغ ${data.amount} دج للوصل #${voucher.number}، وتم إصدار وصل استرداد جديد #${refundVoucherNumber}. السبب: ${data.reason.trim()}`,
           timestamp: new Date(),
         },
       });
@@ -4488,8 +4549,8 @@ export const createRefund = async (
       success: true,
       error: false,
       message: isFullRefund
-        ? `تم استرداد كامل قيمة الوصل #${voucher.number} (${data.amount.toLocaleString()} دج) وإلغاؤه بنجاح.`
-        : `تم استرداد مبلغ جزئي (${data.amount.toLocaleString()} دج) من الوصل #${voucher.number} بنجاح. الرصيد المتبقي: ${newRemainingBalance.toLocaleString()} دج.`,
+        ? `تم استرداد كامل قيمة الوصل #${voucher.number} (${data.amount.toLocaleString()} دج) وإصدار وصل استرداد جديد #${createdRefundVoucherNumber}.`
+        : `تم استرداد مبلغ جزئي (${data.amount.toLocaleString()} دج) من الوصل #${voucher.number} وإصدار وصل استرداد جديد #${createdRefundVoucherNumber}. الرصيد المتبقي: ${newRemainingBalance.toLocaleString()} دج.`,
     };
   } catch (err: any) {
     console.error("createRefund error:", err);
@@ -4695,9 +4756,9 @@ export const registerParticipant = async (
           },
         });
 
-        // Update DailyLedger at target branch (§1.1, §1.7)
+        // Update DailyLedger at issuing branch where cash is physically collected
         await upsertDailyLedger(tx, {
-          branchId: targetBranchId,
+          branchId: branchId,
           date: new Date(),
           type: "ATELIER_FORMATION",
           amount: initialAmount,
@@ -4905,9 +4966,9 @@ export const addWorkshopPayment = async (
         },
       });
 
-      // Update DailyLedger at target branch (§1.1)
+      // Update DailyLedger at issuing branch where cash is physically collected
       await upsertDailyLedger(tx, {
-        branchId: targetBranchId,
+        branchId: issuingBranchId,
         date: new Date(),
         type: "ATELIER_FORMATION",
         amount: paymentAmount,

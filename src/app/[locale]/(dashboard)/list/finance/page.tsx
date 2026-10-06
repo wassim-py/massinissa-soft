@@ -312,26 +312,42 @@ export default async function FinancePage(props: PageProps) {
   // Transfers data
   let formattedTransfers: any[] = [];
   if (activeSection === "transfers") {
-    const rawTransfers = await prisma.enrollmentTransfer.findMany({
-      include: {
-        fromEnrollment: {
-          include: {
-            student: { select: { id: true, name: true, phone: true } },
-            class: { include: { branch: { select: { id: true, name: true } } } },
-          },
-        },
-        toEnrollment: {
-          include: {
-            student: { select: { id: true, name: true, phone: true } },
-            class: { include: { branch: { select: { id: true, name: true } } } },
-          },
-        },
-      },
-      orderBy: { transferredAt: "desc" },
-    });
+    const branchMap = new Map(allBranchesData.map((b) => [b.id, b.name]));
 
-    formattedTransfers = rawTransfers.map((tr) => ({
-      id: tr.id,
+    const [rawTransfers, rawVouchers] = await Promise.all([
+      prisma.enrollmentTransfer.findMany({
+        include: {
+          fromEnrollment: {
+            include: {
+              student: { select: { id: true, name: true, phone: true } },
+              class: { include: { branch: { select: { id: true, name: true } } } },
+            },
+          },
+          toEnrollment: {
+            include: {
+              student: { select: { id: true, name: true, phone: true } },
+              class: { include: { branch: { select: { id: true, name: true } } } },
+            },
+          },
+        },
+        orderBy: { transferredAt: "desc" },
+      }),
+      prisma.voucher.findMany({
+        where: {
+          isVoided: false,
+          amount: { gt: 0 },
+        },
+        include: {
+          student: { select: { id: true, name: true, phone: true } },
+          class: { include: { branch: { select: { id: true, name: true } } } },
+          workshop: { include: { Branch: { select: { id: true, name: true } } } },
+        },
+        orderBy: { issuedAt: "desc" },
+      }),
+    ]);
+
+    const formattedEnrollmentTransfers = rawTransfers.map((tr) => ({
+      id: `tr-${tr.id}`,
       studentId: tr.fromEnrollment?.student?.id || tr.toEnrollment?.student?.id || "",
       studentName: tr.fromEnrollment?.student?.name || tr.toEnrollment?.student?.name || "—",
       studentPhone: tr.fromEnrollment?.student?.phone || tr.toEnrollment?.student?.phone || null,
@@ -350,6 +366,44 @@ export default async function FinancePage(props: PageProps) {
       transferredBy: tr.transferredBy,
       transferredAt: tr.transferredAt,
     }));
+
+    // Cross-branch vouchers: physical cash collected in issuingBranchId for student/class in targetBranchId
+    const crossBranchVouchers = rawVouchers.filter((v) => v.issuingBranchId !== v.targetBranchId);
+
+    const formattedCrossBranchVouchers = crossBranchVouchers.map((v) => {
+      const fromBranchName = branchMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`;
+      const toBranchName = branchMap.get(v.targetBranchId) || `Branche #${v.targetBranchId}`;
+      const groupName = v.class?.name || v.workshop?.title || "—";
+      const noteLabel =
+        locale === "ar"
+          ? `وصل #${v.number} (${v.paymentType}) - دفعة بين الفروع`
+          : `Reçu #${v.number} (${v.paymentType}) - Paiement inter-branches`;
+
+      return {
+        id: `v-${v.id}`,
+        studentId: v.studentId,
+        studentName: v.student?.name || "—",
+        studentPhone: v.student?.phone || null,
+        fromClassId: v.classId || 0,
+        fromClassName: groupName,
+        fromBranchId: v.issuingBranchId,
+        fromBranchName,
+        toClassId: v.classId || 0,
+        toClassName: groupName,
+        toBranchId: v.targetBranchId,
+        toBranchName,
+        isCrossBranch: true,
+        transferredSessions: v.paymentType.startsWith("TUITION") ? 4 : 0,
+        amount: Number(v.amount || 0),
+        notes: noteLabel,
+        transferredBy: v.issuedBy,
+        transferredAt: v.issuedAt,
+      };
+    });
+
+    formattedTransfers = [...formattedEnrollmentTransfers, ...formattedCrossBranchVouchers].sort((a, b) => {
+      return new Date(b.transferredAt).getTime() - new Date(a.transferredAt).getTime();
+    });
   }
 
   const totalRevenueSum = Number(dashboardData?.summary?.grossRevenue || 0);

@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
 
 export interface TransferredRecord {
-  id: number;
+  id: number | string;
   studentId: string;
   studentName: string;
   studentPhone: string | null;

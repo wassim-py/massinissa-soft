@@ -507,6 +507,10 @@ model Voucher {
   lastEditedAt       DateTime?
   lastEditedBy       String?
   trimesterId        Int?
+  isRefund           Boolean       @default(false)
+  refundForVoucherId Int?
+  refundFor          Voucher?      @relation("VoucherRefundLink", fields: [refundForVoucherId], references: [id])
+  refundVouchers     Voucher[]     @relation("VoucherRefundLink")
   class              Class?        @relation(fields: [classId], references: [id])
   workshop           Workshop?     @relation(fields: [workshopId], references: [id])
   series             VoucherSeries @relation(fields: [seriesId], references: [id])
@@ -522,6 +526,8 @@ model Voucher {
   @@index([trimesterId])
   @@index([issuedAt])
   @@index([seriesId])
+  @@index([isRefund])
+  @@index([refundForVoucherId])
 }
 
 model Refund {

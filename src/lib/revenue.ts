@@ -39,6 +39,7 @@ export interface RevenueDashboardVoucher {
   branchId: number;
   branchName: string;
   issuingBranchName: string;
+  targetBranchName?: string;
   paymentType: string;
   amount: number;
   issuedAt: string;
@@ -180,7 +181,7 @@ export async function getDailyRevenueDashboardData(options?: {
           gte: startDate,
           lte: endDate,
         },
-        ...(targetBranchId ? { targetBranchId } : {}),
+        ...(targetBranchId ? { issuingBranchId: targetBranchId } : {}),
       },
       include: {
         student: { select: { id: true, name: true, phone: true } },
@@ -456,9 +457,10 @@ export async function getDailyRevenueDashboardData(options?: {
     studentPhone: v.student?.phone || null,
     classId: v.classId,
     className: v.class?.name || v.workshop?.title || "—",
-    branchId: v.targetBranchId,
-    branchName: branchNameMap.get(v.targetBranchId) || `Branche #${v.targetBranchId}`,
+    branchId: v.issuingBranchId,
+    branchName: branchNameMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`,
     issuingBranchName: branchNameMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`,
+    targetBranchName: branchNameMap.get(v.targetBranchId) || `Branche #${v.targetBranchId}`,
     paymentType: v.paymentType,
     amount: Number(v.amount),
     issuedAt: v.issuedAt.toISOString(),
@@ -541,11 +543,14 @@ export interface DailyBranchLedgerData {
     studentId?: string | null;
     studentName: string;
     className: string;
+    targetBranchId?: number;
+    targetBranchName?: string | null;
     paymentType: string;
     amount: number;
     issuedAt: Date;
     issuedBy: string;
     isPartial: boolean;
+    isRefund?: boolean;
   }>;
   todayTransfers: Array<{
     id: number;
@@ -609,14 +614,14 @@ export async function getDailyBranchLedgerData(
     }),
     prisma.voucher.findMany({
       where: {
-        targetBranchId: branchId,
+        issuingBranchId: branchId,
         issuedAt: { gte: startOfDay, lte: endOfDay },
         isVoided: false,
       },
       include: {
         student: { select: { id: true, name: true } },
-        class: { select: { name: true } },
-        workshop: { select: { title: true } },
+        class: { select: { name: true, branch: { select: { id: true, name: true } } } },
+        workshop: { select: { title: true, Branch: { select: { id: true, name: true } } } },
       },
       orderBy: { issuedAt: "desc" },
     }),
@@ -725,11 +730,14 @@ export async function getDailyBranchLedgerData(
       studentId: v.student?.id || v.studentId || null,
       studentName: v.student?.name || "—",
       className: v.class?.name || v.workshop?.title || "—",
+      targetBranchId: v.targetBranchId,
+      targetBranchName: v.class?.branch?.name || v.workshop?.Branch?.name || null,
       paymentType: v.paymentType,
       amount: Number(v.amount),
       issuedAt: v.issuedAt,
       issuedBy: v.issuedBy,
       isPartial: v.isPartial,
+      isRefund: v.isRefund,
     })),
     todayTransfers: (() => {
       let inTotal = 0;

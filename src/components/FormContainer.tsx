@@ -73,19 +73,31 @@ const FormContainer = async ({
               };
             }
           }
-          const [levels, teachers] = await Promise.all([
+          const branchWhere = session.isOwner
+            ? undefined
+            : { id: { in: session.branchIds.concat(existingClass?.branchId ? [existingClass.branchId] : []) } };
+          const [levels, teachers, branches] = await Promise.all([
             prisma.level.findMany({
               select: { id: true, name: true },
               orderBy: { id: "asc" },
             }),
             prisma.$queryRaw<Array<{ id: string; name: string }>>`SELECT id, name FROM "Teacher" ORDER BY name ASC`,
+            prisma.branch.findMany({
+              where: branchWhere,
+              select: { id: true, name: true },
+              orderBy: { name: "asc" },
+            }),
           ]);
           finalRelatedData = {
             grades: levels.map((l) => ({ id: l.id, level: l.name, name: l.name })),
             teachers: teachers.map((t) => ({ id: t.id, name: t.name, surname: "" })),
+            branches: branches.map((b) => ({ id: b.id, name: b.name })),
+            defaultBranchId: session.branchIds?.[0] || branches[0]?.id || 1,
           };
           if (existingClass && !data) {
             data = existingClass;
+          } else if (data && !data.branchId && existingClass?.branchId) {
+            data = { ...data, branchId: existingClass.branchId };
           }
           break;
         }

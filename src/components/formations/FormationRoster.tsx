@@ -12,7 +12,11 @@ import StudentProgressionModal from "./StudentProgressionModal";
 import DeleteStudentFromFormationModal from "./DeleteStudentFromFormationModal";
 import RefundForm from "@/components/forms/RefundForm";
 import PrintTicketButton from "@/components/PrintTicketButton";
-import { formatVoucherDisplay } from "@/lib/voucherUtils";
+import {
+  formatVoucherDisplay,
+  formatPaymentDate,
+  formatPaymentTime,
+} from "@/lib/voucherUtils";
 import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 
@@ -368,8 +372,14 @@ export default function FormationRoster({
                                         </span>
                                       )}
                                     </td>
-                                    <td className="p-2 text-gray-500 font-mono text-start">
-                                      {new Date(v.issuedAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                                    <td className="p-2 text-gray-500 font-mono text-start whitespace-nowrap" dir="ltr">
+                                      <div>{formatPaymentDate(v.issuedAt)}</div>
+                                      {(() => {
+                                        const time = formatPaymentTime(v.issuedAt);
+                                        return time && time !== "00:00" && time !== "12:00" ? (
+                                          <div className="text-[10px] text-gray-400">{time}</div>
+                                        ) : null;
+                                      })()}
                                     </td>
                                     <td className="p-2 text-center">
                                       <PrintTicketButton

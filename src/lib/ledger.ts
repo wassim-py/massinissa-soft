@@ -86,7 +86,7 @@ export async function upsertDailyLedger(
 export async function syncDailyLedgerFromVouchers() {
   const [vouchers, refunds, transfers] = await Promise.all([
     prisma.voucher.findMany({
-      where: { isVoided: false },
+      where: { isVoided: false, isRefund: false },
       include: { class: true },
     }),
     prisma.refund.findMany({
@@ -110,7 +110,7 @@ export async function syncDailyLedgerFromVouchers() {
     const normalizedDate = normalizeDateToStartOfDay(v.issuedAt);
     const dateKey = normalizedDate.toISOString();
     const type = resolveLedgerType(v.paymentType, v.class?.isFormation ?? false);
-    const branchId = v.targetBranchId; // §1.1 Cross-branch lands on TARGET branch
+    const branchId = v.issuingBranchId; // Physical cash is received in the cash box of the ISSUING branch
     const mapKey = `${branchId}|${dateKey}|${type}`;
 
     const current = ledgerMap.get(mapKey);
@@ -128,7 +128,7 @@ export async function syncDailyLedgerFromVouchers() {
     const normalizedDate = normalizeDateToStartOfDay(r.refundedAt);
     const dateKey = normalizedDate.toISOString();
     const type: LedgerVoucherCategory = "REFUND";
-    const branchId = r.voucher.targetBranchId;
+    const branchId = r.voucher.issuingBranchId; // Physical cash refund is paid out of the ISSUING branch cash box
     const mapKey = `${branchId}|${dateKey}|${type}`;
 
     const current = ledgerMap.get(mapKey);

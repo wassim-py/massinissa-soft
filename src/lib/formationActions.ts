@@ -1100,9 +1100,9 @@ export async function recordFormationLumpSumPayment(data: {
           },
         });
 
-        // Update DailyLedger at target branch (type ATELIER_FORMATION)
+        // Update DailyLedger at issuing branch where cash is physically collected (type ATELIER_FORMATION)
         await upsertDailyLedger(tx, {
-          branchId: targetClass.branchId,
+          branchId: issuingBranchId,
           date: new Date(),
           type: "ATELIER_FORMATION",
           amount: finalAmount,
@@ -1147,9 +1147,9 @@ export async function recordFormationLumpSumPayment(data: {
           },
         });
 
-        // Update DailyLedger at target branch (type BOOK)
+        // Update DailyLedger at issuing branch where cash is physically collected (type BOOK)
         await upsertDailyLedger(tx, {
-          branchId: targetClass.branchId,
+          branchId: issuingBranchId,
           date: new Date(),
           type: "BOOK",
           amount: bookFee,
@@ -1991,6 +1991,7 @@ export async function deleteFormationGroup(classId: number): Promise<ActionRespo
 export async function updateFormationGroup(data: {
   id: number;
   name: string;
+  branchId?: number;
   teacherId?: string | null;
   ageGroup?: string;
   hasBooks?: boolean;
@@ -2006,6 +2007,7 @@ export async function updateFormationGroup(data: {
       where: { id: data.id },
       data: {
         name: data.name.trim(),
+        branchId: data.branchId ? Number(data.branchId) : undefined,
         teacherId: data.teacherId || null,
         ageGroup: data.ageGroup?.trim() || null,
         hasBooks: !!data.hasBooks,
@@ -2025,6 +2027,7 @@ export async function updateFormationGroup(data: {
 export async function updateFormationWithLevels(data: {
   id: number;
   name: string;
+  branchId?: number;
   teacherId?: string | null;
   ageGroup?: string;
   hasBooks?: boolean;
@@ -2059,6 +2062,7 @@ export async function updateFormationWithLevels(data: {
         where: { id: data.id },
         data: {
           name: data.name.trim(),
+          branchId: data.branchId ? Number(data.branchId) : undefined,
           teacherId: data.teacherId || null,
           ageGroup: data.ageGroup?.trim() || null,
           hasBooks: !!data.hasBooks,

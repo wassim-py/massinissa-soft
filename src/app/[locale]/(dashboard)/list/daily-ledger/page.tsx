@@ -504,7 +504,14 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                     className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
                   >
                     <td className="p-3.5 font-mono text-xs font-bold text-primary" dir="ltr">
-                      #{v.number}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span>#{v.number}</span>
+                        {v.isRefund && (
+                          <Badge variant="danger" size="sm">
+                            {locale === "ar" ? "استرداد" : "Remboursement"}
+                          </Badge>
+                        )}
+                      </div>
                     </td>
                     <td className="p-3.5 font-semibold text-gray-900">
                       {v.studentId ? (
@@ -518,11 +525,22 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                         v.studentName
                       )}
                     </td>
-                    <td className="p-3.5 text-gray-700">{v.className}</td>
+                    <td className="p-3.5 text-gray-700">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span>{v.className}</span>
+                        {v.targetBranchId && v.targetBranchId !== selectedBranchId && (
+                          <Badge variant="neutral" size="sm" className="text-[10px] text-purple-700 border-purple-200 bg-purple-50">
+                            {v.targetBranchName || `Branche #${v.targetBranchId}`}
+                          </Badge>
+                        )}
+                      </div>
+                    </td>
                     <td className="p-3.5">
                       <Badge
                         variant={
-                          v.paymentType === "INSCRIPTION"
+                          v.isRefund
+                            ? "danger"
+                            : v.paymentType === "INSCRIPTION"
                             ? "success"
                             : v.paymentType === "BOOK"
                             ? "warning"
@@ -538,8 +556,8 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                     <td className="p-3.5 text-muted text-xs">
                       {format(new Date(v.issuedAt), "HH:mm")}
                     </td>
-                    <td className="p-3.5 font-mono font-bold text-success-text text-end">
-                      +{formatDZD(v.amount)}
+                    <td className={`p-3.5 font-mono font-bold text-end ${v.isRefund ? "text-danger" : "text-success-text"}`}>
+                      {v.isRefund ? `-${formatDZD(v.amount)}` : `+${formatDZD(v.amount)}`}
                     </td>
                   </tr>
                 )}
