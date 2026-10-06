@@ -53,6 +53,13 @@ interface ColumnInfo {
   lessonId: number | null; // will be resolved or created
 }
 
+interface BookColInfo {
+  col: number;
+  trimNum: 1 | 2 | 3;
+  bookNum: number; // 1, 2, ...
+  headerText: string;
+}
+
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
   const fileArg = (() => {
@@ -212,7 +219,7 @@ async function processFile(
   const freeRow = ws.getRow(FREE_FLAG_ROW);
 
   const lessonCols: ColumnInfo[] = [];
-  let bookCols: Array<{ col: number; trimNum: 1 | 2 | 3 }> = [];
+  const bookCols: BookColInfo[] = [];
 
   dateRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
     if (colNumber < FIRST_LESSON_COL) return;
@@ -221,16 +228,14 @@ async function processFile(
     if (!cellText) return;
 
     // Check if this is a book column
-    if (cellText.includes('كتاب') || cellText.includes('ت 1') || cellText.includes('ت1')) {
-      bookCols.push({ col: colNumber, trimNum: 1 });
-      return;
-    }
-    if (cellText.includes('ت 2') || cellText.includes('ت2')) {
-      bookCols.push({ col: colNumber, trimNum: 2 });
-      return;
-    }
-    if (cellText.includes('ت 3') || cellText.includes('ت3')) {
-      bookCols.push({ col: colNumber, trimNum: 3 });
+    const bookParsed = parseBookColHeader(cellText, bookCols);
+    if (bookParsed) {
+      bookCols.push({
+        col: colNumber,
+        trimNum: bookParsed.trimNum,
+        bookNum: bookParsed.bookNum,
+        headerText: cellText,
+      });
       return;
     }
 
@@ -266,8 +271,7 @@ async function processFile(
     if (!nameVal) break;
 
     for (const lCol of lessonCols) {
-      const val = row.getCell(lCol.col).value;
-      if (val === 1 || val === '1' || String(val).toUpperCase() === 'X') {
+      if (isCellMarked(row.getCell(lCol.col).value)) {
         hasAnyMark = true;
         break;
       }
@@ -275,8 +279,7 @@ async function processFile(
     if (hasAnyMark) break;
 
     for (const b of bookCols) {
-      const val = row.getCell(b.col).value;
-      if (val === 1 || val === '1' || String(val).toUpperCase() === 'X') {
+      if (isCellMarked(row.getCell(b.col).value)) {
         hasAnyMark = true;
         break;
       }
@@ -295,6 +298,12 @@ async function processFile(
   lessonCols.forEach((l) => {
     console.log(`     - ${l.dateStr} ${l.isFree ? '🎁 [FREE LESSON]' : '💼 [Paid Lesson]'}`);
   });
+  if (bookCols.length > 0) {
+    console.log(`   Group: "${cls.name}" → ${bookCols.length} book columns detected:`);
+    bookCols.forEach((b) => {
+      console.log(`     - Col ${b.col}: Trimester ${b.trimNum}, Book ${b.bookNum} (${JSON.stringify(b.headerText)})`);
+    });
+  }
 
   // ── Resolve or Create Lessons in DB ───────────────────────────────
   // IMPORTANT: Only match lessons created for attendance imports (isExtra: true)
@@ -387,8 +396,7 @@ async function processFile(
     for (const lCol of lessonCols) {
       if (!lCol.lessonId) continue;
 
-      const val = row.getCell(lCol.col).value;
-      const isPresent = val === 1 || val === '1' || String(val).toUpperCase() === 'X';
+      const isPresent = isCellMarked(row.getCell(lCol.col).value);
 
       if (!dryRun && lCol.lessonId > 0) {
         try {
@@ -419,27 +427,41 @@ async function processFile(
     }
 
     // ── Process Book Receipts ───────────────────────────────────────
-    if (hasBooks && cls.teacherId && cls.levelId) {
-      for (const { col, trimNum } of bookCols) {
+    if ((hasBooks || bookCols.length > 0) && cls.teacherId && cls.levelId) {
+      if (!cls.hasBooks && !dryRun) {
+        await prisma.class.update({
+          where: { id: cls.id },
+          data: { hasBooks: true },
+        });
+        cls.hasBooks = true;
+      }
+
+      for (const { col, trimNum, bookNum } of bookCols) {
         const val = row.getCell(col).value;
-        const gotBook = val === 1 || val === '1' || String(val).toUpperCase() === 'X';
+        const gotBook = isCellMarked(val);
         if (!gotBook) continue;
 
         const trimId = TRIMESTER_IDS[trimNum];
-        const bookKey = `${cls.teacherId}-${cls.levelId}-${trimId}`;
+        const bookKey = `${cls.teacherId}-${cls.levelId}-${trimId}-${bookNum}`;
 
         let bookId = bookCache.get(bookKey);
         if (!bookId) {
           if (!dryRun) {
-            const existingBook = await prisma.book.findFirst({
+            // Find all books for this teacher + level + trimester, ordered by id asc
+            const existingBooks = await prisma.book.findMany({
               where: { teacherId: cls.teacherId, levelId: cls.levelId, trimesterId: trimId },
+              orderBy: { id: 'asc' },
             });
-            if (existingBook) {
-              bookId = existingBook.id;
+            const targetBook = existingBooks[bookNum - 1];
+            if (targetBook) {
+              bookId = targetBook.id;
             } else {
+              const title = bookNum > 1
+                ? `كتاب ${bookNum} ت${trimNum}`
+                : `كتاب ت${trimNum}`;
               const newBook = await prisma.book.create({
                 data: {
-                  title: `كتاب ت${trimNum}`,
+                  title,
                   teacherId: cls.teacherId,
                   levelId: cls.levelId,
                   trimesterId: trimId,
@@ -447,14 +469,27 @@ async function processFile(
               });
               bookId = newBook.id;
               res.booksCreated++;
+              console.log(`    📚 Created new book in DB: "${title}" (id=${bookId}) for teacher "${cls.teacher?.name ?? cls.teacherId}"`);
             }
             bookCache.set(bookKey, bookId);
           } else {
-            res.booksCreated++;
+            // In dry run, check if book exists in DB or simulate creation
+            const existingBooks = await prisma.book.findMany({
+              where: { teacherId: cls.teacherId, levelId: cls.levelId, trimesterId: trimId },
+              orderBy: { id: 'asc' },
+            });
+            const targetBook = existingBooks[bookNum - 1];
+            if (targetBook) {
+              bookId = targetBook.id;
+            } else {
+              bookId = -bookNum; // dummy id for dry-run
+              res.booksCreated++;
+            }
+            bookCache.set(bookKey, bookId);
           }
         }
 
-        if (!dryRun && bookId) {
+        if (!dryRun && bookId && bookId > 0) {
           const existingReceipt = await prisma.bookReceipt.findFirst({
             where: { studentId, bookId },
           });
@@ -469,6 +504,8 @@ async function processFile(
             });
             res.receiptsCreated++;
           }
+        } else if (dryRun) {
+          res.receiptsCreated++;
         }
       }
     }
@@ -481,6 +518,73 @@ async function processFile(
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+function isCellMarked(val: any): boolean {
+  if (val === 1 || val === '1' || val === true) return true;
+  if (typeof val === 'string') {
+    const s = val.trim().toUpperCase();
+    return s === 'X' || s === 'V' || s === '✓' || s === '✔' || s === 'OUI' || s === 'YES' || s === 'نعم';
+  }
+  return false;
+}
+
+function parseBookColHeader(
+  cellText: string,
+  existingBookCols: BookColInfo[]
+): { trimNum: 1 | 2 | 3; bookNum: number } | null {
+  const norm = cellText.replace(/\s+/g, ' ').trim();
+
+  // Must contain keywords indicating a book column or trimester indicator
+  const hasBookKeyword = /كتاب|كتب|كـتاب|livre|book/i.test(norm);
+  const hasTrimKeyword = /ت\s*[123]|فصل\s*[123]|ثلاثي\s*[123]|T[123]/i.test(norm);
+
+  if (!hasBookKeyword && !hasTrimKeyword) {
+    return null;
+  }
+
+  // Determine Trimester (1, 2, or 3)
+  let trimNum: 1 | 2 | 3 = 1;
+  if (/ت\s*3|فصل\s*3|ثلاثي\s*3|T3|ثالث/i.test(norm)) {
+    trimNum = 3;
+  } else if (/ت\s*2|فصل\s*2|ثلاثي\s*2|T2|ثاني/i.test(norm) && !/كتاب\s*2\s*ت\s*1/i.test(norm) && !/كتاب\s*2\s*\(?ت\s*1\)?/i.test(norm)) {
+    trimNum = 2;
+  } else if (/ت\s*1|فصل\s*1|ثلاثي\s*1|T1|اول|أول/i.test(norm)) {
+    trimNum = 1;
+  } else {
+    // Default to Trimester 1 (current active trimester)
+    trimNum = 1;
+  }
+
+  // Determine Book Number (1, 2, ...) within the trimester
+  let bookNum: number = 1;
+  if (
+    /كتاب\s*2\b/i.test(norm) ||
+    /كتاب\s*\(2\)/i.test(norm) ||
+    /كتاب.*ثاني/i.test(norm) ||
+    /2\s*كتاب/i.test(norm) ||
+    /كتاب.*[Bbب]\b/i.test(norm) ||
+    /ت\s*[123]\s*[-_]?\s*2\b/i.test(norm) ||
+    /ت\s*[123]\s*\(\s*2\s*\)/i.test(norm)
+  ) {
+    bookNum = 2;
+  } else if (
+    /كتاب\s*1\b/i.test(norm) ||
+    /كتاب\s*\(1\)/i.test(norm) ||
+    /كتاب.*(اول|أول)/i.test(norm) ||
+    /1\s*كتاب/i.test(norm) ||
+    /كتاب.*[Aaأا]\b/i.test(norm) ||
+    /ت\s*[123]\s*[-_]?\s*1\b/i.test(norm) ||
+    /ت\s*[123]\s*\(\s*1\s*\)/i.test(norm)
+  ) {
+    bookNum = 1;
+  } else {
+    // If not explicitly numbered, use sequential order for this trimester
+    const countForTrim = existingBookCols.filter((b) => b.trimNum === trimNum).length;
+    bookNum = countForTrim + 1;
+  }
+
+  return { trimNum, bookNum };
+}
 
 function parseDateValue(val: any): Date | null {
   if (!val) return null;

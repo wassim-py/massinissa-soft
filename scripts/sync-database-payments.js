@@ -59,7 +59,7 @@ async function main() {
     const normalizedDate = normalizeDateToStartOfDay(v.issuedAt);
     const dateKey = normalizedDate.toISOString();
     const type = resolveLedgerType(v.paymentType, v.class?.isFormation ?? false);
-    const branchId = v.targetBranchId; // Cross-branch lands on TARGET branch
+    const branchId = v.issuingBranchId; // Physical cash in issuing branch drawer
     const mapKey = `${branchId}|${dateKey}|${type}`;
 
     const current = ledgerMap.get(mapKey);
@@ -77,7 +77,7 @@ async function main() {
     const normalizedDate = normalizeDateToStartOfDay(r.refundedAt);
     const dateKey = normalizedDate.toISOString();
     const type = "REFUND";
-    const branchId = r.voucher.targetBranchId;
+    const branchId = r.voucher.issuingBranchId; // Physical cash refund out of issuing branch drawer
     const mapKey = `${branchId}|${dateKey}|${type}`;
 
     const current = ledgerMap.get(mapKey);

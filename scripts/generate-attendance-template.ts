@@ -158,9 +158,10 @@ async function generateGroupTemplate(
   const numSlots = Math.max(DEFAULT_TOTAL_LESSON_SLOTS, existingLessons.length);
   const LAST_LESSON_COL = FIRST_LESSON_COL + numSlots - 1;
   const hasBooks = Boolean(cls.hasBooks);
-  const BOOK_T1_COL = LAST_LESSON_COL + 1;
-  const BOOK_T2_COL = LAST_LESSON_COL + 2;
-  const BOOK_T3_COL = LAST_LESSON_COL + 3;
+  const BOOK_T1_1_COL = LAST_LESSON_COL + 1; // كتاب 1 ت 1
+  const BOOK_T1_2_COL = LAST_LESSON_COL + 2; // كتاب 2 ت 1
+  const BOOK_T2_COL   = LAST_LESSON_COL + 3; // كتاب ت 2
+  const BOOK_T3_COL   = LAST_LESSON_COL + 4; // كتاب ت 3
   const LAST_COL = hasBooks ? BOOK_T3_COL : LAST_LESSON_COL;
 
   const TITLE_ROW     = 1;
@@ -207,7 +208,7 @@ async function generateGroupTemplate(
   }
 
   if (hasBooks) {
-    for (const bCol of [BOOK_T1_COL, BOOK_T2_COL, BOOK_T3_COL]) {
+    for (const bCol of [BOOK_T1_1_COL, BOOK_T1_2_COL, BOOK_T2_COL, BOOK_T3_COL]) {
       const cell = ws.getCell(FREE_FLAG_ROW, bCol);
       cell.value = '';
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
@@ -237,10 +238,12 @@ async function generateGroupTemplate(
   }
 
   if (hasBooks) {
-    setHeaderCell(ws, DATE_ROW, BOOK_T1_COL, 'كتاب\nت 1', COLOR_BOOK_BG);
+    setHeaderCell(ws, DATE_ROW, BOOK_T1_1_COL, 'كتاب 1\nت 1', COLOR_BOOK_BG);
+    setHeaderCell(ws, DATE_ROW, BOOK_T1_2_COL, 'كتاب 2\nت 1', COLOR_BOOK_BG);
     setHeaderCell(ws, DATE_ROW, BOOK_T2_COL, 'كتاب\nت 2', COLOR_BOOK_BG);
     setHeaderCell(ws, DATE_ROW, BOOK_T3_COL, 'كتاب\nت 3', COLOR_BOOK_BG);
-    ws.getColumn(BOOK_T1_COL).width = 8;
+    ws.getColumn(BOOK_T1_1_COL).width = 8;
+    ws.getColumn(BOOK_T1_2_COL).width = 8;
     ws.getColumn(BOOK_T2_COL).width = 8;
     ws.getColumn(BOOK_T3_COL).width = 8;
   }
@@ -283,7 +286,7 @@ async function generateGroupTemplate(
 
     // Book cells
     if (hasBooks) {
-      for (const bookCol of [BOOK_T1_COL, BOOK_T2_COL, BOOK_T3_COL]) {
+      for (const bookCol of [BOOK_T1_1_COL, BOOK_T1_2_COL, BOOK_T2_COL, BOOK_T3_COL]) {
         const cell = row.getCell(bookCol);
         cell.value = 0;
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -322,7 +325,8 @@ async function generateGroupTemplate(
     ['   → لكل طالب: اكتب 1 إذا كان حاضراً، و0 إذا كان غائباً'],
     [''],
     ['3. للأفواج التي لها كتب (ت1 / ت2 / ت3) :'],
-    ['   → اكتب 1 في خانة الفصل إذا استلم الطالب كتابه، أو 0 إذا لم يستلم'],
+    ['   → للأفواج التي لها كتابان في هذا الفصل (ت1): تم توفير عمودين (كتاب 1 ت 1 و كتاب 2 ت 1)'],
+    ['   → اكتب 1 (أو X) في خانة الكتاب إذا استلم الطالب نسخته، أو 0 إذا لم يستلم'],
     [''],
     ['4. احفظ الملف (Ctrl+S) بعد الانتهاء ثم شغّل أمر الاستيراد.'],
   ];

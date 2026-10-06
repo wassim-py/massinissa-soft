@@ -84,19 +84,13 @@ export async function upsertDailyLedger(
  * Guarantees zero drift between raw vouchers and DailyLedger summaries.
  */
 export async function syncDailyLedgerFromVouchers() {
-  const [vouchers, refunds, transfers] = await Promise.all([
+  const [vouchers, refunds] = await Promise.all([
     prisma.voucher.findMany({
       where: { isVoided: false, isRefund: false },
       include: { class: true },
     }),
     prisma.refund.findMany({
       include: { voucher: true },
-    }),
-    prisma.enrollmentTransfer.findMany({
-      include: {
-        fromEnrollment: { include: { class: true } },
-        toEnrollment: { include: { class: true } },
-      },
     }),
   ]);
 
@@ -136,37 +130,6 @@ export async function syncDailyLedgerFromVouchers() {
       current.amount += amount;
     } else {
       ledgerMap.set(mapKey, { branchId, date: normalizedDate, type, amount });
-    }
-  }
-
-  // Inter-branch transfers: money moves from source branch to destination branch
-  for (const t of transfers) {
-    const amount = Number(t.amount || 0);
-    const fromBranchId = t.fromEnrollment?.class?.branchId;
-    const toBranchId = t.toEnrollment?.class?.branchId;
-
-    if (amount > 0 && fromBranchId && toBranchId && fromBranchId !== toBranchId) {
-      const normalizedDate = normalizeDateToStartOfDay(t.transferredAt);
-      const dateKey = normalizedDate.toISOString();
-      const type: LedgerVoucherCategory = "TUITION";
-
-      // Deduct from source branch
-      const fromKey = `${fromBranchId}|${dateKey}|${type}`;
-      const fromCurrent = ledgerMap.get(fromKey);
-      if (fromCurrent) {
-        fromCurrent.amount -= amount;
-      } else {
-        ledgerMap.set(fromKey, { branchId: fromBranchId, date: normalizedDate, type, amount: -amount });
-      }
-
-      // Add to destination branch
-      const toKey = `${toBranchId}|${dateKey}|${type}`;
-      const toCurrent = ledgerMap.get(toKey);
-      if (toCurrent) {
-        toCurrent.amount += amount;
-      } else {
-        ledgerMap.set(toKey, { branchId: toBranchId, date: normalizedDate, type, amount: amount });
-      }
     }
   }
 

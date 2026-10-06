@@ -3982,28 +3982,6 @@ export const transferEnrollmentCredit = async (
           data: { status: "TRANSFERRED" },
         });
       }
-
-      // Cross-branch money transfer in DailyLedger
-      const fromBranchId = fromEnrollment.class.branchId;
-      const toBranchId = toClass.branchId;
-
-      if (fromBranchId !== toBranchId && transferredAmount > 0) {
-        const now = new Date();
-        // Deduct from source branch ledger
-        await upsertDailyLedger(tx, {
-          branchId: fromBranchId,
-          date: now,
-          type: "TUITION",
-          amount: -transferredAmount,
-        });
-        // Add to destination branch ledger
-        await upsertDailyLedger(tx, {
-          branchId: toBranchId,
-          date: now,
-          type: "TUITION",
-          amount: transferredAmount,
-        });
-      }
     });
 
     try {
