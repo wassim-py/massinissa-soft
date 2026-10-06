@@ -158,7 +158,7 @@ const SingleStudentPage = async (
           attendances: {
             include: {
               lesson: {
-                select: { id: true, isFree: true, classId: true, startsAt: true },
+                select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true },
               },
             },
           },
@@ -368,6 +368,7 @@ const SingleStudentPage = async (
         isExtra: r.isExtra || false,
         isCatchUp: r.isCatchUp || false,
         isFree: r.isFree || false,
+        isTeacherAbsent: Boolean(r.isTeacherAbsent),
         extraFee: r.extraFee != null ? Number(r.extraFee) : null,
         subject: { id: r.classId || 1, name: r.className || (locale === "ar" ? "مادة" : "Matière") },
         class: { id: r.classId, name: r.className || (locale === "ar" ? "قسم" : "Classe") },

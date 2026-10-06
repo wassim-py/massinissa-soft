@@ -1663,6 +1663,93 @@ export const deleteLesson = async (
   }
 };
 
+export const toggleTeacherLessonAbsenceAction = async (input: {
+  lessonId: number;
+  isTeacherAbsent: boolean;
+}) => {
+  try {
+    const session = await getAuthSession();
+    if (!session.userId && !session.rawRole) {
+      return { success: false, error: true, message: "Non autorisé / غير مصرح" };
+    }
+
+    const lesson = await prisma.lesson.findUnique({
+      where: { id: input.lessonId },
+      select: {
+        id: true,
+        branchId: true,
+        classId: true,
+        teacherId: true,
+        isTeacherAbsent: true,
+      },
+    });
+
+    if (!lesson) {
+      return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
+    }
+
+    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, lesson.branchId)) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé pour cette succursale / غير مصرح لك بتعديل حصة في هذا الفرع.",
+      };
+    }
+
+    const updated = await prisma.lesson.update({
+      where: { id: input.lessonId },
+      data: { isTeacherAbsent: input.isTeacherAbsent },
+      select: { id: true, isTeacherAbsent: true },
+    });
+
+    const adminId = session.userId || session.rawRole || "admin";
+    await prisma.auditLog.create({
+      data: {
+        action: input.isTeacherAbsent ? "TEACHER_ABSENCE_MARKED" : "TEACHER_ABSENCE_UNMARKED",
+        entityType: "Lesson",
+        entityId: String(input.lessonId),
+        branchId: lesson.branchId,
+        userId: adminId,
+        userName: adminId,
+        details: JSON.stringify({
+          lessonId: input.lessonId,
+          teacherId: lesson.teacherId,
+          classId: lesson.classId,
+          isTeacherAbsent: input.isTeacherAbsent,
+          timestamp: new Date().toISOString(),
+        }),
+      },
+    });
+
+    safeRevalidatePath("/list/lessons");
+    safeRevalidatePath(`/list/attendance/take/${input.lessonId}`);
+    if (lesson.classId) {
+      safeRevalidatePath(`/list/attendance/class/${lesson.classId}`);
+      safeRevalidatePath(`/list/payments/class/${lesson.classId}`);
+    }
+    safeRevalidatePath(`/list/teachers/${lesson.teacherId}`);
+    safeRevalidatePath("/list/finance");
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/admin");
+
+    return {
+      success: true,
+      error: false,
+      isTeacherAbsent: updated.isTeacherAbsent,
+      message: input.isTeacherAbsent
+        ? "Absence de l'enseignant enregistrée / تم تسجيل غياب الأستاذ بنجاح."
+        : "Présence de l'enseignant rétablie / تم إلغاء تسجيل غياب الأستاذ بنجاح.",
+    };
+  } catch (err: any) {
+    console.error("toggleTeacherLessonAbsenceAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: "Erreur lors de la modification du statut / خطأ أثناء تحديث حالة الأستاذ.",
+    };
+  }
+};
+
 // =================================================================
 // ATTENDANCE ACTIONS
 // =================================================================
@@ -1874,8 +1961,8 @@ export const saveAttendance = async (
       if (absentStudentIds.length > 0) {
         const [classLessons, allAttendances, allCatchUps] = await Promise.all([
           prisma.lesson.findMany({
-            where: { classId: lessonInfo.classId, isFree: false },
-            select: { id: true, startsAt: true, isFree: true },
+            where: { classId: lessonInfo.classId, isFree: false, isTeacherAbsent: false },
+            select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
             orderBy: { startsAt: "asc" },
           }),
           prisma.attendance.findMany({

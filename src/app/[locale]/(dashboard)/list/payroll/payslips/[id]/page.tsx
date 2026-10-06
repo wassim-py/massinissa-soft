@@ -109,6 +109,7 @@ export default async function PayslipDetailPage(props: PageProps) {
       isFree: s.isFree,
       isExtra: s.isExtra,
       isCatchUp: s.isCatchUp,
+      isTeacherAbsent: s.isTeacherAbsent,
     }));
   } else {
     const rawLessons = await prisma.lesson.findMany({
@@ -137,10 +138,12 @@ export default async function PayslipDetailPage(props: PageProps) {
       isFree: l.isFree,
       isExtra: l.isExtra,
       isCatchUp: l.isCatchUp,
+      isTeacherAbsent: l.isTeacherAbsent,
     }));
   }
 
-  const freeSessionsCount = sessionItems.filter((s) => s.isFree).length;
+  const freeSessionsCount = sessionItems.filter((s) => s.isFree && !s.isTeacherAbsent).length;
+  const teacherAbsencesCount = payrollCalc?.teacherAbsencesCount ?? sessionItems.filter((s) => s.isTeacherAbsent).length;
 
   const printData: PayslipPrintData = {
     id: payslip.id,
@@ -152,8 +155,9 @@ export default async function PayslipDetailPage(props: PageProps) {
       name: teacher?.name || payslip.personId,
       phone: (teacher as any)?.phone || null,
     },
-    sessionsCount: payslip.sessionsCount || sessionItems.length,
+    sessionsCount: payslip.sessionsCount || sessionItems.filter((s) => !s.isTeacherAbsent).length,
     freeSessionsCount,
+    teacherAbsencesCount,
     grossAmount: Number(payslip.grossAmount),
     bookRevenue: payrollCalc?.bookRevenue || 0,
     bookRevenueDetails: payrollCalc?.bookRevenueDetails || [],

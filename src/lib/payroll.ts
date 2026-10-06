@@ -7,6 +7,13 @@ export interface TeacherPayrollCalculation {
   teacherId: string;
   teacherName: string;
   totalSessions: number;
+  teacherAbsencesCount?: number;
+  absentSessions?: Array<{
+    lessonId: number;
+    startsAt: Date;
+    className: string;
+    branchName: string;
+  }>;
   totalPresentAttendances?: number;
   percentageOfSessionFee?: number | null;
   grossAmount: number;
@@ -35,6 +42,7 @@ export interface TeacherPayrollCalculation {
     isFree: boolean;
     isExtra: boolean;
     isCatchUp: boolean;
+    isTeacherAbsent?: boolean;
     isRetroactive?: boolean;
     retroactiveNote?: string;
   }>;
@@ -119,7 +127,7 @@ export async function calculateTeacherPayroll(
     }
   });
 
-  // Find all lessons in the period that ACTUALLY HAPPENED (have at least one attendance record)
+  // Find all lessons in the period that ACTUALLY HAPPENED (have attendance) OR where teacher was marked absent
   const lessons = await prisma.lesson.findMany({
     where: {
       teacherId: teacher.id,
@@ -127,9 +135,10 @@ export async function calculateTeacherPayroll(
         gte: startDate,
         lte: endDate,
       },
-      attendances: {
-        some: {}, // Only lessons where attendance was taken
-      },
+      OR: [
+        { attendances: { some: {} } },
+        { isTeacherAbsent: true },
+      ],
     },
     include: {
       branch: true,
@@ -177,9 +186,12 @@ export async function calculateTeacherPayroll(
         where: {
           classId: cid,
           startsAt: { lte: endDate },
-          attendances: { some: {} },
+          OR: [
+            { attendances: { some: {} } },
+            { isTeacherAbsent: true },
+          ],
         },
-        select: { id: true, startsAt: true, isFree: true },
+        select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
         orderBy: { startsAt: "asc" },
       }),
       prisma.attendance.findMany({
@@ -314,12 +326,42 @@ export async function calculateTeacherPayroll(
   });
 
   let totalSessions = 0;
+  let teacherAbsencesCount = 0;
   let totalPresentAttendances = 0;
   let calculatedGross = 0;
   const sessionDetails: NonNullable<TeacherPayrollCalculation["sessionDetails"]> = [];
+  const absentSessions: NonNullable<TeacherPayrollCalculation["absentSessions"]> = [];
 
   // 1. Process current period lessons
   lessons.forEach((lesson) => {
+    // If teacher was marked absent, record in payroll as unpaid absent session (0 DZD)
+    if (lesson.isTeacherAbsent) {
+      teacherAbsencesCount += 1;
+      absentSessions.push({
+        lessonId: lesson.id,
+        startsAt: lesson.startsAt,
+        className: lesson.class?.name || "فوج",
+        branchName: lesson.branch.name,
+      });
+      sessionDetails.push({
+        lessonId: lesson.id,
+        startsAt: lesson.startsAt,
+        className: lesson.class?.name || "فوج",
+        branchName: lesson.branch.name,
+        presentCount: 0,
+        payingCount: 0,
+        pricePerCycle: lesson.class?.pricePerCycle ? Number(lesson.class.pricePerCycle) : 0,
+        sessionPrice: 0,
+        teacherCut: 0,
+        lessonAmount: 0,
+        isFree: lesson.isFree,
+        isExtra: lesson.isExtra,
+        isCatchUp: lesson.isCatchUp,
+        isTeacherAbsent: true,
+      });
+      return;
+    }
+
     const existing = branchSessionsMap.get(lesson.branchId) || {
       branchName: lesson.branch.name,
       totalSessions: 0,
@@ -642,6 +684,8 @@ export async function calculateTeacherPayroll(
     teacherId: teacher.id,
     teacherName: teacher.name,
     totalSessions,
+    teacherAbsencesCount,
+    absentSessions,
     totalPresentAttendances,
     percentageOfSessionFee,
     sessionDetails,
@@ -690,10 +734,11 @@ export async function generatePayrollRun(
 
   for (const t of teachers) {
     const calc = await calculateTeacherPayroll(t.id, startDate, endDate);
-    // Only include teachers who taught lessons, have fixed salary, or have deductions
+    // Only include teachers who taught lessons, had absences, have fixed salary, or have deductions
     if (
       calc &&
       (calc.totalSessions > 0 ||
+        (calc.teacherAbsencesCount && calc.teacherAbsencesCount > 0) ||
         calc.grossAmount > 0 ||
         calc.salaryAdvances > 0 ||
         calc.photocopyDeductions > 0)

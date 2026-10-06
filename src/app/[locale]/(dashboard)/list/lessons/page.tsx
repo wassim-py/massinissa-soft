@@ -237,7 +237,7 @@ const LessonListPage = async (props: {
 
     const rawLessons = await prisma.$queryRaw<any[]>`
       SELECT l.id, l."startsAt", l."endsAt", l."classId", l."teacherId", l."classroomId", l."branchId",
-             l."isExtra", l."isCatchUp", l."isFree", l."extraFee",
+             l."isExtra", l."isCatchUp", l."isFree", l."extraFee", l."isTeacherAbsent",
              c.name as "className", c."isFormation", c."levelId", lvl.name as "levelName",
              t.name as "teacherName", cr.name as "classroomName", b.name as "branchName",
              fl."languageId" as "formationLanguageId", flLang.name as "formationLanguageName"
@@ -297,6 +297,7 @@ const LessonListPage = async (props: {
         isFree: Boolean(r.isFree),
         isFormation: Boolean(r.isFormation),
         isWorkshop: false,
+        isTeacherAbsent: Boolean(r.isTeacherAbsent),
         extraFee: r.extraFee != null ? Number(r.extraFee) : null,
         subject: resolvedSubject,
         class: { id: r.classId, name: r.className || t("group") } as any,

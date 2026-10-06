@@ -303,7 +303,8 @@
       "free": "Gratuite",
       "formation": "Formation",
       "workshop": "Atelier (Dawarat)",
-      "cancelled": "Annulée"
+      "cancelled": "Annulée",
+      "teacherAbsent": "Professeur absent"
     },
     "displayMode": "Mode d'affichage :",
     "viewByDay": "Quotidien (Agenda)",
@@ -365,6 +366,7 @@
     "freeBadge": "Gratuite",
     "formationBadge": "Formation",
     "workshopBadge": "Atelier",
+    "teacherAbsentBadge": "Prof absent",
     "branch": "Siège",
     "viewFormation": "Voir la formation",
     "viewWorkshop": "Voir l'atelier",

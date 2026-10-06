@@ -25,6 +25,7 @@ export type AttendanceCellDetail = {
     status: "PRESENT" | "ABSENT" | "NOT_DEFINED";
     justification?: string | null;
     isPreStart?: boolean;
+    isTeacherAbsent?: boolean;
     catchUp?: {
         catchUpDate: string;
         catchUpGroupName: string;
@@ -118,6 +119,7 @@ const ClassAttendancePage = async (
                         a.justification,
                         l.id as "lessonId",
                         l."startsAt" as date,
+                        l."isTeacherAbsent",
                         c.name as "className"
                     FROM "Attendance" a
                     JOIN "Lesson" l ON l.id = a."lessonId"
@@ -136,6 +138,7 @@ const ClassAttendancePage = async (
                             status: att.status,
                             justification: att.justification || null,
                             present: att.status === "PRESENT",
+                            isTeacherAbsent: Boolean(att.isTeacherAbsent),
                             lesson: {
                                 subject: {
                                     name: att.className || "درس",
@@ -273,6 +276,7 @@ const ClassAttendancePage = async (
             id: a.lessonId,
             startsAt: a.date,
             isFree: false,
+            isTeacherAbsent: Boolean(a.isTeacherAbsent),
         }));
 
         const classified = classifyStudentAttendanceHistory({
@@ -292,11 +296,13 @@ const ClassAttendancePage = async (
             const instanceKey = `${record.lessonId}-${dateKey}`;
             const catchUpInfo = studentCatchUps.find((cu) => cu.missedLessonId === record.lessonId);
             const isPreStart = classificationMap.get(record.lessonId) === "PRE_START_ABSENCE";
+            const isTeacherAbsent = Boolean(record.isTeacherAbsent) || classificationMap.get(record.lessonId) === "TEACHER_ABSENT";
 
             studentRecords.set(instanceKey, {
                 status: record.status || (record.present ? "PRESENT" : "ABSENT"),
                 justification: record.justification || null,
                 isPreStart,
+                isTeacherAbsent,
                 catchUp: catchUpInfo ? {
                     catchUpDate: catchUpInfo.catchUpDate,
                     catchUpGroupName: catchUpInfo.catchUpGroupName,

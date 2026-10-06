@@ -138,16 +138,26 @@ async function main() {
   }
 
   // Load reference data from DB
-  const [dbClasses, dbLevels, dbStudents] = await Promise.all([
+  const [dbClasses, dbLevels, dbFormationLevels, dbStudents] = await Promise.all([
     prisma.class.findMany({
-      include: { branch: true, level: true },
+      include: { branch: true, level: true, FormationLevel: { include: { Language: true } } },
     }),
     prisma.level.findMany(),
+    prisma.formationLevel.findMany({ include: { Language: true } }),
     prisma.student.findMany({ select: { id: true, name: true, globalNumber: true } }),
   ]);
 
-  const classLookup = buildClassLookup(dbClasses);
+  const classLookup = buildClassLookup(dbClasses as any);
   const levelByName = new Map(dbLevels.map((l) => [normalizeArabic(l.name), l.id]));
+  const formationLevelByName = new Map<string, number>();
+  for (const fl of dbFormationLevels) {
+    formationLevelByName.set(normalizeArabic(fl.name), fl.id);
+    if (fl.Language?.name) {
+      formationLevelByName.set(normalizeArabic(`${fl.Language.name} ${fl.name}`), fl.id);
+      formationLevelByName.set(normalizeArabic(`${fl.name} ${fl.Language.name}`), fl.id);
+      formationLevelByName.set(normalizeArabic(fl.Language.name), fl.id);
+    }
+  }
   const existingStudentsByName = new Map(
     dbStudents.map((s) => [normalizeArabic(s.name), s])
   );
@@ -197,7 +207,7 @@ async function main() {
   // Check group matching
   const unmatchedGroups: string[] = [];
   for (const g of allGroups) {
-    const cls = matchClass(g.groupName, g.levelName, g.branchId, classLookup, levelByName);
+    const cls = matchClass(g.groupName, g.levelName, g.branchId, classLookup, levelByName, formationLevelByName);
     if (!cls) {
       unmatchedGroups.push(
         `  [Branch ${g.branchId}] "${g.groupName}" / level "${g.levelName}" → NO MATCH`
@@ -254,7 +264,7 @@ async function main() {
   let skippedGroups = 0;
 
   for (const group of allGroups) {
-    const cls = matchClass(group.groupName, group.levelName, group.branchId, classLookup, levelByName);
+    const cls = matchClass(group.groupName, group.levelName, group.branchId, classLookup, levelByName, formationLevelByName);
     if (!cls) {
       skippedGroups++;
       continue;
@@ -355,10 +365,11 @@ async function main() {
       }
 
       // Tuition vouchers
+      const tuitionPaymentType = cls.isFormation ? 'FORMATION' : 'TUITION_4SESSION';
       for (const v of student.tuitionVouchers) {
         const vNumber = getValidVoucherNumber(v.number, seriesKey, seriesMaxNumber);
         const exists = await prisma.voucher.findFirst({
-          where: { studentId, classId: cls.id, paymentType: 'TUITION_4SESSION', number: vNumber, seriesId },
+          where: { studentId, classId: cls.id, paymentType: tuitionPaymentType, number: vNumber, seriesId },
         });
         if (!exists) {
           await createVoucher({
@@ -367,7 +378,7 @@ async function main() {
             seriesId,
             number: vNumber,
             amount: v.amount,
-            paymentType: 'TUITION_4SESSION',
+            paymentType: tuitionPaymentType,
             issuingBranchId: group.branchId,
             targetBranchId: cls.branchId,
             issuedAt: v.date,
@@ -795,9 +806,16 @@ type DbClass = {
   name: string;
   branchId: number;
   levelId: number | null;
+  formationLevelId?: number | null;
+  isFormation?: boolean;
   hasBooks: boolean;
   branch: { id: number; name: string };
   level: { id: number; name: string } | null;
+  FormationLevel?: {
+    id: number;
+    name: string;
+    Language?: { id: number; name: string } | null;
+  } | null;
 };
 
 function buildClassLookup(classes: DbClass[]): Map<string, DbClass> {
@@ -813,7 +831,8 @@ function matchClass(
   levelName: string,
   branchId: number,
   classLookup: Map<string, DbClass>,
-  levelByName: Map<string, number>
+  levelByName: Map<string, number>,
+  formationLevelByName?: Map<string, number>
 ): DbClass | null {
   const normGroup = normalizeArabic(groupName);
 
@@ -843,6 +862,28 @@ function matchClass(
     }
   }
 
+  // Try matching by formation level
+  if (formationLevelByName) {
+    const fLevelId =
+      formationLevelByName.get(normalizeArabic(levelName)) ||
+      formationLevelByName.get(normGroup);
+    if (fLevelId) {
+      for (const [key, cls] of classLookup.entries()) {
+        if (!key.startsWith(`${branchId}-`)) continue;
+        if (cls.isFormation && cls.formationLevelId === fLevelId) {
+          const normClass = normalizeArabic(cls.name);
+          const words = normGroup.split(' ').filter((w) => w.length > 2);
+          if (words.length === 0 || words.some((w) => normClass.includes(w))) return cls;
+        }
+      }
+      // Single formation class match for branch + formationLevelId
+      const matching = [...classLookup.values()].filter(
+        (c) => c.branchId === branchId && c.isFormation && c.formationLevelId === fLevelId
+      );
+      if (matching.length === 1) return matching[0];
+    }
+  }
+
   // Cross-branch fallback: exact name match in another branch
   for (const [key, cls] of classLookup.entries()) {
     const normClass = normalizeArabic(cls.name);
@@ -860,8 +901,8 @@ async function findOrCreateSeries(branchId: number, levelId: number | null): Pro
   const existing = await prisma.voucherSeries.findFirst({
     where: {
       issuingBranchId: branchId,
-      scope: 'LOCAL_LEVEL',
-      levelId: levelId ?? undefined,
+      scope: levelId ? 'LOCAL_LEVEL' : 'LOCAL_BRANCH',
+      levelId: levelId ?? null,
     },
   });
   if (existing) return existing.id;
@@ -869,7 +910,7 @@ async function findOrCreateSeries(branchId: number, levelId: number | null): Pro
   const created = await prisma.voucherSeries.create({
     data: {
       issuingBranchId: branchId,
-      scope: 'LOCAL_LEVEL',
+      scope: levelId ? 'LOCAL_LEVEL' : 'LOCAL_BRANCH',
       levelId,
       targetBranchId: branchId,
       currentNumber: 0,

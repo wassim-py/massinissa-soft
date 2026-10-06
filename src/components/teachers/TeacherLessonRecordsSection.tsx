@@ -19,6 +19,7 @@ export interface LessonRecordItem {
   extraFee?: number | null;
   isCatchUp: boolean;
   isFree: boolean;
+  isTeacherAbsent?: boolean;
   presentCount: number;
   absentCount: number;
   totalAttendances: number;
@@ -185,7 +186,11 @@ export default function TeacherLessonRecordsSection({
                 <span className="text-muted text-xs ms-1">({lesson.classroomName})</span>
               </td>
               <td className="p-3.5 text-center">
-                {lesson.isFree ? (
+                {lesson.isTeacherAbsent ? (
+                  <Badge variant="danger" size="sm" className="bg-rose-100 text-rose-800 border-rose-300">
+                    {locale === "ar" ? "أستاذ غائب" : "Prof absent"}
+                  </Badge>
+                ) : lesson.isFree ? (
                   <Badge variant="success" size="sm">{t("lessonTypeFree")}</Badge>
                 ) : lesson.isExtra ? (
                   <Badge variant="warning" size="sm">{t("lessonTypeExtra")}</Badge>

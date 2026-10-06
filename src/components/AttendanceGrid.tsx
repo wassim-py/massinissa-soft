@@ -70,6 +70,10 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         <span className="w-3 h-3 rounded-full bg-blue-600 inline-block shadow-2xs"></span>
                         <span>{t("legendCaughtUp")}</span>
                     </div>
+                    <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-rose-500 inline-block shadow-2xs"></span>
+                        <span>{locale === "ar" ? "أستاذ غائب (محفوظ)" : "Prof absent (préservé)"}</span>
+                    </div>
                 </div>
             </div>
 
@@ -150,6 +154,21 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                             typeof rawRecord === "boolean"
                                                 ? { status: rawRecord ? "PRESENT" : "ABSENT" }
                                                 : rawRecord;
+
+                                        if (record.isTeacherAbsent) {
+                                            // Rose circle: teacher absent session, credit preserved
+                                            return (
+                                                <td
+                                                    key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                    className="p-3 text-center"
+                                                >
+                                                    <div
+                                                        className="w-5 h-5 mx-auto rounded-full bg-rose-500 ring-2 ring-rose-200 shadow-2xs"
+                                                        title={locale === "ar" ? "أستاذ غائب (الرصيد غير مخصوم)" : "Professeur absent (crédit préservé)"}
+                                                    />
+                                                </td>
+                                            );
+                                        }
 
                                         if (record.status === "PRESENT") {
                                             // Green circle: Present

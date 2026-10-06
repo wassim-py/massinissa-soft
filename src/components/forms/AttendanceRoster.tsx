@@ -16,7 +16,7 @@ import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
 import CatchUpVisitorModal from "./CatchUpVisitorModal";
-import { BookOpen, Check, X, Minus, ChevronDown, UserPlus } from "lucide-react";
+import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, UserX } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
 import BookStatusBadge, { computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
@@ -466,6 +466,27 @@ const AttendanceRoster = ({
           )}
         </div>
       </div>
+
+      {/* Teacher Absent Info Banner */}
+      {lesson.isTeacherAbsent && (
+        <div className="p-3.5 mb-4 bg-rose-50 border-2 border-rose-300 rounded-xl flex items-center justify-between gap-3 text-rose-950 text-sm shadow-xs font-sans">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-600 inline-block shrink-0"></span>
+            <div>
+              <strong className="font-bold">
+                {locale === "ar" ? "الأستاذ غائب في هذه الحصة :" : "Enseignant absent pour cette séance :"}
+              </strong>{" "}
+              {locale === "ar"
+                ? "تسجيل الحضور في هذه الحصة لن يخصم من رصيد حصص التلاميذ (0 حصة مستهلكة)، وسيتم احتساب غياب الأستاذ في جدول الأجور."
+                : "Faire l'appel pour cette séance ne débitera pas le crédit des élèves (0 séance décomptée). L'absence de l'enseignant est enregistrée dans sa paie."}
+            </div>
+          </div>
+          <span className="bg-rose-600 text-white text-xs font-bold px-2.5 py-1 rounded-full shadow-xs flex items-center gap-1 shrink-0">
+            <UserX className="w-3.5 h-3.5" />
+            <span>{locale === "ar" ? "أستاذ غائب" : "Prof absent"}</span>
+          </span>
+        </div>
+      )}
 
       {/* Free Session Info Banner */}
       {lesson.isFree && (

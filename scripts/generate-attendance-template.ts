@@ -72,6 +72,7 @@ async function main() {
     include: {
       branch: true,
       level: true,
+      FormationLevel: { include: { Language: true } },
       teacher: { select: { id: true, name: true } },
       lessons: {
         orderBy: { startsAt: 'asc' },
@@ -83,7 +84,7 @@ async function main() {
         orderBy: { enrolledAt: 'asc' },
       },
     },
-    orderBy: [{ branchId: 'asc' }, { name: 'asc' }],
+    orderBy: [{ branchId: 'asc' }, { isFormation: 'asc' }, { name: 'asc' }],
   });
 
   if (classes.length === 0) {
@@ -108,8 +109,8 @@ async function main() {
     }
     const students = [...studentsMap.values()].sort((a, b) => a.globalNumber - b.globalNumber);
 
-    if (students.length === 0) {
-      // Skip classes with 0 enrolled students
+    // Skip regular classes with 0 enrolled students, but ALWAYS generate templates for formation classes
+    if (students.length === 0 && !cls.isFormation) {
       continue;
     }
 
@@ -139,7 +140,8 @@ async function generateGroupTemplate(
   students: Array<{ id: string; name: string; globalNumber: number }>,
   existingLessons: any[]
 ) {
-  const safeFilename = sanitizeFilename(`${cls.branch.name}_${cls.name}`);
+  const formationPrefix = cls.isFormation ? 'FORMATION_' : '';
+  const safeFilename = sanitizeFilename(`${cls.branch.name}_${formationPrefix}${cls.name}`);
   const filePath = path.join(OUTPUT_DIR, `${safeFilename}.xlsx`);
 
   const wb = new ExcelJS.Workbook();
@@ -173,7 +175,11 @@ async function generateGroupTemplate(
   // ── Row 1: Title ──────────────────────────────────────────────────
   ws.mergeCells(TITLE_ROW, NUM_COL, TITLE_ROW, LAST_COL);
   const titleCell = ws.getCell(TITLE_ROW, NUM_COL);
-  titleCell.value = `${cls.name}  |  ${cls.branch.name}  |  ${cls.level?.name ?? ''}  |  ${cls.teacher?.name ?? ''}`;
+  const levelLabel = cls.isFormation
+    ? (cls.FormationLevel ? `${cls.FormationLevel.Language?.name ?? 'تكوين'} - ${cls.FormationLevel.name}` : 'تكوين')
+    : (cls.level?.name ?? '');
+  const titlePrefix = cls.isFormation ? '[تكوين / Formation] ' : '';
+  titleCell.value = `${titlePrefix}${cls.name}  |  ${cls.branch.name}  |  ${levelLabel}  |  ${cls.teacher?.name ?? ''}`;
   titleCell.font = { bold: true, size: 13, color: { argb: COLOR_HEADER_FG } };
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_GROUP_TITLE } };
   titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -183,6 +189,7 @@ async function generateGroupTemplate(
   ws.getCell(META_ROW, 1).value = `class_id=${cls.id}`;
   ws.getCell(META_ROW, 2).value = `branch_id=${cls.branchId}`;
   ws.getCell(META_ROW, 3).value = `has_books=${hasBooks}`;
+  ws.getCell(META_ROW, 4).value = `is_formation=${Boolean(cls.isFormation)}`;
   ws.getRow(META_ROW).hidden = true;
 
   // ── Row 3: Free lesson indicator row ──────────────────────────────
@@ -248,8 +255,9 @@ async function generateGroupTemplate(
     ws.getColumn(BOOK_T3_COL).width = 8;
   }
 
-  // ── Rows 5+: Students ─────────────────────────────────────────────
-  for (let s = 0; s < students.length; s++) {
+  // ── Rows 5+: Students (or 30 pre-formatted empty rows if group has no students yet) ──
+  const totalStudentRows = students.length > 0 ? students.length : 30;
+  for (let s = 0; s < totalStudentRows; s++) {
     const student = students[s];
     const rowIdx = FIRST_DATA_ROW + s;
     const row = ws.getRow(rowIdx);
@@ -258,19 +266,21 @@ async function generateGroupTemplate(
 
     // # cell
     const numCell = row.getCell(NUM_COL);
-    numCell.value = student.globalNumber;
+    numCell.value = student ? student.globalNumber : (s + 1);
     numCell.font = { size: 9, color: { argb: '666666' } };
     numCell.alignment = { horizontal: 'center', vertical: 'middle' };
     numCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_STUDENT_BG } };
     setBorder(numCell);
 
-    // Name cell (store student_id in cell note)
+    // Name cell (store student_id in cell note if already enrolled)
     const nameCell = row.getCell(NAME_COL);
-    nameCell.value = student.name;
+    nameCell.value = student ? student.name : '';
     nameCell.font = { bold: true, size: 10 };
     nameCell.alignment = { horizontal: 'right', vertical: 'middle', readingOrder: 'rtl' };
     nameCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_STUDENT_BG } };
-    (nameCell as any).note = { texts: [{ text: `student_id:${student.id}` }] };
+    if (student) {
+      (nameCell as any).note = { texts: [{ text: `student_id:${student.id}` }] };
+    }
     setBorder(nameCell);
 
     // Lesson cells — default 0

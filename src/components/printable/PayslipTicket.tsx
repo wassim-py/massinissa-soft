@@ -14,6 +14,7 @@ export interface PayslipSessionItem {
   isFree: boolean;
   isExtra?: boolean;
   isCatchUp?: boolean;
+  isTeacherAbsent?: boolean;
 }
 
 export interface PayslipPrintData {
@@ -28,6 +29,7 @@ export interface PayslipPrintData {
   };
   sessionsCount: number;
   freeSessionsCount?: number;
+  teacherAbsencesCount?: number;
   grossAmount: number;
   bookRevenue?: number;
   bookRevenueDetails?: Array<{
@@ -107,8 +109,9 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
   const formatDZD = (num: number) => `${Number(num).toLocaleString('fr-FR')} DZD`;
 
   const allSessions = data.sessions || [];
-  const freeLessons = allSessions.filter((s) => s.isFree);
-  const paidLessons = allSessions.filter((s) => !s.isFree);
+  const absentLessons = allSessions.filter((s) => s.isTeacherAbsent);
+  const freeLessons = allSessions.filter((s) => s.isFree && !s.isTeacherAbsent);
+  const paidLessons = allSessions.filter((s) => !s.isFree && !s.isTeacherAbsent);
   const totalFreeSessions = data.freeSessionsCount ?? freeLessons.length;
   const totalPaidSessions = Math.max(0, data.sessionsCount - totalFreeSessions);
 
@@ -376,6 +379,51 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           </div>
         )}
       </div>
+
+      {/* Section 3b: Teacher Absence Sessions */}
+      {(absentLessons.length > 0 || (data.teacherAbsencesCount ?? 0) > 0) && (
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-xs font-bold text-gray-700">
+              Séances d&apos;absence de l&apos;enseignant (Non rémunérées) :
+            </h2>
+            <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded">
+              {absentLessons.length} séance(s) manquée(s)
+            </span>
+          </div>
+
+          <table className="w-full border-collapse text-xs text-left">
+            <thead>
+              <tr className="bg-rose-50 border border-rose-200 text-rose-900">
+                <th className="p-1.5 border border-rose-200">Date & Heure</th>
+                <th className="p-1.5 border border-rose-200">Groupe / Classe</th>
+                <th className="p-1.5 border border-rose-200">Branche</th>
+                <th className="p-1.5 border border-rose-200 text-center">Statut</th>
+                <th className="p-1.5 border border-rose-200 text-right">Rémunération</th>
+              </tr>
+            </thead>
+            <tbody>
+              {absentLessons.map((al, idx) => (
+                <tr key={al.lessonId || idx} className="border border-gray-200">
+                  <td className="p-1.5 border border-gray-200 font-mono text-[11px] text-gray-800">
+                    {formatDateTime(al.startsAt)}
+                  </td>
+                  <td className="p-1.5 border border-gray-200 font-semibold text-gray-900">{al.className}</td>
+                  <td className="p-1.5 border border-gray-200 text-gray-600">{al.branchName}</td>
+                  <td className="p-1.5 border border-gray-200 text-center">
+                    <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                      Enseignant Absent
+                    </span>
+                  </td>
+                  <td className="p-1.5 border border-gray-200 text-right font-mono font-bold text-rose-700">
+                    0 DZD (Non rémunéré)
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Section 4: Detailed Deductions (Photocopy & Advances) */}
       {data.photocopyDetails && data.photocopyDetails.length > 0 && (

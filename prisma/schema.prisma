@@ -132,6 +132,7 @@ model Lesson {
   isCatchUp   Boolean      @default(false)
   isExtra     Boolean      @default(false)
   isFree      Boolean      @default(false)
+  isTeacherAbsent Boolean  @default(false)
   startsAt    DateTime
   attendances Attendance[]
   missedByCatchUps    CatchUpAttendance[] @relation("MissedLesson")
@@ -147,6 +148,7 @@ model Lesson {
   @@index([classroomId, startsAt])
   @@index([startsAt, endsAt])
   @@index([isExtra, isCatchUp, isFree])
+  @@index([isTeacherAbsent])
 }
 
 model Attendance {

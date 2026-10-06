@@ -303,7 +303,8 @@
       "free": "مجانية (Free)",
       "formation": "تكوين (Formation)",
       "workshop": "دورة ورشة (Atelier)",
-      "cancelled": "ملغاة"
+      "cancelled": "ملغاة",
+      "teacherAbsent": "أستاذ غائب"
     },
     "displayMode": "طريقة العرض:",
     "viewByDay": "يومي (أجندة)",
@@ -365,6 +366,7 @@
     "freeBadge": "مجانية",
     "formationBadge": "تكوين",
     "workshopBadge": "دورة ورشة",
+    "teacherAbsentBadge": "أستاذ غائب",
     "branch": "الفرع",
     "viewFormation": "عرض التكوين",
     "viewWorkshop": "عرض الدورة",

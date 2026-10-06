@@ -196,7 +196,8 @@ export type AttendanceClassification =
   | "PRE_START_ABSENCE"
   | "INTERLEAVED_ABSENCE"
   | "TRAILING_ABSENCE_HELD"
-  | "FORFEITED_DROPOUT";
+  | "FORFEITED_DROPOUT"
+  | "TEACHER_ABSENT";
 
 export interface StudentAttendanceHistoryItem {
   lessonId: number;
@@ -218,6 +219,7 @@ export interface StudentAttendanceHistoryItem {
  * 4. INTERLEAVED_ABSENCE: Absence followed by subsequent presence (consumed credit, teacher paid, non-refundable).
  * 5. TRAILING_ABSENCE_HELD: Absence at the end with <60 calendar days elapsed (held pending, 0 teacher pay this month, refundable if student leaves).
  * 6. FORFEITED_DROPOUT: Student missed >=60 calendar days (2 months) without attending (money retained 100% by school, 0 teacher pay, non-refundable).
+ * 7. TEACHER_ABSENT: Teacher marked absent for lesson (0 credit deducted, student credit untouched, 0 teacher pay).
  */
 export function classifyStudentAttendanceHistory({
   lessons,
@@ -225,7 +227,7 @@ export function classifyStudentAttendanceHistory({
   catchUps = [],
   referenceDate = new Date(),
 }: {
-  lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean }>;
+  lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
   catchUps?: Array<{ missedLessonId: number; recordedAt?: Date | string }>;
   referenceDate?: Date;
@@ -241,8 +243,9 @@ export function classifyStudentAttendanceHistory({
   const catchUpSet = new Set<number>();
   catchUps.forEach((c) => catchUpSet.add(c.missedLessonId));
 
-  // Determine presence at each lesson
+  // Determine presence at each lesson (teacher absent lessons are never treated as student presence or normal sessions)
   const presenceArray: boolean[] = sortedLessons.map((l) => {
+    if (l.isTeacherAbsent) return false;
     const rawStatus = attendanceMap.get(l.id);
     const hasCatchUp = catchUpSet.has(l.id);
     return rawStatus === "PRESENT" || hasCatchUp;
@@ -259,14 +262,15 @@ export function classifyStudentAttendanceHistory({
   const lastPresenceDate =
     lastPresenceIndex >= 0 ? new Date(sortedLessons[lastPresenceIndex].startsAt) : null;
 
-  // Count trailing unexcused absences from lastPresenceIndex to end
+  // Count trailing unexcused absences from lastPresenceIndex to end (excluding teacher absent lessons)
   const trailingAbsenceCount =
     lastPresenceIndex >= 0
       ? sortedLessons.slice(lastPresenceIndex + 1).filter((l) => {
+          if (l.isTeacherAbsent) return false;
           const st = attendanceMap.get(l.id);
           return st === "ABSENT";
         }).length
-      : sortedLessons.filter((l) => attendanceMap.get(l.id) === "ABSENT").length;
+      : sortedLessons.filter((l) => !l.isTeacherAbsent && attendanceMap.get(l.id) === "ABSENT").length;
 
   const daysSinceLastPresence = lastPresenceDate
     ? Math.floor((referenceDate.getTime() - lastPresenceDate.getTime()) / (1000 * 60 * 60 * 24))
@@ -282,6 +286,23 @@ export function classifyStudentAttendanceHistory({
     const startsAt = new Date(lesson.startsAt);
     const rawStatus = attendanceMap.get(lesson.id) || "ABSENT";
     const hasCatchUp = catchUpSet.has(lesson.id);
+
+    // Rule: When teacher is absent, student credits are untouched (0 credit deducted)
+    // even if attendance was taken, and teacher is not paid for this lesson.
+    if (lesson.isTeacherAbsent) {
+      history.push({
+        lessonId: lesson.id,
+        startsAt,
+        status: (rawStatus as any) || "ABSENT",
+        isCatchUp: false,
+        classification: "TEACHER_ABSENT",
+        isConsumedCredit: false,
+        isTeacherPayable: false,
+        isRefundable: false,
+        isHeld: false,
+      });
+      continue;
+    }
 
     if (rawStatus === "NOT_DEFINED") {
       history.push({
@@ -466,7 +487,7 @@ export function computeStudentConsecutiveAbsences({
   attendances,
   catchUps = [],
 }: {
-  lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean }>;
+  lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
   catchUps?: Array<{ missedLessonId: number }>;
 }): number {
@@ -474,7 +495,7 @@ export function computeStudentConsecutiveAbsences({
     return 0;
   }
   const sortedLessons = [...lessons]
-    .filter((l) => !l.isFree)
+    .filter((l) => !l.isFree && !l.isTeacherAbsent)
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
   const attendanceMap = new Map<number, string>();

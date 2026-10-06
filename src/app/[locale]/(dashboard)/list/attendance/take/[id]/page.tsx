@@ -104,6 +104,7 @@ const TakeAttendancePage = async (
     isExtra: Boolean(l.isExtra),
     isCatchUp: Boolean(l.isCatchUp),
     isFree: Boolean(l.isFree),
+    isTeacherAbsent: Boolean(l.isTeacherAbsent),
     extraFee: l.extraFee != null ? Number(l.extraFee) : null,
     branchId: l.branchId != null ? Number(l.branchId) : null,
   };
@@ -262,6 +263,7 @@ const TakeAttendancePage = async (
                   id: true,
                   startsAt: true,
                   isFree: true,
+                  isTeacherAbsent: true,
                 },
               },
             },

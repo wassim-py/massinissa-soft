@@ -4,7 +4,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { TeacherPayrollCalculation } from "@/lib/payroll";
-import { Coins, CheckCircle2, Building2, BookOpen } from "lucide-react";
+import { Coins, CheckCircle2, Building2, BookOpen, UserX } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
 interface TeacherPayrollSectionProps {
@@ -92,7 +92,7 @@ export default function TeacherPayrollSection({
 
       <CardContent className="space-y-6 pt-2">
         {/* KPI Cards */}
-        <div className={`grid grid-cols-2 ${(payroll.bookRevenue ?? 0) > 0 ? "lg:grid-cols-7" : "lg:grid-cols-6"} gap-3.5`}>
+        <div className={`grid grid-cols-2 ${(payroll.bookRevenue ?? 0) > 0 ? "lg:grid-cols-4 xl:grid-cols-8" : "lg:grid-cols-4 xl:grid-cols-7"} gap-3.5`}>
           {/* Sessions count */}
           <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
             <span className="text-xs text-muted font-medium">{t("completedSessions")}</span>
@@ -101,6 +101,31 @@ export default function TeacherPayrollSection({
                 {payroll.totalSessions}
               </span>
               <span className="text-xs text-muted">{t("sessionsUnit")}</span>
+            </div>
+          </div>
+
+          {/* Teacher Absences */}
+          <div className={`p-4 rounded-xl border flex flex-col justify-between shadow-xs ${
+            (payroll.teacherAbsencesCount ?? 0) > 0
+              ? "bg-rose-50/80 border-rose-200"
+              : "bg-surface-subtle/70 border-border/80"
+          }`}>
+            <span className={`text-xs font-medium ${
+              (payroll.teacherAbsencesCount ?? 0) > 0 ? "text-rose-800" : "text-muted"
+            }`}>
+              {locale === "ar" ? "غيابات الأستاذ" : "Absences enseignant"}
+            </span>
+            <div className="mt-2 flex items-baseline gap-1">
+              <span className={`text-2xl font-bold ${
+                (payroll.teacherAbsencesCount ?? 0) > 0 ? "text-rose-700" : "text-gray-900"
+              }`}>
+                {payroll.teacherAbsencesCount ?? 0}
+              </span>
+              <span className={`text-xs ${
+                (payroll.teacherAbsencesCount ?? 0) > 0 ? "text-rose-600" : "text-muted"
+              }`}>
+                {t("sessionsUnit")}
+              </span>
             </div>
           </div>
 
@@ -205,7 +230,11 @@ export default function TeacherPayrollSection({
               <tr
                 key={idx}
                 className={`border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body ${
-                  s.isFree ? "bg-orange-50/50 border-l-4 border-l-orange-500" : ""
+                  s.isTeacherAbsent
+                    ? "bg-rose-50/60 border-l-4 border-l-rose-500"
+                    : s.isFree
+                    ? "bg-orange-50/50 border-l-4 border-l-orange-500"
+                    : ""
                 }`}
               >
                 <td className="p-3.5 text-gray-800 font-medium">
@@ -218,7 +247,11 @@ export default function TeacherPayrollSection({
                   {s.branchName}
                 </td>
                 <td className="p-3.5 text-center">
-                  {s.isFree ? (
+                  {s.isTeacherAbsent ? (
+                    <Badge size="sm" className="bg-rose-100 text-rose-800 border-rose-300 font-bold">
+                      {locale === "ar" ? "غياب الأستاذ" : "Enseignant absent"}
+                    </Badge>
+                  ) : s.isFree ? (
                     <Badge size="sm" className="bg-orange-100 text-orange-800 border-orange-300 font-bold">
                       {t("lessonTypeFree")}
                     </Badge>
@@ -231,32 +264,81 @@ export default function TeacherPayrollSection({
                   )}
                 </td>
                 <td className="p-3.5 text-center">
-                  <div className="flex flex-col items-center">
-                    <span className="font-bold text-primary">{s.presentCount} {t("presentUnit")}</span>
-                    {s.payingCount !== undefined && s.payingCount !== s.presentCount && (
-                      <span className="text-[11px] text-muted font-medium">
-                        ({s.payingCount} {locale === "ar" ? "دافع" : "payant"})
-                      </span>
-                    )}
-                  </div>
+                  {s.isTeacherAbsent ? (
+                    <span className="text-xs text-rose-700 font-medium">
+                      {locale === "ar" ? "غياب مسجل" : "Absent"}
+                    </span>
+                  ) : (
+                    <div className="flex flex-col items-center">
+                      <span className="font-bold text-primary">{s.presentCount} {t("presentUnit")}</span>
+                      {s.payingCount !== undefined && s.payingCount !== s.presentCount && (
+                        <span className="text-[11px] text-muted font-medium">
+                          ({s.payingCount} {locale === "ar" ? "دافع" : "payant"})
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </td>
                 <td className="p-3.5 text-end text-gray-700">
                   {formatDZD(s.sessionPrice)}
                 </td>
                 <td className="p-3.5 text-end text-success-text font-semibold">
-                  {formatDZD(Math.round(s.teacherCut))}
+                  {s.isTeacherAbsent ? "0 DZD" : formatDZD(Math.round(s.teacherCut))}
                 </td>
                 <td className="p-3.5 text-end text-blue-700 font-semibold">
-                  {formatDZD(Math.round(Math.max(0, s.sessionPrice - s.teacherCut)))}
+                  {s.isTeacherAbsent ? "0 DZD" : formatDZD(Math.round(Math.max(0, s.sessionPrice - s.teacherCut)))}
                 </td>
                 <td className="p-3.5 text-end font-bold text-gray-900">
-                  {formatDZD(s.lessonAmount)}
+                  {s.isTeacherAbsent ? (
+                    <span className="text-xs text-rose-600 font-bold">0 DZD</span>
+                  ) : (
+                    formatDZD(s.lessonAmount)
+                  )}
                 </td>
               </tr>
             )}
             emptyTitle={t("emptyPayrollTitle")}
             emptyDescription={t("emptyPayrollDesc")}
           />
+
+          {/* Dedicated Teacher Absences Summary */}
+          {((payroll.teacherAbsencesCount ?? 0) > 0 || (payroll.absentSessions && payroll.absentSessions.length > 0)) && (
+            <div className="mt-4 p-4 bg-rose-50/70 border border-rose-200 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-bold text-rose-900 flex items-center gap-1.5">
+                  <UserX className="w-4 h-4 text-rose-600" />
+                  <span>{locale === "ar" ? "سجل غيابات الأستاذ (غير مدفوعة)" : "Séances d'absence de l'enseignant (Non rémunérées)"}</span>
+                </h4>
+                <Badge variant="danger" size="sm">
+                  {payroll.teacherAbsencesCount || payroll.absentSessions?.length || 0} {t("sessionsUnit")}
+                </Badge>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-rose-200 bg-white">
+                <table className="w-full text-xs text-start">
+                  <thead>
+                    <tr className="bg-rose-100/60 border-b border-rose-200 text-rose-900 font-semibold">
+                      <th className="p-2.5 text-start">{t("colDateTime")}</th>
+                      <th className="p-2.5 text-start">{t("colGroup")}</th>
+                      <th className="p-2.5 text-start">{t("colBranch")}</th>
+                      <th className="p-2.5 text-end">{locale === "ar" ? "الأثر المالي" : "Impact financier"}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(payroll.absentSessions || []).map((abs, i) => (
+                      <tr key={i} className="border-b border-rose-100 text-gray-800 last:border-b-0 hover:bg-rose-50/40">
+                        <td className="p-2.5 font-medium">{formatDate(abs.startsAt)}</td>
+                        <td className="p-2.5 font-semibold text-gray-900">{abs.className}</td>
+                        <td className="p-2.5 text-gray-600">{abs.branchName}</td>
+                        <td className="p-2.5 text-end font-mono text-rose-700 font-bold">
+                          0 DZD ({locale === "ar" ? "غير مدفوعة" : "Non rémunéré"})
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Book Revenue Details (Rule: 100% Enseignant) */}

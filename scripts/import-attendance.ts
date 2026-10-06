@@ -24,6 +24,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as ExcelJS from 'exceljs';
+import { v4 as uuidv4 } from 'uuid';
 import { prisma } from './lib/db';
 
 const ATTENDANCE_DIR = path.join(__dirname, '../data/attendance');
@@ -101,6 +102,7 @@ async function main() {
       teacher: true,
       branch: { include: { classrooms: true } },
       level: true,
+      FormationLevel: { include: { Language: true } },
       lessons: {
         orderBy: { startsAt: 'asc' },
       },
@@ -362,33 +364,85 @@ async function processFile(
     const row = ws.getRow(rowIdx);
     const nameCell = row.getCell(NAME_COL);
     const nameVal = getCellText(nameCell);
-    if (!nameVal) break; // end of student list
+    if (!nameVal) {
+      // Check if there are any further rows with names within 5 rows
+      let hasMore = false;
+      for (let scan = rowIdx + 1; scan <= Math.min(rowIdx + 5, ws.rowCount); scan++) {
+        if (getCellText(ws.getRow(scan).getCell(NAME_COL))) {
+          hasMore = true;
+          break;
+        }
+      }
+      if (hasMore) {
+        rowIdx++;
+        continue;
+      }
+      break; // end of student list
+    }
+
+    const cleanName = nameVal.trim().toLowerCase();
 
     // Extract student_id from note
     const noteText = ((nameCell as any).note as any)?.texts?.[0]?.text
       ?? (typeof (nameCell as any).note === 'string' ? (nameCell as any).note : '');
     const studentIdMatch = String(noteText).match(/student_id:([a-f0-9\-]{36})/i);
-    if (!studentIdMatch) {
-      res.errors.push(`Row ${rowIdx}: Cannot read student_id for "${nameVal}"`);
-      rowIdx++;
-      continue;
-    }
-    let studentId = studentIdMatch[1];
-    if (!validStudentSet.has(studentId)) {
-      const byName = studentByName.get(nameVal.trim().toLowerCase());
+    let studentId: string | null = null;
+
+    if (studentIdMatch && validStudentSet.has(studentIdMatch[1])) {
+      studentId = studentIdMatch[1];
+    } else {
+      // Name lookup fallback
+      const byName = studentByName.get(cleanName);
       if (byName) {
         studentId = byName;
       } else {
         const found = validStudents.find(
-          (s) => s.name.includes(nameVal) || nameVal.includes(s.name)
+          (s) => s.name.trim().toLowerCase() === cleanName ||
+                 s.name.includes(nameVal.trim()) ||
+                 nameVal.trim().includes(s.name)
         );
         if (found) {
           studentId = found.id;
         } else {
-          res.errors.push(`Row ${rowIdx}: Student "${nameVal}" (id: ${studentId}) not found in DB. Skipping.`);
-          rowIdx++;
-          continue;
+          // Auto-create student if entered manually (especially for formations)
+          if (!dryRun) {
+            studentId = uuidv4();
+            const globalNum = await getNextGlobalNumber();
+            await prisma.student.create({
+              data: {
+                id: studentId,
+                globalNumber: globalNum,
+                name: nameVal.trim(),
+                registeredBranchId: cls.branchId,
+                payerStatus: 'NORMAL',
+              },
+            });
+            validStudents.push({ id: studentId, name: nameVal.trim() });
+            validStudentSet.add(studentId);
+            studentByName.set(cleanName, studentId);
+            console.log(`    👤 Created new student in DB: "${nameVal.trim()}" (globalNumber: ${globalNum})`);
+          } else {
+            studentId = `dry-run-student-${rowIdx}`;
+          }
         }
+      }
+    }
+
+    // Ensure student is enrolled in this class
+    if (!dryRun && studentId && !studentId.startsWith('dry-run-')) {
+      const existingEnr = await prisma.enrollment.findFirst({
+        where: { studentId, classId: cls.id },
+      });
+      if (!existingEnr) {
+        await prisma.enrollment.create({
+          data: {
+            studentId,
+            classId: cls.id,
+            academicYearId: 11,
+            inscriptionFeeCharged: true,
+            payerStatus: 'NORMAL',
+          },
+        });
       }
     }
 
@@ -427,7 +481,7 @@ async function processFile(
     }
 
     // ── Process Book Receipts ───────────────────────────────────────
-    if ((hasBooks || bookCols.length > 0) && cls.teacherId && cls.levelId) {
+    if ((hasBooks || bookCols.length > 0) && cls.teacherId && (cls.levelId || cls.formationLevelId)) {
       if (!cls.hasBooks && !dryRun) {
         await prisma.class.update({
           where: { id: cls.id },
@@ -436,20 +490,22 @@ async function processFile(
         cls.hasBooks = true;
       }
 
+      const effectiveLevelId = cls.levelId ?? (await getFallbackLevelId());
+
       for (const { col, trimNum, bookNum } of bookCols) {
         const val = row.getCell(col).value;
         const gotBook = isCellMarked(val);
         if (!gotBook) continue;
 
         const trimId = TRIMESTER_IDS[trimNum];
-        const bookKey = `${cls.teacherId}-${cls.levelId}-${trimId}-${bookNum}`;
+        const bookKey = `${cls.teacherId}-${effectiveLevelId}-${trimId}-${bookNum}`;
 
         let bookId = bookCache.get(bookKey);
         if (!bookId) {
           if (!dryRun) {
             // Find all books for this teacher + level + trimester, ordered by id asc
             const existingBooks = await prisma.book.findMany({
-              where: { teacherId: cls.teacherId, levelId: cls.levelId, trimesterId: trimId },
+              where: { teacherId: cls.teacherId, levelId: effectiveLevelId, trimesterId: trimId },
               orderBy: { id: 'asc' },
             });
             const targetBook = existingBooks[bookNum - 1];
@@ -463,7 +519,7 @@ async function processFile(
                 data: {
                   title,
                   teacherId: cls.teacherId,
-                  levelId: cls.levelId,
+                  levelId: effectiveLevelId,
                   trimesterId: trimId,
                 },
               });
@@ -475,7 +531,7 @@ async function processFile(
           } else {
             // In dry run, check if book exists in DB or simulate creation
             const existingBooks = await prisma.book.findMany({
-              where: { teacherId: cls.teacherId, levelId: cls.levelId, trimesterId: trimId },
+              where: { teacherId: cls.teacherId, levelId: effectiveLevelId, trimesterId: trimId },
               orderBy: { id: 'asc' },
             });
             const targetBook = existingBooks[bookNum - 1];
@@ -652,7 +708,31 @@ async function getFirstClassroomId(branchId: number): Promise<number> {
   return classroom.id;
 }
 
+let cachedFallbackLevelId: number | null = null;
+async function getFallbackLevelId(): Promise<number> {
+  if (cachedFallbackLevelId) return cachedFallbackLevelId;
+  const lvl = await prisma.level.findFirst({ select: { id: true } });
+  cachedFallbackLevelId = lvl?.id ?? 73;
+  return cachedFallbackLevelId;
+}
+
+async function getNextGlobalNumber(): Promise<number> {
+  const result = await prisma.$queryRaw<Array<{ nextNumber: number }>>`
+    WITH RECURSIVE seq AS (
+      SELECT 1 AS n
+      UNION ALL
+      SELECT n + 1 FROM seq WHERE n < 10000
+    )
+    SELECT MIN(n) AS "nextNumber"
+    FROM seq
+    WHERE n NOT IN (SELECT "globalNumber" FROM "Student")
+    LIMIT 1;
+  `;
+  return result[0]?.nextNumber ?? 1;
+}
+
 main().catch((err) => {
   console.error('❌ Import failed:', err);
   process.exit(1);
 });
+

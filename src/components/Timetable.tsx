@@ -5,7 +5,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import LessonDetailModal from "./LessonDetailModal";
 import Link from "next/link";
 import { useTranslations, useLocale } from "next-intl";
-import { Clock, User, School, Building2, ClipboardList } from "lucide-react";
+import { Clock, User, School, Building2, ClipboardList, UserX } from "lucide-react";
 
 export type Day = "SATURDAY" | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY";
 
@@ -27,6 +27,7 @@ export type TimetableLesson = {
   isFree?: boolean;
   isFormation?: boolean;
   isWorkshop?: boolean;
+  isTeacherAbsent?: boolean;
   workshopId?: number;
   workshopSessionId?: number;
   extraFee?: number | null;
@@ -121,7 +122,20 @@ const Timetable = ({
 }) => {
   const t = useTranslations("lessons");
   const locale = useLocale();
-  const safeLessons = Array.isArray(lessons) ? lessons : [];
+  const [absenceOverrides, setAbsenceOverrides] = useState<Record<number, boolean>>({});
+
+  const enrichedLessons = useMemo(() => {
+    const raw = Array.isArray(lessons) ? lessons : [];
+    return raw.map((l) => ({
+      ...l,
+      isTeacherAbsent: absenceOverrides[l.id] !== undefined ? absenceOverrides[l.id] : Boolean(l.isTeacherAbsent),
+    }));
+  }, [lessons, absenceOverrides]);
+
+  const handleLessonUpdated = (lessonId: number, isTeacherAbsent: boolean) => {
+    setAbsenceOverrides((prev) => ({ ...prev, [lessonId]: isTeacherAbsent }));
+    setSelectedLesson((prev) => (prev && prev.id === lessonId ? { ...prev, isTeacherAbsent } : prev));
+  };
 
   const getDayTranslation = (day: Day) => {
     const keyMap: Record<Day, string> = {
@@ -140,14 +154,14 @@ const Timetable = ({
 
   const timeSlots = useMemo(() => {
     const slotSet = new Set(DEFAULT_TIME_SLOTS);
-    safeLessons.forEach((lesson) => {
+    enrichedLessons.forEach((lesson) => {
       const hourStr = getLessonHourInAlgiers(lesson.startsAt);
       if (hourStr) {
         slotSet.add(`${hourStr}:00`);
       }
     });
     return Array.from(slotSet).sort((a, b) => a.localeCompare(b));
-  }, [safeLessons]);
+  }, [enrichedLessons]);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedLesson, setSelectedLesson] = useState<TimetableLesson | null>(null);
@@ -206,10 +220,10 @@ const Timetable = ({
   };
 
   useEffect(() => {
-    if (selectedLesson && !safeLessons.find(l => l.id === selectedLesson.id)) {
+    if (selectedLesson && !enrichedLessons.find(l => l.id === selectedLesson.id)) {
       handleCloseModal();
     }
-  }, [safeLessons, selectedLesson]);
+  }, [enrichedLessons, selectedLesson]);
 
   const getLessonDay = (lesson: TimetableLesson): Day => {
     if (lesson.day && daysOfWeek.includes(lesson.day)) {
@@ -227,7 +241,7 @@ const Timetable = ({
   };
 
   const findLessonsForSlot = (day: Day, time: string): TimetableLesson[] => {
-    return safeLessons.filter((lesson) => {
+    return enrichedLessons.filter((lesson) => {
       const lessonHour = getLessonHourInAlgiers(lesson.startsAt);
       const lessonTime = `${lessonHour}:00`;
       return getLessonDay(lesson) === day && lessonTime === time;
@@ -235,6 +249,11 @@ const Timetable = ({
   };
 
   const getLessonCardStyle = (lesson: TimetableLesson, isClickable: boolean) => {
+    if (lesson.isTeacherAbsent) {
+      return `bg-rose-50/90 border-2 border-rose-500 text-rose-950 p-2 rounded-md text-xs flex flex-col justify-between w-full shadow-xs ${
+        isClickable ? 'hover:bg-rose-100 hover:border-rose-600 transition-all cursor-pointer' : 'cursor-default'
+      }`;
+    }
     if (lesson.isWorkshop) {
       return `bg-rose-50 border-2 border-rose-500 text-rose-950 p-2 rounded-md text-xs flex flex-col justify-between w-full shadow-xs ${
         isClickable ? 'hover:bg-rose-100 hover:border-rose-600 transition-all cursor-pointer' : 'cursor-default'
@@ -295,6 +314,10 @@ const Timetable = ({
             <span className="w-3 h-3 rounded bg-rose-100 border-2 border-rose-500 inline-block"></span>
             <span className="text-rose-950 font-medium">{t("legend.workshop")}</span>
           </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded bg-rose-200 border-2 border-rose-600 inline-block"></span>
+            <span className="text-rose-950 font-medium">{t("legend.teacherAbsent")}</span>
+          </div>
         </div>
       </div>
 
@@ -333,7 +356,7 @@ const Timetable = ({
         {mobileMode === "day" && (
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
             {daysOfWeek.map((day) => {
-              const count = lessons.filter((l) => getLessonDay(l) === day).length;
+              const count = enrichedLessons.filter((l) => getLessonDay(l) === day).length;
               const isSelected = selectedDay === day;
               const isCurrent = day === today;
               return (
@@ -367,7 +390,7 @@ const Timetable = ({
         {mobileMode === "day" && (
           <div className="space-y-2.5 pt-1">
             {(() => {
-              const dayLessons = lessons
+              const dayLessons = enrichedLessons
                 .filter((l) => getLessonDay(l) === selectedDay)
                 .sort(
                   (a, b) =>
@@ -393,7 +416,9 @@ const Timetable = ({
                     key={lesson.id}
                     onClick={clickHandler}
                     className={`p-3 rounded-xl border space-y-2 transition-all ${
-                      lesson.isWorkshop
+                      lesson.isTeacherAbsent
+                        ? "bg-rose-50/90 border-2 border-rose-500 text-rose-950 shadow-xs"
+                        : lesson.isWorkshop
                         ? "bg-rose-50/60 border-rose-300 text-rose-950"
                         : lesson.isFormation
                         ? "bg-teal-50/60 border-teal-300 text-teal-950"
@@ -419,36 +444,44 @@ const Timetable = ({
                         </p>
                       </div>
                       {/* Lesson type badge */}
-                      {lesson.isWorkshop && (
-                        <span className="bg-rose-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
-                          {t("workshopBadge")}
-                        </span>
-                      )}
-                      {lesson.isFormation && (
-                        <span className="bg-teal-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
-                          {t("formationBadge")}
-                        </span>
-                      )}
-                      {lesson.isFree && (
-                        <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
-                          {t("freeBadge")}
-                        </span>
-                      )}
-                      {lesson.isExtra && (
-                        <span className="bg-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
-                          {t("extraBadge")}
-                        </span>
-                      )}
-                      {lesson.isCatchUp && (
-                        <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
-                          {t("catchUpBadge")}
-                        </span>
-                      )}
-                      {!lesson.isWorkshop && !lesson.isFormation && !lesson.isFree && !lesson.isExtra && !lesson.isCatchUp && (
-                        <span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
-                          {t("regularBadge")}
-                        </span>
-                      )}
+                      <div className="flex flex-wrap items-center gap-1 justify-end">
+                        {lesson.isTeacherAbsent && (
+                          <span className="bg-rose-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
+                            <UserX className="w-3 h-3" />
+                            <span>{t("teacherAbsentBadge")}</span>
+                          </span>
+                        )}
+                        {lesson.isWorkshop && (
+                          <span className="bg-rose-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
+                            {t("workshopBadge")}
+                          </span>
+                        )}
+                        {lesson.isFormation && (
+                          <span className="bg-teal-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
+                            {t("formationBadge")}
+                          </span>
+                        )}
+                        {lesson.isFree && (
+                          <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
+                            {t("freeBadge")}
+                          </span>
+                        )}
+                        {lesson.isExtra && (
+                          <span className="bg-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
+                            {t("extraBadge")}
+                          </span>
+                        )}
+                        {lesson.isCatchUp && (
+                          <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
+                            {t("catchUpBadge")}
+                          </span>
+                        )}
+                        {!lesson.isTeacherAbsent && !lesson.isWorkshop && !lesson.isFormation && !lesson.isFree && !lesson.isExtra && !lesson.isCatchUp && (
+                          <span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
+                            {t("regularBadge")}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between text-xs text-gray-600 pt-1.5 border-t border-gray-200/60 font-medium gap-2">
@@ -580,6 +613,12 @@ const Timetable = ({
                           >
                             <div>
                               <div className="flex flex-wrap items-center gap-1 mb-1.5">
+                                {lesson.isTeacherAbsent && (
+                                  <span className="bg-rose-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs flex items-center gap-1">
+                                    <UserX className="w-3 h-3" />
+                                    <span>{t("teacherAbsentBadge")}</span>
+                                  </span>
+                                )}
                                 {lesson.isWorkshop && (
                                   <span className="bg-rose-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded shadow-xs">
                                     {t("workshopBadge")}
@@ -605,7 +644,8 @@ const Timetable = ({
                                     {t("catchUpBadge")}
                                   </span>
                                 )}
-                                {!lesson.isWorkshop &&
+                                {!lesson.isTeacherAbsent &&
+                                  !lesson.isWorkshop &&
                                   !lesson.isFormation &&
                                   !lesson.isFree &&
                                   !lesson.isExtra &&
@@ -679,6 +719,8 @@ const Timetable = ({
           actions={actions[selectedLesson.id]}
           relatedData={relatedDataForForms}
           isToday={isLessonToday(selectedLesson)}
+          canManage={userRole === "admin" || userRole === "owner"}
+          onLessonUpdated={handleLessonUpdated}
         />
       )}
     </div>
