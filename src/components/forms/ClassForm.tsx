@@ -43,7 +43,7 @@ const ClassForm = ({
           hasBooks: Boolean(data.hasBooks),
           bookFee: data.bookFee != null ? Number(data.bookFee) : undefined,
         }
-      : { price: 0, hasBooks: false },
+      : { price: 0, hasBooks: false, branchId: relatedData?.defaultBranchId },
   });
 
   const watchHasBooks = watch("hasBooks");
@@ -157,7 +157,7 @@ const ClassForm = ({
           <select
             className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px]"
             {...register("branchId")}
-            defaultValue={data?.branchId || ""}
+            defaultValue={data?.branchId || relatedData?.defaultBranchId || ""}
           >
             <option value="">{tClasses("selectBranch")}</option>
             {branches.map((branch: { id: number; name: string }) => (

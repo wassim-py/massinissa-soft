@@ -570,7 +570,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
         </CardContent>
       </Card>
 
-      {/* SECTION 5: TODAY'S CREDIT TRANSFERS */}
+      {/* SECTION 5: TODAY'S CREDIT TRANSFERS (NON-MONETARY) */}
       {todayTransfers && todayTransfers.length > 0 && (
         <Card className="border-border/80 shadow-xs bg-surface">
           <CardContent className="p-5 sm:p-6 space-y-4">
@@ -580,8 +580,8 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                   <ArrowRightLeft className="w-4 h-4 text-primary" />
                   <span>
                     {locale === "ar"
-                      ? "تحويلات الأرصدة لهذا اليوم"
-                      : "Transferts de solde du jour"}
+                      ? "تحويلات الحصص البيداغوجية لهذا اليوم"
+                      : "Transferts de séances pédagogiques du jour"}
                   </span>
                   <Badge variant="primary" size="sm">
                     {todayTransfers.length}
@@ -589,25 +589,41 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                 </h3>
                 <p className="text-form-helper text-muted mt-0.5">
                   {locale === "ar"
-                    ? "العمليات المالية لتحويل الحصص المرتبطة بهذا الفرع اليوم (واردة أو صادرة)"
-                    : "Opérations de transfert de séances associées à cette branche aujourd'hui"}
+                    ? "حركات الحصص التعليمية بين الأفواج — لا تؤثر على نقود الصندوق (أثر الصندوق: 0 دج)"
+                    : "Mouvements de séances entre groupes — n'affectent pas la caisse physique (impact caisse : 0 DZD)"}
                 </p>
               </div>
 
-              {(transfersInTotal > 0 || transfersOutTotal > 0) && (
-                <div className="flex items-center gap-2 text-xs">
-                  {transfersInTotal > 0 && (
-                    <Badge variant="success" size="sm">
-                      +{formatDZD(transfersInTotal)} {locale === "ar" ? "وارد" : "entrant"}
-                    </Badge>
-                  )}
-                  {transfersOutTotal > 0 && (
-                    <Badge variant="danger" size="sm">
-                      -{formatDZD(transfersOutTotal)} {locale === "ar" ? "صادر" : "sortant"}
-                    </Badge>
-                  )}
-                </div>
-              )}
+              <div className="flex items-center gap-2 text-xs flex-wrap">
+                <Badge variant="secondary" size="sm">
+                  {locale === "ar" ? "أثر الصندوق: 0 دج (غير نقدي)" : "Impact caisse : 0 DZD (non monétaire)"}
+                </Badge>
+                {isOwner && (
+                  <Link
+                    href="/list/finance?section=transfers"
+                    className="text-xs text-primary hover:underline font-semibold flex items-center gap-1"
+                  >
+                    <span>{locale === "ar" ? "التسوية المالية للمالك ↗" : "Règlement financier ↗"}</span>
+                  </Link>
+                )}
+              </div>
+            </div>
+
+            {/* Clear Cash Disclaimer Banner */}
+            <div className="p-3.5 rounded-lg bg-info-light/40 border border-info-soft flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-info mt-0.5 flex-shrink-0" />
+              <div className="text-xs space-y-1">
+                <p className="font-bold text-gray-900">
+                  {locale === "ar"
+                    ? "تنبيه لمسؤولي الصندوق: تحويلات الحصص هي عمليات بيداغوجية فقط (غير نقدية)"
+                    : "Avis aux caissiers : Les transferts de séances sont des opérations pédagogiques (non monétaires)"}
+                </p>
+                <p className="text-muted leading-relaxed">
+                  {locale === "ar"
+                    ? "هذه العمليات تمثل نقل حصص دراسية بين الأفواج ولا تتضمن أي دفع أو استلام مبالغ نقدية في مكتب الاستقبال. صندوق الفرع لا يتأثر إطلاقاً بهذه العمليات (أثر الصندوق = 0 دج). التسوية المالية المتبادلة بين الفروع تظهر حصرياً للمالك في صفحة مالية المؤسسة (قسم التحويلات)."
+                    : "Ces opérations représentent le déplacement de cours entre groupes et n'impliquent aucun encaissement ni décaissement au guichet. La caisse physique n'est absolument pas affectée (impact caisse = 0 DZD). Le suivi financier inter-branches est géré par le propriétaire dans la section Finances (Transferts)."}
+                </p>
+              </div>
             </div>
 
             <DataTable
@@ -615,9 +631,10 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                 { header: locale === "ar" ? "التلميذ" : "Élève", accessor: "studentName" },
                 { header: locale === "ar" ? "من" : "De", accessor: "fromClassName" },
                 { header: locale === "ar" ? "إلى" : "Vers", accessor: "toClassName" },
-                { header: locale === "ar" ? "الاتجاه" : "Direction", accessor: "direction", align: "center" },
-                { header: locale === "ar" ? "الحصص" : "Séances", accessor: "transferredSessions", align: "center" },
-                { header: locale === "ar" ? "المبلغ" : "Montant", accessor: "amount", align: "end" },
+                { header: locale === "ar" ? "نوع التحويل" : "Type", accessor: "direction", align: "center" },
+                { header: locale === "ar" ? "الحصص المحولة" : "Séances", accessor: "transferredSessions", align: "center" },
+                { header: locale === "ar" ? "قيمة الحصص" : "Valeur estimée", accessor: "amount", align: "end" },
+                { header: locale === "ar" ? "أثر الصندوق" : "Impact Caisse", accessor: "cashImpact", align: "center" },
                 { header: locale === "ar" ? "المسؤول" : "Par", accessor: "transferredBy" },
               ]}
               data={todayTransfers}
@@ -648,12 +665,12 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                   </td>
                   <td className="p-3.5 text-center">
                     {item.direction === "IN" ? (
-                      <Badge variant="success" size="sm">
-                        {locale === "ar" ? "وارد من فرع آخر" : "Entrant"}
+                      <Badge variant="primary" size="sm">
+                        {locale === "ar" ? "وارد بيداغوجي" : "Entrant"}
                       </Badge>
                     ) : item.direction === "OUT" ? (
-                      <Badge variant="danger" size="sm">
-                        {locale === "ar" ? "صادر لفرع آخر" : "Sortant"}
+                      <Badge variant="warning" size="sm">
+                        {locale === "ar" ? "صادر بيداغوجي" : "Sortant"}
                       </Badge>
                     ) : (
                       <Badge variant="secondary" size="sm">
@@ -662,24 +679,16 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                     )}
                   </td>
                   <td className="p-3.5 text-center font-mono font-bold text-xs">
-                    {item.transferredSessions}
+                    {item.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
                   </td>
-                  <td className={`p-3.5 font-mono font-bold text-end ${
-                    item.direction === "IN"
-                      ? "text-success-text"
-                      : item.direction === "OUT"
-                      ? "text-danger"
-                      : "text-gray-900"
-                  }`}>
-                    {item.amount > 0 ? (
-                      item.direction === "IN"
-                        ? `+${formatDZD(item.amount)}`
-                        : item.direction === "OUT"
-                        ? `-${formatDZD(item.amount)}`
-                        : formatDZD(item.amount)
-                    ) : (
-                      "—"
-                    )}
+                  <td className="p-3.5 font-mono text-end text-xs text-gray-700">
+                    <div>{item.amount > 0 ? formatDZD(item.amount) : "—"}</div>
+                    <div className="text-[10px] text-muted">{locale === "ar" ? "(رصيد حصص)" : "(crédit)"}</div>
+                  </td>
+                  <td className="p-3.5 text-center">
+                    <Badge variant="secondary" size="sm">
+                      {locale === "ar" ? "0 دج (غير نقدي)" : "0 DZD (non monétaire)"}
+                    </Badge>
                   </td>
                   <td className="p-3.5 text-xs text-muted">
                     {item.transferredBy}

@@ -48,6 +48,71 @@ const COLOR_STUDENT_BG   = 'FFFFFACD'; // light yellow — student name column
 const COLOR_GRID_BORDER  = 'FFB8CCE4'; // light blue border
 const COLOR_GROUP_TITLE  = 'FF0070C0'; // bright blue — group title row
 
+function normalizeArabic(str: string): string {
+  return str
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[أإآا]/g, 'ا')
+    .replace(/[ة]/g, 'ه')
+    .replace(/[ى]/g, 'ي')
+    .replace(/[\u064B-\u065F]/g, '');
+}
+
+interface ExcelGroupData {
+  groupName: string;
+  hasBooks: boolean;
+  studentNames: string[];
+}
+
+async function loadBranchExcelGroups(branchId: number): Promise<ExcelGroupData[]> {
+  const branchNames: Record<number, string> = { 1: 'ECOLE', 2: 'ANNEX', 3: 'AMPHI' };
+  const bName = branchNames[branchId];
+  if (!bName) return [];
+  const filePath = path.join(__dirname, `../data/import/${bName}.xlsx`);
+  if (!fs.existsSync(filePath)) return [];
+
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  const groups: ExcelGroupData[] = [];
+
+  for (const ws of wb.worksheets) {
+    let currentGroup: ExcelGroupData | null = null;
+    for (let r = 1; r <= ws.rowCount; r++) {
+      const v = ws.getRow(r).getCell(1).value;
+      if (!v) continue;
+      const str = String(v).trim();
+      if (str.includes('الاسم') || str.includes('رقم الهاتف')) continue;
+
+      const nextRow = ws.getRow(r + 1);
+      const nextRowText = (nextRow.values as any[] || []).join(' ');
+      if (nextRowText.includes('الاسم') || nextRowText.includes('رقم الهاتف')) {
+        const hasBooks = nextRowText.includes('كتاب') || nextRowText.includes('مطبوع');
+        currentGroup = {
+          groupName: str,
+          hasBooks,
+          studentNames: [],
+        };
+        groups.push(currentGroup);
+        r++;
+        continue;
+      }
+
+      if (currentGroup) {
+        const nameVal = String(ws.getRow(r).getCell(1).value || '').trim();
+        if (nameVal && !nameVal.includes('الاسم') && isNaN(Number(nameVal))) {
+          if (!currentGroup.studentNames.includes(nameVal)) {
+            currentGroup.studentNames.push(nameVal);
+          }
+          r++;
+        }
+      }
+    }
+  }
+
+  return groups;
+}
+
 async function main() {
   const classFilter = (() => {
     const idx = process.argv.indexOf('--class');
@@ -56,7 +121,7 @@ async function main() {
 
   const branchFilter = (() => {
     const idx = process.argv.indexOf('--branch');
-    if (idx < 0) return null; // null = all branches
+    if (idx < 0) return null;
     const val = process.argv[idx + 1];
     return val === 'all' ? null : parseInt(val, 10);
   })();
@@ -87,17 +152,81 @@ async function main() {
     orderBy: [{ branchId: 'asc' }, { isFormation: 'asc' }, { name: 'asc' }],
   });
 
-  if (classes.length === 0) {
-    console.log('⚠  No classes found.');
-    await prisma.$disconnect();
-    return;
-  }
+  const allClasses = branchFilter ? await prisma.class.findMany({
+    include: {
+      branch: true,
+      level: true,
+      FormationLevel: { include: { Language: true } },
+      teacher: { select: { id: true, name: true } },
+      lessons: { orderBy: { startsAt: 'asc' } },
+      enrollments: {
+        include: { student: { select: { id: true, name: true, globalNumber: true } } },
+        orderBy: { enrolledAt: 'asc' },
+      },
+    },
+  }) : classes;
 
+  const allDbStudents = await prisma.student.findMany({
+    select: { id: true, name: true, globalNumber: true },
+  });
+  const studentLookup = new Map<string, { id: string; name: string; globalNumber: number }>();
+  for (const s of allDbStudents) {
+    studentLookup.set(normalizeArabic(s.name), s);
+  }
+  const maxGlobalNumber = allDbStudents.reduce((max, s) => Math.max(max, s.globalNumber), 0);
+  let nextGlobalNumber = maxGlobalNumber + 1;
+
+  // Load excel groups if branch filter is set
+  const excelGroups = branchFilter ? await loadBranchExcelGroups(branchFilter) : [];
+  const processedClassIds = new Set<number>();
   let filesCreated = 0;
 
+  if (excelGroups.length > 0) {
+    console.log(`ℹ Loaded ${excelGroups.length} groups from branch import Excel file.`);
+    for (const eg of excelGroups) {
+      const normGroupName = normalizeArabic(eg.groupName);
+      const cls = allClasses.find((c) => normalizeArabic(c.name) === normGroupName)
+               || allClasses.find((c) => c.name.includes(eg.groupName) || eg.groupName.includes(c.name));
+
+      if (!cls) continue;
+      processedClassIds.add(cls.id);
+
+      const studentList: Array<{ id: string | null; name: string; globalNumber: number }> = [];
+      const seenNames = new Set<string>();
+
+      for (const sName of eg.studentNames) {
+        const norm = normalizeArabic(sName);
+        if (seenNames.has(norm)) continue;
+        seenNames.add(norm);
+
+        const dbStudent = studentLookup.get(norm);
+        if (dbStudent) {
+          studentList.push({ id: dbStudent.id, name: sName, globalNumber: dbStudent.globalNumber });
+        } else {
+          studentList.push({ id: null, name: sName, globalNumber: nextGlobalNumber++ });
+        }
+      }
+
+      for (const enr of cls.enrollments) {
+        const norm = normalizeArabic(enr.student.name);
+        if (!seenNames.has(norm)) {
+          seenNames.add(norm);
+          studentList.push({ id: enr.student.id, name: enr.student.name, globalNumber: enr.student.globalNumber });
+        }
+      }
+
+      studentList.sort((a, b) => a.globalNumber - b.globalNumber);
+      const branchName = branchFilter === 2 ? 'ANNEX' : (branchFilter === 1 ? 'ECOLE' : cls.branch.name);
+      await generateGroupTemplate({ ...cls, branchNameOverride: branchName }, studentList, cls.lessons, eg.hasBooks);
+      filesCreated++;
+    }
+  }
+
+  // Also process any remaining classes from DB
   for (const cls of classes) {
-    // Deduplicate and sort students
-    const studentsMap = new Map<string, { id: string; name: string; globalNumber: number }>();
+    if (processedClassIds.has(cls.id)) continue;
+
+    const studentsMap = new Map<string, { id: string | null; name: string; globalNumber: number }>();
     for (const enr of cls.enrollments) {
       if (!studentsMap.has(enr.studentId)) {
         studentsMap.set(enr.studentId, {
@@ -109,7 +238,6 @@ async function main() {
     }
     const students = [...studentsMap.values()].sort((a, b) => a.globalNumber - b.globalNumber);
 
-    // Skip regular classes with 0 enrolled students, but ALWAYS generate templates for formation classes
     if (students.length === 0 && !cls.isFormation) {
       continue;
     }
@@ -137,11 +265,13 @@ async function main() {
 
 async function generateGroupTemplate(
   cls: any,
-  students: Array<{ id: string; name: string; globalNumber: number }>,
-  existingLessons: any[]
+  students: Array<{ id: string | null; name: string; globalNumber: number }>,
+  existingLessons: any[],
+  hasBooksOverride: boolean = false
 ) {
   const formationPrefix = cls.isFormation ? 'FORMATION_' : '';
-  const safeFilename = sanitizeFilename(`${cls.branch.name}_${formationPrefix}${cls.name}`);
+  const branchName = cls.branchNameOverride || cls.branch.name;
+  const safeFilename = sanitizeFilename(`${branchName}_${formationPrefix}${cls.name}`);
   const filePath = path.join(OUTPUT_DIR, `${safeFilename}.xlsx`);
 
   const wb = new ExcelJS.Workbook();
@@ -159,7 +289,7 @@ async function generateGroupTemplate(
   // We provide at least DEFAULT_TOTAL_LESSON_SLOTS slots, or more if existingLessons exceeds it
   const numSlots = Math.max(DEFAULT_TOTAL_LESSON_SLOTS, existingLessons.length);
   const LAST_LESSON_COL = FIRST_LESSON_COL + numSlots - 1;
-  const hasBooks = Boolean(cls.hasBooks);
+  const hasBooks = Boolean(cls.hasBooks) || hasBooksOverride;
   const BOOK_T1_1_COL = LAST_LESSON_COL + 1; // كتاب 1 ت 1
   const BOOK_T1_2_COL = LAST_LESSON_COL + 2; // كتاب 2 ت 1
   const BOOK_T2_COL   = LAST_LESSON_COL + 3; // كتاب ت 2
@@ -278,7 +408,7 @@ async function generateGroupTemplate(
     nameCell.font = { bold: true, size: 10 };
     nameCell.alignment = { horizontal: 'right', vertical: 'middle', readingOrder: 'rtl' };
     nameCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_STUDENT_BG } };
-    if (student) {
+    if (student && student.id) {
       (nameCell as any).note = { texts: [{ text: `student_id:${student.id}` }] };
     }
     setBorder(nameCell);

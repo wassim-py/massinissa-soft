@@ -1,7 +1,7 @@
 import FormContainer from "@/components/FormContainer";
 import Pagination from "@/components/Pagination";
 import prisma from "@/lib/prisma";
-import { ITEM_PER_PAGE } from "@/lib/settings";
+import { ITEM_PER_PAGE, canUserAccessBranch } from "@/lib/settings";
 import { getAuthSession } from "@/lib/auth";
 import PageHeader from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/Card";
@@ -38,7 +38,8 @@ const ClassListPage = async (
   const searchParams = await props.searchParams;
   const session = await getAuthSession();
   const isOwner = session.isOwner;
-  const canViewPayments = session.isOwner || session.isBranchAdmin;
+  const canManage = session.isOwner || session.isBranchAdmin || session.isOwnerOrAdmin;
+  const canViewPayments = canManage;
 
   const t = await getTranslations("classes");
 
@@ -63,69 +64,77 @@ const ClassListPage = async (
     { header: t("teacherName"), accessor: "teacherName" as any },
     { header: t("branch"), accessor: "branchName" as any, className: "hidden md:table-cell" },
     { header: t("pricePerCycle"), accessor: "pricePerCycle" as any, className: "hidden md:table-cell" },
-    ...(canViewPayments
+    ...(canViewPayments || canManage
       ? [{ header: t("actions"), accessor: "action" as const, align: "end" as const }]
       : []),
   ];
 
-  const renderRow = (item: ClassItem) => (
-    <tr
-      key={item.id}
-      className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
-    >
-      <td className="p-3.5 font-semibold text-gray-900">
-        <Link
-          href={`/list/payments/class/${item.id}`}
-          className="hover:text-primary hover:underline transition-colors block"
-          title={t("paymentRecordsTooltip")}
-        >
-          {item.name}
-        </Link>
-      </td>
-      <td className="p-3.5 text-muted-dark">
-        {item.teacherName ? (
-          <span className="font-medium text-gray-800">{item.teacherName}</span>
-        ) : (
-          <span className="text-muted text-xs">—</span>
-        )}
-      </td>
-      <td className="hidden md:table-cell p-3.5">
-        <Badge variant="primary" size="sm">
-          <Building2 className="w-3 h-3 inline me-1" />
-          {item.branchName || t("branchFallback", { id: item.branchId })}
-        </Badge>
-      </td>
-      <td className="hidden md:table-cell p-3.5 font-semibold text-gray-900 font-mono">
-        {item.pricePerCycle ? `${item.pricePerCycle} ${t("currency")}` : "-"}
-      </td>
-      {canViewPayments && (
-        <td className="text-end pe-3.5">
-          <div className="flex items-center justify-end gap-2">
-            <Link
-              href={`/list/payments/class/${item.id}`}
-              className="px-2 py-1 text-xs font-semibold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-colors whitespace-nowrap"
-              title={t("paymentRecordsTooltip")}
-            >
-              {t("paymentRecords")}
-            </Link>
-            <Link
-              href={`/list/classes/${item.id}?tab=books`}
-              className="px-2 py-1 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 transition-colors whitespace-nowrap"
-              title={t("booksTooltip")}
-            >
-              {t("books")}
-            </Link>
-            {isOwner && (
-              <>
-                <FormContainer table="class" type="update" data={item} />
-                <FormContainer table="class" type="delete" id={item.id} />
-              </>
-            )}
-          </div>
+  const renderRow = (item: ClassItem) => {
+    const canActOnItem =
+      session.isOwner ||
+      (canManage &&
+        (session.branchIds.length === 0 ||
+          canUserAccessBranch(session.rawRole, session.branchIds, item.branchId)));
+
+    return (
+      <tr
+        key={item.id}
+        className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
+      >
+        <td className="p-3.5 font-semibold text-gray-900">
+          <Link
+            href={`/list/payments/class/${item.id}`}
+            className="hover:text-primary hover:underline transition-colors block"
+            title={t("paymentRecordsTooltip")}
+          >
+            {item.name}
+          </Link>
         </td>
-      )}
-    </tr>
-  );
+        <td className="p-3.5 text-muted-dark">
+          {item.teacherName ? (
+            <span className="font-medium text-gray-800">{item.teacherName}</span>
+          ) : (
+            <span className="text-muted text-xs">—</span>
+          )}
+        </td>
+        <td className="hidden md:table-cell p-3.5">
+          <Badge variant="primary" size="sm">
+            <Building2 className="w-3 h-3 inline me-1" />
+            {item.branchName || t("branchFallback", { id: item.branchId })}
+          </Badge>
+        </td>
+        <td className="hidden md:table-cell p-3.5 font-semibold text-gray-900 font-mono">
+          {item.pricePerCycle ? `${item.pricePerCycle} ${t("currency")}` : "-"}
+        </td>
+        {(canViewPayments || canManage) && (
+          <td className="text-end pe-3.5">
+            <div className="flex items-center justify-end gap-2">
+              <Link
+                href={`/list/payments/class/${item.id}`}
+                className="px-2 py-1 text-xs font-semibold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-colors whitespace-nowrap"
+                title={t("paymentRecordsTooltip")}
+              >
+                {t("paymentRecords")}
+              </Link>
+              <Link
+                href={`/list/classes/${item.id}?tab=books`}
+                className="px-2 py-1 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 transition-colors whitespace-nowrap"
+                title={t("booksTooltip")}
+              >
+                {t("books")}
+              </Link>
+              {canActOnItem && (
+                <>
+                  <FormContainer table="class" type="update" data={item} />
+                  <FormContainer table="class" type="delete" id={item.id} />
+                </>
+              )}
+            </div>
+          </td>
+        )}
+      </tr>
+    );
+  };
 
   const { page, search } = searchParams;
   const p = page ? parseInt(page, 10) : 1;
@@ -240,7 +249,7 @@ const ClassListPage = async (
         <PageHeader
           title={t("title")}
           searchPlaceholder={t("searchPlaceholder")}
-          createAction={isOwner ? { table: "class", type: "create" } : null}
+          createAction={canManage ? { table: "class", type: "create" } : null}
         />
 
         <DataTable

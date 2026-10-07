@@ -188,8 +188,8 @@ export const createClass = async (
 ) => {
   try {
     const session = await getAuthSession();
-    if (!session.isOwner) {
-      return { success: false, error: true, message: "Action réservée au propriétaire / فقط المالك يمكنه إنشاء فوج جديد." };
+    if (!session.isOwner && !session.isBranchAdmin && !session.isOwnerOrAdmin) {
+      return { success: false, error: true, message: "Non autorisé / غير مصرح لك بإنشاء فوج جديد." };
     }
 
     const activeBranchId = await getActiveBranchId();
@@ -235,7 +235,7 @@ export const updateClass = async (
 ) => {
   try {
     const session = await getAuthSession();
-    if (!session.isOwner && !session.isBranchAdmin) {
+    if (!session.isOwner && !session.isBranchAdmin && !session.isOwnerOrAdmin) {
       return { success: false, error: true, message: "Non autorisé / غير مصرح لك بتعديل الفوج." };
     }
 
@@ -302,8 +302,8 @@ export const deleteClass = async (
   const id = data.get("id") as string;
   try {
     const session = await getAuthSession();
-    if (!session.isOwner) {
-      return { success: false, error: true, message: "Action réservée au propriétaire / فقط المالك يمكنه حذف الفوج." };
+    if (!session.isOwner && !session.isBranchAdmin && !session.isOwnerOrAdmin) {
+      return { success: false, error: true, message: "Non autorisé / غير مصرح لك بحذف الفوج." };
     }
 
     const classId = parseInt(id, 10);

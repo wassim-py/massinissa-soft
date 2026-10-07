@@ -21,6 +21,7 @@ export interface ParsedVoucher {
   number: number;
   amount: number;
   date: Date;
+  isRefund?: boolean;
 }
 
 /**
@@ -39,7 +40,7 @@ export function parsePaymentCell(
 
   // ── 0. Handle inverted cells ──────────────────────────────────────
   // If amountRaw looks like a BON voucher and voucherRaw is empty
-  if (/^BON/i.test(amtStr) && !bonStr) {
+  if (/^(?:RMB\s*)?BON/i.test(amtStr) && !bonStr) {
     bonStr = amtStr;
     amtStr = defaultAmount > 0 ? String(defaultAmount) : '';
   }
@@ -55,7 +56,7 @@ export function parsePaymentCell(
   const isRmb = /RMB/i.test(bonStr) || /RMB/i.test(amtStr);
   const isZero = amtStr === '0' && (bonStr === '0' || !bonStr || isRmb);
 
-  if (isZero || isFree || isRmb) {
+  if (isZero || isFree) {
     return [];
   }
 
@@ -63,6 +64,23 @@ export function parsePaymentCell(
   if (isTransfer && !bonStr) {
     return [];
   }
+
+  // If it's an RMB note with 0, empty, or non-numeric amount, skip cleanly
+  if (isRmb) {
+    const numericPart = amtStr.replace(/[^\d]/g, '');
+    if (!numericPart || numericPart === '0') {
+      return [];
+    }
+    bonStr = bonStr.replace(/RMB/gi, '').trim();
+    amtStr = amtStr.replace(/RMB/gi, '').trim();
+  }
+
+  const wrap = (items: ParsedVoucher[]): ParsedVoucher[] => {
+    if (isRmb) {
+      return items.map((item) => ({ ...item, isRefund: true }));
+    }
+    return items;
+  };
 
   // ── 2. Parse amounts ──────────────────────────────────────────────
   let amounts = amtStr
@@ -77,11 +95,11 @@ export function parsePaymentCell(
   // If amount exists without any voucher
   if (!bonStr) {
     if (amounts.length > 0) {
-      return amounts.map((amt) => ({
+      return wrap(amounts.map((amt) => ({
         number: 0,
         amount: amt,
         date: new Date(Date.UTC(2026, 8, 1, 12, 0, 0)), // Sept 2026 default
-      }));
+      })));
     }
     return [];
   }
@@ -143,7 +161,7 @@ export function parsePaymentCell(
   if (noNumMatch) {
     const dt = parseDateDMY(noNumMatch[1]);
     if (dt) {
-      return [{ number: 0, amount: amounts[0] ?? 0, date: dt }];
+      return wrap([{ number: 0, amount: amounts[0] ?? 0, date: dt }]);
     }
   }
 
@@ -154,17 +172,17 @@ export function parsePaymentCell(
     const date = parseDateDMY(singleMatch[2]);
     if (date) {
       const amount = amounts[0] ?? 0;
-      return [{ number: num, amount, date }];
+      return wrap([{ number: num, amount, date }]);
     }
   }
 
   // ── 6. Match Triple Voucher: "BON 112+104+219(18+01+08/08+09/2026)" ─
   const tripleResult = parseTripleVoucher(normalized, amounts);
-  if (tripleResult) return tripleResult;
+  if (tripleResult) return wrap(tripleResult);
 
   // ── 7. Match Double Voucher ───────────────────────────────────────
   const doubleResult = parseDoubleVoucher(normalized, amounts);
-  if (doubleResult) return doubleResult;
+  if (doubleResult) return wrap(doubleResult);
 
   // ── 8. Fallback: match any single voucher with space before date ──
   const fallbackSingle = normalized.match(/^BON\s*(\d+)\s*\(?([0-9\/]+)\)?$/);
@@ -172,7 +190,7 @@ export function parsePaymentCell(
     const num = parseInt(fallbackSingle[1], 10);
     const date = parseDateDMY(fallbackSingle[2]);
     if (date) {
-      return [{ number: num, amount: amounts[0] ?? 0, date }];
+      return wrap([{ number: num, amount: amounts[0] ?? 0, date }]);
     }
   }
 
@@ -182,7 +200,7 @@ export function parsePaymentCell(
     const num = parseInt(fallback[1], 10);
     const date = parseDateDMY(fallback[2]);
     if (date) {
-      return [{ number: num, amount: amounts[0] ?? 0, date }];
+      return wrap([{ number: num, amount: amounts[0] ?? 0, date }]);
     }
   }
 

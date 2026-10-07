@@ -179,7 +179,7 @@ const BRANCH_ADMIN_ALLOWED_PERMISSIONS: Record<string, ReadonlySet<string>> = {
   student_profile: new Set(["view"]),
   parents: new Set(["view", "create", "update", "delete"]),
   subjects: new Set(["view"]), // Read-only: create, update, delete are OWNER-ONLY
-  groups: new Set(["view"]), // Read-only: create, update, delete are OWNER-ONLY
+  groups: new Set(["view", "create", "update", "delete"]),
   lessons: new Set([
     "view",
     "create",

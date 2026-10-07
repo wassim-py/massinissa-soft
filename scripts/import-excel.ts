@@ -8,7 +8,8 @@
  *   - Students (with globalNumber allocation)
  *   - Parent/student phone numbers
  *   - Enrollments (Student ↔ Class)
- *   - Vouchers (INSCRIPTION + TUITION_4SESSION)
+ *   - Vouchers (INSCRIPTION + TUITION_4SESSION + BOOK + REFUND)
+ *   - Refunds (Refund records and refund vouchers linked to cycles)
  *   - VoucherSeries (created / currentNumber updated)
  *
  * USAGE:
@@ -188,9 +189,13 @@ async function main() {
   // ── Build report ──────────────────────────────────────────────────
   const totalStudentsFound = allGroups.reduce((s, g) => s + g.students.length, 0);
   let totalBookVouchersFound = 0;
+  let totalRefundVouchersFound = 0;
   for (const g of allGroups) {
     for (const s of g.students) {
       totalBookVouchersFound += s.bookVouchers.length;
+      totalRefundVouchersFound +=
+        s.inscriptionVouchers.filter((v) => v.isRefund).length +
+        s.tuitionVouchers.filter((v) => v.isRefund).length;
     }
   }
 
@@ -199,6 +204,7 @@ async function main() {
   console.log(`  Groups found:         ${allGroups.length}`);
   console.log(`  Students found:       ${totalStudentsFound}`);
   console.log(`  Book payments found:  ${totalBookVouchersFound}`);
+  console.log(`  Refunds found:        ${totalRefundVouchersFound}`);
   if (parseErrors.length > 0) {
     console.log(`\n⚠  PARSE WARNINGS (${parseErrors.length}):`);
     parseErrors.forEach((e) => console.log(`   - ${e}`));
@@ -260,6 +266,8 @@ async function main() {
   let createdStudents = 0;
   let createdEnrollments = 0;
   let createdVouchers = 0;
+  let createdRefundVouchers = 0;
+  let createdRefunds = 0;
   let createdBookVouchers = 0;
   let skippedGroups = 0;
 
@@ -343,6 +351,78 @@ async function main() {
 
       // Inscription vouchers
       for (const v of student.inscriptionVouchers) {
+        if (v.isRefund) {
+          const refundSeriesKey = `refund-${group.branchId}`;
+          if (!seriesCache.has(refundSeriesKey)) {
+            const rSeriesId = await findOrCreateRefundSeries(group.branchId);
+            seriesCache.set(refundSeriesKey, rSeriesId);
+          }
+          const refundSeriesId = seriesCache.get(refundSeriesKey)!;
+          const rvNumber = getValidVoucherNumber(v.number, refundSeriesKey, seriesMaxNumber);
+          const exists = await prisma.voucher.findFirst({
+            where: { studentId, classId: cls.id, isRefund: true, number: rvNumber, seriesId: refundSeriesId },
+          });
+          if (!exists) {
+            let orig = await prisma.voucher.findFirst({
+              where: { studentId, classId: cls.id, paymentType: 'INSCRIPTION', isRefund: false },
+            });
+            if (!orig) {
+              const origNumber = getValidVoucherNumber(0, seriesKey, seriesMaxNumber);
+              orig = (await createVoucher({
+                studentId,
+                classId: cls.id,
+                seriesId,
+                number: origNumber,
+                amount: v.amount,
+                paymentType: 'INSCRIPTION',
+                issuingBranchId: group.branchId,
+                targetBranchId: cls.branchId,
+                issuedAt: v.date,
+              })) as any;
+              createdVouchers++;
+              updateSeriesMax(seriesMaxNumber, seriesKey, origNumber);
+            }
+            await createVoucher({
+              studentId,
+              classId: cls.id,
+              seriesId: refundSeriesId,
+              number: rvNumber,
+              amount: v.amount,
+              paymentType: 'INSCRIPTION',
+              issuingBranchId: group.branchId,
+              targetBranchId: cls.branchId,
+              issuedAt: v.date,
+              isRefund: true,
+              refundForVoucherId: orig.id,
+              status: 'REFUND',
+            });
+            createdRefundVouchers++;
+            createdVouchers++;
+            updateSeriesMax(seriesMaxNumber, refundSeriesKey, rvNumber);
+
+            const existingRefund = await prisma.refund.findFirst({
+              where: { voucherId: orig.id, amount: new Decimal(v.amount) },
+            });
+            if (!existingRefund) {
+              await prisma.refund.create({
+                data: {
+                  voucherId: orig.id,
+                  amount: new Decimal(v.amount),
+                  reason: `Excel import - RMB BON ${rvNumber}`,
+                  refundedBy: SYSTEM_USER,
+                  refundedAt: v.date,
+                },
+              });
+              createdRefunds++;
+            }
+            await prisma.voucher.update({
+              where: { id: orig.id },
+              data: { remainingBalance: new Decimal(0), status: 'REFUNDED', isVoided: true },
+            });
+          }
+          continue;
+        }
+
         const vNumber = getValidVoucherNumber(v.number, seriesKey, seriesMaxNumber);
         const exists = await prisma.voucher.findFirst({
           where: { studentId, classId: cls.id, paymentType: 'INSCRIPTION', number: vNumber, seriesId },
@@ -366,7 +446,11 @@ async function main() {
 
       // Tuition vouchers
       const tuitionPaymentType = cls.isFormation ? 'FORMATION' : 'TUITION_4SESSION';
-      for (const v of student.tuitionVouchers) {
+      const regularTuitionVouchers = student.tuitionVouchers.filter((v) => !v.isRefund);
+      const refundTuitionVouchers = student.tuitionVouchers.filter((v) => v.isRefund);
+
+      // 4a. Process regular tuition vouchers first
+      for (const v of regularTuitionVouchers) {
         const vNumber = getValidVoucherNumber(v.number, seriesKey, seriesMaxNumber);
         const exists = await prisma.voucher.findFirst({
           where: { studentId, classId: cls.id, paymentType: tuitionPaymentType, number: vNumber, seriesId },
@@ -385,6 +469,131 @@ async function main() {
           });
           createdVouchers++;
           updateSeriesMax(seriesMaxNumber, seriesKey, vNumber);
+        }
+      }
+
+      // 4b. Process refund tuition vouchers
+      for (const rv of refundTuitionVouchers) {
+        const refundSeriesKey = `refund-${group.branchId}`;
+        if (!seriesCache.has(refundSeriesKey)) {
+          const rSeriesId = await findOrCreateRefundSeries(group.branchId);
+          seriesCache.set(refundSeriesKey, rSeriesId);
+        }
+        const refundSeriesId = seriesCache.get(refundSeriesKey)!;
+        const rvNumber = getValidVoucherNumber(rv.number, refundSeriesKey, seriesMaxNumber);
+
+        const existsRefund = await prisma.voucher.findFirst({
+          where: {
+            studentId,
+            classId: cls.id,
+            seriesId: refundSeriesId,
+            number: rvNumber,
+            isRefund: true,
+          },
+        });
+
+        if (!existsRefund) {
+          // Find the original tuition voucher to link this refund to
+          let originalVoucher = await prisma.voucher.findFirst({
+            where: {
+              studentId,
+              classId: cls.id,
+              isRefund: false,
+              status: { in: ['ACTIVE', 'PARTIALLY_REFUNDED'] },
+            },
+            orderBy: { issuedAt: 'desc' },
+            include: { refunds: true },
+          });
+
+          if (!originalVoucher) {
+            originalVoucher = await prisma.voucher.findFirst({
+              where: {
+                studentId,
+                classId: cls.id,
+                isRefund: false,
+              },
+              orderBy: { issuedAt: 'desc' },
+              include: { refunds: true },
+            });
+          }
+
+          if (!originalVoucher) {
+            // Create the underlying tuition voucher that is being refunded
+            const origNumber = getValidVoucherNumber(0, seriesKey, seriesMaxNumber);
+            originalVoucher = (await createVoucher({
+              studentId,
+              classId: cls.id,
+              seriesId,
+              number: origNumber,
+              amount: rv.amount,
+              paymentType: tuitionPaymentType,
+              issuingBranchId: group.branchId,
+              targetBranchId: cls.branchId,
+              issuedAt: rv.date,
+            })) as any;
+            createdVouchers++;
+            updateSeriesMax(seriesMaxNumber, seriesKey, origNumber);
+          }
+
+          // Create the refund voucher
+          await createVoucher({
+            studentId,
+            classId: cls.id,
+            seriesId: refundSeriesId,
+            number: rvNumber,
+            amount: rv.amount,
+            paymentType: tuitionPaymentType,
+            issuingBranchId: group.branchId,
+            targetBranchId: cls.branchId,
+            issuedAt: rv.date,
+            isRefund: true,
+            refundForVoucherId: originalVoucher.id,
+            status: 'REFUND',
+          });
+          createdRefundVouchers++;
+          createdVouchers++;
+          updateSeriesMax(seriesMaxNumber, refundSeriesKey, rvNumber);
+
+          // Create Refund record for audit & ledger
+          const existingRefund = await prisma.refund.findFirst({
+            where: {
+              voucherId: originalVoucher.id,
+              amount: new Decimal(rv.amount),
+            },
+          });
+
+          if (!existingRefund) {
+            await prisma.refund.create({
+              data: {
+                voucherId: originalVoucher.id,
+                amount: new Decimal(rv.amount),
+                reason: `Excel import - RMB BON ${rvNumber}`,
+                refundedBy: SYSTEM_USER,
+                refundedAt: rv.date,
+              },
+            });
+            createdRefunds++;
+          }
+
+          // Update original voucher remaining balance and status
+          const priorRefunds = originalVoucher.refunds
+            ? originalVoucher.refunds.reduce((sum: number, r: any) => sum + Number(r.amount), 0)
+            : 0;
+          const newTotalRefunded = priorRefunds + rv.amount;
+          const origAmount = Number(originalVoucher.amount);
+          const newRemaining = Math.max(0, origAmount - newTotalRefunded);
+          const isFull = newRemaining <= 0;
+
+          await prisma.voucher.update({
+            where: { id: originalVoucher.id },
+            data: {
+              remainingBalance: new Decimal(newRemaining),
+              status: isFull ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
+              isVoided: isFull ? true : originalVoucher.isVoided,
+              lastEditedAt: new Date(),
+              lastEditedBy: SYSTEM_USER,
+            },
+          });
         }
       }
 
@@ -459,7 +668,9 @@ async function main() {
   console.log(`  Students created:       ${createdStudents}`);
   console.log(`  Enrollments created:    ${createdEnrollments}`);
   console.log(`  Total vouchers created: ${createdVouchers}`);
+  console.log(`    - Refund vouchers:    ${createdRefundVouchers}`);
   console.log(`    - Book vouchers:      ${createdBookVouchers}`);
+  console.log(`  Refund records created: ${createdRefunds}`);
   console.log(`  Groups skipped:         ${skippedGroups} (no class match)`);
   console.log(`${'═'.repeat(60)}\n`);
 
@@ -467,10 +678,15 @@ async function main() {
 }
 
 async function syncImportedDailyLedger() {
-  const vouchers = await prisma.voucher.findMany({
-    where: { isVoided: false },
-    include: { class: true },
-  });
+  const [vouchers, refunds] = await Promise.all([
+    prisma.voucher.findMany({
+      where: { isVoided: false, isRefund: false },
+      include: { class: true },
+    }),
+    prisma.refund.findMany({
+      include: { voucher: true },
+    }),
+  ]);
 
   const ledgerMap = new Map<string, { branchId: number; date: Date; type: string; amount: number }>();
 
@@ -491,7 +707,26 @@ async function syncImportedDailyLedger() {
       type = 'BOOK';
     }
 
-    const branchId = v.targetBranchId;
+    const branchId = v.issuingBranchId;
+    const mapKey = `${branchId}|${dateKey}|${type}`;
+
+    const current = ledgerMap.get(mapKey);
+    if (current) {
+      current.amount += amount;
+    } else {
+      ledgerMap.set(mapKey, { branchId, date: normalizedDate, type, amount });
+    }
+  }
+
+  for (const r of refunds) {
+    const amount = Number(r.amount);
+    if (amount <= 0) continue;
+
+    const d = new Date(r.refundedAt);
+    const normalizedDate = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+    const dateKey = normalizedDate.toISOString();
+    const type = 'REFUND';
+    const branchId = r.voucher.issuingBranchId;
     const mapKey = `${branchId}|${dateKey}|${type}`;
 
     const current = ledgerMap.get(mapKey);
@@ -919,6 +1154,27 @@ async function findOrCreateSeries(branchId: number, levelId: number | null): Pro
   return created.id;
 }
 
+async function findOrCreateRefundSeries(branchId: number): Promise<number> {
+  const existing = await prisma.voucherSeries.findFirst({
+    where: {
+      issuingBranchId: branchId,
+      scope: 'REFUND',
+    },
+    orderBy: { id: 'asc' },
+  });
+  if (existing) return existing.id;
+
+  const created = await prisma.voucherSeries.create({
+    data: {
+      issuingBranchId: branchId,
+      scope: 'REFUND',
+      targetBranchId: null,
+      currentNumber: 0,
+    },
+  });
+  return created.id;
+}
+
 async function createVoucher(opts: {
   studentId: string;
   classId: number;
@@ -930,9 +1186,14 @@ async function createVoucher(opts: {
   targetBranchId: number;
   issuedAt: Date;
   trimesterId?: number;
+  isRefund?: boolean;
+  refundForVoucherId?: number | null;
+  status?: string;
+  isVoided?: boolean;
+  remainingBalance?: number | null;
 }) {
   const amount = new Decimal(opts.amount);
-  await prisma.voucher.create({
+  return await prisma.voucher.create({
     data: {
       seriesId: opts.seriesId,
       number: opts.number,
@@ -945,9 +1206,15 @@ async function createVoucher(opts: {
       isPartial: false,
       issuedBy: SYSTEM_USER,
       issuedAt: opts.issuedAt,
-      isVoided: false,
-      status: 'ACTIVE',
+      isVoided: opts.isVoided ?? false,
+      status: opts.status ?? 'ACTIVE',
       trimesterId: opts.trimesterId ?? null,
+      isRefund: opts.isRefund ?? false,
+      refundForVoucherId: opts.refundForVoucherId ?? null,
+      remainingBalance:
+        opts.remainingBalance !== undefined && opts.remainingBalance !== null
+          ? new Decimal(opts.remainingBalance)
+          : null,
     },
   });
 }
