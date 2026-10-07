@@ -113,10 +113,36 @@ async function loadBranchExcelGroups(branchId: number): Promise<ExcelGroupData[]
   return groups;
 }
 
+async function getMaxGlobalNumberFromExistingFiles(outputDir: string): Promise<number> {
+  let maxNum = 0;
+  if (!fs.existsSync(outputDir)) return maxNum;
+  const files = fs.readdirSync(outputDir).filter((f) => f.endsWith('.xlsx') && !f.startsWith('~$'));
+  for (const f of files) {
+    try {
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(path.join(outputDir, f));
+      const ws = wb.getWorksheet('Présences');
+      if (!ws) continue;
+      for (let r = 5; r <= ws.rowCount; r++) {
+        const val = Number(ws.getRow(r).getCell(1).value);
+        if (!isNaN(val) && val > maxNum) maxNum = val;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return maxNum;
+}
+
 async function main() {
   const classFilter = (() => {
     const idx = process.argv.indexOf('--class');
     return idx >= 0 ? parseInt(process.argv[idx + 1], 10) : null;
+  })();
+
+  const groupFilter = (() => {
+    const idx = process.argv.indexOf('--group');
+    return idx >= 0 ? process.argv[idx + 1] : null;
   })();
 
   const branchFilter = (() => {
@@ -126,13 +152,20 @@ async function main() {
     return val === 'all' ? null : parseInt(val, 10);
   })();
 
-  console.log(`\n📋 Generating attendance grid templates ${branchFilter ? `(Branch ${branchFilter})` : '(All Branches)'}...\n`);
+  const filterDesc = [
+    branchFilter ? `Branch ${branchFilter}` : null,
+    classFilter ? `Class ${classFilter}` : null,
+    groupFilter ? `Group "${groupFilter}"` : null,
+  ].filter(Boolean).join(', ') || 'All';
+
+  console.log(`\n📋 Generating attendance grid templates (${filterDesc})...\n`);
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
   const classes = await prisma.class.findMany({
     where: {
       ...(branchFilter ? { branchId: branchFilter } : {}),
       ...(classFilter ? { id: classFilter } : {}),
+      ...(groupFilter ? { name: { contains: groupFilter } } : {}),
     },
     include: {
       branch: true,
@@ -152,7 +185,7 @@ async function main() {
     orderBy: [{ branchId: 'asc' }, { isFormation: 'asc' }, { name: 'asc' }],
   });
 
-  const allClasses = branchFilter ? await prisma.class.findMany({
+  const allClasses = (branchFilter || classFilter || groupFilter) ? await prisma.class.findMany({
     include: {
       branch: true,
       level: true,
@@ -173,11 +206,27 @@ async function main() {
   for (const s of allDbStudents) {
     studentLookup.set(normalizeArabic(s.name), s);
   }
-  const maxGlobalNumber = allDbStudents.reduce((max, s) => Math.max(max, s.globalNumber), 0);
+  let maxGlobalNumber = allDbStudents.reduce((max, s) => Math.max(max, s.globalNumber), 0);
+  if (allDbStudents.length === 0) {
+    const maxFileNum = await getMaxGlobalNumberFromExistingFiles(OUTPUT_DIR);
+    maxGlobalNumber = Math.max(maxGlobalNumber, maxFileNum);
+  }
   let nextGlobalNumber = maxGlobalNumber + 1;
 
-  // Load excel groups if branch filter is set
-  const excelGroups = branchFilter ? await loadBranchExcelGroups(branchFilter) : [];
+  // Determine branch to load from Excel
+  let targetBranchId = branchFilter;
+  if (!targetBranchId && classFilter) {
+    const foundCls = allClasses.find((c) => c.id === classFilter);
+    if (foundCls) targetBranchId = foundCls.branchId;
+  }
+  if (!targetBranchId && groupFilter) {
+    const normG = normalizeArabic(groupFilter);
+    const foundCls = allClasses.find((c) => normalizeArabic(c.name).includes(normG));
+    if (foundCls) targetBranchId = foundCls.branchId;
+  }
+
+  // Load excel groups
+  const excelGroups = targetBranchId ? await loadBranchExcelGroups(targetBranchId) : [];
   const processedClassIds = new Set<number>();
   let filesCreated = 0;
 
@@ -189,6 +238,9 @@ async function main() {
                || allClasses.find((c) => c.name.includes(eg.groupName) || eg.groupName.includes(c.name));
 
       if (!cls) continue;
+      if (classFilter && cls.id !== classFilter) continue;
+      if (groupFilter && !normalizeArabic(cls.name).includes(normalizeArabic(groupFilter)) && !normGroupName.includes(normalizeArabic(groupFilter))) continue;
+
       processedClassIds.add(cls.id);
 
       const studentList: Array<{ id: string | null; name: string; globalNumber: number }> = [];
@@ -216,7 +268,7 @@ async function main() {
       }
 
       studentList.sort((a, b) => a.globalNumber - b.globalNumber);
-      const branchName = branchFilter === 2 ? 'ANNEX' : (branchFilter === 1 ? 'ECOLE' : cls.branch.name);
+      const branchName = (targetBranchId === 2 ? 'ANNEX' : (targetBranchId === 1 ? 'ECOLE' : cls.branch.name));
       await generateGroupTemplate({ ...cls, branchNameOverride: branchName }, studentList, cls.lessons, eg.hasBooks);
       filesCreated++;
     }
@@ -225,6 +277,8 @@ async function main() {
   // Also process any remaining classes from DB
   for (const cls of classes) {
     if (processedClassIds.has(cls.id)) continue;
+    if (classFilter && cls.id !== classFilter) continue;
+    if (groupFilter && !normalizeArabic(cls.name).includes(normalizeArabic(groupFilter))) continue;
 
     const studentsMap = new Map<string, { id: string | null; name: string; globalNumber: number }>();
     for (const enr of cls.enrollments) {

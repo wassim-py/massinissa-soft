@@ -38,6 +38,7 @@ export interface TeacherPayrollCalculation {
     pricePerCycle: number;
     sessionPrice: number;
     teacherCut: number;
+    appliedPercentage?: number;
     lessonAmount: number;
     isFree: boolean;
     isExtra: boolean;
@@ -99,6 +100,7 @@ export async function calculateTeacherPayroll(
       TeacherPayRate: {
         orderBy: [{ effectiveFrom: "desc" }, { id: "desc" }],
       },
+      teacherClassRates: true,
     },
   });
 
@@ -124,6 +126,14 @@ export async function calculateTeacherPayroll(
   teacher.TeacherBranch.forEach((tb) => {
     if (tb.payRate !== null && tb.payRate !== undefined) {
       branchRateMap.set(tb.branchId, Number(tb.payRate));
+    }
+  });
+
+  // Map of classId -> group-specific percentage override
+  const classRateMap = new Map<number, number>();
+  teacher.teacherClassRates?.forEach((tcr) => {
+    if (tcr.percentage !== null && tcr.percentage !== undefined) {
+      classRateMap.set(tcr.classId, Number(tcr.percentage));
     }
   });
 
@@ -440,12 +450,17 @@ export async function calculateTeacherPayroll(
     const pricePerCycle = lesson.class?.pricePerCycle ? Number(lesson.class.pricePerCycle) : 0;
     const sessionPrice = pricePerCycle > 0 ? pricePerCycle / 4 : 0;
 
+    // Resolve group-specific percentage override or fall back to teacher overall percentage
+    const appliedGroupPercentage = classRateMap.has(lesson.classId)
+      ? classRateMap.get(lesson.classId)!
+      : (percentageOfSessionFee ?? null);
+
     if (!lesson.isFree) {
       if (branchRateMap.has(lesson.branchId)) {
         effectiveRateForSession = branchRateMap.get(lesson.branchId)!;
         lessonAmount = effectiveRateForSession;
-      } else if (percentageOfSessionFee !== null && percentageOfSessionFee > 0) {
-        effectiveRateForSession = (sessionPrice * percentageOfSessionFee) / 100;
+      } else if (appliedGroupPercentage !== null && appliedGroupPercentage > 0) {
+        effectiveRateForSession = (sessionPrice * appliedGroupPercentage) / 100;
         lessonAmount = payingWeight * effectiveRateForSession;
       } else if (defaultSessionRate > 0) {
         effectiveRateForSession = defaultSessionRate;
@@ -467,6 +482,7 @@ export async function calculateTeacherPayroll(
       pricePerCycle,
       sessionPrice,
       teacherCut: effectiveRateForSession,
+      appliedPercentage: appliedGroupPercentage !== null ? appliedGroupPercentage : undefined,
       lessonAmount,
       isFree: lesson.isFree,
       isExtra: lesson.isExtra,
@@ -558,9 +574,13 @@ export async function calculateTeacherPayroll(
                   ? Number(lessonRecord.class.pricePerCycle)
                   : 0;
                 const sessionPrice = pricePerCycle > 0 ? pricePerCycle / 4 : 0;
+                const retroGroupPercentage = classRateMap.has(lessonRecord.classId)
+                  ? classRateMap.get(lessonRecord.classId)!
+                  : (percentageOfSessionFee ?? null);
+
                 const teacherCut =
-                  percentageOfSessionFee !== null && percentageOfSessionFee > 0
-                    ? (sessionPrice * percentageOfSessionFee) / 100
+                  retroGroupPercentage !== null && retroGroupPercentage > 0
+                    ? (sessionPrice * retroGroupPercentage) / 100
                     : defaultSessionRate;
 
                 if (teacherCut > 0) {
@@ -585,6 +605,7 @@ export async function calculateTeacherPayroll(
                     pricePerCycle,
                     sessionPrice,
                     teacherCut,
+                    appliedPercentage: retroGroupPercentage !== null ? retroGroupPercentage : undefined,
                     lessonAmount: teacherCut,
                     isFree: false,
                     isExtra: false,

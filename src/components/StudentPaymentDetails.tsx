@@ -371,9 +371,15 @@ export default function StudentPaymentDetails({
 
     const mostRecentActiveCycle = sortedActiveCycles[0] || null;
 
-    const teacherPercentage = (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
-      ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
-      : null;
+    const teacherId = (c as any).teacherId || c.teacher?.id;
+    const teacherClassOverride = (c as any)?.teacherClassRates?.find(
+      (tcr: any) => tcr.teacherId === teacherId
+    )?.percentage;
+    const teacherPercentage = teacherClassOverride != null
+      ? Number(teacherClassOverride)
+      : (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+        ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+        : null;
 
     const enrPayerStatus = (enr as any).payerStatus || student.payerStatus || "NORMAL";
     const feeCalc = computeStudentSessionFee({

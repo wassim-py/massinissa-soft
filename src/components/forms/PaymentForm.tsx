@@ -59,9 +59,14 @@ const PaymentForm = ({
     : 0;
   const isSiblingWaived = siblingDiscountPct >= 100;
 
-  const teacherPercentage = (classData as any)?.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
-    ? Number((classData as any).teacher.TeacherPayRate[0].percentageOfSessionFee)
-    : null;
+  const teacherClassOverride = (classData as any)?.teacherClassRates?.find(
+    (tcr: any) => tcr.teacherId === (classData as any)?.teacherId
+  )?.percentage;
+  const teacherPercentage = teacherClassOverride != null
+    ? Number(teacherClassOverride)
+    : (classData as any)?.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
+      ? Number((classData as any).teacher.TeacherPayRate[0].percentageOfSessionFee)
+      : null;
 
   const enrollment = (student.enrollments as any[])?.find((e) => e.classId === classData.id);
   const currentPayerStatus = enrollment?.payerStatus || (student as any).payerStatus || "NORMAL";

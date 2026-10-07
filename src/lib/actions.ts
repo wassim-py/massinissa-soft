@@ -6507,6 +6507,132 @@ export async function recordTeacherPhotocopyAction(formData: {
 }
 
 /**
+ * Update an existing Photocopy Charge for a teacher (Owner-only).
+ * Allows the owner to correct false counting/pages, branch, or group.
+ */
+export async function updateTeacherPhotocopyAction(formData: {
+  id: number;
+  teacherId: string;
+  pages: number;
+  branchId?: number;
+  classId?: number | null;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / تعديل سجل النسخ متاح للمالك فقط.",
+      };
+    }
+
+    const pages = Number(formData.pages);
+    if (!pages || pages < 1) {
+      return { success: false, error: true, message: "يرجى إدخال عدد صفحات صالح (1 على الأقل)." };
+    }
+
+    const teacher = await prisma.teacher.findUnique({
+      where: { id: formData.teacherId },
+      select: { id: true, name: true, photocopyRatePerPage: true },
+    });
+
+    if (!teacher) {
+      return { success: false, error: true, message: "لم يتم العثور على الأستاذ المطلوب." };
+    }
+
+    const existingCharge = await prisma.photocopyCharge.findUnique({
+      where: { id: Number(formData.id) },
+    });
+
+    if (!existingCharge) {
+      return { success: false, error: true, message: "لم يتم العثور على سجل النسخ المطلوب." };
+    }
+
+    const rate = teacher.photocopyRatePerPage ? Number(teacher.photocopyRatePerPage) : 0;
+    const costAmount = pages * rate;
+
+    const charge = await prisma.photocopyCharge.update({
+      where: { id: Number(formData.id) },
+      data: {
+        pages,
+        costAmount: new Prisma.Decimal(costAmount),
+        ...(formData.branchId ? { branchId: Number(formData.branchId) } : {}),
+        classId: formData.classId !== undefined ? (formData.classId ? Number(formData.classId) : null) : undefined,
+      },
+      include: {
+        Branch: true,
+        class: true,
+      },
+    });
+
+    safeRevalidatePath("/list/teachers");
+    safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+
+    return {
+      success: true,
+      error: false,
+      message: `تم تعديل عملية النسخ #${charge.id} (${pages} صفحة - ${costAmount} دج) للأستاذ ${teacher.name} بنجاح.`,
+      data: {
+        ...charge,
+        costAmount: Number(charge.costAmount),
+      },
+    };
+  } catch (error: any) {
+    console.error("Error in updateTeacherPhotocopyAction:", error);
+    return { success: false, error: true, message: error.message || "فشل تعديل تكلفة النسخ." };
+  }
+}
+
+/**
+ * Delete a Photocopy Charge for a teacher (Owner-only).
+ * Allows the owner to remove erroneous or false photocopy entries.
+ */
+export async function deleteTeacherPhotocopyAction(formData: {
+  id: number;
+  teacherId: string;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / حذف سجل النسخ متاح للمالك فقط.",
+      };
+    }
+
+    const existingCharge = await prisma.photocopyCharge.findUnique({
+      where: { id: Number(formData.id) },
+    });
+
+    if (!existingCharge) {
+      return { success: false, error: true, message: "لم يتم العثور على سجل النسخ المطلوب." };
+    }
+
+    await prisma.photocopyCharge.delete({
+      where: { id: Number(formData.id) },
+    });
+
+    safeRevalidatePath("/list/teachers");
+    safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+
+    return {
+      success: true,
+      error: false,
+      message: `تم حذف سجل النسخ #${formData.id} بنجاح.`,
+    };
+  } catch (error: any) {
+    console.error("Error in deleteTeacherPhotocopyAction:", error);
+    return { success: false, error: true, message: error.message || "فشل حذف سجل النسخ." };
+  }
+}
+
+/**
  * Update a teacher's individual photocopyRatePerPage (Owner-only).
  */
 export async function updateTeacherPhotocopyRateAction(formData: {
@@ -6593,6 +6719,143 @@ export async function updateTeacherPayrollPercentageAction(formData: {
   } catch (error: any) {
     console.error("Error in updateTeacherPayrollPercentageAction:", error);
     return { success: false, error: true, message: error.message || "Échec de mise à jour de la rémunération / فشل تحديث نسبة الأستاذ." };
+  }
+}
+
+/**
+ * Update or reset a teacher's group-specific payroll percentage - OWNER-ONLY.
+ * If percentage is provided (number), upserts the TeacherClassRate record.
+ * If percentage is null or undefined, deletes the override so the group falls back to the teacher's overall rate.
+ */
+export async function updateTeacherGroupPercentageAction(data: {
+  teacherId: string;
+  classId: number;
+  percentage: number | null;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / تحديد نسبة الفوج متاح للمالك فقط.",
+      };
+    }
+
+    const { teacherId, classId, percentage } = data;
+
+    const teacher = await prisma.teacher.findUnique({
+      where: { id: teacherId },
+      select: { id: true, name: true },
+    });
+    if (!teacher) {
+      return { success: false, error: true, message: "Enseignant introuvable / لم يتم العثور على الأستاذ المطلوب." };
+    }
+
+    const classGroup = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { id: true, name: true },
+    });
+    if (!classGroup) {
+      return { success: false, error: true, message: "Groupe introuvable / لم يتم العثور على الفوج المطلوب." };
+    }
+
+    if (percentage === null || percentage === undefined) {
+      // Revert to global percentage: remove custom group override if exists
+      await prisma.teacherClassRate.deleteMany({
+        where: { teacherId, classId },
+      });
+
+      safeRevalidatePath("/list/teachers");
+      safeRevalidatePath(`/list/teachers/${teacherId}`);
+      safeRevalidatePath("/list/payroll");
+      safeRevalidatePath("/list/finance");
+
+      return {
+        success: true,
+        error: false,
+        message: `Le groupe "${classGroup.name}" utilise désormais le pourcentage global de l'enseignant / تم إعادة ضبط الفوج "${classGroup.name}" إلى النسبة العامة بنجاح.`,
+      };
+    }
+
+    const pctNum = Number(percentage);
+    if (isNaN(pctNum) || pctNum < 0 || pctNum > 100) {
+      return {
+        success: false,
+        error: true,
+        message: "Pourcentage non valide (entre 0 et 100) / يرجى إدخال نسبة مئوية صالحة بين 0 و 100.",
+      };
+    }
+
+    await prisma.teacherClassRate.upsert({
+      where: {
+        teacherId_classId: { teacherId, classId },
+      },
+      create: {
+        teacherId,
+        classId,
+        percentage: new Prisma.Decimal(pctNum),
+      },
+      update: {
+        percentage: new Prisma.Decimal(pctNum),
+      },
+    });
+
+    safeRevalidatePath("/list/teachers");
+    safeRevalidatePath(`/list/teachers/${teacherId}`);
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+
+    return {
+      success: true,
+      error: false,
+      message: `Pourcentage du groupe "${classGroup.name}" fixé à ${pctNum}% avec succès / تم تحديد نسبة الفوج "${classGroup.name}" بـ ${pctNum}% بنجاح.`,
+    };
+  } catch (error: any) {
+    console.error("Error in updateTeacherGroupPercentageAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error.message || "Échec de mise à jour du pourcentage du groupe / فشل تحديث نسبة الفوج.",
+    };
+  }
+}
+
+/**
+ * Reset all group overrides for a teacher back to the overall default - OWNER-ONLY.
+ */
+export async function resetAllTeacherGroupPercentagesAction(teacherId: string) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط.",
+      };
+    }
+
+    await prisma.teacherClassRate.deleteMany({
+      where: { teacherId },
+    });
+
+    safeRevalidatePath("/list/teachers");
+    safeRevalidatePath(`/list/teachers/${teacherId}`);
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+
+    return {
+      success: true,
+      error: false,
+      message: "Toutes les dérogations de groupes ont été réinitialisées au taux global / تم إعادة ضبط جميع الأفواج إلى النسبة العامة.",
+    };
+  } catch (error: any) {
+    console.error("Error in resetAllTeacherGroupPercentagesAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error.message || "Échec de réinitialisation / فشل إعادة الضبط.",
+    };
   }
 }
 

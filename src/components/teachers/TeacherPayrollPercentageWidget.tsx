@@ -50,9 +50,14 @@ export default function TeacherPayrollPercentageWidget({
           <Percent className="w-4 h-4 text-emerald-600" />
         </div>
         <div className="min-w-0 grow sm:grow-0">
-          <span className="text-xs text-muted font-medium block truncate">
-            {t("percentageLabel")}
-          </span>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-muted font-medium block truncate">
+              {t("percentageLabel")}
+            </span>
+            <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100/90 dark:bg-emerald-950/60 dark:text-emerald-300 px-1.5 py-0.2 rounded border border-emerald-200/80">
+              {t("overallPercentageBadge")}
+            </span>
+          </div>
           {isEditing ? (
             <form onSubmit={handleSave} className="flex flex-wrap items-center gap-2 mt-1.5">
               <input

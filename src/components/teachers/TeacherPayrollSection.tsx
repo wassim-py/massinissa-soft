@@ -59,6 +59,7 @@ export default function TeacherPayrollSection({
     { header: t("colType"), accessor: "type", align: "center" },
     { header: locale === "ar" ? "الحضور / الدفع" : "Présents / Payants", accessor: "presentCount", align: "center" },
     { header: t("colSessionPrice"), accessor: "sessionPrice", align: "end" },
+    { header: t("colAppliedRate"), accessor: "appliedPercentage", align: "center" },
     { header: t("colTeacherCut"), accessor: "teacherCut", align: "end" },
     { header: t("colSchoolCut"), accessor: "schoolCut", align: "end" },
     { header: t("colLessonTotal"), accessor: "lessonAmount", align: "end" },
@@ -281,6 +282,23 @@ export default function TeacherPayrollSection({
                 </td>
                 <td className="p-3.5 text-end text-gray-700">
                   {formatDZD(s.sessionPrice)}
+                </td>
+                <td className="p-3.5 text-center">
+                  {s.isTeacherAbsent ? (
+                    <span className="text-xs text-muted">-</span>
+                  ) : s.appliedPercentage !== undefined ? (
+                    <Badge
+                      variant={s.appliedPercentage !== percentage ? "success" : "neutral"}
+                      size="sm"
+                      className="font-mono font-semibold"
+                    >
+                      {s.appliedPercentage}%
+                    </Badge>
+                  ) : (
+                    <Badge variant="neutral" size="sm" className="font-mono">
+                      {percentage}%
+                    </Badge>
+                  )}
                 </td>
                 <td className="p-3.5 text-end text-success-text font-semibold">
                   {s.isTeacherAbsent ? "0 DZD" : formatDZD(Math.round(s.teacherCut))}

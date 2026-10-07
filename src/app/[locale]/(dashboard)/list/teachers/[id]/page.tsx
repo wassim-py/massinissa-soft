@@ -13,6 +13,7 @@ import { DataTable, Column } from "@/components/ui/DataTable";
 import { TeacherAvatar } from "@/components/ui/UserAvatar";
 import TeacherPhotocopyRateWidget from "@/components/teachers/TeacherPhotocopyRateWidget";
 import TeacherPayrollPercentageWidget from "@/components/teachers/TeacherPayrollPercentageWidget";
+import TeacherGroupPercentageConfigurator from "@/components/teachers/TeacherGroupPercentageConfigurator";
 import TeacherPayrollSection from "@/components/teachers/TeacherPayrollSection";
 import TeacherLessonRecordsSection from "@/components/teachers/TeacherLessonRecordsSection";
 import TeacherPhotocopySection from "@/components/teachers/TeacherPhotocopySection";
@@ -112,6 +113,7 @@ const SingleTeacherPage = async (
       include: {
         TeacherPayRate: { orderBy: [{ effectiveFrom: "desc" }, { id: "desc" }] },
         TeacherBranch: { include: { Branch: true } },
+        teacherClassRates: true,
         classes: {
           include: {
             branch: true,
@@ -224,12 +226,35 @@ const SingleTeacherPage = async (
   });
   const assignedSubjects = Array.from(subjectSet);
 
+  // Active pay rates
+  const activePayRate = t.TeacherPayRate.find(
+    (r) => new Date(r.effectiveFrom) <= thisMonthEnd
+  ) || t.TeacherPayRate[0];
+
+  const initialPercentage = activePayRate?.percentageOfSessionFee
+    ? Number(activePayRate.percentageOfSessionFee)
+    : 40; // Default 40% per architecture spec if not explicitly set
+  const photocopyRate = t.photocopyRatePerPage ? Number(t.photocopyRatePerPage) : 5;
+
+  const teacherGroupRatesMap = new Map<number, number>();
+  t.teacherClassRates?.forEach((tcr) => {
+    if (tcr.percentage !== null && tcr.percentage !== undefined) {
+      teacherGroupRatesMap.set(tcr.classId, Number(tcr.percentage));
+    }
+  });
+
+  const configurableGroups = assignedGroups.map((g) => ({
+    ...g,
+    customPercentage: teacherGroupRatesMap.has(g.id) ? teacherGroupRatesMap.get(g.id)! : null,
+  }));
+
   const groupColumns: Column[] = [
     { header: tProfile("colGroup"), accessor: "name" },
     { header: tProfile("colLevel"), accessor: "levelName" },
     { header: tProfile("colBranch"), accessor: "branchName" },
     { header: tProfile("colStudentsCount"), accessor: "studentsCount", align: "center" },
     { header: tProfile("colSessionPrice"), accessor: "sessionPrice", align: "end" },
+    { header: tProfile("colAppliedRate"), accessor: "appliedRate", align: "center" },
     { header: tProfile("colTeacherCut"), accessor: "teacherCut", align: "end" },
     { header: tProfile("colSchoolCut"), accessor: "schoolCut", align: "end" },
   ];
@@ -241,16 +266,6 @@ const SingleTeacherPage = async (
     { header: tProfile("colRoom"), accessor: "classroomName" },
     { header: tProfile("colType"), accessor: "type", align: "center" },
   ];
-
-  // Active pay rates
-  const activePayRate = t.TeacherPayRate.find(
-    (r) => new Date(r.effectiveFrom) <= thisMonthEnd
-  ) || t.TeacherPayRate[0];
-
-  const initialPercentage = activePayRate?.percentageOfSessionFee
-    ? Number(activePayRate.percentageOfSessionFee)
-    : 40; // Default 40% per architecture spec if not explicitly set
-  const photocopyRate = t.photocopyRatePerPage ? Number(t.photocopyRatePerPage) : 5;
 
   // Timetable data preparation
   const lessonsForTimetable = allLessonsForTimetable.map((r) => ({
@@ -415,7 +430,9 @@ const SingleTeacherPage = async (
                 data={assignedGroups}
                 renderRow={(g) => {
                   const sessionPrice = g.pricePerCycle > 0 ? g.pricePerCycle / 4 : 0;
-                  const teacherCut = (sessionPrice * initialPercentage) / 100;
+                  const customPct = teacherGroupRatesMap.get(g.id);
+                  const effectivePercentage = customPct !== undefined ? customPct : initialPercentage;
+                  const teacherCut = (sessionPrice * effectivePercentage) / 100;
                   const schoolCut = Math.max(0, sessionPrice - teacherCut);
                   return (
                     <tr
@@ -437,6 +454,17 @@ const SingleTeacherPage = async (
                       <td className="p-3.5 text-end text-gray-700">
                         {formatDZD(sessionPrice, locale)}
                       </td>
+                      <td className="p-3.5 text-center">
+                        {customPct !== undefined ? (
+                          <Badge variant="success" size="sm" className="font-semibold">
+                            {customPct}% ({tProfile("customBadge")})
+                          </Badge>
+                        ) : (
+                          <Badge variant="neutral" size="sm">
+                            {initialPercentage}% ({tProfile("defaultBadge")})
+                          </Badge>
+                        )}
+                      </td>
                       <td className="p-3.5 text-end font-bold text-success-text">
                         {formatDZD(Math.round(teacherCut), locale)}
                       </td>
@@ -453,6 +481,13 @@ const SingleTeacherPage = async (
           </Card>
         </div>
       </div>
+
+      {/* DETAILED GROUP PERCENTAGE CONFIGURATOR (Mobile & Desktop Friendly) */}
+      <TeacherGroupPercentageConfigurator
+        teacherId={t.id}
+        overallPercentage={initialPercentage}
+        groups={configurableGroups}
+      />
 
       {/* SECTION 6: CURRENT PAYROLL (§2.9 & Req 6) */}
       <TeacherPayrollSection
@@ -587,6 +622,7 @@ const SingleTeacherPage = async (
           date: c.date,
           recordedBy: c.recordedBy,
         }))}
+        isOwner={session.isOwner}
       />
 
       {/* SECTION 5: BOOKS BROUGHT TO SCHOOL (FILTERABLE BY DATE, BRANCH, AND LEVEL) */}

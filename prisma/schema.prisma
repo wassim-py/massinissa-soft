@@ -75,7 +75,7 @@ model ParentPhoneNumber {
 }
 
 model Teacher {
-  id                   String            @id
+  id                   String             @id
   name                 String
   phone                String?
   gender               String?
@@ -84,34 +84,36 @@ model Teacher {
   PhotocopyCharge      PhotocopyCharge[]
   TeacherBranch        TeacherBranch[]
   TeacherPayRate       TeacherPayRate[]
+  teacherClassRates    TeacherClassRate[]
   books                Book[]
   classes              Class[]
 }
 
 model Class {
-  id               Int             @id @default(autoincrement())
-  name             String
-  ageGroup         String?
-  bookFee          Decimal?
-  branchId         Int
-  teacherId        String?
-  levelId          Int?
-  formationLevelId Int?
-  hasBooks         Boolean         @default(false)
-  inscriptionFee   Decimal
-  isFormation      Boolean         @default(false)
-  pricePerCycle    Decimal?
-  isCompleted      Boolean         @default(false)
-  completedAt      DateTime?
-  branch           Branch          @relation(fields: [branchId], references: [id])
-  teacher          Teacher?        @relation(fields: [teacherId], references: [id])
-  level            Level?          @relation(fields: [levelId], references: [id])
-  FormationLevel   FormationLevel? @relation(fields: [formationLevelId], references: [id])
-  enrollments      Enrollment[]
-  lessons          Lesson[]
-  LevelTest        LevelTest[]
-  vouchers         Voucher[]
-  photocopyCharges PhotocopyCharge[]
+  id                Int                @id @default(autoincrement())
+  name              String
+  ageGroup          String?
+  bookFee           Decimal?
+  branchId          Int
+  teacherId         String?
+  levelId           Int?
+  formationLevelId  Int?
+  hasBooks          Boolean            @default(false)
+  inscriptionFee    Decimal
+  isFormation       Boolean            @default(false)
+  pricePerCycle     Decimal?
+  isCompleted       Boolean            @default(false)
+  completedAt       DateTime?
+  branch            Branch             @relation(fields: [branchId], references: [id])
+  teacher           Teacher?           @relation(fields: [teacherId], references: [id])
+  level             Level?             @relation(fields: [levelId], references: [id])
+  FormationLevel    FormationLevel?    @relation(fields: [formationLevelId], references: [id])
+  enrollments       Enrollment[]
+  lessons           Lesson[]
+  LevelTest         LevelTest[]
+  vouchers          Voucher[]
+  photocopyCharges  PhotocopyCharge[]
+  teacherClassRates TeacherClassRate[]
 
   @@index([branchId])
   @@index([teacherId])
@@ -471,6 +473,21 @@ model TeacherPayRate {
   percentageOfSessionFee Decimal? @db.Decimal
   effectiveFrom          DateTime
   Teacher                Teacher  @relation(fields: [teacherId], references: [id])
+}
+
+model TeacherClassRate {
+  id         Int      @id @default(autoincrement())
+  teacherId  String
+  classId    Int
+  percentage Decimal  @db.Decimal(5, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  teacher    Teacher  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  class      Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, classId])
+  @@index([teacherId])
+  @@index([classId])
 }
 
 model UserProfile {

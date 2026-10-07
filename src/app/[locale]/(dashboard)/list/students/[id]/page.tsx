@@ -94,6 +94,7 @@ const SingleStudentPage = async (
                 include: {
                   branch: true,
                   level: true,
+                  teacherClassRates: true,
                   teacher: {
                     include: {
                       TeacherPayRate: {
@@ -249,9 +250,14 @@ const SingleStudentPage = async (
 
       const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + Number((enr as any).creditResetOffset || 0);
 
-      const teacherPercentage = (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
-        ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
-        : null;
+      const teacherClassOverride = (c.teacherClassRates as any[])?.find(
+        (tcr: any) => tcr.teacherId === c.teacherId
+      )?.percentage;
+      const teacherPercentage = teacherClassOverride != null
+        ? Number(teacherClassOverride)
+        : (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+          ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+          : null;
 
       const enrStatus = enr.payerStatus || "NORMAL";
       const feeCalc = computeStudentSessionFee({
