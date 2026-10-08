@@ -849,12 +849,19 @@ function findHeaderRow(rows: Array<Array<string | null>>, startIdx: number): num
   return -1;
 }
 
+function cleanGroupName(raw: string): string {
+  return raw
+    .split('[')[0]
+    .split('(')[0]
+    .trim();
+}
+
 function findGroupName(rows: Array<Array<string | null>>, headerIdx: number, minRow: number = 0): string {
   // Search backwards from headerIdx - 1 down to minRow for the merged group name
   for (let j = headerIdx - 1; j >= Math.max(minRow, headerIdx - 5); j--) {
     const nonEmpty = rows[j].filter((c) => c && c.trim().length > 0);
     if (nonEmpty.length > 0) {
-      return nonEmpty[0]!.trim();
+      return cleanGroupName(nonEmpty[0]!.trim());
     }
   }
   return `Group at row ${headerIdx + 1}`;
@@ -1058,6 +1065,15 @@ function buildClassLookup(classes: DbClass[]): Map<string, DbClass> {
   const map = new Map<string, DbClass>();
   for (const c of classes) {
     map.set(`${c.branchId}-${normalizeArabic(c.name)}`, c);
+    if (c.isFormation && c.FormationLevel) {
+      map.set(`${c.branchId}-${normalizeArabic(c.FormationLevel.name)}`, c);
+      if (c.FormationLevel.Language?.name) {
+        map.set(`${c.branchId}-${normalizeArabic(`${c.FormationLevel.Language.name} ${c.FormationLevel.name}`)}`, c);
+        map.set(`${c.branchId}-${normalizeArabic(`Formation ${c.FormationLevel.Language.name} - ${c.FormationLevel.name}`)}`, c);
+        map.set(`${c.branchId}-${normalizeArabic(`Formation Anglais - ${c.FormationLevel.name}`)}`, c);
+        map.set(`${c.branchId}-${normalizeArabic(`Formation Français - ${c.FormationLevel.name}`)}`, c);
+      }
+    }
   }
   return map;
 }
@@ -1070,45 +1086,76 @@ function matchClass(
   levelByName: Map<string, number>,
   formationLevelByName?: Map<string, number>
 ): DbClass | null {
+  const cleanName = cleanGroupName(groupName);
+  const normClean = normalizeArabic(cleanName);
   const normGroup = normalizeArabic(groupName);
 
-  // Direct name match in same branch
-  const direct = classLookup.get(`${branchId}-${normGroup}`);
-  if (direct) return direct;
+  // 1. Direct name match in same branch on clean name or raw name
+  const directClean = classLookup.get(`${branchId}-${normClean}`);
+  if (directClean) return directClean;
 
-  // Try partial match: class name contains group name or vice versa
+  const directRaw = classLookup.get(`${branchId}-${normGroup}`);
+  if (directRaw) return directRaw;
+
+  // Extract numbers in clean group name (e.g. 02, 2, 04, 4)
+  const groupNumbers = (normClean.match(/\d+/g) || []).map((n) => parseInt(n, 10));
+
+  // 2. Partial match in same branch
   for (const [key, cls] of classLookup.entries()) {
     if (!key.startsWith(`${branchId}-`)) continue;
     const normClass = normalizeArabic(cls.name);
-    if (normClass.includes(normGroup) || normGroup.includes(normClass)) {
+
+    // If group has specific numbers, ensure class has matching numbers!
+    if (groupNumbers.length > 0) {
+      const classNumbers = (normClass.match(/\d+/g) || []).map((n) => parseInt(n, 10));
+      if (classNumbers.length > 0 && !groupNumbers.some((gn) => classNumbers.includes(gn))) {
+        continue;
+      }
+      if (classNumbers.length === 0) {
+        continue;
+      }
+    } else {
+      // If group has NO numbers, do not match a class that has numbers!
+      const classNumbers = (normClass.match(/\d+/g) || []).map((n) => parseInt(n, 10));
+      if (classNumbers.length > 0 && cls.isFormation) {
+        continue;
+      }
+    }
+
+    if (
+      normClass.includes(normClean) ||
+      normClean.includes(normClass) ||
+      normClass.includes(normGroup) ||
+      normGroup.includes(normClass)
+    ) {
       return cls;
     }
   }
 
-  // Try matching by level and any keyword in the group name
+  // 3. Try matching by level and any keyword in the group name
   const levelId = levelByName.get(normalizeArabic(levelName));
   if (levelId) {
     for (const [key, cls] of classLookup.entries()) {
       if (!key.startsWith(`${branchId}-`)) continue;
       if (cls.levelId === levelId) {
         const normClass = normalizeArabic(cls.name);
-        const words = normGroup.split(' ').filter((w) => w.length > 2);
+        const words = normClean.split(' ').filter((w) => w.length > 2);
         if (words.some((w) => normClass.includes(w))) return cls;
       }
     }
   }
 
-  // Try matching by formation level
+  // 4. Try matching by formation level
   if (formationLevelByName) {
     const fLevelId =
-      formationLevelByName.get(normalizeArabic(levelName)) ||
+      formationLevelByName.get(normClean) ||
       formationLevelByName.get(normGroup);
     if (fLevelId) {
       for (const [key, cls] of classLookup.entries()) {
         if (!key.startsWith(`${branchId}-`)) continue;
         if (cls.isFormation && cls.formationLevelId === fLevelId) {
           const normClass = normalizeArabic(cls.name);
-          const words = normGroup.split(' ').filter((w) => w.length > 2);
+          const words = normClean.split(' ').filter((w) => w.length > 2);
           if (words.length === 0 || words.some((w) => normClass.includes(w))) return cls;
         }
       }
@@ -1120,10 +1167,10 @@ function matchClass(
     }
   }
 
-  // Cross-branch fallback: exact name match in another branch
+  // 5. Cross-branch fallback: exact name match in another branch
   for (const [key, cls] of classLookup.entries()) {
     const normClass = normalizeArabic(cls.name);
-    if (normClass === normGroup) {
+    if (normClass === normClean || normClass === normGroup) {
       return cls;
     }
   }

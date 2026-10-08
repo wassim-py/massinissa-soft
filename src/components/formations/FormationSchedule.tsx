@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Image from "next/image";
-import FormationAttendanceModal from "./FormationAttendanceModal";
 import AddFormationSessionModal from "./AddFormationSessionModal";
 import EditFormationSessionModal from "./EditFormationSessionModal";
 import DeleteFormationSessionModal from "./DeleteFormationSessionModal";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import Link from "next/link";
@@ -40,23 +39,11 @@ export default function FormationSchedule({
   role?: string;
 }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const sessionIdParam = searchParams.get("session");
   const t = useTranslations("formations");
   const locale = useLocale();
-  const [selectedSessionForAttendance, setSelectedSessionForAttendance] = useState<any | null>(null);
   const [isAddSessionOpen, setIsAddSessionOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<any | null>(null);
   const [deletingSession, setDeletingSession] = useState<any | null>(null);
-
-  useEffect(() => {
-    if (sessionIdParam) {
-      const match = sessions.find((s) => s.id.toString() === sessionIdParam);
-      if (match) {
-        setSelectedSessionForAttendance(match);
-      }
-    }
-  }, [sessionIdParam, sessions]);
 
   return (
     <>
@@ -150,20 +137,18 @@ export default function FormationSchedule({
                   </div>
 
                   <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
-                    <Button
-                      variant={isAttendanceDone ? "outline" : "primary"}
-                      size="sm"
-                      onClick={() => setSelectedSessionForAttendance(session)}
-                      className={`text-xs font-semibold flex items-center gap-1.5 ${
+                    <Link
+                      href={`/list/attendance/take/${session.id}`}
+                      className={`text-xs font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors shadow-2xs ${
                         isAttendanceDone
-                          ? "text-emerald-700 border-emerald-300 hover:bg-emerald-50"
-                          : ""
+                          ? "text-emerald-700 border-emerald-300 bg-emerald-50/60 hover:bg-emerald-100/80"
+                          : "bg-primary text-white hover:bg-primary-hover border-transparent"
                       }`}
                       title={t("takeAttendance")}
                     >
                       <UserCheck className="w-3.5 h-3.5" />
                       <span>{t("takeAttendance")}</span>
-                    </Button>
+                    </Link>
 
                     {role === "admin" && (
                       <>
@@ -193,18 +178,6 @@ export default function FormationSchedule({
           </ul>
         )}
       </div>
-
-      {/* ATTENDANCE MODAL */}
-      {selectedSessionForAttendance && (
-        <FormationAttendanceModal
-          isOpen={!!selectedSessionForAttendance}
-          onClose={() => setSelectedSessionForAttendance(null)}
-          lesson={selectedSessionForAttendance}
-          enrolledStudents={enrolledStudents}
-          existingAttendance={selectedSessionForAttendance.attendances || []}
-          onAttendanceSaved={() => router.refresh()}
-        />
-      )}
 
       {/* ADD SESSION MODAL */}
       {isAddSessionOpen && (

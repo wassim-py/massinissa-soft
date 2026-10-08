@@ -92,9 +92,6 @@ const LessonDetailModal = ({
       const wsId = lesson.workshopSessionId || Math.abs(lesson.id);
       return `/list/workshops/${lesson.workshopId}?session=${wsId}`;
     }
-    if (lesson.isFormation) {
-      return `/list/formations/${lesson.classId}?session=${lesson.id}`;
-    }
     return `/list/attendance/take/${lesson.id}`;
   };
 

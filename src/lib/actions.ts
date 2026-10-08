@@ -1961,6 +1961,8 @@ export const saveAttendance = async (
   if (lessonInfo?.classId) {
     safeRevalidatePath(`/list/attendance/class/${lessonInfo.classId}`);
     safeRevalidatePath(`/list/payments/class/${lessonInfo.classId}`);
+    safeRevalidatePath(`/list/formations/${lessonInfo.classId}`);
+    safeRevalidatePath("/list/formations");
   }
   safeRevalidatePath("/list/students");
   return { success: true, error: false, message: "Présences et distribution des livres enregistrées avec succès / تم حفظ بيانات الحضور وتوزيع الكتب بنجاح." };
@@ -2102,6 +2104,8 @@ export const markSingleAttendanceAction = async (input: {
 
       safeRevalidatePath(`/list/attendance/class/${lessonInfo.classId}`);
       safeRevalidatePath(`/list/payments/class/${lessonInfo.classId}`);
+      safeRevalidatePath(`/list/formations/${lessonInfo.classId}`);
+      safeRevalidatePath("/list/formations");
       safeRevalidatePath(`/list/students/${input.studentId}`);
     }
 

@@ -47,7 +47,7 @@ const AdminPage = async () => {
           isExtra: false,
           isCatchUp: false,
           class: {
-            isFormation: false,
+            isCompleted: false,
           },
         },
       ],
@@ -137,9 +137,7 @@ const AdminPage = async () => {
 
   const allTodaysLessons = candidateLessons
     .filter((l) => {
-      const isOneOff = Boolean(
-        l.isExtra || l.isCatchUp || l.class.isFormation
-      );
+      const isOneOff = Boolean(l.isExtra || l.isCatchUp);
       const lInfo = getAlgiersDateInfo(new Date(l.startsAt));
       if (isOneOff) {
         return lInfo.dateStr === todayInfo.dateStr;
@@ -147,9 +145,7 @@ const AdminPage = async () => {
       return lInfo.weekday === todayInfo.weekday;
     })
     .map((l) => {
-      const isOneOff = Boolean(
-        l.isExtra || l.isCatchUp || l.class.isFormation
-      );
+      const isOneOff = Boolean(l.isExtra || l.isCatchUp);
       if (!isOneOff) {
         const lInfo = getAlgiersDateInfo(new Date(l.startsAt));
         const durationMs =
