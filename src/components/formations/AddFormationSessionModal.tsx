@@ -1,13 +1,23 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { addFormationSession } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { FormField, Input, Select } from "@/components/ui/FormField";
 import { useTranslations, useLocale } from "next-intl";
-import { CalendarPlus, X, Clock } from "lucide-react";
+import { CalendarPlus, X } from "lucide-react";
+
+const daysOfWeek = [
+  "SATURDAY",
+  "SUNDAY",
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+] as const;
 
 export default function AddFormationSessionModal({
   isOpen,
@@ -31,49 +41,45 @@ export default function AddFormationSessionModal({
   onSessionAdded?: () => void;
 }) {
   const t = useTranslations("formations");
+  const tLessons = useTranslations("lessons");
   const tCommon = useTranslations("common");
   const locale = useLocale();
-  const [date, setDate] = useState(() => {
-    const d = new Date();
-    return d.toISOString().split("T")[0];
-  });
+
+  const getDayTranslation = (d: string) => {
+    const keyMap: Record<string, string> = {
+      SATURDAY: "days.saturday",
+      SUNDAY: "days.sunday",
+      MONDAY: "days.monday",
+      TUESDAY: "days.tuesday",
+      WEDNESDAY: "days.wednesday",
+      THURSDAY: "days.thursday",
+      FRIDAY: "days.friday",
+    };
+    return tLessons(keyMap[d] as any);
+  };
+
+  const [day, setDay] = useState<string>("SATURDAY");
   const [startTime, setStartTime] = useState("14:00");
   const [endTime, setEndTime] = useState("16:00");
   const [classroomId, setClassroomId] = useState<number>(classrooms[0]?.id || 1);
   const [teacherId, setTeacherId] = useState<string>(defaultTeacherId || teachers[0]?.id || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const selectedDayName = useMemo(() => {
-    if (!date) return "";
-    try {
-      const d = new Date(`${date}T12:00:00Z`);
-      if (isNaN(d.getTime())) return "";
-      return new Intl.DateTimeFormat(locale === "ar" ? "ar-DZ" : "fr-DZ", {
-        weekday: "long",
-      }).format(d);
-    } catch {
-      return "";
-    }
-  }, [date, locale]);
-
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!date || !startTime || !endTime) {
+    if (!day || !startTime || !endTime) {
       toast.error(
         locale === "ar"
-          ? "يرجى إدخال التاريخ وأوقات الحصة."
-          : "Veuillez saisir la date et les horaires de la séance."
+          ? "يرجى تحديد اليوم وأوقات الحصة."
+          : "Veuillez sélectionner le jour et les horaires de la séance."
       );
       return;
     }
 
-    const startsAt = new Date(`${date}T${startTime}:00`);
-    const endsAt = new Date(`${date}T${endTime}:00`);
-
-    if (endsAt <= startsAt) {
+    if (startTime >= endTime) {
       toast.error(
         locale === "ar"
           ? "وقت نهاية الحصة يجب أن يكون بعد وقت البداية."
@@ -86,8 +92,9 @@ export default function AddFormationSessionModal({
     try {
       const res = await addFormationSession({
         classId,
-        startsAt,
-        endsAt,
+        day,
+        startTime,
+        endTime,
         classroomId: Number(classroomId),
         teacherId: teacherId || undefined,
       });
@@ -142,31 +149,19 @@ export default function AddFormationSessionModal({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-4">
-          <FormField label={t("sessionDateLabel")} required>
-            <Input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
+          <FormField label={tLessons("dayLabel")} required>
+            <Select
+              value={day}
+              onChange={(e) => setDay(e.target.value)}
               required
-            />
+            >
+              {daysOfWeek.map((d) => (
+                <option key={d} value={d}>
+                  {getDayTranslation(d)}
+                </option>
+              ))}
+            </Select>
           </FormField>
-
-          {/* Fixed weekly recurring schedule banner */}
-          <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-teal-950 text-xs flex items-start gap-2.5">
-            <Clock className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <p className="font-bold">
-                {locale === "ar"
-                  ? `حصة أسبوعية ثابتة (كل يوم ${selectedDayName || "..."})`
-                  : `Séance hebdomadaire fixe (chaque ${selectedDayName || "..."})`}
-              </p>
-              <p className="text-teal-800 text-[11px] leading-relaxed">
-                {locale === "ar"
-                  ? "ستظهر هذه الحصة تلقائياً بشكل متكرر كل أسبوع في جدول الحصص العام."
-                  : "Cette séance apparaîtra automatiquement et de manière récurrente chaque semaine dans l'emploi du temps général."}
-              </p>
-            </div>
-          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <FormField label={t("startTimeLabel")} required>

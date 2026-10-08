@@ -13,6 +13,7 @@
     "import:attendance": "npx tsx scripts/import-attendance.ts",
     "import:attendance:dry": "npx tsx scripts/import-attendance.ts --dry-run",
     "import:template": "npx tsx scripts/generate-attendance-template.ts",
+    "import:template:formation": "npx tsx scripts/generate-attendance-template.ts --formations-only",
     "template:formation": "npx tsx scripts/generate-formation-excel-template.ts",
     "db:check": "node scripts/check-db.js",
     "sync:ledger": "node scripts/sync-database-payments.js",

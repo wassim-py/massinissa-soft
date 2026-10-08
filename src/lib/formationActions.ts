@@ -5,7 +5,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { getAuthSession, getActiveBranchId } from "@/lib/auth";
 import { canUserAccessBranch } from "@/lib/settings";
-import { serializeForClient } from "@/lib/utils";
+import { serializeForClient, getLessonDateTime } from "@/lib/utils";
 import { upsertDailyLedger } from "@/lib/ledger";
 import { checkForConflicts } from "@/lib/actions";
 
@@ -1854,8 +1854,11 @@ export async function saveFormationAttendance(
 
 export async function addFormationSession(data: {
   classId: number;
-  startsAt: string | Date;
-  endsAt: string | Date;
+  day?: string;
+  startTime?: string;
+  endTime?: string;
+  startsAt?: string | Date;
+  endsAt?: string | Date;
   teacherId?: string;
   classroomId?: number;
 }): Promise<ActionResponse> {
@@ -1894,8 +1897,18 @@ export async function addFormationSession(data: {
       return { success: false, error: true, message: "Veuillez spécifier la salle / يرجى تحديد القاعة لهذه الحصة" };
     }
 
-    const startsAt = new Date(data.startsAt);
-    const endsAt = new Date(data.endsAt);
+    let startsAt: Date;
+    let endsAt: Date;
+
+    if (data.day && data.startTime && data.endTime) {
+      startsAt = getLessonDateTime(data.day, data.startTime);
+      endsAt = getLessonDateTime(data.day, data.endTime);
+    } else if (data.startsAt && data.endsAt) {
+      startsAt = new Date(data.startsAt);
+      endsAt = new Date(data.endsAt);
+    } else {
+      return { success: false, error: true, message: "Horaires ou jour invalides / يرجى تحديد التوقيت واليوم." };
+    }
 
     // School timetable conflict check
     const dayName = new Intl.DateTimeFormat("en-US", {

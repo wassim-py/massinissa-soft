@@ -113,6 +113,58 @@ async function loadBranchExcelGroups(branchId: number): Promise<ExcelGroupData[]
   return groups;
 }
 
+async function loadFormationExcelGroups(): Promise<ExcelGroupData[]> {
+  const possiblePaths = [
+    path.join(__dirname, '../data/import/ANNEX_FORMATIONS.xlsx'),
+    path.join(__dirname, '../data/ANNEX_FORMATIONS.xlsx'),
+  ];
+  let filePath = '';
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      filePath = p;
+      break;
+    }
+  }
+  if (!filePath) return [];
+
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  const groups: ExcelGroupData[] = [];
+
+  for (const ws of wb.worksheets) {
+    if (ws.name.includes('Instruction')) continue;
+    let currentGroup: ExcelGroupData | null = null;
+
+    for (let r = 1; r <= ws.rowCount; r++) {
+      const cell1 = ws.getRow(r).getCell(1).value;
+      const str1 = cell1 ? String(cell1).trim() : '';
+
+      if (str1.includes('مستحقات')) {
+        const rawName = str1.split('[')[0].split('(')[0].trim();
+        currentGroup = {
+          groupName: rawName || str1,
+          hasBooks: true,
+          studentNames: [],
+        };
+        groups.push(currentGroup);
+        continue;
+      }
+
+      if (currentGroup) {
+        const nameVal = ws.getRow(r).getCell(2).value;
+        const nameStr = nameVal ? String(nameVal).trim() : '';
+        if (nameStr && !nameStr.includes('الاسم') && !nameStr.includes('مستحقات') && isNaN(Number(nameStr))) {
+          if (!currentGroup.studentNames.includes(nameStr)) {
+            currentGroup.studentNames.push(nameStr);
+          }
+        }
+      }
+    }
+  }
+
+  return groups.filter((g) => g.studentNames.length > 0);
+}
+
 async function getMaxGlobalNumberFromExistingFiles(outputDir: string): Promise<number> {
   let maxNum = 0;
   if (!fs.existsSync(outputDir)) return maxNum;
@@ -152,7 +204,10 @@ async function main() {
     return val === 'all' ? null : parseInt(val, 10);
   })();
 
+  const formationsOnly = process.argv.includes('--formations') || process.argv.includes('--formations-only');
+
   const filterDesc = [
+    formationsOnly ? 'Formations Only (Starting Levels)' : null,
     branchFilter ? `Branch ${branchFilter}` : null,
     classFilter ? `Class ${classFilter}` : null,
     groupFilter ? `Group "${groupFilter}"` : null,
@@ -161,8 +216,22 @@ async function main() {
   console.log(`\n📋 Generating attendance grid templates (${filterDesc})...\n`);
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
+  // If generating formations only, clean up previous empty formation templates
+  if (formationsOnly && fs.existsSync(OUTPUT_DIR)) {
+    const existing = fs.readdirSync(OUTPUT_DIR).filter((f) => f.includes('FORMATION_') && f.endsWith('.xlsx'));
+    for (const f of existing) {
+      try {
+        fs.unlinkSync(path.join(OUTPUT_DIR, f));
+      } catch {
+        // ignore
+      }
+    }
+    console.log(`🧹 Cleaned up ${existing.length} previous formation template file(s).\n`);
+  }
+
   const classes = await prisma.class.findMany({
     where: {
+      ...(formationsOnly ? { isFormation: true } : {}),
       ...(branchFilter ? { branchId: branchFilter } : {}),
       ...(classFilter ? { id: classFilter } : {}),
       ...(groupFilter ? { name: { contains: groupFilter } } : {}),
@@ -185,7 +254,7 @@ async function main() {
     orderBy: [{ branchId: 'asc' }, { isFormation: 'asc' }, { name: 'asc' }],
   });
 
-  const allClasses = (branchFilter || classFilter || groupFilter) ? await prisma.class.findMany({
+  const allClasses = (formationsOnly || branchFilter || classFilter || groupFilter) ? await prisma.class.findMany({
     include: {
       branch: true,
       level: true,
@@ -226,18 +295,24 @@ async function main() {
   }
 
   // Load excel groups
-  const excelGroups = targetBranchId ? await loadBranchExcelGroups(targetBranchId) : [];
+  const excelGroups = (!formationsOnly && targetBranchId) ? await loadBranchExcelGroups(targetBranchId) : [];
+  const formationExcelGroups = await loadFormationExcelGroups();
   const processedClassIds = new Set<number>();
   let filesCreated = 0;
 
-  if (excelGroups.length > 0) {
-    console.log(`ℹ Loaded ${excelGroups.length} groups from branch import Excel file.`);
-    for (const eg of excelGroups) {
-      const normGroupName = normalizeArabic(eg.groupName);
-      const cls = allClasses.find((c) => normalizeArabic(c.name) === normGroupName)
-               || allClasses.find((c) => c.name.includes(eg.groupName) || eg.groupName.includes(c.name));
+  // 1. Process formation groups loaded from ANNEX_FORMATIONS.xlsx
+  if (formationExcelGroups.length > 0) {
+    console.log(`ℹ Loaded ${formationExcelGroups.length} starting formation group(s) with students.`);
+    for (const fg of formationExcelGroups) {
+      const normGroupName = normalizeArabic(fg.groupName);
+      const cls = allClasses.find((c) => c.isFormation && normalizeArabic(c.name) === normGroupName)
+               || allClasses.find((c) => c.isFormation && normalizeArabic(c.name).includes(normGroupName))
+               || allClasses.find((c) => c.isFormation && normGroupName.includes(normalizeArabic(c.name)));
 
-      if (!cls) continue;
+      if (!cls) {
+        console.warn(`  ⚠ Could not match formation group "${fg.groupName}" to a DB class.`);
+        continue;
+      }
       if (classFilter && cls.id !== classFilter) continue;
       if (groupFilter && !normalizeArabic(cls.name).includes(normalizeArabic(groupFilter)) && !normGroupName.includes(normalizeArabic(groupFilter))) continue;
 
@@ -246,7 +321,7 @@ async function main() {
       const studentList: Array<{ id: string | null; name: string; globalNumber: number }> = [];
       const seenNames = new Set<string>();
 
-      for (const sName of eg.studentNames) {
+      for (const sName of fg.studentNames) {
         const norm = normalizeArabic(sName);
         if (seenNames.has(norm)) continue;
         seenNames.add(norm);
@@ -268,36 +343,87 @@ async function main() {
       }
 
       studentList.sort((a, b) => a.globalNumber - b.globalNumber);
-      const branchName = (targetBranchId === 2 ? 'ANNEX' : (targetBranchId === 1 ? 'ECOLE' : cls.branch.name));
-      await generateGroupTemplate({ ...cls, branchNameOverride: branchName }, studentList, cls.lessons, eg.hasBooks);
+      await generateGroupTemplate(cls, studentList, cls.lessons, fg.hasBooks);
       filesCreated++;
     }
   }
 
-  // Also process any remaining classes from DB
-  for (const cls of classes) {
-    if (processedClassIds.has(cls.id)) continue;
-    if (classFilter && cls.id !== classFilter) continue;
-    if (groupFilter && !normalizeArabic(cls.name).includes(normalizeArabic(groupFilter))) continue;
+  // If formationsOnly was requested, do not process regular classes
+  if (!formationsOnly) {
+    // 2. Process regular branch import groups
+    if (excelGroups.length > 0) {
+      console.log(`ℹ Loaded ${excelGroups.length} groups from branch import Excel file.`);
+      for (const eg of excelGroups) {
+        const normGroupName = normalizeArabic(eg.groupName);
+        const cls = allClasses.find((c) => !c.isFormation && (
+          normalizeArabic(c.name) === normGroupName ||
+          c.name.includes(eg.groupName) ||
+          eg.groupName.includes(c.name)
+        ));
 
-    const studentsMap = new Map<string, { id: string | null; name: string; globalNumber: number }>();
-    for (const enr of cls.enrollments) {
-      if (!studentsMap.has(enr.studentId)) {
-        studentsMap.set(enr.studentId, {
-          id: enr.student.id,
-          name: enr.student.name,
-          globalNumber: enr.student.globalNumber,
-        });
+        if (!cls) continue;
+        if (classFilter && cls.id !== classFilter) continue;
+        if (groupFilter && !normalizeArabic(cls.name).includes(normalizeArabic(groupFilter)) && !normGroupName.includes(normalizeArabic(groupFilter))) continue;
+
+        processedClassIds.add(cls.id);
+
+        const studentList: Array<{ id: string | null; name: string; globalNumber: number }> = [];
+        const seenNames = new Set<string>();
+
+        for (const sName of eg.studentNames) {
+          const norm = normalizeArabic(sName);
+          if (seenNames.has(norm)) continue;
+          seenNames.add(norm);
+
+          const dbStudent = studentLookup.get(norm);
+          if (dbStudent) {
+            studentList.push({ id: dbStudent.id, name: sName, globalNumber: dbStudent.globalNumber });
+          } else {
+            studentList.push({ id: null, name: sName, globalNumber: nextGlobalNumber++ });
+          }
+        }
+
+        for (const enr of cls.enrollments) {
+          const norm = normalizeArabic(enr.student.name);
+          if (!seenNames.has(norm)) {
+            seenNames.add(norm);
+            studentList.push({ id: enr.student.id, name: enr.student.name, globalNumber: enr.student.globalNumber });
+          }
+        }
+
+        studentList.sort((a, b) => a.globalNumber - b.globalNumber);
+        const branchName = (targetBranchId === 2 ? 'ANNEX' : (targetBranchId === 1 ? 'ECOLE' : cls.branch.name));
+        await generateGroupTemplate({ ...cls, branchNameOverride: branchName }, studentList, cls.lessons, eg.hasBooks);
+        filesCreated++;
       }
     }
-    const students = [...studentsMap.values()].sort((a, b) => a.globalNumber - b.globalNumber);
 
-    if (students.length === 0 && !cls.isFormation) {
-      continue;
+    // 3. Also process any remaining classes from DB with enrolled students
+    for (const cls of classes) {
+      if (processedClassIds.has(cls.id)) continue;
+      if (classFilter && cls.id !== classFilter) continue;
+      if (groupFilter && !normalizeArabic(cls.name).includes(normalizeArabic(groupFilter))) continue;
+
+      const studentsMap = new Map<string, { id: string | null; name: string; globalNumber: number }>();
+      for (const enr of cls.enrollments) {
+        if (!studentsMap.has(enr.studentId)) {
+          studentsMap.set(enr.studentId, {
+            id: enr.student.id,
+            name: enr.student.name,
+            globalNumber: enr.student.globalNumber,
+          });
+        }
+      }
+      const students = [...studentsMap.values()].sort((a, b) => a.globalNumber - b.globalNumber);
+
+      // Skip classes with 0 enrolled students
+      if (students.length === 0) {
+        continue;
+      }
+
+      await generateGroupTemplate(cls, students, cls.lessons);
+      filesCreated++;
     }
-
-    await generateGroupTemplate(cls, students, cls.lessons);
-    filesCreated++;
   }
 
   console.log(`\n✅ Generated ${filesCreated} template file(s) in: ${OUTPUT_DIR}`);
@@ -439,8 +565,8 @@ async function generateGroupTemplate(
     ws.getColumn(BOOK_T3_COL).width = 8;
   }
 
-  // ── Rows 5+: Students (or 30 pre-formatted empty rows if group has no students yet) ──
-  const totalStudentRows = students.length > 0 ? students.length : 30;
+  // ── Rows 5+: Students (provide buffer of extra empty rows for future students) ──
+  const totalStudentRows = students.length > 0 ? Math.max(students.length + 5, 20) : 30;
   for (let s = 0; s < totalStudentRows; s++) {
     const student = students[s];
     const rowIdx = FIRST_DATA_ROW + s;

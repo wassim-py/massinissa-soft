@@ -105,3 +105,62 @@ export function splitFullName(fullName?: string | null): { surname: string; name
 export function formatFullName(surname?: string | null, name?: string | null): string {
   return [surname?.trim(), name?.trim()].filter(Boolean).join(" ");
 }
+
+export const dayToSaturdayOffset: Record<string, number> = {
+  SATURDAY: 0,
+  SUNDAY: 1,
+  MONDAY: 2,
+  TUESDAY: 3,
+  WEDNESDAY: 4,
+  THURSDAY: 5,
+  FRIDAY: 6,
+};
+
+export function getCurrentWeekSaturday(referenceDate: Date = new Date()): Date {
+  const d = new Date(referenceDate);
+  const dayOfWeek = d.getDay(); // 0 is Sun, ..., 6 is Sat
+  const diffToSaturday = (dayOfWeek + 1) % 7; // Sat -> 0, Sun -> 1, ..., Fri -> 6
+  const currentSaturday = new Date(d);
+  currentSaturday.setDate(d.getDate() - diffToSaturday);
+  currentSaturday.setHours(0, 0, 0, 0);
+  return currentSaturday;
+}
+
+export function getLessonDateTime(day: string, time: string, dateStr?: string | null): Date {
+  const [hours, minutes] = (time || "00:00").split(":").map(Number);
+
+  let year: number;
+  let month: number;
+  let dayNum: number;
+
+  if (dateStr && dateStr.trim().length > 0) {
+    const parts = dateStr.trim().split("-").map(Number);
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+      year = parts[0];
+      month = parts[1] - 1; // 0-indexed in JS Date
+      dayNum = parts[2];
+    } else {
+      const targetSaturday = getCurrentWeekSaturday(new Date());
+      const offset = dayToSaturdayOffset[(day || "").toUpperCase()] ?? 0;
+      const targetDate = new Date(targetSaturday);
+      targetDate.setDate(targetSaturday.getDate() + offset);
+      year = targetDate.getFullYear();
+      month = targetDate.getMonth();
+      dayNum = targetDate.getDate();
+    }
+  } else {
+    // Normal lesson: use current week's corresponding day as base reference
+    const targetSaturday = getCurrentWeekSaturday(new Date());
+    const offset = dayToSaturdayOffset[(day || "").toUpperCase()] ?? 0;
+    const targetDate = new Date(targetSaturday);
+    targetDate.setDate(targetSaturday.getDate() + offset);
+    year = targetDate.getFullYear();
+    month = targetDate.getMonth();
+    dayNum = targetDate.getDate();
+  }
+
+  // School timezone is UTC+1 (Africa/Algiers, constant without DST).
+  // Database timestamps are stored in UTC; subtracting 1 hour from local time
+  // guarantees the saved UTC time exactly matches the entered local hour when read back.
+  return new Date(Date.UTC(year, month, dayNum, (hours || 0) - 1, minutes || 0, 0, 0));
+}
