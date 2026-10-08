@@ -170,6 +170,44 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                             );
                                         }
 
+                                        if (record.catchUp) {
+                                            // Blue circle: missed lesson but caught up in another group
+                                            // Hover shows date and group caught up in
+                                            const tooltipText = t("caughtUpTooltip", {
+                                                group: record.catchUp.catchUpGroupName,
+                                                date: formatCatchUpDate(record.catchUp.catchUpDate),
+                                            });
+
+                                            return (
+                                                <td
+                                                    key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                    className="p-3 text-center"
+                                                >
+                                                    <div className="relative group/catchup inline-flex items-center justify-center">
+                                                        <div
+                                                            className="w-5 h-5 rounded-full bg-blue-600 hover:bg-blue-700 ring-2 ring-blue-300 ring-offset-1 transition-transform hover:scale-125 cursor-help shadow-xs"
+                                                            title={tooltipText}
+                                                        />
+                                                        {/* Interactive Hover Tooltip */}
+                                                        <div className="pointer-events-none absolute bottom-full start-1/2 -translate-x-1/2 mb-2 hidden group-hover/catchup:flex flex-col items-center z-30 min-w-[180px] max-w-xs transition-all">
+                                                            <div className="bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-xl text-center font-normal">
+                                                                <div className="font-bold text-blue-300 mb-0.5 flex items-center justify-center gap-1.5">
+                                                                    <svg className="w-3.5 h-3.5 text-blue-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                                                    </svg>
+                                                                    <span>{t("legendCaughtUp")}</span>
+                                                                </div>
+                                                                <div className="text-[11px] text-gray-200 leading-snug">
+                                                                    {tooltipText}
+                                                                </div>
+                                                            </div>
+                                                            <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            );
+                                        }
+
                                         if (record.status === "PRESENT") {
                                             // Green circle: Present
                                             return (
@@ -213,43 +251,6 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                         }
 
                                         // Status is ABSENT
-                                        if (record.catchUp) {
-                                            // Blue circle: missed lesson but caught up in another group
-                                            // Hover shows date and group caught up in
-                                            const tooltipText = t("caughtUpTooltip", {
-                                                group: record.catchUp.catchUpGroupName,
-                                                date: formatCatchUpDate(record.catchUp.catchUpDate),
-                                            });
-
-                                            return (
-                                                <td
-                                                    key={`${student.id}-${instance.key}-${studentIndex}`}
-                                                    className="p-3 text-center"
-                                                >
-                                                    <div className="relative group/catchup inline-flex items-center justify-center">
-                                                        <div
-                                                            className="w-5 h-5 rounded-full bg-blue-600 hover:bg-blue-700 ring-2 ring-blue-300 ring-offset-1 transition-transform hover:scale-125 cursor-help shadow-xs"
-                                                            title={tooltipText}
-                                                        />
-                                                        {/* Interactive Hover Tooltip */}
-                                                        <div className="pointer-events-none absolute bottom-full start-1/2 -translate-x-1/2 mb-2 hidden group-hover/catchup:flex flex-col items-center z-30 min-w-[180px] max-w-xs transition-all">
-                                                            <div className="bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-xl text-center font-normal">
-                                                                <div className="font-bold text-blue-300 mb-0.5 flex items-center justify-center gap-1.5">
-                                                                    <svg className="w-3.5 h-3.5 text-blue-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                                                    </svg>
-                                                                    <span>{t("legendCaughtUp")}</span>
-                                                                </div>
-                                                                <div className="text-[11px] text-gray-200 leading-snug">
-                                                                    {tooltipText}
-                                                                </div>
-                                                            </div>
-                                                            <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                            );
-                                        }
 
                                         if (record.isPreStart) {
                                             // Neutral grayed circle: pre-start absence (Rule 10)

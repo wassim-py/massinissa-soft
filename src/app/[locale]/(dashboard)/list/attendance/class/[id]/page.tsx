@@ -160,6 +160,13 @@ const ClassAttendancePage = async (
                         },
                     },
                     include: {
+                        missedLesson: {
+                            include: {
+                                class: {
+                                    select: { name: true },
+                                },
+                            },
+                        },
                         catchUpLesson: {
                             include: {
                                 class: {
@@ -212,6 +219,23 @@ const ClassAttendancePage = async (
         }
     });
 
+    // Also ensure any lesson referenced by a catch-up in this class appears as a column
+    (classData.catchUpAttendances || []).forEach((cu: any) => {
+        if (cu.missedLesson) {
+            const dateKey = new Date(cu.missedLesson.startsAt).toISOString().split('T')[0];
+            const instanceKey = `${cu.missedLesson.id}-${dateKey}`;
+            if (!seenInstancesTemp.has(instanceKey)) {
+                seenInstancesTemp.add(instanceKey);
+                uniqueLessonInstancesTemp.push({
+                    key: instanceKey,
+                    lessonId: cu.missedLesson.id,
+                    subjectName: cu.missedLesson.class?.name || classHeader.name || "درس",
+                    date: dateKey,
+                });
+            }
+        }
+    });
+
     // 2. Count how many times each subject appears on each day from the unique list
     const dailySubjectCounts = new Map<string, number>();
     uniqueLessonInstancesTemp.forEach(instance => {
@@ -227,7 +251,6 @@ const ClassAttendancePage = async (
     uniqueLessonInstancesTemp.sort((a, b) => {
         const dateComparison = new Date(a.date).getTime() - new Date(b.date).getTime();
         if (dateComparison !== 0) return dateComparison;
-        // A secondary sort can be added here if needed, e.g., by lesson start time if available
         return a.subjectName.localeCompare(b.subjectName);
     });
 
@@ -253,6 +276,7 @@ const ClassAttendancePage = async (
     // 4. Group catch-ups by student and create the attendance map for the grid
     const catchUpsByStudent = new Map<string, Array<{
         missedLessonId: number;
+        missedLessonDate?: string | null;
         catchUpDate: string;
         catchUpGroupName: string;
     }>>();
@@ -261,6 +285,7 @@ const ClassAttendancePage = async (
         const list = catchUpsByStudent.get(cu.studentId) || [];
         list.push({
             missedLessonId: cu.missedLessonId,
+            missedLessonDate: cu.missedLesson?.startsAt ? new Date(cu.missedLesson.startsAt).toISOString() : null,
             catchUpDate: new Date(cu.catchUpLesson.startsAt).toISOString(),
             catchUpGroupName: cu.catchUpLesson?.class?.name || (locale === "ar" ? "فوج آخر" : "Autre groupe"),
         });
@@ -309,6 +334,27 @@ const ClassAttendancePage = async (
                 } : null,
             });
         });
+
+        // Ensure every catch-up entry for this student is represented in studentRecords
+        studentCatchUps.forEach((cuInfo: any) => {
+            if (cuInfo.missedLessonDate) {
+                const dateKey = new Date(cuInfo.missedLessonDate).toISOString().split('T')[0];
+                const instanceKey = `${cuInfo.missedLessonId}-${dateKey}`;
+                if (!studentRecords.has(instanceKey)) {
+                    studentRecords.set(instanceKey, {
+                        status: "ABSENT",
+                        justification: null,
+                        isPreStart: false,
+                        isTeacherAbsent: false,
+                        catchUp: {
+                            catchUpDate: cuInfo.catchUpDate,
+                            catchUpGroupName: cuInfo.catchUpGroupName,
+                        },
+                    });
+                }
+            }
+        });
+
         studentAttendanceMap.set(student.id, studentRecords);
     });
 

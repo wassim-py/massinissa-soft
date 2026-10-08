@@ -2315,11 +2315,16 @@ export async function searchCatchUpCandidatesAction(
         },
         attendances: {
           where: {
-            status: "ABSENT",
+            lessonId: { not: currentLessonId },
           },
-          include: {
+          select: {
+            id: true,
+            lessonId: true,
+            status: true,
             lesson: {
-              include: {
+              select: {
+                id: true,
+                startsAt: true,
                 class: {
                   select: { id: true, name: true },
                 },
@@ -2334,29 +2339,123 @@ export async function searchCatchUpCandidatesAction(
               startsAt: "desc",
             },
           },
-          take: 20,
+          take: 30,
         },
         catchUpAttendances: {
           select: {
             missedLessonId: true,
           },
         },
+        enrollments: {
+          where: {
+            class: {
+              isCompleted: false,
+            },
+          },
+          select: {
+            class: {
+              select: {
+                id: true,
+                name: true,
+                teacher: {
+                  select: { id: true, name: true },
+                },
+                lessons: {
+                  where: {
+                    id: { not: currentLessonId },
+                    isFree: false,
+                  },
+                  orderBy: {
+                    startsAt: "asc",
+                  },
+                  take: 15,
+                },
+              },
+            },
+          },
+        },
       },
       take: 25,
     });
 
-    // Filter missed lessons to only those not already caught up
+    // Collect eligible lessons for each student:
+    // 1. Past uncompensated absences (status: "ABSENT" and not caught up)
+    // 2. Upcoming / unrecorded lessons of their enrolled classes (anticipatory catch-up before absence is marked)
     const candidates = students.map((s) => {
       const alreadyCaughtUpLessonIds = new Set(s.catchUpAttendances.map((c) => c.missedLessonId));
-      const uncaughtUpAbsences = s.attendances
-        .filter((a) => !alreadyCaughtUpLessonIds.has(a.lessonId) && a.lesson.id !== currentLessonId)
-        .map((a) => ({
-          attendanceId: a.id,
-          lessonId: a.lesson.id,
-          className: a.lesson.class.name,
-          teacherName: a.lesson.teacher.name,
-          startsAt: a.lesson.startsAt,
-        }));
+      const studentAttendanceMap = new Map(s.attendances.map((a) => [a.lessonId, a]));
+      const seenLessonIds = new Set<number>();
+
+      const eligiblePastLessons: Array<{
+        attendanceId: number | null;
+        lessonId: number;
+        className: string;
+        teacherName: string;
+        startsAt: Date | string;
+        isUpcoming: boolean;
+      }> = [];
+
+      // 1. Existing marked absences
+      s.attendances.forEach((a) => {
+        if (
+          (a.status === "ABSENT" || a.status === "NOT_DEFINED") &&
+          !alreadyCaughtUpLessonIds.has(a.lessonId) &&
+          a.lessonId !== currentLessonId &&
+          !seenLessonIds.has(a.lessonId)
+        ) {
+          seenLessonIds.add(a.lessonId);
+          eligiblePastLessons.push({
+            attendanceId: a.id,
+            lessonId: a.lesson.id,
+            className: a.lesson.class.name,
+            teacherName: a.lesson.teacher?.name || "",
+            startsAt: a.lesson.startsAt,
+            isUpcoming: false,
+          });
+        }
+      });
+
+      // 2. Upcoming / unrecorded lessons from enrolled classes
+      const eligibleUpcomingLessons: Array<{
+        attendanceId: number | null;
+        lessonId: number;
+        className: string;
+        teacherName: string;
+        startsAt: Date | string;
+        isUpcoming: boolean;
+      }> = [];
+
+      (s.enrollments || []).forEach((enr) => {
+        const cls = enr.class;
+        (cls.lessons || []).forEach((l) => {
+          if (
+            l.id !== currentLessonId &&
+            !alreadyCaughtUpLessonIds.has(l.id) &&
+            !seenLessonIds.has(l.id)
+          ) {
+            const att = studentAttendanceMap.get(l.id);
+            // If already marked PRESENT, they attended this class so no catch-up needed
+            if (att?.status === "PRESENT") return;
+
+            seenLessonIds.add(l.id);
+            eligibleUpcomingLessons.push({
+              attendanceId: att?.id || null,
+              lessonId: l.id,
+              className: cls.name,
+              teacherName: cls.teacher?.name || "",
+              startsAt: l.startsAt,
+              isUpcoming: true,
+            });
+          }
+        });
+      });
+
+      // Sort upcoming lessons so the closest future lesson (e.g. next Monday) is first
+      eligibleUpcomingLessons.sort(
+        (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+      );
+
+      const combinedLessons = [...eligiblePastLessons, ...eligibleUpcomingLessons];
 
       return {
         id: s.id,
@@ -2364,15 +2463,15 @@ export async function searchCatchUpCandidatesAction(
         globalNumber: s.globalNumber,
         phone: s.phone,
         branchName: s.registeredBranch?.name || null,
-        missedLessons: uncaughtUpAbsences,
+        missedLessons: combinedLessons,
       };
     });
 
     // Smart ranking:
-    // 1. Students WITH uncompensated absences first!
+    // 1. Students WITH eligible lessons first!
     // 2. Exact globalNumber match at the top
     // 3. Name starts with search query
-    // 4. Higher number of missed lessons first
+    // 4. Higher number of missed/eligible lessons first
     const lowerQuery = trimmedQuery.toLowerCase();
     const queryNum = hasNumeric ? parseInt(cleanNumeric, 10) : null;
 
@@ -2409,6 +2508,7 @@ export async function searchCatchUpCandidatesAction(
  * Record a CatchUpAttendance for a visiting student (§2.12).
  * Does NOT decrement session credit, does NOT require payment in this host class,
  * and leaves the original missed lesson record as ABSENT.
+ * Can happen BEFORE the absence is marked (e.g. student visits Saturday because they will miss Monday).
  */
 export async function recordCatchUpAttendanceAction(data: {
   catchUpLessonId: number;
@@ -2433,20 +2533,37 @@ export async function recordCatchUpAttendanceAction(data: {
       return { success: false, error: true, message: "الحصة الحالية غير موجودة." };
     }
 
-    // Verify missed lesson exists and student was marked ABSENT
-    const missedAttendance = await prisma.attendance.findFirst({
-      where: {
-        lessonId: missedLessonId,
-        studentId,
-        status: "ABSENT",
-      },
+    // Verify missed lesson exists
+    const missedLesson = await prisma.lesson.findUnique({
+      where: { id: missedLessonId },
+      include: { class: true },
     });
 
-    if (!missedAttendance) {
+    if (!missedLesson) {
+      return { success: false, error: true, message: "الحصة المطلوب استدراكها غير موجودة." };
+    }
+
+    if (missedLesson.classId === catchUpLesson.classId) {
       return {
         success: false,
         error: true,
-        message: "لم يتم العثور على غياب مسجل لهذا التلميذ في الحصة المحددة.",
+        message: "لا يمكن استدراك حصة في نفس الفوج كزائر استدراك.",
+      };
+    }
+
+    // Verify student is enrolled in missedLesson's class
+    const enrollment = await prisma.enrollment.findFirst({
+      where: {
+        studentId,
+        classId: missedLesson.classId,
+      },
+    });
+
+    if (!enrollment) {
+      return {
+        success: false,
+        error: true,
+        message: "التلميذ غير مسجل في فوج الحصة المطلوب استدراكها.",
       };
     }
 
@@ -2464,24 +2581,59 @@ export async function recordCatchUpAttendanceAction(data: {
       return {
         success: false,
         error: true,
-        message: "تم تعويض هذه الحصة الغائبة مسبقاً ولا يمكن تعويضها مرة أخرى.",
+        message: "تم تعويض هذه الحصة مسبقاً ولا يمكن تعويضها مرة أخرى.",
+      };
+    }
+
+    // Check if student was already marked PRESENT in missedLesson
+    const existingAttendance = await prisma.attendance.findFirst({
+      where: {
+        lessonId: missedLessonId,
+        studentId,
+      },
+    });
+
+    if (existingAttendance && existingAttendance.status === "PRESENT") {
+      return {
+        success: false,
+        error: true,
+        message: "التلميذ مسجل كحاضر في هذه الحصة، ولا يمكن تسجيل استدراك لها.",
       };
     }
 
     const recordedBy = session.userId || session.rawRole || "admin";
 
-    await prisma.catchUpAttendance.create({
-      data: {
-        studentId,
-        missedLessonId,
-        catchUpLessonId,
-        recordedBy,
-        recordedAt: new Date(),
-      },
+    await prisma.$transaction(async (tx) => {
+      // 1. If no attendance record exists yet for the missed lesson (e.g. anticipatory catch-up),
+      // create one as ABSENT so it displays as an absence/catch-up on the group's attendance page
+      if (!existingAttendance) {
+        await tx.attendance.create({
+          data: {
+            studentId,
+            lessonId: missedLessonId,
+            status: "ABSENT",
+            justification: null,
+          },
+        });
+      }
+
+      // 2. Create the CatchUpAttendance record
+      await tx.catchUpAttendance.create({
+        data: {
+          studentId,
+          missedLessonId,
+          catchUpLessonId,
+          recordedBy,
+          recordedAt: new Date(),
+        },
+      });
     });
 
     safeRevalidatePath("/list/attendance");
     safeRevalidatePath(`/list/attendance/take/${catchUpLessonId}`);
+    safeRevalidatePath(`/list/attendance/take/${missedLessonId}`);
+    safeRevalidatePath(`/list/attendance/class/${missedLesson.classId}`);
+    safeRevalidatePath(`/list/attendance/class/${catchUpLesson.classId}`);
 
     return {
       success: true,
@@ -2511,12 +2663,48 @@ export async function removeCatchUpAttendanceAction(
       return { success: false, error: true, message: "غير مصرح لك." };
     }
 
-    await prisma.catchUpAttendance.delete({
+    const catchUpRecord = await prisma.catchUpAttendance.findUnique({
       where: { id: catchUpAttendanceId },
+      include: { missedLesson: true },
+    });
+
+    if (!catchUpRecord) {
+      return { success: false, error: true, message: "سجل الاستدراك غير موجود." };
+    }
+
+    const { missedLessonId, studentId, missedLesson } = catchUpRecord;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.catchUpAttendance.delete({
+        where: { id: catchUpAttendanceId },
+      });
+
+      // If the missed lesson is in the future (startsAt > now), and there were no other attendances taken for it,
+      // clean up the placeholder attendance record
+      if (missedLesson && missedLesson.startsAt > new Date()) {
+        const otherAttendancesCount = await tx.attendance.count({
+          where: {
+            lessonId: missedLessonId,
+            studentId: { not: studentId },
+          },
+        });
+        if (otherAttendancesCount === 0) {
+          await tx.attendance.deleteMany({
+            where: {
+              lessonId: missedLessonId,
+              studentId,
+            },
+          });
+        }
+      }
     });
 
     safeRevalidatePath("/list/attendance");
     safeRevalidatePath(`/list/attendance/take/${catchUpLessonId}`);
+    safeRevalidatePath(`/list/attendance/take/${missedLessonId}`);
+    if (missedLesson) {
+      safeRevalidatePath(`/list/attendance/class/${missedLesson.classId}`);
+    }
 
     return {
       success: true,

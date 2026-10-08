@@ -61,6 +61,14 @@ export interface CatchUpVisitor {
   recordedAt: string | Date;
 }
 
+export interface CaughtUpAbsentee {
+  studentId: string;
+  catchUpLessonId: number;
+  catchUpClassName: string;
+  catchUpTeacherName: string;
+  catchUpStartsAt: string | Date;
+}
+
 type FullStudent = Student & {
   vouchers: Voucher[];
   attendances: Attendance[];
@@ -93,6 +101,7 @@ const AttendanceRoster = ({
   booksWithDrops = [],
   groupBooks = [],
   catchUpVisitors = [],
+  caughtUpAbsentees = [],
   initialSearch = "",
   studentRelatedData = { grades: [], classes: [] },
   canCreateStudent = true,
@@ -103,6 +112,7 @@ const AttendanceRoster = ({
   booksWithDrops?: BookWithPendingDrops[];
   groupBooks?: Array<{ id: number; title: string }>;
   catchUpVisitors?: CatchUpVisitor[];
+  caughtUpAbsentees?: CaughtUpAbsentee[];
   initialSearch?: string;
   studentRelatedData?: {
     grades: Array<{ id: number; level?: string; name?: string }>;
@@ -172,6 +182,11 @@ const AttendanceRoster = ({
       return matchName || matchId;
     });
   }, [catchUpVisitors, cleanSearch, cleanNumeric]);
+
+  const caughtUpMap = useMemo(
+    () => new Map((caughtUpAbsentees || []).map((c) => [c.studentId, c])),
+    [caughtUpAbsentees]
+  );
 
   // Quick book handout state: Map of studentId -> array of received book IDs
   const [studentReceivedBooks, setStudentReceivedBooks] = useState<Record<string, number[]>>(() => {
@@ -824,6 +839,14 @@ const AttendanceRoster = ({
                             {locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls"}
                           </Badge>
                         ) : null}
+
+                        {caughtUpMap.has(student.id) && (
+                          <Badge variant="neutral" size="sm" withDot className="bg-blue-100 text-blue-900 border-blue-300 font-semibold shadow-2xs">
+                            {locale === "ar"
+                              ? `استدراك مسبق (${caughtUpMap.get(student.id)?.catchUpClassName})`
+                              : `Rattrapé (${caughtUpMap.get(student.id)?.catchUpClassName})`}
+                          </Badge>
+                        )}
 
                         {hasConsecutiveAbsenceAlert && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-950 border border-amber-300 text-[11px] font-bold shadow-2xs">

@@ -188,6 +188,27 @@ const TakeAttendancePage = async (
     recordedAt: v.recordedAt,
   }));
 
+  // Fetch enrolled students of THIS lesson who already caught up in another group (§2.12)
+  const caughtUpStudents = await prisma.catchUpAttendance.findMany({
+    where: { missedLessonId: lessonId },
+    include: {
+      catchUpLesson: {
+        include: {
+          class: { select: { name: true } },
+          teacher: { select: { name: true } },
+        },
+      },
+    },
+  });
+
+  const formattedCaughtUpAbsentees = caughtUpStudents.map((c) => ({
+    studentId: c.studentId,
+    catchUpLessonId: c.catchUpLessonId,
+    catchUpClassName: c.catchUpLesson?.class?.name || "",
+    catchUpTeacherName: c.catchUpLesson?.teacher?.name || "",
+    catchUpStartsAt: c.catchUpLesson.startsAt,
+  }));
+
   let rawStudents: any[] = [];
   try {
     rawStudents = await prisma.$queryRaw<any[]>`
@@ -487,6 +508,7 @@ const TakeAttendancePage = async (
           existingRecords={serializeForClient(todaysAttendance) as any}
           groupBooks={serializeForClient(groupBooks) as any}
           catchUpVisitors={serializeForClient(formattedCatchUpVisitors) as any}
+          caughtUpAbsentees={serializeForClient(formattedCaughtUpAbsentees) as any}
           initialSearch={searchQuery}
           studentRelatedData={serializeForClient(studentRelatedData) as any}
           canCreateStudent={canCreateStudent}

@@ -8,11 +8,12 @@ import { Search, Loader2, X, AlertCircle, CheckCircle2, User, Calendar } from "l
 import { searchCatchUpCandidatesAction, recordCatchUpAttendanceAction } from "@/lib/actions";
 
 interface MissedLesson {
-  attendanceId: number;
+  attendanceId?: number | null;
   lessonId: number;
   className: string;
   teacherName: string;
   startsAt: string | Date;
+  isUpcoming?: boolean;
 }
 
 interface CandidateStudent {
@@ -374,16 +375,16 @@ export default function CatchUpVisitorModal({
               <div className="max-h-48 overflow-y-auto space-y-1.5 border border-gray-200 rounded-xl p-2 bg-gray-50/50">
                 {candidates.map((cand) => {
                   const isSelected = selectedStudent?.id === cand.id;
-                  const hasAbsences = cand.missedLessons.length > 0;
+                  const hasEligibleLessons = cand.missedLessons.length > 0;
 
                   return (
                     <div
                       key={cand.id}
-                      onClick={() => hasAbsences && handleSelectStudent(cand)}
+                      onClick={() => hasEligibleLessons && handleSelectStudent(cand)}
                       className={`p-2.5 rounded-lg border text-xs transition-all flex items-center justify-between ${
                         isSelected
                           ? "border-amber-500 bg-amber-50/90 shadow-xs ring-1 ring-amber-400 cursor-pointer"
-                          : hasAbsences
+                          : hasEligibleLessons
                           ? "border-gray-200 bg-white hover:border-amber-300 hover:bg-amber-50/30 cursor-pointer"
                           : "border-gray-100 bg-gray-100/70 opacity-60 cursor-not-allowed"
                       }`}
@@ -393,7 +394,7 @@ export default function CatchUpVisitorModal({
                           className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
                             isSelected
                               ? "bg-amber-600 text-white"
-                              : hasAbsences
+                              : hasEligibleLessons
                               ? "bg-gray-100 text-gray-600"
                               : "bg-gray-200 text-gray-400"
                           }`}
@@ -425,19 +426,25 @@ export default function CatchUpVisitorModal({
                       </div>
 
                       <div className="shrink-0 ms-2">
-                        {hasAbsences ? (
+                        {hasEligibleLessons ? (
                           <span
                             className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                               isSelected
                                 ? "bg-amber-200 text-amber-900"
+                                : cand.missedLessons.some((m) => m.isUpcoming)
+                                ? "bg-blue-100 text-blue-800 border border-blue-200"
                                 : "bg-red-100 text-red-800"
                             }`}
                           >
-                            {t("missedLessonsCount", { count: cand.missedLessons.length })}
+                            {cand.missedLessons.some((m) => !m.isUpcoming) && cand.missedLessons.some((m) => m.isUpcoming)
+                              ? (locale === "ar" ? `${cand.missedLessons.length} حصص (سابق/قادم)` : `${cand.missedLessons.length} séances (passé/à venir)`)
+                              : cand.missedLessons.every((m) => m.isUpcoming)
+                              ? (locale === "ar" ? `${cand.missedLessons.length} حصة قادمة` : `${cand.missedLessons.length} à venir`)
+                              : t("missedLessonsCount", { count: cand.missedLessons.length })}
                           </span>
                         ) : (
                           <span className="text-[10px] text-gray-400">
-                            {t("noAbsencesRecorded")}
+                            {locale === "ar" ? "لا توجد حصص متاحة" : "Aucune séance"}
                           </span>
                         )}
                       </div>
@@ -454,13 +461,19 @@ export default function CatchUpVisitorModal({
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
                   <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                  <span>{t("selectMissedLesson", { name: selectedStudent.name })}</span>
+                  <span>
+                    {locale === "ar"
+                      ? `اختر الحصة المراد استدراكها (${selectedStudent.name}):`
+                      : `Sélectionnez la séance à rattraper (${selectedStudent.name}) :`}
+                  </span>
                 </label>
               </div>
 
               {selectedStudent.missedLessons.length === 0 ? (
                 <div className="p-3 text-xs text-amber-800 bg-amber-50 rounded-lg border border-amber-200">
-                  {t("noUncompensatedLessons")}
+                  {locale === "ar"
+                    ? "لا توجد حصص متاحة للاستدراك (غيابات سابقة أو حصص قادمة) لهذا التلميذ."
+                    : "Aucune séance disponible pour rattrapage (absence passée ou séance à venir) pour cet élève."}
                 </div>
               ) : (
                 <div className="space-y-2 max-h-44 overflow-y-auto pr-0.5">
@@ -473,6 +486,8 @@ export default function CatchUpVisitorModal({
                         year: "numeric",
                         month: "short",
                         day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
                       }
                     );
 
@@ -497,8 +512,17 @@ export default function CatchUpVisitorModal({
                             <span>{t("groupClassLabel", { name: ml.className })}</span>
                             <span className="text-gray-500 font-normal">{lessonDate}</span>
                           </div>
-                          <div className="text-gray-600 text-[11px]">
-                            {t("teacherNameFormatted", { name: ml.teacherName })}
+                          <div className="text-gray-600 text-[11px] flex items-center justify-between gap-2">
+                            <span>{t("teacherNameFormatted", { name: ml.teacherName })}</span>
+                            {ml.isUpcoming ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200 shrink-0">
+                                {locale === "ar" ? "استدراك مسبق (حصة قادمة)" : "Rattrapage anticipé (à venir)"}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 font-semibold border border-red-200 shrink-0">
+                                {locale === "ar" ? "غياب مسجل" : "Absence enregistrée"}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </label>

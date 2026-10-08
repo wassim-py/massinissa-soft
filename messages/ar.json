@@ -468,7 +468,7 @@
     "freeSessionModalMessage": "هذه حصة مجانية — لن يتأثر عدد الحصص المدفوعة للتلميذ ولن يُخصم أي رصيد من اشتراكه. هل تريد المتابعة؟",
     "continueBtn": "متابعة",
     "catchUpModalTitle": "إضافة تلميذ استدراك (حصة تعويضية)",
-    "catchUpModalSubtitle": "حضور تلميذ من فوج آخر لتعويض حصة سابقة",
+    "catchUpModalSubtitle": "حضور تلميذ من فوج آخر لتعويض حصة سابقة أو قادمة (استدراك مسبق)",
     "searching": "جاري البحث...",
     "searchBtn": "بحث",
     "selectCandidateStudent": "اختر التلميذ:",

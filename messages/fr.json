@@ -468,7 +468,7 @@
     "freeSessionModalMessage": "Il s'agit d'une séance gratuite — le solde de séances payées de l'élève ne sera pas affecté. Continuer ?",
     "continueBtn": "Continuer",
     "catchUpModalTitle": "Ajouter un élève en rattrapage (Séance compensatoire)",
-    "catchUpModalSubtitle": "Présence d'un élève d'un autre groupe pour compenser une séance précédente",
+    "catchUpModalSubtitle": "Présence d'un élève d'un autre groupe pour compenser une séance précédente ou à venir (rattrapage anticipé)",
     "searching": "Recherche en cours...",
     "searchBtn": "Rechercher",
     "selectCandidateStudent": "Sélectionnez l'élève :",
