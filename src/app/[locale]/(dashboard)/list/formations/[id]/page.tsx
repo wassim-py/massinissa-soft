@@ -171,12 +171,17 @@ export default async function FormationDetailsPage(props: {
       },
       enrollments: {
         include: {
-          student: true,
+          student: {
+            include: {
+              family: true,
+              enrollments: true,
+            },
+          },
         },
         orderBy: { enrolledAt: "desc" },
       },
       vouchers: {
-        where: { paymentType: { in: ["FORMATION", "BOOK"] } },
+        where: { paymentType: { in: ["FORMATION", "BOOK", "INSCRIPTION", "TUITION_4SESSION"] } },
         include: {
           refunds: true,
           series: {
@@ -333,6 +338,8 @@ export default async function FormationDetailsPage(props: {
       globalNumber: enr.student.globalNumber,
       name: enr.student.name,
       phone: enr.student.phone,
+      family: enr.student.family,
+      enrollments: enr.student.enrollments,
     },
     vouchers: vouchersByStudent.get(enr.student.id) || [],
     levelTests: testsByStudent.get(enr.student.id) || [],

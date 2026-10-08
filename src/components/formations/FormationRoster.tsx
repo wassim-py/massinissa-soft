@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Link } from "@/i18n/navigation";
 import Image from "next/image";
 import EnrollStudentModal from "./EnrollStudentModal";
-import FormationPaymentModal from "./FormationPaymentModal";
+import PaymentForm from "@/components/forms/PaymentForm";
+import { X } from "lucide-react";
 import RecordLevelTestModal from "./RecordLevelTestModal";
 import AssistedLevelUpModal from "./AssistedLevelUpModal";
 import RetakeLevelModal from "./RetakeLevelModal";
@@ -82,6 +83,7 @@ export default function FormationRoster({
     amountOwed?: number;
     isRetake?: boolean;
     previousVouchers?: any[];
+    isBookPaid?: boolean;
   }>({ isOpen: false });
 
   const [testModalState, setTestModalState] = useState<{
@@ -152,6 +154,7 @@ export default function FormationRoster({
 
               const totalPaid = vouchers.reduce((sum, v) => {
                 if (v.isVoided) return sum;
+                if (v.paymentType === "BOOK" || v.paymentType === "INSCRIPTION") return sum;
                 const paid = Number(v.amount || 0);
                 const refunded = (v.refunds || []).reduce(
                   (rSum: number, r: any) => rSum + Number(r.amount || 0),
@@ -163,6 +166,9 @@ export default function FormationRoster({
               const isPaidInFull = totalPaid >= levelPrice;
               const amountOwed = Math.max(0, levelPrice - totalPaid);
               const isRetake = latestTest && !latestTest.passed;
+              const isBookPaid = vouchers.some(
+                (v) => v.paymentType === "BOOK" && !v.isVoided
+              );
 
               const idDisplay =
                 student.globalNumber !== undefined && student.globalNumber !== null
@@ -202,12 +208,12 @@ export default function FormationRoster({
                                   amount: amountOwed.toLocaleString(
                                     locale === "ar" ? "ar-DZ" : "fr-DZ"
                                   ),
-                                })
+                                 })
                               : t("remainingBalance", {
                                   amount: levelPrice.toLocaleString(
                                     locale === "ar" ? "ar-DZ" : "fr-DZ"
                                   ),
-                                })}
+                                 })}
                           </span>
                           {latestTest && (
                             <span
@@ -239,9 +245,10 @@ export default function FormationRoster({
                                 isOpen: true,
                                 student,
                                 totalPaid,
-                                amountOwed,
+                                amountOwed: isRetake ? levelPrice : amountOwed,
                                 isRetake,
                                 previousVouchers: vouchers,
+                                isBookPaid,
                               })
                             }
                             className="px-3 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full hover:bg-blue-200"
@@ -362,6 +369,10 @@ export default function FormationRoster({
                                         <span className="text-purple-700 font-semibold">
                                           {t("bookFeePaymentOption")}
                                         </span>
+                                      ) : v.paymentType === "INSCRIPTION" ? (
+                                        <span className="text-blue-700 font-semibold">
+                                          {locale === "ar" ? "حقوق التسجيل" : "Frais d'inscription"}
+                                        </span>
                                       ) : v.isPartial ? (
                                         <span className="text-amber-700 font-semibold">
                                           {t("partial")}
@@ -447,25 +458,45 @@ export default function FormationRoster({
         />
       )}
 
-      {/* PAYMENT MODAL */}
+      {/* PAYMENT MODAL (IDENTICAL TO NORMAL GROUPS) */}
       {paymentModalState.isOpen && paymentModalState.student && (
-        <FormationPaymentModal
-          isOpen={paymentModalState.isOpen}
-          onClose={() =>
-            setPaymentModalState({ isOpen: false })
-          }
-          student={paymentModalState.student}
-          formationClass={formationClass}
-          formationLevel={formationLevel}
-          totalPaid={paymentModalState.totalPaid || 0}
-          amountOwed={paymentModalState.amountOwed || 0}
-          isRetake={paymentModalState.isRetake}
-          previousVouchers={paymentModalState.previousVouchers || []}
-          onPaymentSuccess={() => {
-            setPaymentModalState({ isOpen: false });
-            router.refresh();
-          }}
-        />
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-surface rounded-2xl shadow-xl relative w-full max-w-md max-h-[92vh] overflow-y-auto border border-border">
+            <button
+              type="button"
+              onClick={() => setPaymentModalState({ isOpen: false })}
+              className="absolute top-4 end-4 text-muted hover:text-gray-900 hover:bg-surface-subtle z-10 p-1.5 rounded-lg transition-colors cursor-pointer"
+              aria-label={tCommon("close")}
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <PaymentForm
+              student={paymentModalState.student}
+              classData={{
+                ...formationClass,
+                isFormation: true,
+                pricePerCycle: levelPrice,
+              }}
+              setOpen={(open) => {
+                setPaymentModalState((prev) => ({ ...prev, isOpen: open }));
+                if (!open) {
+                  router.refresh();
+                }
+              }}
+              type="create"
+              amountOwedByStudent={paymentModalState.amountOwed}
+              isRetake={paymentModalState.isRetake}
+              isBookPaid={paymentModalState.isBookPaid}
+              initialNotes={
+                paymentModalState.isRetake
+                  ? locale === "ar"
+                    ? "إعادة المستوى بعد الرسوب في اختبار المستوى"
+                    : "Reprise de niveau après échec au test"
+                  : ""
+              }
+            />
+          </div>
+        </div>
       )}
 
       {/* LEVEL TEST MODAL */}

@@ -24,7 +24,13 @@ export function resolveLedgerType(
   paymentType: string,
   isFormation: boolean = false
 ): LedgerVoucherCategory {
-  if (isFormation || paymentType === "WORKSHOP") {
+  if (paymentType === "INSCRIPTION") {
+    return "INSCRIPTION";
+  }
+  if (paymentType === "BOOK") {
+    return "BOOK";
+  }
+  if (isFormation || paymentType === "WORKSHOP" || paymentType === "FORMATION") {
     return "ATELIER_FORMATION";
   }
   switch (paymentType) {
@@ -32,10 +38,6 @@ export function resolveLedgerType(
     case "CATCHUP":
     case "EXTRA_SESSION":
       return "TUITION";
-    case "INSCRIPTION":
-      return "INSCRIPTION";
-    case "BOOK":
-      return "BOOK";
     default:
       return "TUITION";
   }

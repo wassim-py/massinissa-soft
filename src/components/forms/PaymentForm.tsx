@@ -36,15 +36,21 @@ const PaymentForm = ({
   sessionsForThisPayment,
   amountOwedByStudent,
   defaultInscriptionFee,
+  initialNotes,
+  isRetake,
+  isBookPaid,
 }: {
   student: ExtendedStudent;
-  classData: Class;
+  classData: Class | any;
   type: "create" | "update";
   data?: Voucher;
   setOpen: (isOpen: boolean) => void;
   sessionsForThisPayment?: number;
   amountOwedByStudent?: number;
   defaultInscriptionFee?: number;
+  initialNotes?: string;
+  isRetake?: boolean;
+  isBookPaid?: boolean;
 }) => {
   const router = useRouter();
   const t = useTranslations("payments");
@@ -85,8 +91,17 @@ const PaymentForm = ({
       : (defaultInscriptionFee || 0);
 
   // State for Multi-Item Creation Form
-  const [isTuitionChecked, setIsTuitionChecked] = useState(true);
-  const [tuitionAmount, setTuitionAmount] = useState<number>(feeCalc.studentCycleFee);
+  const initialTuitionAmount =
+    amountOwedByStudent !== undefined
+      ? amountOwedByStudent > 0
+        ? amountOwedByStudent
+        : feeCalc.studentCycleFee
+      : feeCalc.studentCycleFee;
+  const initialTuitionChecked =
+    amountOwedByStudent !== undefined ? amountOwedByStudent > 0 : true;
+
+  const [isTuitionChecked, setIsTuitionChecked] = useState(initialTuitionChecked);
+  const [tuitionAmount, setTuitionAmount] = useState<number>(initialTuitionAmount);
 
   const [configuredFee, setConfiguredFee] = useState<number>(initialConfiguredFee);
   const [isInscriptionChecked, setIsInscriptionChecked] = useState(false);
@@ -97,7 +112,7 @@ const PaymentForm = ({
   const [isBookChecked, setIsBookChecked] = useState(false);
   const [bookAmount, setBookAmount] = useState<number>(Number(classData.bookFee || 0));
 
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState(initialNotes || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [issuedBundle, setIssuedBundle] = useState<any>(null);
 
@@ -363,7 +378,7 @@ const PaymentForm = ({
                 id: issuedBundle.voucherNumber,
                 number: issuedBundle.voucherNumber,
                 amount: issuedBundle.totalAmount,
-                paymentType: "MULTI_ITEM",
+                paymentType: (classData as any)?.isFormation ? "FORMATION" : "MULTI_ITEM",
                 student,
                 class: classData,
                 series: { scope: issuedBundle.seriesScope, id: issuedBundle.seriesId },
@@ -476,9 +491,21 @@ const PaymentForm = ({
         </div>
       )}
 
+      {/* Retake Notice if Applicable */}
+      {isRetake && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+          <span>
+            {locale === "ar"
+              ? "تسديد إعادة المستوى بعد الرسوب في اختبار المستوى."
+              : "Paiement de reprise de niveau suite à l'échec au test."}
+          </span>
+        </div>
+      )}
+
       {/* Multi-Item Selection Area */}
       <div className="flex flex-col gap-2.5">
-        {/* ITEM 1: Studies / Tuition Fee */}
+        {/* ITEM 1: Studies / Tuition / Formation Fee */}
         <div className="p-3.5 bg-surface rounded-xl border border-border space-y-2">
           <div className="flex items-center justify-between">
             <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-gray-900 select-none">
@@ -488,7 +515,15 @@ const PaymentForm = ({
                 onChange={(e) => setIsTuitionChecked(e.target.checked)}
                 className="w-4 h-4 rounded text-primary focus:ring-primary/20 cursor-pointer"
               />
-              <span>{locale === "ar" ? "اشتراك دراسي (4 حصص)" : "Cycle d'études (4 séances)"}</span>
+              <span>
+                {(classData as any)?.isFormation
+                  ? locale === "ar"
+                    ? "رسوم الدورة التكوينية"
+                    : "Frais de formation"
+                  : locale === "ar"
+                  ? "اشتراك دراسي (4 حصص)"
+                  : "Cycle d'études (4 séances)"}
+              </span>
             </label>
             <Badge variant="primary" size="sm">
               {classData.name}
@@ -582,21 +617,32 @@ const PaymentForm = ({
         {classData.hasBooks && (
           <div className="p-3.5 bg-surface rounded-xl border border-border space-y-2">
             <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-gray-900 select-none">
+              <label
+                className={`flex items-center gap-2 font-bold text-xs text-gray-900 select-none ${
+                  isBookPaid ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
+                }`}
+              >
                 <input
                   type="checkbox"
-                  checked={isBookChecked}
+                  disabled={isBookPaid}
+                  checked={isBookChecked && !isBookPaid}
                   onChange={(e) => setIsBookChecked(e.target.checked)}
-                  className="w-4 h-4 rounded text-primary focus:ring-primary/20 cursor-pointer"
+                  className="w-4 h-4 rounded text-primary focus:ring-primary/20 cursor-pointer disabled:cursor-not-allowed"
                 />
                 <span>{locale === "ar" ? "رسوم الكتب المدرسية" : "Frais des manuels"}</span>
               </label>
-              <span className="text-xs font-mono font-semibold text-gray-600">
-                {Number(classData.bookFee || 0).toLocaleString()} DZD
-              </span>
+              {isBookPaid ? (
+                <Badge variant="neutral" size="sm" withDot>
+                  {locale === "ar" ? "مسدد مسبقاً لهذا الفوج" : "Déjà payé pour ce groupe"}
+                </Badge>
+              ) : (
+                <span className="text-xs font-mono font-semibold text-gray-600">
+                  {Number(classData.bookFee || 0).toLocaleString()} DZD
+                </span>
+              )}
             </div>
 
-            {isBookChecked && (
+            {isBookChecked && !isBookPaid && (
               <div className="flex items-center gap-2 ps-6 pt-1">
                 <span className="text-xs text-muted">{locale === "ar" ? "المبلغ:" : "Montant :"}</span>
                 <input

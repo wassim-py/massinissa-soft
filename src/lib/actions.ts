@@ -3171,16 +3171,50 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
       });
       voucherNumber = updatedSeries.currentNumber;
 
-      // 1. Process Tuition
+      // 1. Process Tuition / Formation
       if (tuitionItem) {
         const amt = Number(tuitionItem.amount);
         totalAmount += amt;
+        const paymentType = targetClass.isFormation ? "FORMATION" : "TUITION_4SESSION";
+        const labelFr = targetClass.isFormation ? "Frais de formation" : "Cycle d'études (4 séances)";
+        const labelAr = targetClass.isFormation ? "رسوم الدورة التكوينية" : "اشتراك دراسي (4 حصص)";
+
         issuedItems.push({
-          type: "TUITION_4SESSION",
-          labelFr: "Cycle d'études (4 séances)",
-          labelAr: "اشتراك دراسي (4 حصص)",
+          type: paymentType,
+          labelFr,
+          labelAr,
           amount: amt,
         });
+
+        let isPartial = false;
+        let remainingBalanceVal: number | null = null;
+        let completesVoucherIdVal: number | null = null;
+
+        if (targetClass.isFormation) {
+          const fullPrice = Number(targetClass.pricePerCycle || 0);
+          if (fullPrice > 0) {
+            const prevVouchers = await tx.voucher.findMany({
+              where: {
+                studentId: payload.studentId,
+                classId: payload.classId,
+                paymentType: "FORMATION",
+                isVoided: false,
+              },
+            });
+            const prevPaid = prevVouchers.reduce((s, v) => s + Number(v.amount || 0), 0);
+            const remaining = Math.max(0, fullPrice - (prevPaid + amt));
+            if (remaining > 0) {
+              isPartial = true;
+              remainingBalanceVal = remaining;
+            }
+            const activePartial = prevVouchers.find(
+              (v) => v.isPartial && Number(v.remainingBalance || 0) > 0
+            );
+            if (activePartial) {
+              completesVoucherIdVal = activePartial.id;
+            }
+          }
+        }
 
         await tx.voucher.create({
           data: {
@@ -3190,8 +3224,11 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
             classId: payload.classId,
             issuingBranchId,
             targetBranchId,
-            paymentType: "TUITION_4SESSION",
+            paymentType,
             amount: new Prisma.Decimal(amt),
+            isPartial,
+            remainingBalance: remainingBalanceVal !== null ? new Prisma.Decimal(remainingBalanceVal) : null,
+            completesVoucherId: completesVoucherIdVal,
             issuedBy: session.userId || "admin",
             isVoided: false,
             trimesterId: activeTrimesterId,
@@ -3199,7 +3236,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
         });
 
         if (amt > 0) {
-          const ledgerType = resolveLedgerType("TUITION_4SESSION", targetClass.isFormation);
+          const ledgerType = resolveLedgerType(paymentType, targetClass.isFormation);
           await upsertDailyLedger(tx, {
             branchId: issuingBranchId,
             date: new Date(),
@@ -3341,6 +3378,10 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
       safeRevalidatePath(`/list/students/${payload.studentId}`);
       safeRevalidatePath("/list/attendance");
       safeRevalidatePath(`/list/attendance/class/${payload.classId}`);
+      if (targetClass.isFormation) {
+        safeRevalidatePath(`/list/formations/${payload.classId}`);
+        safeRevalidatePath("/list/formations");
+      }
     } catch {}
 
     const bundle = {
