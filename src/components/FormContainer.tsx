@@ -268,11 +268,12 @@ const FormContainer = async ({
           break;
         }
         case "formation": {
-          const targetClassId = id || data?.id;
+          const targetId = id || data?.id;
           let existingLevels: any[] = [];
-          if (targetClassId) {
+          if (targetId) {
+            let languageId: number | null = null;
             const cls = await prisma.class.findUnique({
-              where: { id: Number(targetClassId) },
+              where: { id: Number(targetId) },
               select: {
                 formationLevelId: true,
                 FormationLevel: {
@@ -281,8 +282,20 @@ const FormContainer = async ({
               },
             });
             if (cls?.FormationLevel?.languageId) {
+              languageId = cls.FormationLevel.languageId;
+            } else {
+              const lang = await prisma.language.findUnique({
+                where: { id: Number(targetId) },
+                select: { id: true },
+              });
+              if (lang) {
+                languageId = lang.id;
+              }
+            }
+
+            if (languageId) {
               const rawLevels = await prisma.formationLevel.findMany({
-                where: { languageId: cls.FormationLevel.languageId },
+                where: { languageId },
                 include: {
                   Class: {
                     select: {

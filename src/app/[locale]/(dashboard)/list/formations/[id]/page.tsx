@@ -1,7 +1,6 @@
 import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import { getAuthRole } from "@/lib/auth";
-import BackButton from "@/components/BackButton";
 import ExportButton from "@/components/ExportButton";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -14,24 +13,146 @@ import Image from "next/image";
 import Link from "next/link";
 import { serializeForClient } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
-import { GraduationCap } from "lucide-react";
+import { GraduationCap, ArrowLeft, ArrowRight, Layers, Users, Calendar } from "lucide-react";
+import { Prisma } from "@prisma/client";
 
 export default async function FormationDetailsPage(props: {
   params: Promise<{ id: string; locale?: string }>;
+  searchParams?: Promise<{ [key: string]: string | undefined }>;
 }) {
   const params = await props.params;
+  const searchParams = props.searchParams ? await props.searchParams : {};
   const role = await getAuthRole();
   const t = await getTranslations("formations");
   const locale = await getLocale();
 
-  const classId = parseInt(params.id, 10);
-  if (isNaN(classId)) {
+  const rawId = parseInt(params.id, 10);
+  if (isNaN(rawId)) {
     notFound();
   }
 
-  // 1. Fetch Formation Group (Class) with full relations
+  // 1. Resolve whether rawId is a Class or a Language (Formation)
+  let languageId: number | null = null;
+  let preselectedClassId: number | null = null;
+
+  const classCandidate = await prisma.class.findUnique({
+    where: { id: rawId },
+    include: { FormationLevel: true },
+  });
+
+  if (classCandidate?.isFormation && classCandidate.FormationLevel) {
+    languageId = classCandidate.FormationLevel.languageId;
+    preselectedClassId = classCandidate.id;
+  } else {
+    const langCandidate = await prisma.language.findUnique({
+      where: { id: rawId },
+    });
+    if (langCandidate) {
+      languageId = langCandidate.id;
+    }
+  }
+
+  if (!languageId) {
+    notFound();
+  }
+
+  // 2. Fetch Formation Language and all levels in this formation
+  const language = await prisma.language.findUnique({
+    where: { id: languageId },
+  });
+  if (!language) notFound();
+
+  const allLevelsInFormation = await prisma.formationLevel.findMany({
+    where: { languageId },
+    include: {
+      Language: true,
+      Class: {
+        where: { isFormation: true },
+        include: {
+          branch: true,
+          teacher: true,
+          _count: {
+            select: {
+              enrollments: true,
+              lessons: true,
+            },
+          },
+        },
+        orderBy: { id: "desc" },
+      },
+    },
+    orderBy: { levelNumber: "asc" },
+  });
+
+  // Ensure every level has an active Class in this branch ready to accept student registrations
+  const baseBranchId =
+    classCandidate?.branchId ||
+    allLevelsInFormation[0]?.Class[0]?.branchId ||
+    1;
+  const baseAgeGroup =
+    classCandidate?.ageGroup ||
+    allLevelsInFormation[0]?.Class[0]?.ageGroup ||
+    "Adultes (15+ ans)";
+  const baseInscriptionFee =
+    classCandidate?.inscriptionFee ||
+    allLevelsInFormation[0]?.Class[0]?.inscriptionFee ||
+    new Prisma.Decimal(0);
+  const baseHasBooks =
+    classCandidate?.hasBooks ??
+    allLevelsInFormation[0]?.Class[0]?.hasBooks ??
+    false;
+  const baseBookFee =
+    classCandidate?.bookFee ||
+    allLevelsInFormation[0]?.Class[0]?.bookFee ||
+    null;
+
+  for (const lvl of allLevelsInFormation) {
+    if (lvl.Class.length === 0) {
+      const createdClass = await prisma.class.create({
+        data: {
+          name: `${language.name} - ${lvl.name}`,
+          branchId: baseBranchId,
+          teacherId: null,
+          isFormation: true,
+          formationLevelId: lvl.id,
+          ageGroup: baseAgeGroup,
+          pricePerCycle: lvl.lumpSumPrice,
+          inscriptionFee: baseInscriptionFee,
+          hasBooks: baseHasBooks,
+          bookFee: baseBookFee,
+        },
+        include: {
+          branch: true,
+          teacher: true,
+          _count: {
+            select: {
+              enrollments: true,
+              lessons: true,
+            },
+          },
+        },
+      });
+      lvl.Class.push(createdClass);
+    }
+  }
+
+  // 3. Determine active class for the selected level
+  const requestedLevelClassId = searchParams.level
+    ? parseInt(searchParams.level, 10)
+    : null;
+  const activeClassId =
+    requestedLevelClassId ||
+    preselectedClassId ||
+    allLevelsInFormation[0]?.Class.find((c) => !c.isCompleted)?.id ||
+    allLevelsInFormation[0]?.Class[0]?.id;
+
+  if (!activeClassId) {
+    notFound();
+  }
+
+  // 4. Fetch the selected level's Formation Group (Class) with full relations
   const formationGroup = await prisma.class.findUnique({
-    where: { id: classId },
+    where: { id: activeClassId },
     include: {
       branch: true,
       teacher: true,
@@ -79,64 +200,11 @@ export default async function FormationDetailsPage(props: {
   }
 
   const formationLevel = formationGroup.FormationLevel;
-  const language = formationLevel.Language;
 
-  // 1b. Fetch all levels of this formation to display them in card style
-  const allLevelsInFormation = await prisma.formationLevel.findMany({
-    where: { languageId: formationLevel.languageId },
-    include: {
-      Language: true,
-      Class: {
-        where: { isFormation: true },
-        include: {
-          branch: true,
-          teacher: true,
-          _count: {
-            select: {
-              enrollments: true,
-              lessons: true,
-            },
-          },
-        },
-        orderBy: { id: "desc" },
-      },
-    },
-    orderBy: { levelNumber: "asc" },
-  });
-
-  // Ensure every level has an active Class in this branch ready to accept student registrations
-  for (const lvl of allLevelsInFormation) {
-    const hasBranchClass = lvl.Class.some(
-      (c) => c.branchId === formationGroup.branchId && !c.isCompleted
-    );
-    if (!hasBranchClass && lvl.Class.length === 0) {
-      const createdClass = await prisma.class.create({
-        data: {
-          name: `${language.name} - ${lvl.name}`,
-          branchId: formationGroup.branchId,
-          teacherId: null,
-          isFormation: true,
-          formationLevelId: lvl.id,
-          ageGroup: formationGroup.ageGroup || "Adultes",
-          pricePerCycle: lvl.lumpSumPrice,
-          inscriptionFee: formationGroup.inscriptionFee,
-          hasBooks: formationGroup.hasBooks,
-          bookFee: formationGroup.bookFee,
-        },
-        include: {
-          branch: true,
-          teacher: true,
-          _count: {
-            select: {
-              enrollments: true,
-              lessons: true,
-            },
-          },
-        },
-      });
-      lvl.Class.push(createdClass);
-    }
-  }
+  // Total enrolled count across all levels in the formation
+  const totalEnrolledFormation = allLevelsInFormation.reduce((total, lvl) => {
+    return total + lvl.Class.reduce((sum, c) => sum + (c._count?.enrollments || 0), 0);
+  }, 0);
 
   const highestLevelNum =
     allLevelsInFormation.length > 0
@@ -169,7 +237,7 @@ export default async function FormationDetailsPage(props: {
     }));
   }
 
-  // 2. Fetch Next Level for assisted level-up flow (§2.8)
+  // Next Level for assisted promotion
   const nextLevel = await prisma.formationLevel.findFirst({
     where: {
       languageId: formationLevel.languageId,
@@ -196,20 +264,18 @@ export default async function FormationDetailsPage(props: {
     });
   }
 
-  // 3. Classrooms in this branch (for scheduling lessons)
+  // Classrooms and teachers for scheduling lessons
   const classrooms = await prisma.classroom.findMany({
     where: { branchId: formationGroup.branchId },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
 
-  // 4. Teachers for scheduling lessons
   const teachers = await prisma.teacher.findMany({
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
 
-  // 5. All students for registration modal
   const allStudents = await prisma.student.findMany({
     select: { id: true, name: true, phone: true },
     orderBy: { name: "asc" },
@@ -248,15 +314,15 @@ export default async function FormationDetailsPage(props: {
   }
 
   const testsByStudent = new Map<string, any[]>();
-  for (const t of formationGroup.LevelTest) {
-    const list = testsByStudent.get(t.studentId) || [];
+  for (const tst of formationGroup.LevelTest) {
+    const list = testsByStudent.get(tst.studentId) || [];
     list.push({
-      id: t.id,
-      score: t.score ? Number(t.score) : null,
-      passed: t.passed,
-      testDate: t.testDate,
+      id: tst.id,
+      score: tst.score ? Number(tst.score) : null,
+      passed: tst.passed,
+      testDate: tst.testDate,
     });
-    testsByStudent.set(t.studentId, list);
+    testsByStudent.set(tst.studentId, list);
   }
 
   const enrolledStudentsData = formationGroup.enrollments.map((enr) => ({
@@ -278,99 +344,156 @@ export default async function FormationDetailsPage(props: {
     phone: enr.student.phone,
   }));
 
-  const lumpPrice = Number(formationLevel.lumpSumPrice || formationGroup.pricePerCycle || 0);
+  const lumpPrice = Number(
+    formationLevel.lumpSumPrice || formationGroup.pricePerCycle || 0
+  );
 
   return (
     <div className="p-4 md:p-6 space-y-6 font-sans">
-      <BackButton />
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-page-title font-bold text-gray-900">{formationGroup.name}</h1>
-          <p className="text-gray-500 mt-1 text-sm">
-            {t("taughtBy")}{" "}
-            <span className="font-semibold text-gray-800">
-              {formationGroup.teacher?.name || t("unspecified")}
-            </span>
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {isFinalLevel && formationGroup.isCompleted && (
-            <FinalLevelEnrollmentButton
-              graduatedStudents={enrolledStudentsList}
-              availableFormations={availableFormationsForEnrollment}
-              role={role}
-            />
+      {/* 1. TOP BREADCRUMB & HEADER */}
+      <div>
+        <Link
+          href={`/${locale}/list/formations`}
+          className="inline-flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-primary transition-colors mb-3 group"
+        >
+          {locale === "ar" ? (
+            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          ) : (
+            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
           )}
-          <ExportButton
-            type="class_attendance"
-            options={{ classId: formationGroup.id }}
-          />
+          <span>
+            {locale === "ar"
+              ? "العودة إلى جميع التكوينات"
+              : "Toutes les formations"}
+          </span>
+        </Link>
+
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-3">
+              <div className="bg-primary/10 p-2.5 rounded-full text-primary">
+                <Image
+                  src="/lesson.png"
+                  alt={language.name}
+                  width={26}
+                  height={26}
+                />
+              </div>
+              <h1 className="text-page-title font-bold text-gray-900">
+                {language.name}
+              </h1>
+            </div>
+            <p className="text-gray-500 mt-1.5 text-xs md:text-sm flex items-center gap-3 flex-wrap">
+              <span className="font-medium text-gray-700">
+                {formationGroup.branch.name}
+              </span>
+              <span>•</span>
+              <span className="flex items-center gap-1 font-medium">
+                <Layers className="w-3.5 h-3.5 text-primary" />
+                {allLevelsInFormation.length}{" "}
+                {locale === "ar" ? "مستويات" : "niveaux"}
+              </span>
+              <span>•</span>
+              <span className="flex items-center gap-1 font-medium">
+                <Users className="w-3.5 h-3.5 text-emerald-600" />
+                {totalEnrolledFormation}{" "}
+                {locale === "ar" ? "تلاميذ مسجلين إجمالاً" : "stagiaires au total"}
+              </span>
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {isFinalLevel && formationGroup.isCompleted && (
+              <FinalLevelEnrollmentButton
+                graduatedStudents={enrolledStudentsList}
+                availableFormations={availableFormationsForEnrollment}
+                role={role}
+              />
+            )}
+            <ExportButton
+              type="class_attendance"
+              options={{ classId: formationGroup.id }}
+            />
+          </div>
         </div>
       </div>
 
-      {/* 1. FORMATION LEVELS CARD GRID (SAME CARD STYLE AS FORMATIONS LIST) */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
+      {/* 2. FORMATION LEVELS CARD GRID (THE LEVELS CREATED IN THE FORMATION CREATION FORM) */}
+      <div className="space-y-3 bg-white p-4 md:p-5 rounded-2xl border border-gray-200 shadow-xs">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+            <h2 className="text-base md:text-lg font-bold text-gray-900 flex items-center gap-2">
               <span>{t("formationLevels")}</span>
               <Badge variant="secondary" size="sm">
                 {allLevelsInFormation.length} {locale === "ar" ? "مستويات" : "niveaux"}
               </Badge>
             </h2>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-gray-500 mt-0.5">
               {language.name} • {t("formationLevelsSub")}
             </p>
           </div>
+          <span className="text-xs text-gray-400">
+            {locale === "ar"
+              ? "اضغط على أي مستوى لعرض تلاميذه ومتابعته أدناه"
+              : "Cliquez sur un niveau pour afficher ses stagiaires ci-dessous"}
+          </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 mt-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-3">
           {allLevelsInFormation.map((lvl) => {
-            const activeClass = lvl.Class.find((c) => !c.isCompleted) || lvl.Class[0];
+            const activeClass =
+              lvl.Class.find((c) => !c.isCompleted) || lvl.Class[0];
             const isCurrent = lvl.id === formationLevel.id;
             const isCompleted = activeClass ? activeClass.isCompleted : false;
-            const price = Number(lvl.lumpSumPrice || activeClass?.pricePerCycle || 0);
-            const teacherName = activeClass?.teacher?.name || t("unspecified");
+            const price = Number(
+              lvl.lumpSumPrice || activeClass?.pricePerCycle || 0
+            );
+            const teacherName =
+              activeClass?.teacher?.name || t("unspecified");
             const sessionsCount = Number(activeClass?._count?.lessons || 0);
-            const participantsCount = Number(activeClass?._count?.enrollments || 0);
+            const participantsCount = Number(
+              activeClass?._count?.enrollments || 0
+            );
             const description = `${language.name} • ${lvl.name}`;
-            const targetUrl = activeClass ? `/${locale}/list/formations/${activeClass.id}` : "#";
+            const targetUrl = activeClass
+              ? `/${locale}/list/formations/${language.id}?level=${activeClass.id}#level-details`
+              : "#";
 
             return (
               <Card
                 key={lvl.id}
-                className={`flex flex-col transition-all overflow-hidden relative ${
+                className={`flex flex-col transition-all overflow-hidden relative cursor-pointer ${
                   isCurrent
                     ? "ring-2 ring-primary border-primary shadow-md bg-primary/[0.02]"
-                    : "hover:border-primary/40 hover:shadow-sm"
+                    : "hover:border-primary/50 hover:shadow-sm"
                 }`}
               >
                 {isCurrent && (
                   <div className="bg-primary text-white text-[10px] font-bold px-3 py-0.5 text-center tracking-wider uppercase">
-                    {t("activeLevelBadge")}
+                    {locale === "ar" ? "المستوى المعروض حالياً" : t("activeLevelBadge")}
                   </div>
                 )}
                 <Link
                   href={targetUrl}
-                  className="block p-5 flex-grow hover:bg-surface-subtle transition-colors"
+                  className="block p-4 flex-grow hover:bg-surface-subtle transition-colors"
                 >
-                  <div className="flex items-center justify-between gap-3 mb-3">
+                  <div className="flex items-center justify-between gap-3 mb-2.5">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div
-                        className={`p-2.5 rounded-full shrink-0 ${
+                        className={`p-2 rounded-full shrink-0 ${
                           isCurrent ? "bg-primary text-white" : "bg-primary/10"
                         }`}
                       >
                         <Image
                           src="/lesson.png"
                           alt={lvl.name}
-                          width={22}
-                          height={22}
+                          width={20}
+                          height={20}
                         />
                       </div>
-                      <h2 className="text-sm font-bold text-gray-900 truncate">
-                        {activeClass?.name || lvl.name}
-                      </h2>
+                      <h3 className="text-sm font-bold text-gray-900 truncate">
+                        {lvl.name}
+                      </h3>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       {activeClass ? (
@@ -398,11 +521,11 @@ export default async function FormationDetailsPage(props: {
                     </div>
                   </div>
 
-                  <p className="text-xs text-gray-600 mb-3 h-8 overflow-hidden line-clamp-2">
+                  <p className="text-xs text-gray-500 mb-3 h-5 overflow-hidden line-clamp-1">
                     {description}
                   </p>
 
-                  <div className="text-xs space-y-2 text-gray-600 border-t border-border pt-3">
+                  <div className="text-xs space-y-1.5 text-gray-600 border-t border-border pt-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-gray-500">{t("teacher")}:</span>
                       <span className="font-semibold text-gray-800 truncate max-w-[130px]">
@@ -426,21 +549,18 @@ export default async function FormationDetailsPage(props: {
                   </div>
                 </Link>
 
-                <div className="border-t border-border p-2.5 bg-surface-subtle flex items-center justify-between gap-2">
+                <div className="border-t border-border p-2 bg-surface-subtle flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5">
                     {activeClass ? (
                       <Link
                         href={`/list/attendance/class/${activeClass.id}`}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                        title={locale === "ar" ? "الحضور" : "Présences"}
                       >
                         <Image src="/attendance.png" alt="" width={12} height={12} />
                         <span>{locale === "ar" ? "الحضور" : "Présences"}</span>
                       </Link>
-                    ) : (
-                      <span className="text-[11px] text-gray-400 italic px-1">
-                        {t("levelOpenForEnrollmentBadge")}
-                      </span>
-                    )}
+                    ) : null}
 
                     {role === "admin" && (
                       <DeleteFormationLevelModal
@@ -454,20 +574,25 @@ export default async function FormationDetailsPage(props: {
 
                   {activeClass && (
                     <Link
-                      href={`/${locale}/list/formations/${activeClass.id}`}
+                      href={targetUrl}
                       className={`text-xs font-semibold px-2 py-1 rounded transition-colors ${
                         isCurrent
                           ? "text-primary font-bold"
                           : "text-gray-600 hover:text-gray-900"
                       }`}
                     >
-                      {isCurrent
-                        ? locale === "ar"
-                          ? "معروض الآن"
-                          : "Affiché"
-                        : participantsCount === 0
-                        ? `${t("enrollStudentsAction")} →`
-                        : `${locale === "ar" ? "عرض التفاصيل" : "Voir détails"} →`}
+                      {isCurrent ? (
+                        locale === "ar" ? (
+                          "معروض أدناه ↓"
+                        ) : (
+                          "Affiché ci-dessous ↓"
+                        )
+                      ) : (
+                        <span>
+                          {locale === "ar" ? "عرض التلاميذ" : "Voir les stagiaires"}{" "}
+                          →
+                        </span>
+                      )}
                     </Link>
                   )}
                 </div>
@@ -477,95 +602,162 @@ export default async function FormationDetailsPage(props: {
         </div>
       </div>
 
-      {/* Final Level Closed Banner */}
-      {isFinalLevel && formationGroup.isCompleted && (
-        <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-emerald-900 shadow-sm animate-in fade-in duration-200">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
-              <GraduationCap className="w-5 h-5 text-emerald-700" />
+      {/* 3. LEVEL DETAILS SECTION (ROSTER, ENROLLED STUDENTS & SCHEDULE) */}
+      <div id="level-details" className="space-y-4 pt-2">
+        {/* Level Switcher & Header Bar */}
+        <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-primary bg-primary/10 px-2 py-0.5 rounded">
+                {locale === "ar" ? "المستوى الحالي" : "Niveau actif"}
+              </span>
+              <h2 className="text-lg md:text-xl font-bold text-gray-900">
+                {formationLevel.name}
+              </h2>
             </div>
-            <div>
-              <h4 className="font-bold text-sm">
-                {locale === "ar"
-                  ? "اكتملت دورة المستوى النهائي بنجاح!"
-                  : "Cycle du niveau final terminé avec succès !"}
-              </h4>
-              <p className="text-xs text-emerald-700 mt-0.5">
-                {t("enrollInNewFormationDesc")}
-              </p>
-            </div>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {language.name} • {t("taughtBy")}{" "}
+              <span className="font-semibold text-gray-800">
+                {formationGroup.teacher?.name || t("unspecified")}
+              </span>
+            </p>
           </div>
-          <FinalLevelEnrollmentButton
-            graduatedStudents={enrolledStudentsList}
-            availableFormations={availableFormationsForEnrollment}
-            role={role}
-          />
-        </div>
-      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <FormationRoster
-            formationClass={serializeForClient(formationGroup)}
-            formationLevel={serializeForClient(formationLevel)}
-            nextLevel={nextLevel ? serializeForClient(nextLevel) : null}
-            availableNextGroups={serializeForClient(availableNextGroups)}
-            enrolledStudents={serializeForClient(enrolledStudentsData)}
-            allStudents={serializeForClient(allStudents)}
-            role={role}
-          />
+          {/* Quick Level Switcher Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full md:max-w-[60%]">
+            <span className="text-xs font-semibold text-gray-500 whitespace-nowrap shrink-0">
+              {locale === "ar" ? "تبديل المستوى:" : "Changer :"}
+            </span>
+            {allLevelsInFormation.map((lvl) => {
+              const cls =
+                lvl.Class.find((c) => !c.isCompleted) || lvl.Class[0];
+              const isLvlActive = lvl.id === formationLevel.id;
+              const enrCount = cls?._count?.enrollments || 0;
+              return (
+                <Link
+                  key={lvl.id}
+                  href={`/${locale}/list/formations/${language.id}?level=${cls.id}#level-details`}
+                  className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
+                    isLvlActive
+                      ? "bg-primary text-white shadow-xs"
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                >
+                  {lvl.name} ({enrCount})
+                </Link>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="space-y-6">
-          <Card className="p-6 space-y-4">
-            <h3 className="text-section-title font-bold text-gray-900">{t("details")}</h3>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between items-center">
-                <span className="text-gray-500">{t("lumpSumPrice")}:</span>
-                <Badge variant="primary" size="sm" className="font-mono font-bold">
-                  {lumpPrice.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
-                </Badge>
+        {/* Final Level Closed Banner */}
+        {isFinalLevel && formationGroup.isCompleted && (
+          <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-emerald-900 shadow-sm animate-in fade-in duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+                <GraduationCap className="w-5 h-5 text-emerald-700" />
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-gray-500">{t("language")} & {t("level")}:</span>
-                <span className="font-semibold text-gray-800">
-                  {language.name} • {formationLevel.name}
-                </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-gray-500">{t("status")}:</span>
-                <FinishLevelButton
-                  classId={formationGroup.id}
-                  isCompleted={formationGroup.isCompleted}
-                  completedAt={formationGroup.completedAt}
-                  role={role}
-                  size="sm"
-                />
-              </div>
-              {formationGroup.hasBooks && (
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-500">{t("bookFee")}:</span>
-                  <span className="font-semibold text-gray-800 font-mono">
-                    {Number(formationGroup.bookFee || 0).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
-                  </span>
-                </div>
-              )}
-              <div className="pt-2 border-t border-border">
-                <p className="text-gray-500 mb-1 text-xs font-semibold">{t("description")}:</p>
-                <p className="text-gray-700 text-sm leading-relaxed">
-                  {`${language.name} - ${formationLevel.name}`}
+              <div>
+                <h4 className="font-bold text-sm">
+                  {locale === "ar"
+                    ? "اكتملت دورة المستوى النهائي بنجاح!"
+                    : "Cycle du niveau final terminé avec succès !"}
+                </h4>
+                <p className="text-xs text-emerald-700 mt-0.5">
+                  {t("enrollInNewFormationDesc")}
                 </p>
               </div>
             </div>
-          </Card>
-          <FormationSchedule
-            formationClass={serializeForClient(formationGroup)}
-            sessions={serializeForClient(formationGroup.lessons)}
-            enrolledStudents={serializeForClient(enrolledStudentsList)}
-            classrooms={serializeForClient(classrooms)}
-            teachers={serializeForClient(teachers)}
-            role={role}
-          />
+            <FinalLevelEnrollmentButton
+              graduatedStudents={enrolledStudentsList}
+              availableFormations={availableFormationsForEnrollment}
+              role={role}
+            />
+          </div>
+        )}
+
+        {/* Roster & Schedule Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            <FormationRoster
+              formationClass={serializeForClient(formationGroup)}
+              formationLevel={serializeForClient(formationLevel)}
+              nextLevel={nextLevel ? serializeForClient(nextLevel) : null}
+              availableNextGroups={serializeForClient(availableNextGroups)}
+              enrolledStudents={serializeForClient(enrolledStudentsData)}
+              allStudents={serializeForClient(allStudents)}
+              role={role}
+            />
+          </div>
+
+          <div className="space-y-6">
+            <Card className="p-6 space-y-4">
+              <h3 className="text-section-title font-bold text-gray-900">
+                {t("details")}
+              </h3>
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">{t("lumpSumPrice")}:</span>
+                  <Badge
+                    variant="primary"
+                    size="sm"
+                    className="font-mono font-bold"
+                  >
+                    {lumpPrice.toLocaleString(
+                      locale === "ar" ? "ar-DZ" : "fr-DZ"
+                    )}{" "}
+                    DZD
+                  </Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">
+                    {t("language")} & {t("level")}:
+                  </span>
+                  <span className="font-semibold text-gray-800">
+                    {language.name} • {formationLevel.name}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">{t("status")}:</span>
+                  <FinishLevelButton
+                    classId={formationGroup.id}
+                    isCompleted={formationGroup.isCompleted}
+                    completedAt={formationGroup.completedAt}
+                    role={role}
+                    size="sm"
+                  />
+                </div>
+                {formationGroup.hasBooks && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-500">{t("bookFee")}:</span>
+                    <span className="font-semibold text-gray-800 font-mono">
+                      {Number(formationGroup.bookFee || 0).toLocaleString(
+                        locale === "ar" ? "ar-DZ" : "fr-DZ"
+                      )}{" "}
+                      DZD
+                    </span>
+                  </div>
+                )}
+                <div className="pt-2 border-t border-border">
+                  <p className="text-gray-500 mb-1 text-xs font-semibold">
+                    {t("description")}:
+                  </p>
+                  <p className="text-gray-700 text-sm leading-relaxed">
+                    {`${language.name} - ${formationLevel.name}`}
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            <FormationSchedule
+              formationClass={serializeForClient(formationGroup)}
+              sessions={serializeForClient(formationGroup.lessons)}
+              enrolledStudents={serializeForClient(enrolledStudentsList)}
+              classrooms={serializeForClient(classrooms)}
+              teachers={serializeForClient(teachers)}
+              role={role}
+            />
+          </div>
         </div>
       </div>
     </div>

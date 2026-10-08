@@ -978,7 +978,7 @@ export async function createFormationWithLevels(data: {
       }
 
       return { language, levels: createdLevels, group: initialFormationGroup };
-    });
+    }, { timeout: 30000, maxWait: 10000 });
 
     safeRevalidatePath("/list/formations");
     safeRevalidatePath("/list/classes");
@@ -2050,10 +2050,20 @@ export async function updateFormationWithLevels(data: {
       return { success: false, error: true, message: "Permissions insuffisantes pour modifier le groupe / صلاحية غير كافية لتعديل الفوج" };
     }
 
-    const targetClass = await prisma.class.findUnique({
+    let targetClass = await prisma.class.findUnique({
       where: { id: data.id },
       include: { FormationLevel: true },
     });
+
+    if (!targetClass) {
+      targetClass = await prisma.class.findFirst({
+        where: {
+          isFormation: true,
+          FormationLevel: { languageId: data.id },
+        },
+        include: { FormationLevel: true },
+      });
+    }
 
     if (!targetClass || !targetClass.isFormation || !targetClass.FormationLevel) {
       return { success: false, error: true, message: "Groupe de formation introuvable." };
@@ -2061,130 +2071,167 @@ export async function updateFormationWithLevels(data: {
 
     const languageId = targetClass.FormationLevel.languageId;
 
-    await prisma.$transaction(async (tx) => {
-      // Find matching level for targetClass
-      const targetLevelInput = data.levels?.find(
-        (lvl) => lvl.id === targetClass.formationLevelId && !lvl.isDeleted
-      );
-      const resolvedTargetTeacherId =
-        targetLevelInput && targetLevelInput.teacherId !== undefined
-          ? (targetLevelInput.teacherId?.trim() ? targetLevelInput.teacherId.trim() : null)
-          : (data.teacherId !== undefined ? data.teacherId : targetClass.teacherId);
+    await prisma.$transaction(
+      async (tx) => {
+        // Update Language name if provided and non-empty
+        if (data.name && data.name.trim()) {
+          await tx.language.update({
+            where: { id: languageId },
+            data: { name: data.name.trim() },
+          });
+        }
 
-      // 1. Update the class itself
-      await tx.class.update({
-        where: { id: data.id },
-        data: {
-          name: data.name.trim(),
-          branchId: data.branchId ? Number(data.branchId) : undefined,
-          teacherId: resolvedTargetTeacherId,
-          ageGroup: data.ageGroup?.trim() || null,
-          hasBooks: !!data.hasBooks,
-          bookFee: data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null,
-        },
-      });
+        // Find matching level for targetClass
+        const targetLevelInput = data.levels?.find(
+          (lvl) => lvl.id === targetClass.formationLevelId && !lvl.isDeleted
+        );
+        const resolvedTargetTeacherId =
+          targetLevelInput && targetLevelInput.teacherId !== undefined
+            ? (targetLevelInput.teacherId?.trim() ? targetLevelInput.teacherId.trim() : null)
+            : (data.teacherId !== undefined ? data.teacherId : targetClass.teacherId);
 
-      // 2. Process levels if provided
-      if (data.levels && data.levels.length > 0) {
-        const existingLevels = await tx.formationLevel.findMany({
-          where: { languageId },
-          include: {
-            Class: {
-              select: { id: true, enrollments: { select: { id: true } } },
-            },
-            LevelTest: { select: { id: true } },
+        // 1. Update shared class fields for this formation
+        await tx.class.updateMany({
+          where: {
+            isFormation: true,
+            FormationLevel: { languageId },
           },
-          orderBy: { levelNumber: "asc" },
+          data: {
+            branchId: data.branchId ? Number(data.branchId) : undefined,
+            ageGroup: data.ageGroup?.trim() || null,
+            hasBooks: !!data.hasBooks,
+            bookFee:
+              data.hasBooks && data.bookFee
+                ? new Prisma.Decimal(data.bookFee)
+                : null,
+          },
         });
 
-        // 2a. Validate that at least one level remains active
-        const remainingActive = data.levels.filter((l) => !l.isDeleted);
-        if (remainingActive.length === 0) {
-          throw new Error(
-            "Impossible de supprimer tous les niveaux. Une formation doit comporter au moins un niveau / لا يمكن حذف جميع المستويات. يجب أن يحتوي التكوين على مستوى واحد على الأقل"
-          );
-        }
+        // Update targetClass specific fields
+        await tx.class.update({
+          where: { id: targetClass.id },
+          data: {
+            teacherId: resolvedTargetTeacherId,
+          },
+        });
 
-        // 2b. Process deletions safely
-        for (const lvl of data.levels) {
-          if (lvl.id && lvl.isDeleted) {
-            await executeSafeDeleteFormationLevel(tx, lvl.id);
-          }
-        }
-
-        // 2c. Process updates on existing non-deleted levels
-        for (const lvl of data.levels) {
-          if (lvl.id && !lvl.isDeleted) {
-            await tx.formationLevel.update({
-              where: { id: lvl.id },
-              data: {
-                name: lvl.name.trim(),
-                lumpSumPrice: new Prisma.Decimal(lvl.lumpSumPrice || 0),
+        // 2. Process levels if provided
+        if (data.levels && data.levels.length > 0) {
+          const existingLevels = await tx.formationLevel.findMany({
+            where: { languageId },
+            include: {
+              Class: {
+                select: { id: true, teacherId: true, enrollments: { select: { id: true } } },
               },
-            });
+              LevelTest: { select: { id: true } },
+            },
+            orderBy: { levelNumber: "asc" },
+          });
 
-            const lvlTeacherId = lvl.teacherId?.trim() ? lvl.teacherId.trim() : null;
+          // 2a. Validate that at least one level remains active
+          const remainingActive = data.levels.filter((l) => !l.isDeleted);
+          if (remainingActive.length === 0) {
+            throw new Error(
+              "Impossible de supprimer tous les niveaux. Une formation doit comporter au moins un niveau / لا يمكن حذف جميع المستويات. يجب أن يحتوي التكوين على مستوى واحد على الأقل"
+            );
+          }
 
-            if (lvl.id === targetClass.formationLevelId) {
-              await tx.class.update({
-                where: { id: targetClass.id },
-                data: {
-                  pricePerCycle: new Prisma.Decimal(lvl.lumpSumPrice || 0),
-                  ...(lvl.teacherId !== undefined ? { teacherId: lvlTeacherId } : {}),
-                },
-              });
-            } else if (lvl.teacherId !== undefined) {
-              const levelClass = await tx.class.findFirst({
-                where: { formationLevelId: lvl.id, isFormation: true },
-                orderBy: { id: "asc" },
-              });
-              if (levelClass) {
-                await tx.class.update({
-                  where: { id: levelClass.id },
-                  data: { teacherId: lvlTeacherId },
+          // 2b. Process deletions safely
+          for (const lvl of data.levels) {
+            if (lvl.id && lvl.isDeleted) {
+              await executeSafeDeleteFormationLevel(tx, lvl.id);
+            }
+          }
+
+          // 2c. Process updates on existing non-deleted levels
+          for (const lvl of data.levels) {
+            if (lvl.id && !lvl.isDeleted) {
+              const existingLvl = existingLevels.find((el) => el.id === lvl.id);
+              const nameChanged = existingLvl && existingLvl.name !== lvl.name.trim();
+              const priceChanged =
+                existingLvl &&
+                Number(existingLvl.lumpSumPrice) !== Number(lvl.lumpSumPrice || 0);
+
+              if (nameChanged || priceChanged) {
+                await tx.formationLevel.update({
+                  where: { id: lvl.id },
+                  data: {
+                    name: lvl.name.trim(),
+                    lumpSumPrice: new Prisma.Decimal(lvl.lumpSumPrice || 0),
+                  },
                 });
+              }
+
+              const lvlTeacherId = lvl.teacherId?.trim()
+                ? lvl.teacherId.trim()
+                : null;
+              const levelClass = existingLvl?.Class[0];
+
+              if (levelClass) {
+                const classUpdateData: any = {};
+                if (priceChanged) {
+                  classUpdateData.pricePerCycle = new Prisma.Decimal(
+                    lvl.lumpSumPrice || 0
+                  );
+                }
+                if (lvl.teacherId !== undefined) {
+                  classUpdateData.teacherId = lvlTeacherId;
+                }
+                if (nameChanged && data.name) {
+                  classUpdateData.name = `${data.name.trim()} - ${lvl.name.trim()}`;
+                }
+
+                if (Object.keys(classUpdateData).length > 0) {
+                  await tx.class.update({
+                    where: { id: levelClass.id },
+                    data: classUpdateData,
+                  });
+                }
               }
             }
           }
-        }
 
-        // 2d. Process creations for new levels
-        let highestLevelNum = existingLevels.reduce(
-          (max, el) => Math.max(max, el.levelNumber),
-          0
-        );
+          // 2d. Process creations for new levels
+          let highestLevelNum = existingLevels.reduce(
+            (max, el) => Math.max(max, el.levelNumber),
+            0
+          );
 
-        for (const lvl of data.levels) {
-          if (!lvl.id && !lvl.isDeleted && lvl.name.trim()) {
-            highestLevelNum += 1;
-            const newLvl = await tx.formationLevel.create({
-              data: {
-                languageId,
-                levelNumber: highestLevelNum,
-                name: lvl.name.trim(),
-                lumpSumPrice: new Prisma.Decimal(lvl.lumpSumPrice || 0),
-              },
-            });
+          for (const lvl of data.levels) {
+            if (!lvl.id && !lvl.isDeleted && lvl.name.trim()) {
+              highestLevelNum += 1;
+              const newLvl = await tx.formationLevel.create({
+                data: {
+                  languageId,
+                  levelNumber: highestLevelNum,
+                  name: lvl.name.trim(),
+                  lumpSumPrice: new Prisma.Decimal(lvl.lumpSumPrice || 0),
+                },
+              });
 
-            const language = await tx.language.findUnique({ where: { id: languageId } });
-            await tx.class.create({
-              data: {
-                name: `${language?.name || "Formation"} - ${newLvl.name}`,
-                branchId: targetClass.branchId,
-                teacherId: lvl.teacherId?.trim() ? lvl.teacherId.trim() : null,
-                isFormation: true,
-                formationLevelId: newLvl.id,
-                ageGroup: targetClass.ageGroup || "Adultes (15+ ans)",
-                pricePerCycle: newLvl.lumpSumPrice,
-                hasBooks: targetClass.hasBooks,
-                bookFee: targetClass.bookFee,
-                inscriptionFee: targetClass.inscriptionFee,
-              },
-            });
+              await tx.class.create({
+                data: {
+                  name: `${data.name?.trim() || "Formation"} - ${newLvl.name}`,
+                  branchId: data.branchId ? Number(data.branchId) : targetClass.branchId,
+                  teacherId: lvl.teacherId?.trim() ? lvl.teacherId.trim() : null,
+                  isFormation: true,
+                  formationLevelId: newLvl.id,
+                  ageGroup: data.ageGroup?.trim() || targetClass.ageGroup || "Adultes (15+ ans)",
+                  pricePerCycle: newLvl.lumpSumPrice,
+                  hasBooks: !!data.hasBooks,
+                  bookFee:
+                    data.hasBooks && data.bookFee
+                      ? new Prisma.Decimal(data.bookFee)
+                      : targetClass.bookFee,
+                  inscriptionFee: targetClass.inscriptionFee,
+                },
+              });
+            }
           }
         }
-      }
-    });
+      },
+      { timeout: 30000, maxWait: 10000 }
+    );
 
     safeRevalidatePath("/list/formations");
     safeRevalidatePath(`/list/formations/${data.id}`);
@@ -2204,15 +2251,84 @@ export async function updateFormationWithLevels(data: {
   }
 }
 
+export async function deleteEntireFormation(formationId: number): Promise<ActionResponse> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwnerOrAdmin && session.role !== "admin") {
+      return { success: false, error: true, message: "Permissions insuffisantes pour supprimer la formation / صلاحية غير كافية لحذف التكوين" };
+    }
+
+    const lang = await prisma.language.findUnique({
+      where: { id: formationId },
+      include: {
+        FormationLevel: {
+          include: {
+            Class: {
+              include: {
+                vouchers: { where: { isVoided: false } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!lang) {
+      return { success: false, error: true, message: "Formation introuvable / التكوين غير موجود" };
+    }
+
+    const allClasses = lang.FormationLevel.flatMap((lvl) => lvl.Class);
+    const hasActiveVouchers = allClasses.some((c) => c.vouchers.length > 0);
+    if (hasActiveVouchers) {
+      return {
+        success: false,
+        error: true,
+        message: "Impossible de supprimer cette formation car des reçus de paiement actifs y sont associés / لا يمكن حذف هذا التكوين لوجود وصولات دفع نشطة مسجلة عليه",
+      };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const classIds = allClasses.map((c) => c.id);
+      if (classIds.length > 0) {
+        const lessons = await tx.lesson.findMany({ where: { classId: { in: classIds } }, select: { id: true } });
+        const lessonIds = lessons.map((l) => l.id);
+        if (lessonIds.length > 0) {
+          await tx.attendance.deleteMany({ where: { lessonId: { in: lessonIds } } });
+          await tx.lesson.deleteMany({ where: { id: { in: lessonIds } } });
+        }
+        await tx.levelTest.deleteMany({ where: { classId: { in: classIds } } });
+        await tx.enrollment.deleteMany({ where: { classId: { in: classIds } } });
+        await tx.class.deleteMany({ where: { id: { in: classIds } } });
+      }
+      await tx.formationLevel.deleteMany({ where: { languageId: formationId } });
+      await tx.language.delete({ where: { id: formationId } });
+    });
+
+    safeRevalidatePath("/list/formations");
+    return { success: true, error: false, message: "Formation supprimée avec succès / تم حذف التكوين بنجاح" };
+  } catch (err: any) {
+    console.error("Error deleting entire formation:", err);
+    return { success: false, error: true, message: err?.message || "Échec de la suppression de la formation / فشل في حذف التكوين" };
+  }
+}
+
 export async function deleteFormationAction(
   currentState: any,
   formData: FormData
 ): Promise<ActionResponse> {
-  const id = formData.get("id") as string;
+  const idStr = formData.get("id") as string;
+  const parsedId = parseInt(idStr, 10);
   try {
-    return await deleteFormationGroup(parseInt(id));
+    const isLanguage = await prisma.language.findUnique({
+      where: { id: parsedId },
+      select: { id: true },
+    });
+    if (isLanguage) {
+      return await deleteEntireFormation(parsedId);
+    }
+    return await deleteFormationGroup(parsedId);
   } catch (err: any) {
-    return { success: false, error: true, message: err?.message || "فشل في حذف الفوج التكويني." };
+    return { success: false, error: true, message: err?.message || "فشل في حذف التكوين." };
   }
 }
 
