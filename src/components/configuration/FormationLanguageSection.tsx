@@ -87,7 +87,7 @@ export default function FormationLanguageSection({
   const [selectedLevel, setSelectedLevel] = useState<FormationLevelItem | null>(null);
   const [levelName, setLevelName] = useState("");
   const [levelNumber, setLevelNumber] = useState<string>("");
-  const [lumpSumPrice, setLumpSumPrice] = useState<string>("12000");
+  const [lumpSumPrice, setLumpSumPrice] = useState<string>("4000");
 
   // Delete Level state
   const [deleteLevelTarget, setDeleteLevelTarget] = useState<FormationLevelItem | null>(null);
@@ -180,7 +180,7 @@ export default function FormationLanguageSection({
     const nextNum = (lang.levels?.length || 0) + 1;
     setLevelNumber(String(nextNum));
     setLevelName(`Niveau ${nextNum}`);
-    setLumpSumPrice("12000");
+    setLumpSumPrice("4000");
     setIsLevelModalOpen(true);
   };
 

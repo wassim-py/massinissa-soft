@@ -13,9 +13,8 @@ async function runCleanup() {
   console.log('🧹 COMPLETE DATABASE FRESH CLEANUP');
   console.log('====================================================');
   console.log('PRESERVING:');
-  console.log('  ✓ Groups / Classes (Class: 101 records)');
-  console.log('  ✓ Teachers (Teacher: 36, TeacherBranch, TeacherPayRate)');
-  console.log('  ✓ Lessons (Lesson: 226 records preserved)');
+  console.log('  ✓ Groups / Classes (Class)');
+  console.log('  ✓ Teachers (Teacher, TeacherBranch, TeacherPayRate)');
   console.log('  ✓ Legitimate Classrooms (Classroom: 9 records)');
   console.log('  ✓ Branches (Branch: 3 records)');
   console.log('  ✓ Legitimate Levels (Level: 10 records)');
@@ -28,7 +27,7 @@ async function runCleanup() {
   console.log('----------------------------------------------------');
   console.log('DELETING:');
   console.log('  ✗ Students, Parent Phones, Families');
-  console.log('  ✗ Attendances & CatchUpAttendances');
+  console.log('  ✗ Lessons, Attendances & CatchUpAttendances');
   console.log('  ✗ Enrollments & EnrollmentTransfers');
   console.log('  ✗ Vouchers, Refunds, VoucherEdits');
   console.log('  ✗ DailyLedgers, Missing/Surplus money');
@@ -49,11 +48,12 @@ async function runCleanup() {
   try {
     await client.query('BEGIN');
 
-    // 1. Unlink circular references
+    // 1. Unlink circular references & nullable foreign keys
     console.log('1. Unlinking circular foreign keys...');
     await client.query(`UPDATE "Student" SET "familyId" = NULL;`);
     await client.query(`UPDATE "Family" SET "payerStudentId" = NULL;`);
     await client.query(`UPDATE "Voucher" SET "refundForVoucherId" = NULL, "completesVoucherId" = NULL;`);
+    await client.query(`UPDATE "Announcement" SET "lessonId" = NULL WHERE "lessonId" IS NOT NULL;`);
 
     // 2. Delete Student Book receipts & distributions
     console.log('2. Deleting BookReceipt & BookCopyDistribution...');
@@ -62,9 +62,8 @@ async function runCleanup() {
     console.log(`   - BookCopyDistribution: ${dBookDist.rowCount}`);
     console.log(`   - BookReceipt:          ${dBookRec.rowCount}`);
 
-    // 3. Delete Attendances, CatchUpAttendances, and Lessons
+    // 3. Delete Attendances & Lessons
     console.log('3. Deleting Attendance, CatchUpAttendance & Lessons...');
-    await client.query(`UPDATE "Announcement" SET "lessonId" = NULL WHERE "lessonId" IS NOT NULL;`);
     const dCatchUp = await client.query(`DELETE FROM "CatchUpAttendance";`);
     const dAttendance = await client.query(`DELETE FROM "Attendance";`);
     const dLesson = await client.query(`DELETE FROM "Lesson";`);
@@ -122,19 +121,15 @@ async function runCleanup() {
 
     // 10. Delete Test Data
     console.log('10. Deleting Test Data...');
-    // Delete test voucher series
     const dTestSeries = await client.query(`DELETE FROM "VoucherSeries" WHERE "levelId" = 74 OR id = 7701;`);
     console.log(`   - Test VoucherSeries (7701): ${dTestSeries.rowCount}`);
 
-    // Delete test level BAC-TEST-SP
     const dTestLevel = await client.query(`DELETE FROM "Level" WHERE name = 'BAC-TEST-SP' OR id = 74;`);
     console.log(`   - Test Level (BAC-TEST-SP):   ${dTestLevel.rowCount}`);
 
-    // Delete test classrooms
     const dTestClassrooms = await client.query(`DELETE FROM "Classroom" WHERE id IN (6601, 6602, 6603) OR name LIKE '%(ANNEX)%' OR name LIKE '%(AMPHI)%';`);
     console.log(`   - Test Classrooms (6602, 6603): ${dTestClassrooms.rowCount}`);
 
-    // Delete extra/test academic years (id 1, 991)
     const dTestAY = await client.query(`DELETE FROM "AcademicYear" WHERE id IN (1, 991);`);
     console.log(`   - Extra/Test AcademicYears:    ${dTestAY.rowCount}`);
 
@@ -202,7 +197,6 @@ async function runCleanup() {
     'TeacherBranch': (await pool.query('SELECT count(*) FROM "TeacherBranch";')).rows[0].count,
     'TeacherPayRate': (await pool.query('SELECT count(*) FROM "TeacherPayRate";')).rows[0].count,
     'Class (groups/classes)': (await pool.query('SELECT count(*) FROM "Class";')).rows[0].count,
-    'Lesson (lessons)': (await pool.query('SELECT count(*) FROM "Lesson";')).rows[0].count,
     'Level (levels)': (await pool.query('SELECT count(*) FROM "Level";')).rows[0].count,
     'Language (subjects)': (await pool.query('SELECT count(*) FROM "Language";')).rows[0].count,
     'FormationLevel': (await pool.query('SELECT count(*) FROM "FormationLevel";')).rows[0].count,
@@ -226,6 +220,7 @@ async function runCleanup() {
     'Family': (await pool.query('SELECT count(*) FROM "Family";')).rows[0].count,
     'Enrollment': (await pool.query('SELECT count(*) FROM "Enrollment";')).rows[0].count,
     'EnrollmentTransfer': (await pool.query('SELECT count(*) FROM "EnrollmentTransfer";')).rows[0].count,
+    'Lesson': (await pool.query('SELECT count(*) FROM "Lesson";')).rows[0].count,
     'Attendance': (await pool.query('SELECT count(*) FROM "Attendance";')).rows[0].count,
     'CatchUpAttendance': (await pool.query('SELECT count(*) FROM "CatchUpAttendance";')).rows[0].count,
     'Voucher': (await pool.query('SELECT count(*) FROM "Voucher";')).rows[0].count,

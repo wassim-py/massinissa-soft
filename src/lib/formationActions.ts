@@ -879,6 +879,7 @@ export async function createFormationWithLevels(data: {
   levels: Array<{
     name: string;
     lumpSumPrice: number;
+    teacherId?: string | null;
   }>;
   branchId: number;
   teacherId?: string | null;
@@ -949,6 +950,9 @@ export async function createFormationWithLevels(data: {
       let initialFormationGroup: any = null;
       for (let i = 0; i < createdLevels.length; i++) {
         const lvl = createdLevels[i];
+        const lvlInput = data.levels[i];
+        const levelTeacherId = lvlInput?.teacherId?.trim() ? lvlInput.teacherId.trim() : null;
+
         const groupName =
           i === 0 && data.initialGroupName?.trim()
             ? data.initialGroupName.trim()
@@ -958,7 +962,7 @@ export async function createFormationWithLevels(data: {
           data: {
             name: groupName,
             branchId: data.branchId,
-            teacherId: data.teacherId || null,
+            teacherId: levelTeacherId,
             isFormation: true,
             formationLevelId: lvl.id,
             ageGroup: data.ageGroup?.trim() || "Adultes (15+ ans)",
@@ -2036,6 +2040,7 @@ export async function updateFormationWithLevels(data: {
     id?: number;
     name: string;
     lumpSumPrice: number;
+    teacherId?: string | null;
     isDeleted?: boolean;
   }>;
 }): Promise<ActionResponse> {
@@ -2057,13 +2062,22 @@ export async function updateFormationWithLevels(data: {
     const languageId = targetClass.FormationLevel.languageId;
 
     await prisma.$transaction(async (tx) => {
+      // Find matching level for targetClass
+      const targetLevelInput = data.levels?.find(
+        (lvl) => lvl.id === targetClass.formationLevelId && !lvl.isDeleted
+      );
+      const resolvedTargetTeacherId =
+        targetLevelInput && targetLevelInput.teacherId !== undefined
+          ? (targetLevelInput.teacherId?.trim() ? targetLevelInput.teacherId.trim() : null)
+          : (data.teacherId !== undefined ? data.teacherId : targetClass.teacherId);
+
       // 1. Update the class itself
       await tx.class.update({
         where: { id: data.id },
         data: {
           name: data.name.trim(),
           branchId: data.branchId ? Number(data.branchId) : undefined,
-          teacherId: data.teacherId || null,
+          teacherId: resolvedTargetTeacherId,
           ageGroup: data.ageGroup?.trim() || null,
           hasBooks: !!data.hasBooks,
           bookFee: data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null,
@@ -2098,7 +2112,7 @@ export async function updateFormationWithLevels(data: {
           }
         }
 
-        // 2b. Process updates on existing non-deleted levels
+        // 2c. Process updates on existing non-deleted levels
         for (const lvl of data.levels) {
           if (lvl.id && !lvl.isDeleted) {
             await tx.formationLevel.update({
@@ -2109,18 +2123,32 @@ export async function updateFormationWithLevels(data: {
               },
             });
 
+            const lvlTeacherId = lvl.teacherId?.trim() ? lvl.teacherId.trim() : null;
+
             if (lvl.id === targetClass.formationLevelId) {
               await tx.class.update({
                 where: { id: targetClass.id },
                 data: {
                   pricePerCycle: new Prisma.Decimal(lvl.lumpSumPrice || 0),
+                  ...(lvl.teacherId !== undefined ? { teacherId: lvlTeacherId } : {}),
                 },
               });
+            } else if (lvl.teacherId !== undefined) {
+              const levelClass = await tx.class.findFirst({
+                where: { formationLevelId: lvl.id, isFormation: true },
+                orderBy: { id: "asc" },
+              });
+              if (levelClass) {
+                await tx.class.update({
+                  where: { id: levelClass.id },
+                  data: { teacherId: lvlTeacherId },
+                });
+              }
             }
           }
         }
 
-        // 2c. Process creations for new levels
+        // 2d. Process creations for new levels
         let highestLevelNum = existingLevels.reduce(
           (max, el) => Math.max(max, el.levelNumber),
           0
@@ -2129,12 +2157,28 @@ export async function updateFormationWithLevels(data: {
         for (const lvl of data.levels) {
           if (!lvl.id && !lvl.isDeleted && lvl.name.trim()) {
             highestLevelNum += 1;
-            await tx.formationLevel.create({
+            const newLvl = await tx.formationLevel.create({
               data: {
                 languageId,
                 levelNumber: highestLevelNum,
                 name: lvl.name.trim(),
                 lumpSumPrice: new Prisma.Decimal(lvl.lumpSumPrice || 0),
+              },
+            });
+
+            const language = await tx.language.findUnique({ where: { id: languageId } });
+            await tx.class.create({
+              data: {
+                name: `${language?.name || "Formation"} - ${newLvl.name}`,
+                branchId: targetClass.branchId,
+                teacherId: lvl.teacherId?.trim() ? lvl.teacherId.trim() : null,
+                isFormation: true,
+                formationLevelId: newLvl.id,
+                ageGroup: targetClass.ageGroup || "Adultes (15+ ans)",
+                pricePerCycle: newLvl.lumpSumPrice,
+                hasBooks: targetClass.hasBooks,
+                bookFee: targetClass.bookFee,
+                inscriptionFee: targetClass.inscriptionFee,
               },
             });
           }

@@ -114,7 +114,7 @@ export default async function FormationDetailsPage(props: {
         data: {
           name: `${language.name} - ${lvl.name}`,
           branchId: formationGroup.branchId,
-          teacherId: formationGroup.teacherId || null,
+          teacherId: null,
           isFormation: true,
           formationLevelId: lvl.id,
           ageGroup: formationGroup.ageGroup || "Adultes",

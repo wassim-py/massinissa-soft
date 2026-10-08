@@ -15,6 +15,7 @@ type LevelInput = {
   id?: number;
   name: string;
   lumpSumPrice: number;
+  teacherId?: string;
   levelNumber?: number;
   isDeleted?: boolean;
   enrollmentsCount?: number;
@@ -29,7 +30,7 @@ interface FormationFormProps {
     branches?: Array<{ id: number; name: string }>;
     teachers?: Array<{ id: string; name: string }>;
     defaultBranchId?: number;
-    levels?: Array<{ id: number; name: string; lumpSumPrice: number; levelNumber?: number; enrollmentsCount?: number }>;
+    levels?: Array<{ id: number; name: string; lumpSumPrice: number; teacherId?: string; levelNumber?: number; enrollmentsCount?: number }>;
   };
 }
 
@@ -84,15 +85,16 @@ const FormationForm = ({
         id: lvl.id,
         name: lvl.name,
         lumpSumPrice: Number(lvl.lumpSumPrice || 0),
+        teacherId: lvl.teacherId || "",
         levelNumber: lvl.levelNumber,
         isDeleted: false,
         enrollmentsCount: lvl.enrollmentsCount || 0,
       }));
     }
     return [
-      { name: "Niveau 1 (A1)", lumpSumPrice: 12000 },
-      { name: "Niveau 2 (A2)", lumpSumPrice: 12000 },
-      { name: "Niveau 3 (B1)", lumpSumPrice: 15000 },
+      { name: "Niveau 1 (A1)", lumpSumPrice: 4000, teacherId: "" },
+      { name: "Niveau 2 (A2)", lumpSumPrice: 4000, teacherId: "" },
+      { name: "Niveau 3 (B1)", lumpSumPrice: 4000, teacherId: "" },
     ];
   });
 
@@ -103,7 +105,8 @@ const FormationForm = ({
       ...prev,
       {
         name: `Niveau ${nextNum}`,
-        lumpSumPrice: prev[prev.length - 1]?.lumpSumPrice || 12000,
+        lumpSumPrice: prev[prev.length - 1]?.lumpSumPrice || 4000,
+        teacherId: "",
         isDeleted: false,
       },
     ]);
@@ -188,6 +191,7 @@ const FormationForm = ({
             id: lvl.id,
             name: lvl.name.trim(),
             lumpSumPrice: Number(lvl.lumpSumPrice) || 0,
+            teacherId: lvl.teacherId ? lvl.teacherId.trim() : null,
             isDeleted: !!lvl.isDeleted,
           })),
         });
@@ -225,9 +229,9 @@ const FormationForm = ({
           levels: levels.map((lvl) => ({
             name: lvl.name.trim(),
             lumpSumPrice: Number(lvl.lumpSumPrice) || 0,
+            teacherId: lvl.teacherId ? lvl.teacherId.trim() : null,
           })),
           branchId: Number(branchId),
-          teacherId: teacherId || null,
           ageGroup: ageGroup.trim(),
           initialGroupName: groupName.trim() || undefined,
           hasBooks,
@@ -305,7 +309,7 @@ const FormationForm = ({
               {t("groupBranchSection")}
             </span>
             <div className="flex justify-between flex-wrap gap-4">
-              <div className="flex flex-col gap-2 w-full md:w-[30%]">
+              <div className="flex flex-col gap-2 w-full md:w-[48%]">
                 <label className="text-xs text-gray-500">{t("branch")}</label>
                 <select
                   value={branchId}
@@ -320,23 +324,7 @@ const FormationForm = ({
                 </select>
               </div>
 
-              <div className="flex flex-col gap-2 w-full md:w-[30%]">
-                <label className="text-xs text-gray-500">{t("teacher")}</label>
-                <select
-                  value={teacherId}
-                  onChange={(e) => setTeacherId(e.target.value)}
-                  className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-                >
-                  <option value="">{t("unassignedTeacher")}</option>
-                  {teachers.map((tItem) => (
-                    <option key={tItem.id} value={tItem.id}>
-                      {tItem.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex flex-col gap-2 w-full md:w-[30%]">
+              <div className="flex flex-col gap-2 w-full md:w-[48%]">
                 <label className="text-xs text-gray-500">{t("ageGroup")}</label>
                 <input
                   type="text"
@@ -434,7 +422,7 @@ const FormationForm = ({
                     />
                   </div>
 
-                  <div className="w-full md:w-44 flex flex-col gap-1">
+                  <div className="w-full md:w-36 flex flex-col gap-1">
                     <label className="text-xs text-gray-500">
                       {t("lumpSumPriceLabel")}
                     </label>
@@ -453,6 +441,24 @@ const FormationForm = ({
                       className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none font-bold text-success"
                       required
                     />
+                  </div>
+
+                  <div className="w-full md:w-48 flex flex-col gap-1">
+                    <label className="text-xs text-gray-500">{t("teacher")}</label>
+                    <select
+                      value={lvl.teacherId || ""}
+                      onChange={(e) =>
+                        handleLevelChange(idx, "teacherId", e.target.value)
+                      }
+                      className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
+                    >
+                      <option value="">{t("unassignedTeacher")}</option>
+                      {teachers.map((tItem) => (
+                        <option key={tItem.id} value={tItem.id}>
+                          {tItem.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 
@@ -487,7 +493,7 @@ const FormationForm = ({
             />
           </div>
 
-          <div className="flex flex-col gap-2 w-full md:w-[31%]">
+          <div className="flex flex-col gap-2 w-full md:w-[48%]">
             <label className="text-xs text-gray-500">{t("branch")}</label>
             <select
               value={branchId}
@@ -502,23 +508,7 @@ const FormationForm = ({
             </select>
           </div>
 
-          <div className="flex flex-col gap-2 w-full md:w-[31%]">
-            <label className="text-xs text-gray-500">{t("teacher")}</label>
-            <select
-              value={teacherId}
-              onChange={(e) => setTeacherId(e.target.value)}
-              className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-            >
-              <option value="">{t("unassignedTeacher")}</option>
-              {teachers.map((tItem) => (
-                <option key={tItem.id} value={tItem.id}>
-                  {tItem.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex flex-col gap-2 w-full md:w-[31%]">
+          <div className="flex flex-col gap-2 w-full md:w-[48%]">
             <label className="text-xs text-gray-500">{t("ageGroup")}</label>
             <input
               type="text"
@@ -614,7 +604,7 @@ const FormationForm = ({
                         />
                       </div>
 
-                      <div className="w-full md:w-44 flex flex-col gap-1">
+                      <div className="w-full md:w-36 flex flex-col gap-1">
                         <label className="text-xs text-gray-500">
                           {t("lumpSumPriceLabel")}
                         </label>
@@ -634,6 +624,25 @@ const FormationForm = ({
                           className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none font-bold text-success disabled:bg-gray-100"
                           required={!isMarkedDeleted}
                         />
+                      </div>
+
+                      <div className="w-full md:w-48 flex flex-col gap-1">
+                        <label className="text-xs text-gray-500">{t("teacher")}</label>
+                        <select
+                          disabled={isMarkedDeleted}
+                          value={lvl.teacherId || ""}
+                          onChange={(e) =>
+                            handleLevelChange(idx, "teacherId", e.target.value)
+                          }
+                          className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none disabled:bg-gray-100"
+                        >
+                          <option value="">{t("unassignedTeacher")}</option>
+                          {teachers.map((tItem) => (
+                            <option key={tItem.id} value={tItem.id}>
+                              {tItem.name}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     </div>
 

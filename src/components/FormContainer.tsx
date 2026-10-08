@@ -286,22 +286,29 @@ const FormContainer = async ({
                 include: {
                   Class: {
                     select: {
+                      id: true,
+                      teacherId: true,
+                      isCompleted: true,
                       _count: { select: { enrollments: true } },
                     },
                   },
                 },
                 orderBy: { levelNumber: "asc" },
               });
-              existingLevels = rawLevels.map((lvl) => ({
-                id: lvl.id,
-                name: lvl.name,
-                levelNumber: lvl.levelNumber,
-                lumpSumPrice: Number(lvl.lumpSumPrice || 0),
-                enrollmentsCount: lvl.Class.reduce(
-                  (sum, c) => sum + (c._count?.enrollments || 0),
-                  0
-                ),
-              }));
+              existingLevels = rawLevels.map((lvl) => {
+                const activeClass = lvl.Class.find((c) => !c.isCompleted) || lvl.Class[0];
+                return {
+                  id: lvl.id,
+                  name: lvl.name,
+                  levelNumber: lvl.levelNumber,
+                  lumpSumPrice: Number(lvl.lumpSumPrice || 0),
+                  teacherId: activeClass?.teacherId || "",
+                  enrollmentsCount: lvl.Class.reduce(
+                    (sum, c) => sum + (c._count?.enrollments || 0),
+                    0
+                  ),
+                };
+              });
             }
           }
 
