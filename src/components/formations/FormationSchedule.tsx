@@ -4,11 +4,13 @@ import { useState, useEffect } from "react";
 import Image from "next/image";
 import FormationAttendanceModal from "./FormationAttendanceModal";
 import AddFormationSessionModal from "./AddFormationSessionModal";
+import EditFormationSessionModal from "./EditFormationSessionModal";
+import DeleteFormationSessionModal from "./DeleteFormationSessionModal";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import Link from "next/link";
-import { CalendarCheck } from "lucide-react";
+import { CalendarCheck, Pencil, Trash2, CheckCircle2, UserCheck } from "lucide-react";
 
 export default function FormationSchedule({
   formationClass,
@@ -44,6 +46,8 @@ export default function FormationSchedule({
   const locale = useLocale();
   const [selectedSessionForAttendance, setSelectedSessionForAttendance] = useState<any | null>(null);
   const [isAddSessionOpen, setIsAddSessionOpen] = useState(false);
+  const [editingSession, setEditingSession] = useState<any | null>(null);
+  const [deletingSession, setDeletingSession] = useState<any | null>(null);
 
   useEffect(() => {
     if (sessionIdParam) {
@@ -86,60 +90,106 @@ export default function FormationSchedule({
           </p>
         ) : (
           <ul className="space-y-3">
-            {sessions.map((session) => (
-              <li
-                key={session.id}
-                className="text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-surface-subtle border border-border/60 rounded-xl hover:border-border transition-colors"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <p className="font-bold text-gray-900 capitalize">
-                      {new Date(session.startsAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
-                        weekday: "long",
-                      })}
-                    </p>
-                    <span className="bg-teal-100 text-teal-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-teal-300">
-                      {locale === "ar" ? "أسبوعي ثابت" : "Hebdomadaire fixe"}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted font-mono font-medium" dir="ltr">
-                    {new Date(session.startsAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}{" "}
-                    -{" "}
-                    {new Date(session.endsAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
-                  {(session.classroom || session.teacher) && (
-                    <div className="flex items-center gap-3 text-[11px] text-gray-500">
-                      {session.classroom && (
-                        <span>
-                          {locale === "ar" ? `القاعة: ${session.classroom.name}` : `Salle : ${session.classroom.name}`}
-                        </span>
-                      )}
-                      {session.teacher && (
-                        <span>
-                          {locale === "ar" ? `الأستاذ: ${session.teacher.name}` : `Enseignant : ${session.teacher.name}`}
+            {sessions.map((session) => {
+              const attendancesCount = session.attendances?.length || 0;
+              const presentCount =
+                session.attendances?.filter((a) => a.status === "PRESENT").length || 0;
+              const isAttendanceDone = attendancesCount > 0;
+
+              return (
+                <li
+                  key={session.id}
+                  className="text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-surface-subtle border border-border/60 rounded-xl hover:border-border transition-colors group"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-bold text-gray-900 capitalize">
+                        {new Date(session.startsAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
+                          weekday: "long",
+                        })}
+                      </p>
+                      <span className="bg-teal-100 text-teal-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-teal-300">
+                        {locale === "ar" ? "أسبوعي ثابت" : "Hebdomadaire fixe"}
+                      </span>
+                      {isAttendanceDone && (
+                        <span className="bg-emerald-50 text-emerald-700 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                          <span>
+                            {locale === "ar"
+                              ? `تم الحضور (${presentCount}/${attendancesCount})`
+                              : `Présences (${presentCount}/${attendancesCount})`}
+                          </span>
                         </span>
                       )}
                     </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 self-end sm:self-center">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setSelectedSessionForAttendance(session)}
-                    className="text-xs font-semibold"
-                  >
-                    {t("takeAttendance")}
-                  </Button>
-                </div>
-              </li>
-            ))}
+                    <p className="text-xs text-muted font-mono font-medium" dir="ltr">
+                      {new Date(session.startsAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}{" "}
+                      -{" "}
+                      {new Date(session.endsAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                    {(session.classroom || session.teacher) && (
+                      <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-wrap">
+                        {session.classroom && (
+                          <span>
+                            {locale === "ar" ? `القاعة: ${session.classroom.name}` : `Salle : ${session.classroom.name}`}
+                          </span>
+                        )}
+                        {session.teacher && (
+                          <span>
+                            {locale === "ar" ? `الأستاذ: ${session.teacher.name}` : `Enseignant : ${session.teacher.name}`}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                    <Button
+                      variant={isAttendanceDone ? "outline" : "primary"}
+                      size="sm"
+                      onClick={() => setSelectedSessionForAttendance(session)}
+                      className={`text-xs font-semibold flex items-center gap-1.5 ${
+                        isAttendanceDone
+                          ? "text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+                          : ""
+                      }`}
+                      title={t("takeAttendance")}
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>{t("takeAttendance")}</span>
+                    </Button>
+
+                    {role === "admin" && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setEditingSession(session)}
+                          title={t("editSession")}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-500 hover:text-primary hover:bg-primary/10 border border-border/80 hover:border-primary/30 transition-colors cursor-pointer"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setDeletingSession(session)}
+                          title={t("deleteSession")}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-400 hover:text-red-600 hover:bg-red-50 border border-border/80 hover:border-red-200 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -168,6 +218,33 @@ export default function FormationSchedule({
           teachers={teachers}
           defaultTeacherId={formationClass.teacherId}
           onSessionAdded={() => router.refresh()}
+        />
+      )}
+
+      {/* EDIT SESSION MODAL */}
+      {editingSession && (
+        <EditFormationSessionModal
+          isOpen={!!editingSession}
+          onClose={() => setEditingSession(null)}
+          session={editingSession}
+          classId={formationClass.id}
+          className={formationClass.name}
+          classrooms={classrooms}
+          teachers={teachers}
+          defaultTeacherId={formationClass.teacherId}
+          onSessionUpdated={() => router.refresh()}
+        />
+      )}
+
+      {/* DELETE SESSION MODAL */}
+      {deletingSession && (
+        <DeleteFormationSessionModal
+          isOpen={!!deletingSession}
+          onClose={() => setDeletingSession(null)}
+          session={deletingSession}
+          classId={formationClass.id}
+          className={formationClass.name}
+          onSessionDeleted={() => router.refresh()}
         />
       )}
     </>

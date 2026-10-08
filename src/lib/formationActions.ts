@@ -1981,6 +1981,189 @@ export async function addFormationSession(data: {
   }
 }
 
+export async function updateFormationSession(data: {
+  sessionId: number;
+  classId: number;
+  day: string;
+  startTime: string;
+  endTime: string;
+  teacherId?: string;
+  classroomId?: number;
+}): Promise<ActionResponse> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwnerOrAdmin && session.role !== "admin") {
+      return { success: false, error: true, message: "Permissions insuffisantes / صلاحية غير كافية" };
+    }
+
+    const targetClass = await prisma.class.findUnique({
+      where: { id: data.classId },
+    });
+    if (!targetClass) {
+      return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود" };
+    }
+
+    if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, targetClass.branchId)) {
+      return { success: false, error: true, message: "Non autorisé dans cette succursale / غير مصرح لك في هذا الفرع" };
+    }
+
+    const existingLesson = await prisma.lesson.findUnique({
+      where: { id: data.sessionId },
+      include: { class: true },
+    });
+    if (!existingLesson) {
+      return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة" };
+    }
+
+    const teacherId = data.teacherId || targetClass.teacherId;
+    if (!teacherId) {
+      return { success: false, error: true, message: "Veuillez assigner un enseignant / يرجى تعيين أستاذ للحصة" };
+    }
+
+    const classroomId = data.classroomId || existingLesson.classroomId;
+    if (!classroomId) {
+      return { success: false, error: true, message: "Veuillez spécifier la salle / يرجى تحديد القاعة" };
+    }
+
+    const startsAt = getLessonDateTime(data.day, data.startTime);
+    const endsAt = getLessonDateTime(data.day, data.endTime);
+
+    if (startsAt >= endsAt) {
+      return { success: false, error: true, message: "L'heure de fin doit être postérieure à l'heure de début / وقت النهاية يجب أن يكون بعد وقت البداية" };
+    }
+
+    const dayName = new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      timeZone: "Africa/Algiers",
+    }).format(startsAt).toUpperCase();
+
+    const startTimeStr = startsAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Algiers" });
+    const endTimeStr = endsAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Algiers" });
+
+    const conflict = await checkForConflicts({
+      classId: data.classId,
+      teacherId,
+      classroomId,
+      day: dayName,
+      startTime: startTimeStr,
+      endTime: endTimeStr,
+      excludeId: data.sessionId,
+      startsAt,
+      endsAt,
+    });
+
+    if (conflict) {
+      return { success: false, error: true, message: conflict };
+    }
+
+    const updated = await prisma.lesson.update({
+      where: { id: data.sessionId },
+      data: {
+        teacherId,
+        classroomId,
+        startsAt,
+        endsAt,
+      },
+      include: {
+        classroom: true,
+        teacher: true,
+      },
+    });
+
+    try {
+      const branchRecord = await prisma.branch.findUnique({ where: { id: targetClass.branchId } });
+      const classroomRecord = await prisma.classroom.findUnique({ where: { id: classroomId } });
+      const dayNameAr = startsAt.toLocaleDateString("ar-DZ", {
+        weekday: "long",
+      });
+
+      const desc = `حصة تكوينية أسبوعية لفوج ${targetClass.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} كل يوم ${dayNameAr} من ${startTimeStr} إلى ${endTimeStr}`;
+
+      const existingAnn = await prisma.announcement.findFirst({
+        where: { lessonId: data.sessionId },
+      });
+      if (existingAnn) {
+        await prisma.announcement.update({
+          where: { id: existingAnn.id },
+          data: {
+            title: "حصة تكوينية أسبوعية",
+            description: desc,
+            expiresAt: endsAt,
+          },
+        });
+      }
+      safeRevalidatePath("/list/announcements");
+    } catch (annErr) {
+      console.warn("Could not sync announcement on formation session update:", annErr);
+    }
+
+    safeRevalidatePath("/list/lessons");
+    safeRevalidatePath(`/list/formations/${data.classId}`);
+    safeRevalidatePath("/list/formations");
+
+    return {
+      success: true,
+      error: false,
+      message: "Séance mise à jour avec succès / تم تحديث الحصة بنجاح",
+      data: serializeForClient(updated),
+    };
+  } catch (err: any) {
+    console.error("Error updating formation session:", err);
+    return { success: false, error: true, message: err?.message || "Échec de la mise à jour de la séance / فشل في تحديث الحصة" };
+  }
+}
+
+export async function deleteFormationSession(data: {
+  sessionId: number;
+  classId: number;
+}): Promise<ActionResponse> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwnerOrAdmin && session.role !== "admin") {
+      return { success: false, error: true, message: "Permissions insuffisantes / صلاحية غير كافية" };
+    }
+
+    const existing = await prisma.lesson.findUnique({
+      where: { id: data.sessionId },
+      select: { branchId: true, classId: true },
+    });
+    if (!existing) {
+      return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة" };
+    }
+
+    if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, existing.branchId)) {
+      return { success: false, error: true, message: "Non autorisé dans cette succursale / غير مصرح لك في هذا الفرع" };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.announcement.deleteMany({ where: { lessonId: data.sessionId } });
+      await tx.catchUpAttendance.deleteMany({
+        where: { OR: [{ missedLessonId: data.sessionId }, { catchUpLessonId: data.sessionId }] },
+      });
+      await tx.attendance.deleteMany({ where: { lessonId: data.sessionId } });
+      await tx.lesson.delete({ where: { id: data.sessionId } });
+    });
+
+    safeRevalidatePath("/list/announcements");
+    safeRevalidatePath("/list/lessons");
+    safeRevalidatePath(`/list/formations/${data.classId}`);
+    safeRevalidatePath("/list/formations");
+
+    return {
+      success: true,
+      error: false,
+      message: "Séance supprimée avec succès / تم حذف الحصة بنجاح",
+    };
+  } catch (err: any) {
+    console.error("Error deleting formation session:", err);
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "Échec de la suppression de la séance / فشل في حذف الحصة",
+    };
+  }
+}
+
 export async function deleteFormationGroup(classId: number): Promise<ActionResponse> {
   try {
     const session = await getAuthSession();
