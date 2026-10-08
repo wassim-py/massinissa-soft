@@ -118,6 +118,7 @@ const SingleTeacherPage = async (
           include: {
             branch: true,
             level: true,
+            FormationLevel: true,
             enrollments: { select: { id: true } },
           },
         },
@@ -145,7 +146,7 @@ const SingleTeacherPage = async (
     // Groups taught
     prisma.class.findMany({
       where: { teacherId: id },
-      include: { branch: true, level: true, enrollments: { select: { id: true } } },
+      include: { branch: true, level: true, FormationLevel: true, enrollments: { select: { id: true } } },
       orderBy: { name: "asc" },
     }),
     // 5. Books brought to school (§2.11)
@@ -197,7 +198,7 @@ const SingleTeacherPage = async (
       id: c.id,
       name: c.name,
       branchName: c.branch?.name || "",
-      levelName: c.level?.name || (locale === "ar" ? "عام" : "Général"),
+      levelName: (c as any).FormationLevel?.name || c.level?.name || (locale === "ar" ? "عام" : "Général"),
       studentsCount: c.enrollments.length,
       pricePerCycle: c.pricePerCycle ? Number(c.pricePerCycle) : 0,
     });
