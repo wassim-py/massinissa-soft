@@ -64,11 +64,11 @@ const BRANCH_FILE_MAP: Record<string, number> = {
 };
 
 // ── Column header keywords (Arabic) ────────────────────────────────
-const COL_NAME_KEYWORDS = ['الاسم', 'اللقب'];
-const COL_PHONE_KEYWORDS = ['الهاتف', 'هاتف'];
-const COL_INSCRIPTION_KEYWORDS = ['التسجيل', 'تسجيل', 'حقوق'];
-const COL_MONTH_KEYWORDS = ['شهر', 'الشهر'];
-const COL_BOOK_KEYWORDS = ['كتاب', 'كتب', 'كـتاب'];
+const COL_NAME_KEYWORDS = ['الاسم', 'اللقب', 'nom', 'nom et prenom', 'élève'];
+const COL_PHONE_KEYWORDS = ['الهاتف', 'هاتف', 'telephone', 'téléphone', 'tel'];
+const COL_INSCRIPTION_KEYWORDS = ['التسجيل', 'تسجيل', 'حقوق', 'fi', 'frais'];
+const COL_MONTH_KEYWORDS = ['شهر', 'الشهر', 'f nv', 'fnv', 'niveau', 'cycle', 'mois'];
+const COL_BOOK_KEYWORDS = ['كتاب', 'كتب', 'كـتاب', 'livre', 'livres', 'book'];
 
 const TRIMESTER_IDS: Record<1 | 2 | 3, number> = {
   1: 24, // T1
@@ -834,9 +834,9 @@ function parseSheet(
 
 function isHeaderRow(row: Array<string | null> | undefined): boolean {
   if (!row) return false;
-  const text = row.filter(Boolean).join(' ');
-  const hasName = COL_NAME_KEYWORDS.some((kw) => text.includes(kw));
-  const hasPhone = COL_PHONE_KEYWORDS.some((kw) => text.includes(kw));
+  const text = row.filter(Boolean).join(' ').toLowerCase();
+  const hasName = COL_NAME_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()));
+  const hasPhone = COL_PHONE_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()));
   return hasName && hasPhone;
 }
 
@@ -868,19 +868,20 @@ function buildColMap(headerRow: Array<string | null>): ColMap | null {
   const bookCols: Array<{ col: number; trimNum: 1 | 2 | 3 }> = [];
 
   for (let c = 0; c < headerRow.length; c++) {
-    const text = (headerRow[c] ?? '').trim();
-    if (nameCol < 0 && COL_NAME_KEYWORDS.some((kw) => text.includes(kw))) {
+    const rawText = (headerRow[c] ?? '').trim();
+    const text = rawText.toLowerCase();
+    if (nameCol < 0 && COL_NAME_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()))) {
       nameCol = c;
-    } else if (phoneCol < 0 && COL_PHONE_KEYWORDS.some((kw) => text.includes(kw))) {
+    } else if (phoneCol < 0 && COL_PHONE_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()))) {
       phoneCol = c;
-    } else if (inscriptionCol < 0 && COL_INSCRIPTION_KEYWORDS.some((kw) => text.includes(kw))) {
+    } else if (inscriptionCol < 0 && COL_INSCRIPTION_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()))) {
       inscriptionCol = c;
-    } else if (COL_BOOK_KEYWORDS.some((kw) => text.includes(kw))) {
+    } else if (COL_BOOK_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()))) {
       let trimNum: 1 | 2 | 3 = 1;
       if (text.includes('3') || text.includes('ت3') || text.includes('ت 3')) trimNum = 3;
       else if (text.includes('2') || text.includes('ت2') || text.includes('ت 2')) trimNum = 2;
       bookCols.push({ col: c, trimNum });
-    } else if (COL_MONTH_KEYWORDS.some((kw) => text.includes(kw))) {
+    } else if (COL_MONTH_KEYWORDS.some((kw) => text.includes(kw.toLowerCase()))) {
       monthCols.push(c);
     }
   }

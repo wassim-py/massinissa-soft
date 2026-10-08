@@ -1101,7 +1101,7 @@ const getLessonDateTime = (day: string, time: string, dateStr?: string | null): 
   return new Date(Date.UTC(year, month, dayNum, (hours || 0) - 1, minutes || 0, 0, 0));
 };
 
-const checkForConflicts = async ({
+export const checkForConflicts = async ({
   classId,
   teacherId,
   classroomId,
@@ -1635,7 +1635,7 @@ export const deleteLesson = async (
     const session = await getAuthSession();
     const existing = await prisma.lesson.findUnique({
       where: { id },
-      select: { branchId: true },
+      select: { branchId: true, classId: true },
     });
     if (!existing) {
       return { success: false, error: true, message: "Leçon introuvable / الحصة غير موجودة." };
@@ -1656,6 +1656,10 @@ export const deleteLesson = async (
     safeRevalidatePath("/student");
     safeRevalidatePath("/parent");
     safeRevalidatePath("/list/lessons");
+    if (existing.classId) {
+      safeRevalidatePath("/list/formations");
+      safeRevalidatePath(`/list/formations/${existing.classId}`);
+    }
     return { success: true, error: false, message: "Leçon supprimée avec succès / تم حذف الحصة بنجاح." };
   } catch (err) {
     console.error("deleteLesson error:", err);

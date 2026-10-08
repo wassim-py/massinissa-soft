@@ -180,8 +180,10 @@ const LessonListPage = async (props: {
 
   try {
     const whereConditions: Prisma.Sql[] = [
-      // Only fetch normal recurring lessons, or one-off lessons occurring in the requested week
-      Prisma.sql`((l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false AND (c."isFormation" = false OR c."isFormation" IS NULL)) OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek}))`,
+      // Fetch normal recurring lessons (regular and formation) for active classes,
+      // or one-off/dated lessons occurring in the requested week.
+      // If a class is completed/closed, its recurring lessons stop displaying for subsequent weeks.
+      Prisma.sql`((l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false AND (c."isCompleted" = false OR c."isCompleted" IS NULL OR c."completedAt" >= ${startOfWeek})) OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek}))`,
     ];
 
     if (search) {
@@ -238,7 +240,7 @@ const LessonListPage = async (props: {
     const rawLessons = await prisma.$queryRaw<any[]>`
       SELECT l.id, l."startsAt", l."endsAt", l."classId", l."teacherId", l."classroomId", l."branchId",
              l."isExtra", l."isCatchUp", l."isFree", l."extraFee", l."isTeacherAbsent",
-             c.name as "className", c."isFormation", c."levelId", lvl.name as "levelName",
+             c.name as "className", c."isFormation", c."isCompleted", c."completedAt", c."levelId", lvl.name as "levelName",
              t.name as "teacherName", cr.name as "classroomName", b.name as "branchName",
              fl."languageId" as "formationLanguageId", flLang.name as "formationLanguageName"
       FROM "Lesson" l
@@ -253,16 +255,23 @@ const LessonListPage = async (props: {
       ORDER BY l."startsAt" ASC
     `;
 
-    // DISPLAY RULE (§7.13):
-    // Normal recurring lessons display every week.
-    // Extra, catch-up, free, and formation lessons display ONLY for the week (Saturday-Friday) they actually occur in.
+    // DISPLAY RULE:
+    // Regular and formation lessons display every week as fixed recurring schedule.
+    // One-off lessons (extra, catch-up, free) display ONLY for the week they actually occur in.
+    // Completed/closed classes do not recur in weeks after their completion date.
     const displayedRawLessons = rawLessons.filter((r) => {
-      const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFree || r.isFormation);
-      if (!isOneOff) {
-        return true;
+      const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFree);
+      if (isOneOff) {
+        const lessonDate = new Date(r.startsAt);
+        return lessonDate >= startOfWeek && lessonDate <= endOfWeek;
       }
-      const lessonDate = new Date(r.startsAt);
-      return lessonDate >= startOfWeek && lessonDate <= endOfWeek;
+      if (r.isCompleted && r.completedAt) {
+        const completedDate = new Date(r.completedAt);
+        if (completedDate < startOfWeek) {
+          return false;
+        }
+      }
+      return true;
     });
 
     lessons = displayedRawLessons.map((r) => {

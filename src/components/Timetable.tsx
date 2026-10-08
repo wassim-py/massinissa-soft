@@ -190,12 +190,11 @@ const Timetable = ({
     // Exact calendar day match for one-off / dated sessions
     if (nowDateStr && lessonDateStr && nowDateStr === lessonDateStr) return true;
 
-    // Recurring normal lesson on today's weekday during current week
+    // Recurring normal / formation lesson on today's weekday during current week
     const isOneOff = Boolean(
       lesson.isExtra ||
       lesson.isCatchUp ||
       lesson.isFree ||
-      lesson.isFormation ||
       lesson.isWorkshop
     );
 

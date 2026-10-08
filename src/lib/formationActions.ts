@@ -7,6 +7,7 @@ import { getAuthSession, getActiveBranchId } from "@/lib/auth";
 import { canUserAccessBranch } from "@/lib/settings";
 import { serializeForClient } from "@/lib/utils";
 import { upsertDailyLedger } from "@/lib/ledger";
+import { checkForConflicts } from "@/lib/actions";
 
 function safeRevalidatePath(path: string) {
   try {
@@ -1893,14 +1894,41 @@ export async function addFormationSession(data: {
       return { success: false, error: true, message: "Veuillez spécifier la salle / يرجى تحديد القاعة لهذه الحصة" };
     }
 
+    const startsAt = new Date(data.startsAt);
+    const endsAt = new Date(data.endsAt);
+
+    // School timetable conflict check
+    const dayName = new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      timeZone: "Africa/Algiers",
+    }).format(startsAt).toUpperCase();
+
+    const startTimeStr = startsAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Algiers" });
+    const endTimeStr = endsAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Algiers" });
+
+    const conflict = await checkForConflicts({
+      classId: data.classId,
+      teacherId,
+      classroomId,
+      day: dayName,
+      startTime: startTimeStr,
+      endTime: endTimeStr,
+      startsAt,
+      endsAt,
+    });
+
+    if (conflict) {
+      return { success: false, error: true, message: conflict };
+    }
+
     const lesson = await prisma.lesson.create({
       data: {
         classId: data.classId,
         branchId: targetClass.branchId,
         teacherId: teacherId,
         classroomId: classroomId,
-        startsAt: new Date(data.startsAt),
-        endsAt: new Date(data.endsAt),
+        startsAt,
+        endsAt,
       },
     });
 
@@ -1908,29 +1936,22 @@ export async function addFormationSession(data: {
     try {
       const branchRecord = await prisma.branch.findUnique({ where: { id: targetClass.branchId } });
       const classroomRecord = await prisma.classroom.findUnique({ where: { id: classroomId } });
-      const startsDate = new Date(data.startsAt);
-      const endsDate = new Date(data.endsAt);
-      const startsDateStr = startsDate.toLocaleDateString("ar-DZ", {
+      const dayNameAr = startsAt.toLocaleDateString("ar-DZ", {
         weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
       });
-      const startTimeStr = startsDate.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-      const endTimeStr = endsDate.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
-      const desc = `حصة تكوينية جديدة لفوج ${targetClass.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`;
+      const desc = `حصة تكوينية أسبوعية جديدة لفوج ${targetClass.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} كل يوم ${dayNameAr} من ${startTimeStr} إلى ${endTimeStr}`;
 
       await prisma.announcement.create({
         data: {
-          title: "حصة تكوينية جديدة",
+          title: "حصة تكوينية أسبوعية جديدة",
           description: desc,
           classId: data.classId,
           branchId: null, // school-wide
           lessonId: lesson.id,
           createdBy: session.userId || "admin",
           pinned: true,
-          expiresAt: endsDate,
+          expiresAt: endsAt,
         },
       });
       safeRevalidatePath("/list/announcements");
@@ -1938,6 +1959,7 @@ export async function addFormationSession(data: {
       console.warn("Could not create automatic formation session announcement:", annErr);
     }
 
+    safeRevalidatePath("/list/lessons");
     safeRevalidatePath(`/list/formations/${data.classId}`);
     return { success: true, error: false, message: "Séance ajoutée avec succès / تمت إضافة الحصة بنجاح", data: serializeForClient(lesson) };
   } catch (err: any) {

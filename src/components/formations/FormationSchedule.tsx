@@ -89,17 +89,20 @@ export default function FormationSchedule({
             {sessions.map((session) => (
               <li
                 key={session.id}
-                className="text-sm flex items-center justify-between p-3.5 bg-surface-subtle border border-border/60 rounded-xl hover:border-border transition-colors"
+                className="text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-surface-subtle border border-border/60 rounded-xl hover:border-border transition-colors"
               >
-                <div>
-                  <p className="font-medium text-gray-900">
-                    {new Date(session.startsAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
-                      weekday: "long",
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </p>
-                  <p className="text-xs text-muted font-mono" dir="ltr">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-gray-900 capitalize">
+                      {new Date(session.startsAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
+                        weekday: "long",
+                      })}
+                    </p>
+                    <span className="bg-teal-100 text-teal-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-teal-300">
+                      {locale === "ar" ? "أسبوعي ثابت" : "Hebdomadaire fixe"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted font-mono font-medium" dir="ltr">
                     {new Date(session.startsAt).toLocaleTimeString([], {
                       hour: "2-digit",
                       minute: "2-digit",
@@ -110,15 +113,31 @@ export default function FormationSchedule({
                       minute: "2-digit",
                     })}
                   </p>
+                  {(session.classroom || session.teacher) && (
+                    <div className="flex items-center gap-3 text-[11px] text-gray-500">
+                      {session.classroom && (
+                        <span>
+                          {locale === "ar" ? `القاعة: ${session.classroom.name}` : `Salle : ${session.classroom.name}`}
+                        </span>
+                      )}
+                      {session.teacher && (
+                        <span>
+                          {locale === "ar" ? `الأستاذ: ${session.teacher.name}` : `Enseignant : ${session.teacher.name}`}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSelectedSessionForAttendance(session)}
-                  className="text-xs font-semibold"
-                >
-                  {t("takeAttendance")}
-                </Button>
+                <div className="flex items-center gap-2 self-end sm:self-center">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedSessionForAttendance(session)}
+                    className="text-xs font-semibold"
+                  >
+                    {t("takeAttendance")}
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>

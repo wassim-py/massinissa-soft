@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { addFormationSession } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { FormField, Input, Select } from "@/components/ui/FormField";
 import { useTranslations, useLocale } from "next-intl";
-import { CalendarPlus, X } from "lucide-react";
+import { CalendarPlus, X, Clock } from "lucide-react";
 
 export default function AddFormationSessionModal({
   isOpen,
@@ -42,6 +42,19 @@ export default function AddFormationSessionModal({
   const [classroomId, setClassroomId] = useState<number>(classrooms[0]?.id || 1);
   const [teacherId, setTeacherId] = useState<string>(defaultTeacherId || teachers[0]?.id || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const selectedDayName = useMemo(() => {
+    if (!date) return "";
+    try {
+      const d = new Date(`${date}T12:00:00Z`);
+      if (isNaN(d.getTime())) return "";
+      return new Intl.DateTimeFormat(locale === "ar" ? "ar-DZ" : "fr-DZ", {
+        weekday: "long",
+      }).format(d);
+    } catch {
+      return "";
+    }
+  }, [date, locale]);
 
   if (!isOpen) return null;
 
@@ -137,6 +150,23 @@ export default function AddFormationSessionModal({
               required
             />
           </FormField>
+
+          {/* Fixed weekly recurring schedule banner */}
+          <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-teal-950 text-xs flex items-start gap-2.5">
+            <Clock className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <p className="font-bold">
+                {locale === "ar"
+                  ? `حصة أسبوعية ثابتة (كل يوم ${selectedDayName || "..."})`
+                  : `Séance hebdomadaire fixe (chaque ${selectedDayName || "..."})`}
+              </p>
+              <p className="text-teal-800 text-[11px] leading-relaxed">
+                {locale === "ar"
+                  ? "ستظهر هذه الحصة تلقائياً بشكل متكرر كل أسبوع في جدول الحصص العام."
+                  : "Cette séance apparaîtra automatiquement et de manière récurrente chaque semaine dans l'emploi du temps général."}
+              </p>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <FormField label={t("startTimeLabel")} required>

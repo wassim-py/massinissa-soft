@@ -83,7 +83,7 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
                 isExtra: true,
                 isCatchUp: true,
                 isFree: true,
-                class: { select: { isFormation: true } },
+                class: { select: { isFormation: true, isCompleted: true } },
                 branch: { select: { id: true, name: true } },
               },
             },
@@ -118,8 +118,9 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
           // Count lessons today across the school
           const todayDow = startOfToday.getDay();
           const todayLessons = t.lessons.filter((l) => {
+            if (l.class?.isCompleted) return false;
             const isOneOff = Boolean(
-              l.isExtra || l.isCatchUp || l.class?.isFormation
+              l.isExtra || l.isCatchUp
             );
             if (isOneOff) {
               const lessonDate = new Date(l.startsAt);
