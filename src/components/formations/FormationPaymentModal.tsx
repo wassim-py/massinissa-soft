@@ -309,7 +309,7 @@ export default function FormationPaymentModal({
                   type="number"
                   min="1"
                   max={tuitionOwed}
-                  step="100"
+                  step="any"
                   value={tuitionAmount}
                   onChange={(e) => setTuitionAmount(Number(e.target.value))}
                   disabled={paymentMode === "FULL"}

@@ -4485,8 +4485,13 @@ export const createRefund = async (
 
     let trailingHeldLessonIds: number[] = [];
 
-    // Validation 3: For class vouchers, enforce the cashback rule (§7.8)
-    if (voucher.classId) {
+    const isFormationOrBook =
+      Boolean(voucher.class?.isFormation) ||
+      voucher.paymentType === "FORMATION" ||
+      voucher.paymentType === "BOOK";
+
+    // Validation 3: For normal class tuition vouchers, enforce the cashback rule (§7.8)
+    if (voucher.classId && !isFormationOrBook) {
       // Must be a tuition cycle voucher
       if (voucher.paymentType !== "TUITION_4SESSION") {
         return {
@@ -4783,6 +4788,10 @@ export const createRefund = async (
       safeRevalidatePath(`/list/reports`);
       safeRevalidatePath(`/list/finance`);
       safeRevalidatePath(`/admin`);
+      if (voucher.class?.isFormation || voucher.paymentType === "FORMATION") {
+        safeRevalidatePath(`/list/formations/${voucher.classId}`);
+        safeRevalidatePath(`/list/formations`);
+      }
     } catch {
       // Ignore revalidatePath errors in non-HTTP request contexts
     }

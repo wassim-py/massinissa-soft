@@ -152,7 +152,7 @@ const RefundForm = ({ payment }: { payment: PaymentData }) => {
                   type="number"
                   id="amount"
                   name="amount"
-                  step="100"
+                  step="any"
                   min="1"
                   max={remainingBalance}
                   defaultValue={remainingBalance}

@@ -55,9 +55,12 @@ except ImportError:
 
 
 def load_env_database_url():
-    """Load DATABASE_URL from environment or local .env file."""
+    """Load DATABASE_URL from environment or local .env file. Automatically strips -pooler."""
+    if os.environ.get("DIRECT_URL"):
+        return os.environ.get("DIRECT_URL")
     if os.environ.get("DATABASE_URL"):
-        return os.environ.get("DATABASE_URL")
+        url = os.environ.get("DATABASE_URL")
+        return url.replace("-pooler.", ".")
 
     # Search common .env locations
     candidates = [
@@ -68,25 +71,35 @@ def load_env_database_url():
     for path in candidates:
         if os.path.isfile(path):
             try:
+                env_dict = {}
                 with open(path, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
-                        if line.startswith("DATABASE_URL="):
-                            val = line.split("=", 1)[1].strip()
-                            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                                val = val[1:-1]
-                            return val
+                        if line.startswith("DIRECT_URL="):
+                            val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            env_dict["DIRECT_URL"] = val
+                        elif line.startswith("DATABASE_URL="):
+                            val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            env_dict["DATABASE_URL"] = val
+                if "DIRECT_URL" in env_dict:
+                    return env_dict["DIRECT_URL"]
+                if "DATABASE_URL" in env_dict:
+                    return env_dict["DATABASE_URL"].replace("-pooler.", ".")
             except Exception:
                 pass
     return None
 
 
 def get_db_connection(db_url):
-    """Create a database connection to PostgreSQL (Neon or local)."""
+    """Create a database connection to PostgreSQL (Neon direct or local)."""
     if not db_url:
         raise ValueError(
             "DATABASE_URL not found! Set DATABASE_URL environment variable or place .env in the folder."
         )
+
+    # Automatically strip -pooler to avoid PgBouncer prepared-statement caching collision
+    if "-pooler." in db_url:
+        db_url = db_url.replace("-pooler.", ".")
 
     parsed = urlparse(db_url)
     user = parsed.username

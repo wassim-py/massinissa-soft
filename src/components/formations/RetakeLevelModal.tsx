@@ -177,7 +177,7 @@ export default function RetakeLevelModal({
               type="number"
               min="1"
               max={levelPrice}
-              step="100"
+              step="any"
               value={amount}
               onChange={(e) => setAmount(Number(e.target.value))}
               disabled={paymentMode === "FULL"}
