@@ -8,7 +8,7 @@ import { Class, Student, Voucher, Enrollment, EnrollmentTransfer, VoucherEdit, R
 import PaymentForm from "./forms/PaymentForm";
 import PrintTicketButton from "./PrintTicketButton";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
-import { computeStudentConsumedSessions } from "@/lib/studentBilling";
+import { computeStudentConsumedSessions, computeStudentCreditAndSessions } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { useTranslations, useLocale } from "next-intl";
@@ -267,38 +267,6 @@ export default function PaymentGrid({
 
     // Tuition cycles & sessions
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
-    let purchasedSessions = 0;
-    const cyclePrice = Number(classData.pricePerCycle || 0);
-    const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-    const effectiveLessonPrice =
-      siblingDiscountPct > 0 && siblingDiscountPct < 100
-        ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-        : siblingDiscountPct >= 100
-        ? 0
-        : baseLessonPrice;
-
-    if (isSiblingWaived100) {
-      purchasedSessions = 16;
-    } else if (effectiveLessonPrice > 0) {
-      let totalPaidTuition = 0;
-      tuitionVouchers.forEach((v) => {
-        const vAmount = Number(v.amount || 0);
-        const vRefunded = v.refunds?.reduce((sum, r) => sum + Number(r.amount || 0), 0) || 0;
-        totalPaidTuition += Math.max(0, vAmount - vRefunded);
-      });
-      purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
-    } else {
-      tuitionVouchers.forEach((v) => {
-        const vAmount = Number(v.amount);
-        const vRefunded = v.refunds?.reduce((sum, r) => sum + Number(r.amount), 0) || 0;
-        const refundedSessions = vAmount > 0 ? Math.floor(vRefunded / (vAmount / 4)) : 0;
-        purchasedSessions += Math.max(0, 4 - refundedSessions);
-      });
-    }
-
-    // Transfers
-    const transferredOut = enrollment.transfersFrom.reduce((sum, t) => sum + t.transferredSessions, 0);
-    const transferredIn = enrollment.transfersTo.reduce((sum, t) => sum + t.transferredSessions, 0);
 
     // Consumed non-free sessions (accounting for Massinissa absence rules)
     const studentAtts: Array<{ lessonId: number; status: string }> = [];
@@ -309,24 +277,29 @@ export default function PaymentGrid({
       }
     });
 
-    const attendedSessions = computeStudentConsumedSessions({
-      lessons: classData.lessons as any,
+    const isFormation = Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId);
+    const enrPayerStatus = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
+
+    const creditMetrics = computeStudentCreditAndSessions({
+      pricePerCycle: Number(classData.pricePerCycle || 0),
+      isFormation,
+      payerStatus: enrPayerStatus,
+      siblingDiscountPercentage: siblingDiscountPct,
+      isSiblingWaived: isSiblingWaived100,
+      tuitionVouchers,
+      transfersIn: enrollment.transfersTo,
+      transfersOut: enrollment.transfersFrom,
+      creditResetOffset: (enrollment as any).creditResetOffset,
       attendances: studentAtts,
+      lessons: classData.lessons as any,
     });
 
-    const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + Number((enrollment as any).creditResetOffset || 0);
-
-    // Status
-    let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" = "UNPAID";
-    if (isSiblingWaived100) {
-      status = "SIBLING_WAIVED";
-    } else if (netSessions >= 2) {
-      status = "PAID";
-    } else if (netSessions === 1) {
-      status = "EXPIRING";
-    } else {
-      status = "UNPAID";
-    }
+    const purchasedSessions = creditMetrics.purchasedSessions;
+    const transferredOut = creditMetrics.transferredOut;
+    const transferredIn = creditMetrics.transferredIn;
+    const attendedSessions = creditMetrics.attendedSessions;
+    const netSessions = creditMetrics.netSessions;
+    const status = creditMetrics.status;
 
     const latestVoucher =
       activeVouchers.length > 0
@@ -792,20 +765,26 @@ export default function PaymentGrid({
 
         {/* 6. Session Credit Balance */}
         <td className="py-3 px-3 text-center">
-          <Badge
-            variant={
-              item.netSessions >= 2
-                ? "success"
-                : item.netSessions === 1
-                ? "warning"
-                : "danger"
-            }
-            size="sm"
-          >
-            {t("sessionsCount", {
-              count: item.netSessions,
-            })}
-          </Badge>
+          {item.status === "NON_PAYER" ? (
+            <Badge variant="success" size="sm">
+              {locale === "ar" ? "معفى" : "Exonéré"}
+            </Badge>
+          ) : (
+            <Badge
+              variant={
+                item.netSessions >= 2
+                  ? "success"
+                  : item.netSessions === 1
+                  ? "warning"
+                  : "danger"
+              }
+              size="sm"
+            >
+              {t("sessionsCount", {
+                count: item.netSessions,
+              })}
+            </Badge>
+          )}
           {item.transferredIn > 0 && (
             <span
               className="block text-[10px] text-purple-700 font-medium mt-0.5"
@@ -842,6 +821,11 @@ export default function PaymentGrid({
           {item.status === "SIBLING_WAIVED" && (
             <Badge variant="secondary" size="sm" withDot>
               {t("siblingWaived")}
+            </Badge>
+          )}
+          {item.status === "NON_PAYER" && (
+            <Badge variant="success" size="sm" withDot>
+              {locale === "ar" ? "معفى من الرسوم" : "Non-payeur"}
             </Badge>
           )}
         </td>
@@ -1059,24 +1043,35 @@ export default function PaymentGrid({
                         {t("siblingWaived")}
                       </Badge>
                     )}
+                    {item.status === "NON_PAYER" && (
+                      <Badge variant="success" size="sm" withDot>
+                        {locale === "ar" ? "معفى من الرسوم" : "Non-payeur"}
+                      </Badge>
+                    )}
                   </div>
 
                   {/* Metrics Row without Consumed Lessons */}
                   <div className="grid grid-cols-2 gap-2 bg-surface-muted p-2.5 rounded-lg text-center text-xs">
                     <div>
                       <span className="text-[10px] text-muted block mb-0.5">{t("remainingBalance")}</span>
-                      <Badge
-                        variant={
-                          item.netSessions >= 2
-                            ? "success"
-                            : item.netSessions === 1
-                            ? "warning"
-                            : "danger"
-                        }
-                        size="sm"
-                      >
-                        {t("sessionsCount", { count: item.netSessions })}
-                      </Badge>
+                      {item.status === "NON_PAYER" ? (
+                        <Badge variant="success" size="sm">
+                          {locale === "ar" ? "معفى" : "Exonéré"}
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant={
+                            item.netSessions >= 2
+                              ? "success"
+                              : item.netSessions === 1
+                              ? "warning"
+                              : "danger"
+                          }
+                          size="sm"
+                        >
+                          {t("sessionsCount", { count: item.netSessions })}
+                        </Badge>
+                      )}
                     </div>
                     <div>
                       <span className="text-[10px] text-muted block mb-0.5">{t("inscriptionFee")}</span>

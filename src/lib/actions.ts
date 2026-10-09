@@ -42,7 +42,7 @@ import { canUserAccessBranch } from "./settings";
 import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from "./ledger";
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences } from "./studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions } from "./studentBilling";
 import { getFixedInscriptionFeeAction } from "./configurationActions";
 import { splitFullName, getLessonDateTime } from "./utils";
 
@@ -1955,7 +1955,8 @@ export const saveAttendance = async (
     }
   }
 
-  // Revalidate the path to the main attendance page, this lesson's roster, and the class records table
+  // Revalidate the path to the dashboard, the main attendance page, this lesson's roster, and the class records table
+  safeRevalidatePath("/admin");
   safeRevalidatePath("/list/attendance");
   safeRevalidatePath(`/list/attendance/take/${lessonId}`);
   if (lessonInfo?.classId) {
@@ -2102,6 +2103,8 @@ export const markSingleAttendanceAction = async (input: {
         console.warn("Auto-suspension evaluation error in markSingleAttendance:", autoErr);
       }
 
+      safeRevalidatePath("/admin");
+      safeRevalidatePath("/list/attendance");
       safeRevalidatePath(`/list/attendance/class/${lessonInfo.classId}`);
       safeRevalidatePath(`/list/payments/class/${lessonInfo.classId}`);
       safeRevalidatePath(`/list/formations/${lessonInfo.classId}`);
@@ -2577,6 +2580,7 @@ export async function recordCatchUpAttendanceAction(data: {
       });
     });
 
+    safeRevalidatePath("/admin");
     safeRevalidatePath("/list/attendance");
     safeRevalidatePath(`/list/attendance/take/${catchUpLessonId}`);
     safeRevalidatePath(`/list/attendance/take/${missedLessonId}`);
@@ -2647,6 +2651,7 @@ export async function removeCatchUpAttendanceAction(
       }
     });
 
+    safeRevalidatePath("/admin");
     safeRevalidatePath("/list/attendance");
     safeRevalidatePath(`/list/attendance/take/${catchUpLessonId}`);
     safeRevalidatePath(`/list/attendance/take/${missedLessonId}`);
@@ -3089,7 +3094,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
 
     const targetClass = await prisma.class.findUnique({
       where: { id: payload.classId },
-      include: { branch: true },
+      include: { branch: true, FormationLevel: true },
     });
     if (!targetClass) {
       return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود." };
@@ -3175,9 +3180,10 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
       if (tuitionItem) {
         const amt = Number(tuitionItem.amount);
         totalAmount += amt;
-        const paymentType = targetClass.isFormation ? "FORMATION" : "TUITION_4SESSION";
-        const labelFr = targetClass.isFormation ? "Frais de formation" : "Cycle d'études (4 séances)";
-        const labelAr = targetClass.isFormation ? "رسوم الدورة التكوينية" : "اشتراك دراسي (4 حصص)";
+        const isFormationClass = Boolean(targetClass.isFormation || targetClass.formationLevelId != null || targetClass.FormationLevel != null);
+        const paymentType = isFormationClass ? "FORMATION" : "TUITION_4SESSION";
+        const labelFr = isFormationClass ? "Frais de formation" : "Cycle d'études (4 séances)";
+        const labelAr = isFormationClass ? "رسوم الدورة التكوينية" : "اشتراك دراسي (4 حصص)";
 
         issuedItems.push({
           type: paymentType,
@@ -3190,8 +3196,8 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
         let remainingBalanceVal: number | null = null;
         let completesVoucherIdVal: number | null = null;
 
-        if (targetClass.isFormation) {
-          const fullPrice = Number(targetClass.pricePerCycle || 0);
+        if (isFormationClass) {
+          const fullPrice = Number(targetClass.FormationLevel?.lumpSumPrice ?? targetClass.pricePerCycle ?? 0);
           if (fullPrice > 0) {
             const prevVouchers = await tx.voucher.findMany({
               where: {
@@ -3640,11 +3646,17 @@ export const issueVoucher = async (
     // 1. Fetch Class and determine targetBranchId
     const targetClass = await prisma.class.findUnique({
       where: { id: data.classId },
+      include: { FormationLevel: true },
     });
     if (!targetClass) {
       return { success: false, error: true, message: "القسم المحدد غير موجود." };
     }
     const targetBranchId = targetClass.branchId;
+    const isFormationClass = Boolean(targetClass.isFormation || targetClass.formationLevelId != null || targetClass.FormationLevel != null);
+    let resolvedPaymentType = data.paymentType;
+    if (isFormationClass && data.paymentType === "TUITION_4SESSION") {
+      resolvedPaymentType = "FORMATION";
+    }
 
     // 2. Fetch Student and Family info for Sibling Discount rule (§2.4)
     const student = await prisma.student.findUnique({
@@ -3790,7 +3802,7 @@ export const issueVoucher = async (
           classId: data.classId,
           issuingBranchId: issuingBranchId,
           targetBranchId: targetBranchId,
-          paymentType: data.paymentType,
+          paymentType: resolvedPaymentType,
           amount: new Prisma.Decimal(finalAmount),
           isPartial: data.isPartial || false,
           completesVoucherId: data.completesVoucherId || null,
@@ -3808,7 +3820,7 @@ export const issueVoucher = async (
 
       // Update DailyLedger at issuing branch where cash is physically collected
       if (finalAmount > 0) {
-        const ledgerCategory = resolveLedgerType(data.paymentType, targetClass?.isFormation ?? false);
+        const ledgerCategory = resolveLedgerType(resolvedPaymentType, isFormationClass);
 
         await upsertDailyLedger(tx, {
           branchId: issuingBranchId,
@@ -3856,16 +3868,26 @@ export const issueVoucher = async (
             feeOverrideNote: feeOverrideNote,
           },
         });
-      } else if (data.paymentType === "INSCRIPTION") {
-        await tx.enrollment.update({
-          where: { id: existingEnrollment.id },
-          data: {
-            inscriptionFeeCharged: true,
-            inscriptionFeeAmount: finalAmount > 0 ? new Prisma.Decimal(finalAmount) : null,
-            feeOverriddenByOwner: feeOverridden || existingEnrollment.feeOverriddenByOwner,
-            feeOverrideNote: feeOverrideNote || existingEnrollment.feeOverrideNote,
-          },
-        });
+      } else {
+        const updateData: any = {};
+        if (data.paymentType === "INSCRIPTION") {
+          updateData.inscriptionFeeCharged = true;
+          updateData.inscriptionFeeAmount = finalAmount > 0 ? new Prisma.Decimal(finalAmount) : null;
+          updateData.feeOverriddenByOwner = feeOverridden || existingEnrollment.feeOverriddenByOwner;
+          updateData.feeOverrideNote = feeOverrideNote || existingEnrollment.feeOverrideNote;
+        }
+        if (
+          data.paymentType === "TUITION_4SESSION" &&
+          (existingEnrollment.status === "REFUNDED" || existingEnrollment.status === "SUSPENDED")
+        ) {
+          updateData.status = "ACTIVE";
+        }
+        if (Object.keys(updateData).length > 0) {
+          await tx.enrollment.update({
+            where: { id: existingEnrollment.id },
+            data: updateData,
+          });
+        }
       }
     });
 
@@ -4728,6 +4750,32 @@ export const createRefund = async (
         },
       });
 
+      // 4b. If full refund, mark student enrollment or workshop participant as REFUNDED
+      if (isFullRefund) {
+        if (voucher.classId) {
+          await tx.enrollment.updateMany({
+            where: {
+              studentId: voucher.studentId,
+              classId: voucher.classId,
+            },
+            data: {
+              status: "REFUNDED",
+            },
+          });
+        }
+        if (voucher.workshopId) {
+          await tx.workshopParticipant.updateMany({
+            where: {
+              studentId: voucher.studentId,
+              workshopId: voucher.workshopId,
+            },
+            data: {
+              status: "REFUNDED",
+            },
+          });
+        }
+      }
+
       // 5. Create VoucherEdit audit log
       await tx.voucherEdit.create({
         data: {
@@ -5317,6 +5365,8 @@ export const saveWorkshopAttendance = async (
       }
     }
 
+    safeRevalidatePath("/admin");
+    safeRevalidatePath("/list/attendance");
     safeRevalidatePath(`/list/workshops/${workshopSession.workshopId}`);
     return { success: true, error: false, message: "تم حفظ الحضور بنجاح." };
   } catch (err: any) {
@@ -5471,6 +5521,7 @@ export const exportToExcel = async (
               },
               vouchers: {
                 where: { isVoided: false },
+                include: { refunds: true },
                 orderBy: { issuedAt: 'asc' },
               },
               lessons: {
@@ -5546,37 +5597,6 @@ export const exportToExcel = async (
             // Tuition vouchers calculation
             const tuitionVouchers = studentVouchers.filter(v => v.paymentType === "TUITION_4SESSION");
             
-            const cyclePrice = Number(classTarget.pricePerCycle || 0);
-            const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-            const effectiveLessonPrice =
-              siblingDiscountPct > 0 && siblingDiscountPct < 100
-                ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-                : siblingDiscountPct >= 100
-                ? 0
-                : baseLessonPrice;
-
-            let totalTuitionSessions = 0;
-            if (siblingDiscountPct >= 100) {
-              totalTuitionSessions = 16; // 100% full waiver
-            } else if (effectiveLessonPrice > 0) {
-              let totalPaidTuition = 0;
-              tuitionVouchers.forEach((v) => {
-                const vAmount = Number(v.amount || 0);
-                const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
-                totalPaidTuition += Math.max(0, vAmount - vRefunded);
-              });
-              totalTuitionSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
-            } else {
-              tuitionVouchers.forEach(() => {
-                totalTuitionSessions += 4;
-              });
-            }
-
-            // Credit transfers
-            const outbound = enrollment.transfersFrom.reduce((sum, t) => sum + t.transferredSessions, 0);
-            const inbound = enrollment.transfersTo.reduce((sum, t) => sum + t.transferredSessions, 0);
-
-            // Consumed sessions from non-free lessons (accounting for Massinissa absence rules)
             const studentAtts: Array<{ lessonId: number; status: string }> = [];
             classTarget.lessons.forEach(l => {
               const att = l.attendances.find(a => a.studentId === student.id);
@@ -5584,16 +5604,32 @@ export const exportToExcel = async (
                 studentAtts.push({ lessonId: l.id, status: att.status });
               }
             });
-            const consumed = computeStudentConsumedSessions({
-              lessons: classTarget.lessons,
+
+            const enrPayerStatus = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
+            const isFormation = Boolean((classTarget as any).isFormation || (classTarget as any).FormationLevel || (classTarget as any).formationLevelId);
+
+            const creditMetrics = computeStudentCreditAndSessions({
+              pricePerCycle: Number(classTarget.pricePerCycle || 0),
+              isFormation,
+              payerStatus: enrPayerStatus,
+              siblingDiscountPercentage: siblingDiscountPct,
+              isSiblingWaived: isWaivedSibling && siblingDiscountPct >= 100,
+              tuitionVouchers,
+              transfersIn: enrollment.transfersTo,
+              transfersOut: enrollment.transfersFrom,
+              creditResetOffset: (enrollment as any).creditResetOffset,
               attendances: studentAtts,
+              lessons: classTarget.lessons as any,
             });
 
-            const remaining = (totalTuitionSessions + inbound - outbound) - consumed;
+            const consumed = creditMetrics.attendedSessions;
+            const remaining = creditMetrics.netSessions;
 
             // Status label
             let statusText = "غير دافع";
-            if (siblingDiscountPct >= 100) {
+            if (creditMetrics.isNonPayer) {
+              statusText = "معفى من الرسوم";
+            } else if (siblingDiscountPct >= 100) {
               statusText = "معفى (خصم الإخوة)";
             } else if (remaining >= 2) {
               statusText = isWaivedSibling ? `دافع (خصم إخوة ${siblingDiscountPct}%)` : "دافع";
@@ -5613,10 +5649,12 @@ export const exportToExcel = async (
             ).join(", ") || "لا يوجد";
 
             // Cycles representation
-            const c1 = siblingDiscountPct >= 100 ? "معفى" : (totalTuitionSessions >= 4 ? "مدفوع" : "غير مدفوع");
-            const c2 = siblingDiscountPct >= 100 ? "معفى" : (totalTuitionSessions >= 8 ? "مدفوع" : "غير مدفوع");
-            const c3 = siblingDiscountPct >= 100 ? "معفى" : (totalTuitionSessions >= 12 ? "مدفوع" : "غير مدفوع");
-            const c4 = siblingDiscountPct >= 100 ? "معفى" : (totalTuitionSessions >= 16 ? "مدفوع" : "غير مدفوع");
+            const purchasedSessions = creditMetrics.purchasedSessions;
+            const isExempt = creditMetrics.isNonPayer || siblingDiscountPct >= 100;
+            const c1 = isExempt ? "معفى" : (purchasedSessions >= 4 ? "مدفوع" : "غير مدفوع");
+            const c2 = isExempt ? "معفى" : (purchasedSessions >= 8 ? "مدفوع" : "غير مدفوع");
+            const c3 = isExempt ? "معفى" : (purchasedSessions >= 12 ? "مدفوع" : "غير مدفوع");
+            const c4 = isExempt ? "معفى" : (purchasedSessions >= 16 ? "مدفوع" : "غير مدفوع");
 
             paymentExportData.push({
               studentName: student.name,
@@ -5630,7 +5668,7 @@ export const exportToExcel = async (
               cycle3: c3,
               cycle4: c4,
               consumedSessions: consumed,
-              remainingSessions: siblingDiscountPct >= 100 ? "معفى" : remaining,
+              remainingSessions: isExempt ? "معفى" : remaining,
               status: statusText,
             });
         });

@@ -1,7 +1,7 @@
 "use client";
 
-import React from "react";
-import { useTranslations } from "next-intl";
+import React, { useState, useMemo } from "react";
+import { useTranslations, useLocale } from "next-intl";
 import {
   BarChart,
   Bar,
@@ -22,14 +22,19 @@ export interface TodayLessonAttendanceData {
   timeSlot: string;
   present: number;
   absent: number;
+  excused?: number;
+  enrolled?: number;
   total: number;
   rate: number;
+  isTeacherAbsent?: boolean;
 }
 
 export interface TodayAttendanceChartProps {
   totalPresent: number;
   totalAbsent: number;
+  totalExcused?: number;
   totalExpected: number;
+  totalExpectedRecorded?: number;
   overallRate: number;
   lessonsData: TodayLessonAttendanceData[];
   branchName: string;
@@ -38,14 +43,40 @@ export interface TodayAttendanceChartProps {
 export default function TodayAttendanceChart({
   totalPresent,
   totalAbsent,
+  totalExcused = 0,
   totalExpected,
+  totalExpectedRecorded,
   overallRate,
   lessonsData,
   branchName,
 }: TodayAttendanceChartProps) {
   const t = useTranslations("dashboard.todayAttendance");
+  const locale = useLocale();
 
-  const hasData = lessonsData.length > 0 && (totalPresent > 0 || totalAbsent > 0);
+  const recordedLessons = useMemo(
+    () => lessonsData.filter((l) => l.total > 0),
+    [lessonsData]
+  );
+
+  const [viewMode, setViewMode] = useState<"recorded" | "all">("recorded");
+
+  const activeLessons = useMemo(() => {
+    if (viewMode === "recorded") {
+      return recordedLessons.length > 0 ? recordedLessons : lessonsData;
+    }
+    return lessonsData;
+  }, [viewMode, recordedLessons, lessonsData]);
+
+  // Ensure each entry has a unique chartId and displayLabel with timeSlot
+  const chartData = useMemo(() => {
+    return activeLessons.map((l) => ({
+      ...l,
+      chartId: `${l.lessonId}-${l.timeSlot}`,
+      displayLabel: `${l.className} (${l.timeSlot})`,
+    }));
+  }, [activeLessons]);
+
+  const hasData = chartData.length > 0 && (totalPresent > 0 || totalAbsent > 0 || recordedLessons.length > 0);
 
   return (
     <Card className="border-border/80 shadow-xs">
@@ -61,7 +92,34 @@ export default function TodayAttendanceChart({
           <p className="text-xs text-muted mt-0.5">{t("subtitle")}</p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {recordedLessons.length > 0 && lessonsData.length > recordedLessons.length && (
+            <div className="flex items-center gap-1 bg-surface-subtle p-1 rounded-lg border border-border text-xs">
+              <button
+                type="button"
+                onClick={() => setViewMode("recorded")}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
+                  viewMode === "recorded"
+                    ? "bg-primary text-white shadow-xs"
+                    : "text-muted hover:text-foreground"
+                }`}
+              >
+                {t("recordedSessions")} ({recordedLessons.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("all")}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
+                  viewMode === "all"
+                    ? "bg-primary text-white shadow-xs"
+                    : "text-muted hover:text-foreground"
+                }`}
+              >
+                {t("allSessions")} ({lessonsData.length})
+              </button>
+            </div>
+          )}
+
           <Badge
             variant={
               overallRate >= 75
@@ -104,7 +162,7 @@ export default function TodayAttendanceChart({
                 {totalAbsent}
               </p>
               <p className="text-[11px] text-rose-600 font-medium mt-1">
-                {t("absent")}
+                {totalExcused > 0 ? `${t("absent")} (${t("excusedNote", { count: totalExcused })})` : t("absent")}
               </p>
             </div>
           </div>
@@ -118,7 +176,9 @@ export default function TodayAttendanceChart({
                 {totalExpected}
               </p>
               <p className="text-[11px] text-blue-600 font-medium mt-1">
-                {t("totalExpected")}
+                {totalPresent + totalAbsent > 0
+                  ? t("recordedOutOfExpected", { recorded: totalPresent + totalAbsent, expected: totalExpected })
+                  : t("totalExpected")}
               </p>
             </div>
           </div>
@@ -140,62 +200,92 @@ export default function TodayAttendanceChart({
 
         {/* Chart View */}
         {hasData ? (
-          <div className="h-[280px] w-full pt-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={lessonsData}
-                margin={{ top: 10, right: 10, left: -20, bottom: 20 }}
-                barGap={4}
-                barSize={20}
-              >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  vertical={false}
-                  stroke="#f1f5f9"
-                />
-                <XAxis
-                  dataKey="className"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: "#64748b", fontSize: 12 }}
-                  interval={0}
-                />
-                <YAxis
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: "#94a3b8", fontSize: 11 }}
-                  allowDecimals={false}
-                />
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (active && payload && payload.length) {
-                      const data = payload[0].payload as TodayLessonAttendanceData;
-                      return (
-                        <div className="bg-surface p-3 rounded-lg border border-border shadow-md text-xs">
-                          <p className="font-bold text-gray-900">
-                            {data.className}
-                          </p>
-                          <p className="text-muted text-[11px] mb-1.5">
-                            {data.timeSlot}
-                          </p>
-                          <div className="flex items-center gap-2 text-emerald-600 font-semibold">
-                            <span>{t("present")}:</span>
-                            <span>{data.present}</span>
-                          </div>
-                          <div className="flex items-center gap-2 text-rose-600 font-semibold">
-                            <span>{t("absent")}:</span>
-                            <span>{data.absent}</span>
-                          </div>
-                          <div className="mt-1 pt-1 border-t border-border flex items-center justify-between font-bold text-gray-800">
-                            <span>{t("rate")}:</span>
-                            <span>{Math.round(data.rate)}%</span>
-                          </div>
-                        </div>
-                      );
+          <div className="w-full pt-2 overflow-x-auto overflow-y-hidden scrollbar-thin">
+            <div
+              style={{
+                minWidth: chartData.length > 5 ? `${Math.max(chartData.length * 80, 500)}px` : "100%",
+                height: 290,
+              }}
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={chartData}
+                  margin={{ top: 10, right: 10, left: -20, bottom: 30 }}
+                  barGap={4}
+                  barSize={20}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    vertical={false}
+                    stroke="#f1f5f9"
+                  />
+                  <XAxis
+                    dataKey="displayLabel"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: "#64748b", fontSize: 11 }}
+                    interval={0}
+                    tickFormatter={(val: string) =>
+                      val && val.length > 18 ? `${val.slice(0, 17)}…` : val
                     }
-                    return null;
-                  }}
-                />
+                  />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: "#94a3b8", fontSize: 11 }}
+                    allowDecimals={false}
+                  />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (active && payload && payload.length) {
+                        const data = payload[0].payload as typeof chartData[0];
+                        return (
+                          <div className="bg-surface p-3 rounded-lg border border-border shadow-md text-xs space-y-1">
+                            <p className="font-bold text-gray-900">
+                              {data.className}
+                            </p>
+                            <p className="text-muted text-[11px]">
+                              {data.timeSlot}
+                            </p>
+                            {Boolean(data.isTeacherAbsent) && (
+                              <div className="text-rose-600 font-semibold text-[11px] bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                                {locale === "ar" ? "الأستاذ غائب" : "Enseignant absent"}
+                              </div>
+                            )}
+                            <div className="flex items-center justify-between gap-4 text-emerald-600 font-semibold">
+                              <span>{t("present")}:</span>
+                              <span>{data.present}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-4 text-rose-600 font-semibold">
+                              <span>{t("absent")}:</span>
+                              <span>{data.absent}</span>
+                            </div>
+                            {Boolean(data.excused && data.excused > 0) && (
+                              <div className="flex items-center justify-between gap-4 text-amber-600 text-[11px]">
+                                <span>{t("excused")}:</span>
+                                <span>{data.excused}</span>
+                              </div>
+                            )}
+                            {Boolean(data.enrolled && data.enrolled > 0) && (
+                              <div className="flex items-center justify-between gap-4 text-muted text-[11px]">
+                                <span>{t("totalExpected")}:</span>
+                                <span>{data.enrolled}</span>
+                              </div>
+                            )}
+                            <div className="mt-1 pt-1 border-t border-border flex items-center justify-between font-bold text-gray-800">
+                              <span>{t("rate")}:</span>
+                              <span>
+                                {data.total > 0
+                                  ? `${Math.round(data.rate)}%`
+                                  : t("notRecordedYet")}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
                 <Legend
                   verticalAlign="top"
                   wrapperStyle={{ paddingBottom: "15px", fontSize: "12px" }}
@@ -214,6 +304,7 @@ export default function TodayAttendanceChart({
                 />
               </BarChart>
             </ResponsiveContainer>
+            </div>
           </div>
         ) : (
           <div className="py-8 px-4 text-center text-muted text-sm bg-surface-subtle/40 rounded-xl border border-dashed border-border">

@@ -518,3 +518,190 @@ export function computeStudentConsecutiveAbsences({
   }
   return consecutiveAbsences;
 }
+
+export interface ComputeStudentCreditParams {
+  pricePerCycle: number;
+  isFormation?: boolean;
+  payerStatus?: string | null;
+  siblingDiscountPercentage?: number | null;
+  isSiblingWaived?: boolean;
+  isPayerSiblingPaid?: boolean;
+  tuitionVouchers?: Array<{
+    amount?: any;
+    isVoided?: boolean;
+    isRefund?: boolean;
+    status?: string | null;
+    refunds?: Array<{ amount?: any }>;
+  }>;
+  transfersIn?: Array<{ transferredSessions: number }> | number;
+  transfersOut?: Array<{ transferredSessions: number }> | number;
+  creditResetOffset?: number | null;
+  attendances?: Array<{
+    lessonId: number;
+    status: string;
+    lesson?: { id: number; startsAt?: Date | string; isFree?: boolean; isTeacherAbsent?: boolean } | null;
+  }>;
+  lessons?: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
+  catchUps?: Array<{ missedLessonId: number; recordedAt?: Date | string }>;
+}
+
+export interface StudentCreditResult {
+  purchasedSessions: number;
+  transferredIn: number;
+  transferredOut: number;
+  attendedSessions: number;
+  creditResetOffset: number;
+  netSessions: number;
+  isFormation: boolean;
+  isNonPayer: boolean;
+  isSiblingWaived: boolean;
+  status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER";
+}
+
+/**
+ * Canonical calculation of student credit and lesson metrics.
+ * Ensures strict, identical calculation across all pages:
+ * Student Profile, Group Payments Page, Attendance Taking Page, and Dashboard.
+ */
+export function computeStudentCreditAndSessions({
+  pricePerCycle,
+  isFormation = false,
+  payerStatus = "NORMAL",
+  siblingDiscountPercentage,
+  isSiblingWaived = false,
+  isPayerSiblingPaid = true,
+  tuitionVouchers = [],
+  transfersIn = 0,
+  transfersOut = 0,
+  creditResetOffset = 0,
+  attendances = [],
+  lessons,
+  catchUps = [],
+}: ComputeStudentCreditParams): StudentCreditResult {
+  const isForm = Boolean(isFormation);
+  const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
+
+  const siblingDiscountPct =
+    siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
+      ? Number(siblingDiscountPercentage)
+      : isSiblingWaived
+      ? 100
+      : 0;
+  const isSiblingWaived100 = siblingDiscountPct >= 100;
+
+  const cyclePrice = Math.max(0, Number(pricePerCycle || 0));
+  const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+  const effectiveLessonPrice =
+    siblingDiscountPct > 0 && siblingDiscountPct < 100
+      ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+      : isSiblingWaived100
+      ? 0
+      : baseLessonPrice;
+
+  let purchasedSessions = 0;
+  if (!isForm) {
+    if (isNonPayer) {
+      purchasedSessions = 16;
+    } else if (isSiblingWaived100) {
+      purchasedSessions = isPayerSiblingPaid ? 16 : 0;
+    } else if (effectiveLessonPrice > 0) {
+      let totalPaidTuition = 0;
+      const validVouchers = tuitionVouchers.filter(
+        (v) => !v.isVoided && !v.isRefund && v.status !== "REFUNDED"
+      );
+      validVouchers.forEach((v) => {
+        const vAmount = Number(v.amount || 0);
+        const vRefunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+        totalPaidTuition += Math.max(0, vAmount - vRefunded);
+      });
+      purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
+    } else {
+      const validVouchers = tuitionVouchers.filter(
+        (v) => !v.isVoided && !v.isRefund && v.status !== "REFUNDED"
+      );
+      validVouchers.forEach((v) => {
+        const vAmount = Number(v.amount || 0);
+        const vRefunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+        const refundedSessions = vAmount > 0 ? Math.floor(vRefunded / (vAmount / 4)) : 0;
+        purchasedSessions += Math.max(0, 4 - refundedSessions);
+      });
+    }
+  }
+
+  const tIn =
+    typeof transfersIn === "number"
+      ? transfersIn
+      : (transfersIn || []).reduce((sum, t) => sum + Number(t.transferredSessions || 0), 0);
+  const tOut =
+    typeof transfersOut === "number"
+      ? transfersOut
+      : (transfersOut || []).reduce((sum, t) => sum + Number(t.transferredSessions || 0), 0);
+  const offset = Number(creditResetOffset || 0);
+
+  // Relevant non-free lessons where this student has an attendance record
+  const relevantLessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }> = [];
+  const relevantAttendances: Array<{ lessonId: number; status: string }> = [];
+
+  const attendanceMap = new Map<number, string>();
+  attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
+
+  if (lessons && lessons.length > 0) {
+    lessons.forEach((l) => {
+      if (l.isFree) return;
+      const st = attendanceMap.get(l.id);
+      if (st) {
+        relevantLessons.push(l);
+        relevantAttendances.push({ lessonId: l.id, status: st });
+      }
+    });
+  } else {
+    attendances.forEach((a) => {
+      if (a.lesson && !a.lesson.isFree) {
+        relevantLessons.push({
+          id: a.lesson.id,
+          startsAt: a.lesson.startsAt || new Date(0),
+          isFree: a.lesson.isFree,
+          isTeacherAbsent: a.lesson.isTeacherAbsent,
+        });
+        relevantAttendances.push({ lessonId: a.lessonId, status: a.status });
+      }
+    });
+  }
+
+  const attendedSessions = computeStudentConsumedSessions({
+    lessons: relevantLessons,
+    attendances: relevantAttendances,
+    catchUps,
+  });
+
+  const netSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - attendedSessions + offset;
+
+  let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER" = "UNPAID";
+  if (isForm) {
+    status = "PAID";
+  } else if (isNonPayer) {
+    status = "NON_PAYER";
+  } else if (isSiblingWaived100) {
+    status = isPayerSiblingPaid ? "SIBLING_WAIVED" : "UNPAID";
+  } else if (netSessions >= 2) {
+    status = "PAID";
+  } else if (netSessions === 1) {
+    status = "EXPIRING";
+  } else {
+    status = "UNPAID";
+  }
+
+  return {
+    purchasedSessions,
+    transferredIn: tIn,
+    transferredOut: tOut,
+    attendedSessions,
+    creditResetOffset: offset,
+    netSessions,
+    isFormation: isForm,
+    isNonPayer,
+    isSiblingWaived: isSiblingWaived100,
+    status,
+  };
+}
+

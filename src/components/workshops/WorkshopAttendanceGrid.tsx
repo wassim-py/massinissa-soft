@@ -105,14 +105,23 @@ export default function WorkshopAttendanceGrid({
 
         {/* Search Input */}
         <div className="relative min-w-[220px]">
-          <Search className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2 text-muted" />
+          <Search className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={locale === "ar" ? "بحث برقم الكرسي أو الاسم..." : "Filtrer par nom ou N° chaise..."}
-            className="w-full ps-9 pe-3 py-1.5 text-xs bg-surface border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-gray-900 placeholder:text-muted"
+            className="w-full ps-9 pe-8 py-1.5 text-xs bg-surface border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-gray-900 placeholder:text-muted"
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute end-2 top-1/2 -translate-y-1/2 text-muted hover:text-gray-700 p-0.5 rounded-md hover:bg-surface-subtle transition-colors cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -123,16 +132,16 @@ export default function WorkshopAttendanceGrid({
       </div>
 
       {/* Main Grid Table */}
-      <div className="w-full overflow-x-auto">
-        <table className="min-w-full border-collapse">
-          <thead className="bg-surface-muted/80 sticky top-0 z-10">
+      <div className="w-full overflow-auto max-h-[calc(100vh-220px)] min-h-[350px] relative">
+        <table className="min-w-full border-separate border-spacing-0">
+          <thead className="sticky top-0 z-20 bg-surface-muted">
             <tr>
-              {/* Participant Header (sticky start) */}
-              <th className="p-3 text-start text-xs font-bold text-gray-700 border-b border-e border-border min-w-[200px] sm:min-w-[240px] sticky start-0 bg-surface-muted z-20">
+              {/* Participant Header (sticky top and start) */}
+              <th className="p-3 text-start text-xs font-bold text-gray-700 border-b-2 border-e border-border min-w-[200px] sm:min-w-[240px] sticky top-0 start-0 ltr:left-0 rtl:right-0 bg-surface-muted z-30 shadow-[2px_2px_4px_-2px_rgba(0,0,0,0.06)] rtl:shadow-[-2px_2px_4px_-2px_rgba(0,0,0,0.06)]">
                 {t("student")}
               </th>
 
-              {/* Sessions Headers */}
+              {/* Sessions Headers (sticky top) */}
               {sessions.map((session, idx) => {
                 const sessionDate = new Date(session.startsAt);
                 const sessionEndDate = new Date(session.endsAt);
@@ -140,7 +149,7 @@ export default function WorkshopAttendanceGrid({
                 return (
                   <th
                     key={session.id}
-                    className="p-3 text-center border-b border-border min-w-[120px] sm:min-w-[150px]"
+                    className="p-3 text-center border-b-2 border-border min-w-[120px] sm:min-w-[150px] sticky top-0 z-20 bg-surface-muted shadow-[0_2px_4px_-2px_rgba(0,0,0,0.05)]"
                   >
                     <div className="flex flex-col items-center gap-1">
                       <span className="font-bold text-gray-900 text-xs">
@@ -174,16 +183,16 @@ export default function WorkshopAttendanceGrid({
                 );
               })}
 
-              {/* Summary Header */}
-              <th className="p-3 text-center text-xs font-bold text-gray-700 border-b border-s border-border min-w-[120px]">
+              {/* Summary Header (sticky top) */}
+              <th className="p-3 text-center text-xs font-bold text-gray-700 border-b-2 border-s border-border min-w-[120px] sticky top-0 z-20 bg-surface-muted shadow-[0_2px_4px_-2px_rgba(0,0,0,0.05)]">
                 {tAtt("attendanceRate")}
               </th>
             </tr>
           </thead>
 
-          <tbody className="divide-y divide-border/60">
+          <tbody>
             {filteredParticipants.map((participant, pIndex) => {
-              const rowBg = pIndex % 2 === 0 ? "bg-surface" : "bg-surface-muted/30";
+              const rowBg = pIndex % 2 === 0 ? "bg-surface" : "bg-surface-muted";
               const isGirl = participant.gender === "FEMALE";
               const studentRecords = participant.studentId ? attendanceMap.get(participant.studentId) : undefined;
 
@@ -204,10 +213,10 @@ export default function WorkshopAttendanceGrid({
               return (
                 <tr
                   key={participant.id}
-                  className={`${rowBg} hover:bg-surface-subtle/80 transition-colors`}
+                  className={`group ${rowBg} hover:bg-surface-subtle transition-colors`}
                 >
                   {/* Sticky Participant Column */}
-                  <td className={`p-3 text-start border-e border-border sticky start-0 z-10 min-w-[200px] sm:min-w-[240px] ${rowBg}`}>
+                  <td className={`p-3 text-start border-b border-e border-border sticky start-0 ltr:left-0 rtl:right-0 z-10 min-w-[200px] sm:min-w-[240px] ${rowBg} group-hover:bg-surface-subtle transition-colors shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)] rtl:shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]`}>
                     <div className="flex items-center gap-2.5">
                       {/* Chair Number Badge */}
                       {participant.chairNumber != null ? (
@@ -253,7 +262,7 @@ export default function WorkshopAttendanceGrid({
 
                     if (status === "PRESENT") {
                       return (
-                        <td key={session.id} className="p-3 text-center">
+                        <td key={session.id} className="p-3 text-center border-b border-border">
                           <div
                             className="w-5 h-5 mx-auto rounded-full bg-success shadow-2xs flex items-center justify-center text-white"
                             title={tAtt("legendPresent")}
@@ -266,7 +275,7 @@ export default function WorkshopAttendanceGrid({
 
                     if (status === "ABSENT") {
                       return (
-                        <td key={session.id} className="p-3 text-center">
+                        <td key={session.id} className="p-3 text-center border-b border-border">
                           <div
                             className="w-5 h-5 mx-auto rounded-full bg-danger shadow-2xs flex items-center justify-center text-white"
                             title={tAtt("legendAbsent")}
@@ -278,7 +287,7 @@ export default function WorkshopAttendanceGrid({
                     }
 
                     return (
-                      <td key={session.id} className="p-3 text-center">
+                      <td key={session.id} className="p-3 text-center border-b border-border">
                         <div
                           className="w-5 h-5 mx-auto rounded-full bg-surface-subtle border border-border"
                           title={tAtt("notRecorded")}
@@ -288,7 +297,7 @@ export default function WorkshopAttendanceGrid({
                   })}
 
                   {/* Student Attendance Rate Column */}
-                  <td className="p-3 text-center border-s border-border">
+                  <td className="p-3 text-center border-b border-s border-border">
                     <div className="flex flex-col items-center gap-0.5">
                       <Badge
                         variant={ratePercent >= 80 ? "success" : ratePercent >= 50 ? "warning" : "danger"}

@@ -91,7 +91,7 @@ const ClassAttendancePage = async (
     try {
 
             const rawStudents = await prisma.$queryRaw<any[]>`
-                SELECT DISTINCT s.id, s.name
+                SELECT DISTINCT s.id, s.name, s."globalNumber", s.phone
                 FROM "Student" s
                 JOIN "Enrollment" e ON e."studentId" = s.id
                 WHERE e."classId" = ${classId}
@@ -104,6 +104,8 @@ const ClassAttendancePage = async (
                     studentMap.set(s.id, {
                         id: s.id,
                         name: s.name,
+                        globalNumber: s.globalNumber,
+                        phone: s.phone,
                         surname: "",
                         attendances: [],
                     });

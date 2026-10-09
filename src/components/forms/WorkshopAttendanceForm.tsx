@@ -1,7 +1,7 @@
 "use client";
 
 import { WorkshopParticipant, WorkshopAttendance } from "@prisma/client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
 import { saveWorkshopAttendance } from "@/lib/actions";
@@ -46,9 +46,20 @@ const WorkshopAttendanceForm = ({
   setOpen: (isOpen: boolean) => void;
 }) => {
   const t = useTranslations("workshops");
+
+  const activeParticipants = useMemo(() => {
+    return (participants || []).filter((p) => {
+      const isRefunded =
+        p.status === "REFUNDED" ||
+        (Number(p.totalRefunded || 0) >= Number(p.totalPaid || 0) && Number(p.totalRefunded || 0) > 0);
+      const isInactive = p.status === "SUSPENDED" || p.status === "INACTIVE";
+      return !isRefunded && !isInactive;
+    });
+  }, [participants]);
+
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() => {
     const initialState: Record<string, AttendanceStatus> = {};
-    participants.forEach((participant) => {
+    activeParticipants.forEach((participant) => {
       const record = existingRecords.find((r) => r.studentId === participant.studentId);
       initialState[participant.id] = record?.status === "PRESENT" ? "PRESENT" : "ABSENT";
     });
@@ -80,7 +91,7 @@ const WorkshopAttendanceForm = ({
     <form action={formAction} className="p-4 font-sans">
       <h2 className="text-section-title font-bold text-gray-900 mb-4">{t("attendanceRosterTitle")}</h2>
       <div className="space-y-3 max-h-96 overflow-y-auto">
-        {participants.map((participant) => {
+        {activeParticipants.map((participant) => {
           const currentStatus = attendance[participant.id];
           const displayName = participant.Student?.name || participant.name || `${t("student")} #${participant.id}`;
           const isGirl = participant.gender === "FEMALE";

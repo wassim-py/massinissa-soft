@@ -11,7 +11,7 @@ import { useActionState } from "react";
 import { saveAttendance, removeCatchUpAttendanceAction, markSingleAttendanceAction } from "@/lib/actions";
 import { executeWithRetry } from "@/lib/retryUtils";
 import { toast } from "react-toastify";
-import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences } from "@/lib/studentBilling";
+import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions } from "@/lib/studentBilling";
 import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
@@ -155,9 +155,21 @@ const AttendanceRoster = ({
   const cleanSearch = debouncedSearch.trim().toLowerCase();
   const cleanNumeric = cleanSearch.replace(/[^0-9]/g, "");
 
+  const activeStudents = useMemo(() => {
+    return (students || []).filter((s) => {
+      const isSuspendedOrInactive =
+        s.enrollmentStatus === "SUSPENDED" ||
+        s.enrollmentStatus === "INACTIVE" ||
+        s.enrollmentStatus === "UNENROLLED" ||
+        s.enrollmentStatus === "TRANSFERRED" ||
+        s.enrollmentStatus === "REFUNDED";
+      return !isSuspendedOrInactive && !(s as any).isRefunded;
+    });
+  }, [students]);
+
   const filteredStudents = useMemo(() => {
-    if (!cleanSearch) return students;
-    return students.filter((student) => {
+    if (!cleanSearch) return activeStudents;
+    return activeStudents.filter((student) => {
       const matchName = student.name.toLowerCase().includes(cleanSearch);
       const matchId =
         cleanNumeric && student.globalNumber !== undefined && student.globalNumber !== null
@@ -169,7 +181,7 @@ const AttendanceRoster = ({
           : false;
       return matchName || matchId || matchPhone;
     });
-  }, [students, cleanSearch, cleanNumeric]);
+  }, [activeStudents, cleanSearch, cleanNumeric]);
 
   const filteredCatchUpVisitors = useMemo(() => {
     if (!cleanSearch) return catchUpVisitors;
@@ -257,7 +269,7 @@ const AttendanceRoster = ({
 
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() => {
     const initialState: Record<string, AttendanceStatus> = {};
-    students.forEach((student) => {
+    activeStudents.forEach((student) => {
       const record = existingRecords.find((r) => r.studentId === student.id);
       if (record?.status === "PRESENT") {
         initialState[student.id] = "PRESENT";
@@ -273,7 +285,7 @@ const AttendanceRoster = ({
 
   const [justifications, setJustifications] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
-    students.forEach((student) => {
+    activeStudents.forEach((student) => {
       const record = existingRecords.find((r) => r.studentId === student.id);
       if (record?.justification) {
         initial[student.id] = record.justification;
@@ -282,12 +294,12 @@ const AttendanceRoster = ({
     return initial;
   });
 
-  // Synchronize attendance state when students prop changes (e.g. newly registered student)
+  // Synchronize attendance state when active students change (e.g. newly registered student)
   useEffect(() => {
     setAttendance((prev) => {
       let changed = false;
       const next = { ...prev };
-      students.forEach((student) => {
+      activeStudents.forEach((student) => {
         if (next[student.id] === undefined) {
           const record = existingRecords.find((r) => r.studentId === student.id);
           if (record?.status === "PRESENT") {
@@ -302,14 +314,14 @@ const AttendanceRoster = ({
       });
       return changed ? next : prev;
     });
-  }, [students, existingRecords]);
+  }, [activeStudents, existingRecords]);
 
-  // Synchronize studentReceivedBooks state when students prop changes
+  // Synchronize studentReceivedBooks state when active students change
   useEffect(() => {
     setStudentReceivedBooks((prev) => {
       let changed = false;
       const next = { ...prev };
-      students.forEach((s) => {
+      activeStudents.forEach((s) => {
         if (next[s.id] === undefined) {
           next[s.id] = s.receivedBookIds ? [...s.receivedBookIds] : [];
           changed = true;
@@ -317,7 +329,7 @@ const AttendanceRoster = ({
       });
       return changed ? next : prev;
     });
-  }, [students]);
+  }, [activeStudents]);
 
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<FullStudent | null>(null);
@@ -380,7 +392,7 @@ const AttendanceRoster = ({
 
   const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     // Validate mandatory justification for any student marked NOT_DEFINED
-    const missingJustification = students.find(
+    const missingJustification = activeStudents.find(
       (s) => attendance[s.id] === "NOT_DEFINED" && !justifications[s.id]?.trim()
     );
 
@@ -535,7 +547,7 @@ const AttendanceRoster = ({
       {/* Top action bar: Summary, Student Registration, and Catch-Up Visitor entry points */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-3 bg-gray-50 border border-gray-200 rounded-xl font-sans">
         <div className="flex items-center gap-2 text-xs text-gray-600 flex-wrap">
-          <span>{t("totalGroupStudents", { count: students.length })}</span>
+          <span>{t("totalGroupStudents", { count: activeStudents.length })}</span>
           {cleanSearch && (
             <span className="px-2 py-0.5 bg-blue-100 text-blue-800 font-semibold rounded-full text-[11px]">
               {locale === "ar"
@@ -638,46 +650,31 @@ const AttendanceRoster = ({
               : true;
             const isWaivedTuition = isNonPayer || (isSiblingWaived100 && isPayerSiblingPaid);
 
-            const activeTuitionVouchers = (student.vouchers || []).filter(
-              (v) => !v.isVoided && v.paymentType === "TUITION_4SESSION"
+            const tuitionVouchers = (student.vouchers || []).filter(
+              (v: any) => v.paymentType === "TUITION_4SESSION" && (v.classId === lesson.class.id || !v.classId)
             );
-            const cyclePrice = Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0);
-            const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-            const effectiveLessonPrice =
-              siblingDiscountPct > 0 && siblingDiscountPct < 100
-                ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-                : siblingDiscountPct >= 100
-                ? 0
-                : baseLessonPrice;
+            const isFormation = Boolean(
+              (lesson.class as any)?.isFormation ||
+              (lesson.class as any)?.FormationLevel ||
+              (lesson.class as any)?.formationLevelId
+            );
 
-            let sessionsPurchased = 0;
-            if (isNonPayer) {
-              sessionsPurchased = 16;
-            } else if (isSiblingWaived100) {
-              sessionsPurchased = isPayerSiblingPaid ? 16 : 0;
-            } else if (effectiveLessonPrice > 0) {
-              const totalPaidTuition = activeTuitionVouchers.reduce(
-                (sum, v) => {
-                  const vAmount = Number(v.amount || 0);
-                  const refunded = (v as any).refunds?.reduce((rSum: number, r: any) => rSum + Number(r.amount || 0), 0) || 0;
-                  return sum + Math.max(0, vAmount - refunded);
-                },
-                0
-              );
-              sessionsPurchased = Math.floor(totalPaidTuition / effectiveLessonPrice);
-            } else {
-              sessionsPurchased = activeTuitionVouchers.length * 4;
-            }
+            const creditMetrics = computeStudentCreditAndSessions({
+              pricePerCycle: Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0),
+              isFormation,
+              payerStatus,
+              siblingDiscountPercentage: siblingDiscountPct,
+              isSiblingWaived: isSiblingWaived100,
+              isPayerSiblingPaid,
+              tuitionVouchers,
+              transfersIn: student.transfersTo || [],
+              transfersOut: student.transfersFrom || [],
+              creditResetOffset: student.creditResetOffset,
+              attendances: student.attendances || [],
+            });
 
-            const transferredIn = (student.transfersTo || []).reduce(
-              (sum, t) => sum + Number(t.transferredSessions || 0),
-              0
-            );
-            const transferredOut = (student.transfersFrom || []).reduce(
-              (sum, t) => sum + Number(t.transferredSessions || 0),
-              0
-            );
-            const totalCreditSessions = sessionsPurchased + transferredIn - transferredOut + Number(student.creditResetOffset || 0);
+            const sessionsRemaining = creditMetrics.netSessions;
+            const sessionsConsumed = creditMetrics.attendedSessions;
 
             const studentLessons = (student.attendances || [])
               .map((a: any) => a.lesson)
@@ -686,11 +683,6 @@ const AttendanceRoster = ({
               lessonId: a.lessonId,
               status: a.status,
             }));
-            const sessionsConsumed = computeStudentConsumedSessions({
-              lessons: studentLessons,
-              attendances: studentAtts,
-            });
-            const sessionsRemaining = totalCreditSessions - sessionsConsumed;
 
             // Consecutive absences and suspension checks (Rules 5 & 9)
             const consecutiveAbsences = computeStudentConsecutiveAbsences({
@@ -885,7 +877,7 @@ const AttendanceRoster = ({
                       <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
                         <span>{statusBubble.text}</span>
                         <span>•</span>
-                        <span>
+                        <span className={sessionsRemaining < 0 && !isNonPayer && !isSiblingWaived100 ? "font-semibold text-rose-600" : ""}>
                           {isSiblingWaived100
                             ? (!isPayerSiblingPaid
                                 ? (locale === "ar" ? "الأخ الدافع غير مسدد" : "Frère payeur non soldé")
@@ -894,7 +886,7 @@ const AttendanceRoster = ({
                             ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
                             : isSchoolFeesOnly
                             ? (locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls")
-                            : t("sessionsRemainingCount", { count: Math.max(0, sessionsRemaining) })}
+                            : t("sessionsRemainingCount", { count: sessionsRemaining })}
                         </span>
                       </div>
                     </div>

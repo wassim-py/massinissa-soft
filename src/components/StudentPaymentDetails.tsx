@@ -13,7 +13,7 @@ import {
   formatPaymentDateTime,
 } from "@/lib/voucherUtils";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
-import { computeStudentSessionFee, computeStudentConsumedSessions } from "@/lib/studentBilling";
+import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -53,6 +53,15 @@ export type ExtendedEnrollmentItem = {
     inscriptionFee: number;
     hasBooks: boolean;
     bookFee?: number | null;
+    isFormation?: boolean;
+    formationLevelId?: number | null;
+    FormationLevel?: {
+      id: number;
+      name: string;
+      levelNumber: number;
+      lumpSumPrice: any;
+      Language?: { id: number; name: string } | null;
+    } | null;
     branch: { id: number; name: string };
     level?: { id: number; name: string } | null;
     teacher?: { id: string; name: string; TeacherPayRate?: Array<{ percentageOfSessionFee: any }> } | null;
@@ -172,6 +181,8 @@ export default function StudentPaymentDetails({
     type: "create" | "update";
     classData?: any;
     voucher?: Voucher;
+    amountOwed?: number;
+    isBookPaid?: boolean;
   }>({ isOpen: false, type: "create" });
 
   const [transferModal, setTransferModal] = useState<{
@@ -304,6 +315,12 @@ export default function StudentPaymentDetails({
   // Calculate per-class metrics
   const allClassMetrics = allEnrollments.map((enr) => {
     const c = enr.class;
+    const isFormation = Boolean((c as any).isFormation || (c as any).FormationLevel || (c as any).formationLevelId);
+    const formationLevel = (c as any).FormationLevel;
+    const formationLevelName = formationLevel?.name || c.level?.name || null;
+    const formationLanguageName = formationLevel?.Language?.name || null;
+    const formationLevelPrice = Number(formationLevel?.lumpSumPrice ?? c.pricePerCycle ?? 0);
+
     const classVouchers = allVouchers.filter((v) => v.classId === c.id || (v.class && v.class.id === c.id));
     const activeClassVouchers = classVouchers.filter((v) => !v.isVoided && !v.isRefund);
 
@@ -315,45 +332,66 @@ export default function StudentPaymentDetails({
         : (configuredInscriptionFee || 1000);
     const isInscriptionPaid = totalInscPaid >= requiredInscFee && requiredInscFee > 0;
     const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
-    const bookVoucher = activeClassVouchers.find((v) => v.paymentType === "BOOK");
+
+    // Books calculation
+    const bookVouchers = activeClassVouchers.filter((v) => v.paymentType === "BOOK");
+    let totalBookPaid = 0;
+    bookVouchers.forEach((v) => {
+      const vAmount = Number(v.amount || 0);
+      const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+      totalBookPaid += Math.max(0, vAmount - vRefunded);
+    });
+    const bookFee = Number(c.bookFee || 0);
+    const hasBooks = Boolean(c.hasBooks);
+    const isBookPaid = hasBooks ? (totalBookPaid >= bookFee && bookFee > 0) || bookVouchers.length > 0 : true;
+    const bookRemainingBalance = hasBooks && !isBookPaid ? Math.max(0, bookFee - totalBookPaid) : 0;
+    const bookVoucher = bookVouchers.length > 0 ? bookVouchers[0] : null;
+
+    // Formation Level payment calculation
+    const formationVouchers = activeClassVouchers.filter((v) => v.paymentType === "FORMATION");
     const tuitionVouchers = activeClassVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
 
-    const cyclePrice = Number(c?.pricePerCycle || 0);
-    const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-    const effectiveLessonPrice =
-      siblingDiscountPct > 0 && siblingDiscountPct < 100
-        ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-        : siblingDiscountPct >= 100
-        ? 0
-        : baseLessonPrice;
-
-    let purchasedSessions = 0;
-    if (isSiblingWaived100) {
-      purchasedSessions = 16;
-    } else if (effectiveLessonPrice > 0) {
-      let totalPaidTuition = 0;
+    let totalPaidFormation = 0;
+    formationVouchers.forEach((v) => {
+      const vAmount = Number(v.amount || 0);
+      const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+      totalPaidFormation += Math.max(0, vAmount - vRefunded);
+    });
+    // In case any legacy voucher exists on a formation class:
+    if (totalPaidFormation === 0 && isFormation && tuitionVouchers.length > 0) {
       tuitionVouchers.forEach((v) => {
         const vAmount = Number(v.amount || 0);
         const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
-        totalPaidTuition += Math.max(0, vAmount - vRefunded);
+        totalPaidFormation += Math.max(0, vAmount - vRefunded);
       });
-      purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
-    } else {
-      purchasedSessions = tuitionVouchers.length * 4;
     }
-    const transferredOut = (enr.transfersFrom || []).reduce((sum, t) => sum + t.transferredSessions, 0);
-    const transferredIn = (enr.transfersTo || []).reduce((sum, t) => sum + t.transferredSessions, 0);
 
-    const classAtts = (student.attendances || []).filter(
-      (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
-    );
-    const classLessons = classAtts.map((att: any) => att.lesson);
-    const attendedSessions = computeStudentConsumedSessions({
-      lessons: classLessons,
-      attendances: classAtts.map((att: any) => ({ lessonId: att.lessonId, status: att.status })),
+    const isLevelPaidInFull = isFormation && totalPaidFormation >= formationLevelPrice && formationLevelPrice > 0;
+    const isLevelPartiallyPaid = isFormation && totalPaidFormation > 0 && totalPaidFormation < formationLevelPrice;
+    const isLevelUnpaid = isFormation && totalPaidFormation <= 0;
+    const levelRemainingBalance = isFormation ? Math.max(0, formationLevelPrice - totalPaidFormation) : 0;
+
+    const enrPayerStatus = (enr as any).payerStatus || student.payerStatus || "NORMAL";
+    const creditMetrics = computeStudentCreditAndSessions({
+      pricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
+      isFormation,
+      payerStatus: enrPayerStatus,
+      siblingDiscountPercentage: siblingDiscountPct,
+      isSiblingWaived: isSiblingWaived100,
+      tuitionVouchers,
+      transfersIn: enr.transfersTo,
+      transfersOut: enr.transfersFrom,
+      creditResetOffset: (enr as any).creditResetOffset,
+      attendances: (student.attendances || []).filter(
+        (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
+      ),
     });
 
-    const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + Number((enr as any).creditResetOffset || 0);
+    const purchasedSessions = creditMetrics.purchasedSessions;
+    const transferredOut = creditMetrics.transferredOut;
+    const transferredIn = creditMetrics.transferredIn;
+    const attendedSessions = creditMetrics.attendedSessions;
+    const netSessions = creditMetrics.netSessions;
     const unconsumedInCycle = Math.max(0, Math.min(4, netSessions));
 
     // Identify the student's most recent active cycle for this class (§7.8)
@@ -381,29 +419,46 @@ export default function StudentPaymentDetails({
         ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
         : null;
 
-    const enrPayerStatus = (enr as any).payerStatus || student.payerStatus || "NORMAL";
     const feeCalc = computeStudentSessionFee({
       payerStatus: enrPayerStatus,
-      pricePerCycle: Number(c.pricePerCycle || 0),
+      pricePerCycle: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
       teacherPercentage,
       isSiblingWaived: isSiblingWaived100,
       siblingDiscountPercentage: siblingDiscountPct,
     });
 
-    let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" = "UNPAID";
-    if (isSiblingWaived100) {
-      status = "SIBLING_WAIVED";
-    } else if (netSessions >= 2) {
-      status = "PAID";
-    } else if (netSessions === 1) {
-      status = "EXPIRING";
+    let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER" = "UNPAID";
+    if (isFormation) {
+      if (isSiblingWaived100) {
+        status = "SIBLING_WAIVED";
+      } else if (isLevelPaidInFull) {
+        status = "PAID";
+      } else {
+        status = "UNPAID";
+      }
     } else {
-      status = "UNPAID";
+      status = creditMetrics.status;
     }
 
     return {
       enrollment: enr,
       class: c,
+      isFormation,
+      formationLevel,
+      formationLevelName,
+      formationLanguageName,
+      formationLevelPrice,
+      totalPaidFormation,
+      isLevelPaidInFull,
+      isLevelPartiallyPaid,
+      isLevelUnpaid,
+      levelRemainingBalance,
+      hasBooks,
+      bookFee,
+      isBookPaid,
+      bookRemainingBalance,
+      totalBookPaid,
+      formationVouchers,
       inscVoucher,
       isInscriptionPaid,
       totalInscPaid,
@@ -432,16 +487,18 @@ export default function StudentPaymentDetails({
   );
 
   // SORTING RULE (§1.0 / Payment-Renewal Signal):
-  // Groups where the student has ONLY 1 session left appear FIRST, above every other group on this page!
-  // Secondary sort: unpaid/exhausted (<= 0), then paid (> 1), then alphabetical by class name.
+  // Non-formation groups where the student has ONLY 1 session left appear FIRST!
+  // Secondary sort: unpaid/exhausted, then paid, then alphabetical by class name.
   const sortedClassMetrics = [...classMetrics].sort((a, b) => {
-    const aIsOne = a.netSessions === 1;
-    const bIsOne = b.netSessions === 1;
+    const aIsOne = !a.isFormation && a.netSessions === 1;
+    const bIsOne = !b.isFormation && b.netSessions === 1;
     if (aIsOne && !bIsOne) return -1;
     if (!aIsOne && bIsOne) return 1;
 
-    if (a.netSessions <= 0 && b.netSessions > 1) return -1;
-    if (a.netSessions > 1 && b.netSessions <= 0) return 1;
+    const aIsUnpaid = a.isFormation ? !a.isLevelPaidInFull : a.netSessions <= 0;
+    const bIsUnpaid = b.isFormation ? !b.isLevelPaidInFull : b.netSessions <= 0;
+    if (aIsUnpaid && !bIsUnpaid) return -1;
+    if (!aIsUnpaid && bIsUnpaid) return 1;
 
     return (a.class.name || "").localeCompare(b.class.name || "");
   });
@@ -666,7 +723,7 @@ export default function StudentPaymentDetails({
 
           {/* 1 Session Left Payment-Renewal Signal Alert Banner */}
           {(() => {
-            const expiringCount = classMetrics.filter((cm) => cm.netSessions === 1).length;
+            const expiringCount = classMetrics.filter((cm) => !cm.isFormation && cm.netSessions === 1).length;
             if (expiringCount > 0) {
               return (
                 <div className="mt-4 p-3.5 bg-amber-50/90 border border-amber-300 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-950 shadow-xs">
@@ -708,6 +765,194 @@ export default function StudentPaymentDetails({
                   const isExpiring = !isInactive && (cm.status === "EXPIRING" || cm.netSessions === 1);
                   const isUnpaid = !isInactive && cm.status === "UNPAID";
                   const isSibling = !isInactive && cm.status === "SIBLING_WAIVED";
+
+                  if (cm.isFormation) {
+                    const isLevelPaid = cm.isLevelPaidInFull;
+                    const isLevelPartial = cm.isLevelPartiallyPaid;
+                    const isLevelUnpaid = cm.isLevelUnpaid;
+
+                    return (
+                      <Card
+                        key={cm.class.id}
+                        className={`border p-4 transition-all rounded-xl ${
+                          isSuspended
+                            ? "border-rose-300 bg-rose-50/40"
+                            : isTransferred || isUnenrolled
+                            ? "border-dashed border-gray-300 bg-gray-50/50 opacity-80"
+                            : isLevelPaid
+                            ? "border-emerald-300 bg-emerald-50/20 shadow-xs"
+                            : isLevelPartial
+                            ? "border-amber-400 bg-amber-50/30 ring-1 ring-amber-300 shadow-xs"
+                            : "border-red-300 bg-red-50/20"
+                        }`}
+                      >
+                        {/* Formation Header */}
+                        <div className="flex items-start justify-between gap-3 border-b border-border/70 pb-3">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="font-bold text-gray-900 text-sm">{cm.class.name}</h4>
+                              <Badge variant="primary" size="sm">
+                                <Building2 className="w-3 h-3 inline me-1" />
+                                {cm.class.branch.name}
+                              </Badge>
+                              <Badge variant="neutral" size="sm">
+                                {cm.formationLanguageName
+                                  ? `${cm.formationLanguageName} • ${cm.formationLevelName || t("formationLevel")}`
+                                  : cm.formationLevelName || t("typeFormation")}
+                              </Badge>
+                            </div>
+                            {cm.class.teacher && (
+                              <p className="text-xs text-muted mt-0.5">
+                                {t("teacherLabel")} <span className="text-gray-700">{cm.class.teacher.name}</span>
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Status Badges */}
+                          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                            {isSuspended ? (
+                              <Badge variant="danger" size="sm" withDot>
+                                {locale === "ar" ? "معلّق" : "Suspendu"}
+                              </Badge>
+                            ) : isLevelPaid ? (
+                              <Badge variant="success" size="sm" withDot className="font-bold">
+                                {t("formationLevelPaid")}
+                              </Badge>
+                            ) : isLevelPartial ? (
+                              <Badge variant="warning" size="sm" withDot className="font-bold">
+                                {t("formationLevelPartial")}
+                              </Badge>
+                            ) : (
+                              <Badge variant="danger" size="sm" withDot className="font-bold">
+                                {t("formationLevelUnpaid")}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 3 Metric Columns: Level Fee, Book Fee, Inscription Fee */}
+                        <div className="grid grid-cols-3 gap-2 py-3 border-b border-border/70 text-center text-xs">
+                          {/* Column 1: Level Payment */}
+                          <div className="bg-surface-subtle p-2 rounded-lg border border-border/60">
+                            <span className="text-[10px] text-muted block mb-0.5 font-medium">{t("formationLevelFee")}</span>
+                            <span className="font-mono font-bold text-sm text-gray-900 block">
+                              {cm.formationLevelPrice.toLocaleString()} DZD
+                            </span>
+                            <span className="text-[10px] block mt-1">
+                              {isLevelPaid ? (
+                                <span className="text-emerald-700 font-bold">{t("paid")}</span>
+                              ) : isLevelPartial ? (
+                                <span className="text-amber-800 font-semibold">
+                                  {t("remaining")}: <strong className="font-mono text-danger">{cm.levelRemainingBalance.toLocaleString()} DZD</strong>
+                                </span>
+                              ) : (
+                                <span className="text-danger font-bold">{t("unpaid")}</span>
+                              )}
+                            </span>
+                          </div>
+
+                          {/* Column 2: Book Fee */}
+                          <div className="bg-surface-subtle p-2 rounded-lg border border-border/60">
+                            <span className="text-[10px] text-muted block mb-0.5 font-medium">{t("formationBooksFee")}</span>
+                            {cm.hasBooks ? (
+                              <>
+                                <span className="font-mono font-bold text-sm text-gray-900 block">
+                                  {cm.bookFee.toLocaleString()} DZD
+                                </span>
+                                <span className="text-[10px] block mt-1">
+                                  {cm.isBookPaid ? (
+                                    <span className="text-emerald-700 font-bold">{t("formationBooksPaid")}</span>
+                                  ) : (
+                                    <span className="text-danger font-bold">{t("formationBooksUnpaid")}</span>
+                                  )}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-xs text-muted block py-2">{t("formationBooksNotRequired")}</span>
+                            )}
+                          </div>
+
+                          {/* Column 3: Inscription Fee */}
+                          <div className="bg-surface-subtle p-2 rounded-lg border border-border/60">
+                            <span className="text-[10px] text-muted block mb-0.5 font-medium">{t("typeInscription")}</span>
+                            <span className="font-mono font-bold text-sm text-gray-900 block">
+                              {cm.requiredInscFee.toLocaleString()} DZD
+                            </span>
+                            <span className="text-[10px] block mt-1">
+                              {cm.isInscriptionPaid ? (
+                                <span className="text-emerald-700 font-bold">{t("settled")}</span>
+                              ) : cm.enrollment.feeOverriddenByOwner ? (
+                                <span className="text-amber-700 font-semibold">{t("waivedOwner")}</span>
+                              ) : !cm.enrollment.inscriptionFeeCharged ? (
+                                <span className="text-blue-700 font-semibold">{t("waivedAuto")}</span>
+                              ) : (
+                                <span className="text-danger font-bold">{t("unsettled")}</span>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Summary / Owed Strip */}
+                        <div className="mt-2.5 py-2 px-2.5 bg-surface-subtle rounded-lg border border-border/70 flex items-center justify-between gap-2 text-[11px] flex-wrap">
+                          {isLevelPaid && (!cm.hasBooks || cm.isBookPaid) && cm.isInscriptionPaid ? (
+                            <div className="flex items-center gap-1.5 text-emerald-800 font-semibold w-full">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                              <span>{t("formationFullySettled")}</span>
+                            </div>
+                          ) : (
+                            <div className="w-full flex items-center justify-between gap-2 flex-wrap">
+                              <span className="text-muted font-medium">
+                                {t("formationRemainingBalance")}
+                              </span>
+                              <div className="flex items-center gap-3 font-semibold text-gray-800 text-[11px]">
+                                {cm.levelRemainingBalance > 0 && (
+                                  <span className="text-danger font-mono font-bold">
+                                    {locale === "ar" ? "المستوى:" : "Niveau :"} {cm.levelRemainingBalance.toLocaleString()} DZD
+                                  </span>
+                                )}
+                                {cm.hasBooks && !cm.isBookPaid && (
+                                  <span className="text-amber-700 font-mono">
+                                    {locale === "ar" ? "الكتب:" : "Livres :"} {cm.bookFee.toLocaleString()} DZD
+                                  </span>
+                                )}
+                                {!cm.isInscriptionPaid && (
+                                  <span className="text-blue-800 font-mono">
+                                    {locale === "ar" ? "التسجيل:" : "Insc :"} {cm.requiredInscFee.toLocaleString()} DZD
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="pt-3 flex items-center justify-between gap-2 flex-wrap text-xs">
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() =>
+                              setVoucherModal({
+                                isOpen: true,
+                                type: "create",
+                                classData: cm.class,
+                                amountOwed: cm.levelRemainingBalance,
+                                isBookPaid: cm.isBookPaid,
+                              })
+                            }
+                          >
+                            {t("formationPayAction")}
+                          </Button>
+
+                          <Link
+                            href={`/list/formations/${cm.class.id}`}
+                            className="text-xs font-semibold text-primary hover:underline"
+                          >
+                            {locale === "ar" ? "عرض صفحة الدورة التكوينية" : "Voir la formation"}
+                          </Link>
+                        </div>
+                      </Card>
+                    );
+                  }
 
                   return (
                     <Card
@@ -798,6 +1043,10 @@ export default function StudentPaymentDetails({
                             <Badge variant="neutral" size="sm" withDot>
                               {locale === "ar" ? "ملغى التسجيل" : "Désinscrit"}
                             </Badge>
+                          ) : cm.status === "NON_PAYER" || (cm.enrollment as any).payerStatus === "NON_PAYER" ? (
+                            <Badge variant="success" size="sm" withDot>
+                              {locale === "ar" ? "معفى من الرسوم" : "Non-payeur (Exonéré)"}
+                            </Badge>
                           ) : isExpiring ? (
                             <Badge variant="warning" size="sm" withDot className="font-bold">
                               {t("expiringWarningBadge")}
@@ -824,14 +1073,18 @@ export default function StudentPaymentDetails({
                           <span className="text-[10px] text-muted block">{t("sessionsRemaining")}</span>
                           <span
                             className={`font-mono font-bold text-sm ${
-                              cm.netSessions <= 0
+                              (cm.enrollment as any).payerStatus === "NON_PAYER"
+                                ? "text-success-text"
+                                : cm.netSessions <= 0
                                 ? "text-danger"
                                 : cm.netSessions === 1
                                 ? "text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-300 inline-block"
                                 : "text-success-text"
                             }`}
                           >
-                            {cm.netSessions}
+                            {(cm.enrollment as any).payerStatus === "NON_PAYER"
+                              ? (locale === "ar" ? "معفى" : "Exonéré")
+                              : cm.netSessions}
                           </span>
                         </div>
                         <div>
@@ -880,7 +1133,7 @@ export default function StudentPaymentDetails({
                           )}
                         </div>
 
-                        {cm.netSessions < 0 && (
+                        {cm.netSessions < 0 && (cm.enrollment as any).payerStatus !== "NON_PAYER" && (
                           <div className="w-full pt-1.5 mt-1 border-t border-border/60 flex items-center justify-between text-danger font-bold text-[11px]">
                             <span>
                               {locale === "ar"
@@ -1331,6 +1584,8 @@ export default function StudentPaymentDetails({
               type={voucherModal.type}
               data={voucherModal.voucher}
               defaultInscriptionFee={configuredInscriptionFee}
+              amountOwedByStudent={voucherModal.amountOwed}
+              isBookPaid={voucherModal.isBookPaid}
             />
           </div>
         </div>

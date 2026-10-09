@@ -68,6 +68,9 @@ export default async function WorkshopAttendancePage(props: {
         orderBy: { startsAt: "asc" },
       },
       participants: {
+        where: {
+          status: { notIn: ["SUSPENDED", "REFUNDED", "INACTIVE"] },
+        },
         include: {
           Student: { select: { id: true, name: true, phone: true } },
         },
@@ -88,6 +91,13 @@ export default async function WorkshopAttendancePage(props: {
   let girlCounter = 0;
   const processedParticipants = [];
   for (const p of workshop.participants) {
+    const isRefunded =
+      p.status === "REFUNDED" ||
+      (Number(p.totalRefunded || 0) >= Number(p.totalPaid || 0) && Number(p.totalRefunded || 0) > 0);
+    const isInactiveOrSuspended =
+      p.status === "SUSPENDED" || p.status === "INACTIVE";
+    if (isRefunded || isInactiveOrSuspended) continue;
+
     const isGirl = p.gender === "FEMALE";
     let num = p.chairNumber;
     if (!num) {

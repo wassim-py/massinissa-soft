@@ -11,8 +11,11 @@ import TodayAttendanceChart, {
   TodayLessonAttendanceData,
 } from "@/components/dashboard/TodayAttendanceChart";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
-import { computeStudentConsumedSessions } from "@/lib/studentBilling";
+import { computeStudentCreditAndSessions } from "@/lib/studentBilling";
 import { serializeForClient } from "@/lib/utils";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const AdminPage = async () => {
   const session = await getAuthSession();
@@ -25,13 +28,43 @@ const AdminPage = async () => {
   });
   const branchName = branch?.name || `Siège #${activeBranchId}`;
 
-  // Time boundary for today
-  const now = new Date();
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
+  // Helper to extract date and weekday information in Africa/Algiers timezone (constant UTC+1 without DST)
+  const getAlgiersDateInfo = (date: Date) => {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Algiers",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      weekday: "long",
+    }).formatToParts(date);
+    const m: Record<string, string> = {};
+    parts.forEach((p) => {
+      m[p.type] = p.value;
+    });
+    return {
+      year: parseInt(m.year, 10),
+      month: parseInt(m.month, 10),
+      day: parseInt(m.day, 10),
+      hour: parseInt(m.hour, 10),
+      minute: parseInt(m.minute, 10),
+      weekday: (m.weekday || "").toUpperCase(),
+      dateStr: `${m.year}-${m.month}-${m.day}`,
+    };
+  };
 
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
+  const now = new Date();
+  const todayInfo = getAlgiersDateInfo(now);
+
+  // Time boundary for today in Africa/Algiers (00:00:00 to 23:59:59.999 Algiers = UTC-1h)
+  const startOfToday = new Date(
+    Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, -1, 0, 0, 0)
+  );
+  const endOfToday = new Date(
+    Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, 22, 59, 59, 999)
+  );
 
   // Fetch today's lessons: dated one-offs occurring today + recurring normal lessons across all branches
   const candidateLessons = await prisma.lesson.findMany({
@@ -46,6 +79,7 @@ const AdminPage = async () => {
         {
           isExtra: false,
           isCatchUp: false,
+          isFree: false,
           class: {
             isCompleted: false,
           },
@@ -69,7 +103,11 @@ const AdminPage = async () => {
               transfersTo: true,
             },
           },
-          vouchers: true,
+          vouchers: {
+            include: {
+              refunds: true,
+            },
+          },
           lessons: {
             select: {
               id: true,
@@ -106,38 +144,11 @@ const AdminPage = async () => {
     },
   });
 
-  // Helper to extract date and weekday information in Africa/Algiers timezone
-  const getAlgiersDateInfo = (date: Date) => {
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Africa/Algiers",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      weekday: "long",
-    }).formatToParts(date);
-    const m: Record<string, string> = {};
-    parts.forEach((p) => {
-      m[p.type] = p.value;
-    });
-    return {
-      year: parseInt(m.year, 10),
-      month: parseInt(m.month, 10),
-      day: parseInt(m.day, 10),
-      hour: parseInt(m.hour, 10),
-      minute: parseInt(m.minute, 10),
-      weekday: (m.weekday || "").toUpperCase(),
-      dateStr: `${m.year}-${m.month}-${m.day}`,
-    };
-  };
-
-  const todayInfo = getAlgiersDateInfo(now);
+  const isOneOffLesson = (l: any) => Boolean(l.isExtra || l.isCatchUp || l.isFree);
 
   const allTodaysLessons = candidateLessons
     .filter((l) => {
-      const isOneOff = Boolean(l.isExtra || l.isCatchUp);
+      const isOneOff = isOneOffLesson(l);
       const lInfo = getAlgiersDateInfo(new Date(l.startsAt));
       if (isOneOff) {
         return lInfo.dateStr === todayInfo.dateStr;
@@ -145,7 +156,7 @@ const AdminPage = async () => {
       return lInfo.weekday === todayInfo.weekday;
     })
     .map((l) => {
-      const isOneOff = Boolean(l.isExtra || l.isCatchUp);
+      const isOneOff = isOneOffLesson(l);
       if (!isOneOff) {
         const lInfo = getAlgiersDateInfo(new Date(l.startsAt));
         const durationMs =
@@ -237,7 +248,7 @@ const AdminPage = async () => {
 
       const student = enr.student;
       const studentVouchers = cls.vouchers.filter(
-        (v) => v.studentId === student.id && !v.isVoided
+        (v) => v.studentId === student.id
       );
       const tuitionVouchers = studentVouchers.filter(
         (v) => v.paymentType === "TUITION_4SESSION"
@@ -253,36 +264,6 @@ const AdminPage = async () => {
         : 0;
       const isSiblingWaived100 = siblingDiscountPct >= 100;
 
-      const cyclePrice = Number(cls.pricePerCycle || 0);
-      const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-      const effectiveLessonPrice =
-        siblingDiscountPct > 0 && siblingDiscountPct < 100
-          ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-          : siblingDiscountPct >= 100
-          ? 0
-          : baseLessonPrice;
-
-      let purchasedSessions = 0;
-      if (isSiblingWaived100) {
-        purchasedSessions = 16;
-      } else if (effectiveLessonPrice > 0) {
-        const totalPaidTuition = tuitionVouchers.reduce(
-          (sum, v) => sum + Math.max(0, Number(v.amount || 0)),
-          0
-        );
-        purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
-      } else {
-        purchasedSessions = tuitionVouchers.length * 4;
-      }
-      const transferredOut = enr.transfersFrom.reduce(
-        (sum, t) => sum + t.transferredSessions,
-        0
-      );
-      const transferredIn = enr.transfersTo.reduce(
-        (sum, t) => sum + t.transferredSessions,
-        0
-      );
-
       const studentAtts: Array<{ lessonId: number; status: string }> = [];
       cls.lessons.forEach((l) => {
         const att = l.attendances.find((a) => a.studentId === student.id);
@@ -291,20 +272,34 @@ const AdminPage = async () => {
         }
       });
 
-      const attendedSessions = computeStudentConsumedSessions({
-        lessons: cls.lessons,
+      const enrPayerStatus = (enr as any).payerStatus || (student as any).payerStatus || "NORMAL";
+      const isFormation = Boolean((cls as any).isFormation || (cls as any).FormationLevel || (cls as any).formationLevelId);
+
+      const creditMetrics = computeStudentCreditAndSessions({
+        pricePerCycle: Number(cls.pricePerCycle || 0),
+        isFormation,
+        payerStatus: enrPayerStatus,
+        siblingDiscountPercentage: siblingDiscountPct,
+        isSiblingWaived: isSiblingWaived100,
+        tuitionVouchers,
+        transfersIn: enr.transfersTo,
+        transfersOut: enr.transfersFrom,
+        creditResetOffset: (enr as any).creditResetOffset,
         attendances: studentAtts,
+        lessons: cls.lessons as any,
       });
 
-      const remainingSessions =
-        purchasedSessions + transferredIn - transferredOut - attendedSessions + ((enr as any).creditResetOffset || 0);
-
-      let status: "PAID" | "EXPIRING" | "UNPAID" = "PAID";
-      if (remainingSessions <= 0) {
-        status = "UNPAID";
-      } else if (remainingSessions === 1) {
-        status = "EXPIRING";
+      if (creditMetrics.isNonPayer || creditMetrics.status === "SIBLING_WAIVED") {
+        continue;
       }
+
+      const remainingSessions = creditMetrics.netSessions;
+      const status: "PAID" | "EXPIRING" | "UNPAID" =
+        creditMetrics.status === "UNPAID"
+          ? "UNPAID"
+          : creditMetrics.status === "EXPIRING"
+          ? "EXPIRING"
+          : "PAID";
 
       studentsToWatchMap.set(key, {
         studentId: student.id,
@@ -352,9 +347,14 @@ const AdminPage = async () => {
   const lessonsAttendanceData: TodayLessonAttendanceData[] =
     thisBranchTodaysLessons.map((l) => {
       const present = l.attendances.filter((a) => a.status === "PRESENT").length;
-      const absent = l.attendances.filter((a) => a.status === "ABSENT").length;
+      const unexcused = l.attendances.filter((a) => a.status === "ABSENT").length;
+      const excused = l.attendances.filter((a) => a.status === "NOT_DEFINED").length;
+      const absent = unexcused + excused;
       const totalRecorded = present + absent;
       const rate = totalRecorded > 0 ? (present / totalRecorded) * 100 : 0;
+      const enrolled = l.class.enrollments.filter(
+        (e: any) => e.status === "ACTIVE" || !e.status
+      ).length;
 
       const timeSlot = `${new Date(l.startsAt).toLocaleTimeString("en-GB", {
         hour: "2-digit",
@@ -369,13 +369,19 @@ const AdminPage = async () => {
         timeSlot,
         present,
         absent,
+        excused,
+        enrolled,
         total: totalRecorded,
         rate,
+        isTeacherAbsent: Boolean(l.isTeacherAbsent),
       };
     });
 
+  const recordedLessons = lessonsAttendanceData.filter((item) => item.total > 0);
   const totalPresent = lessonsAttendanceData.reduce((sum, item) => sum + item.present, 0);
   const totalAbsent = lessonsAttendanceData.reduce((sum, item) => sum + item.absent, 0);
+  const totalExcused = lessonsAttendanceData.reduce((sum, item) => sum + (item.excused || 0), 0);
+  const totalExpectedRecorded = recordedLessons.reduce((sum, item) => sum + (item.enrolled || item.total), 0);
   const totalExpected = thisBranchTodaysLessons.reduce(
     (sum, l) => sum + l.class.enrollments.filter((e: any) => e.status === "ACTIVE" || !e.status).length,
     0
@@ -404,7 +410,9 @@ const AdminPage = async () => {
         <TodayAttendanceChart
           totalPresent={totalPresent}
           totalAbsent={totalAbsent}
+          totalExcused={totalExcused}
           totalExpected={totalExpected}
+          totalExpectedRecorded={totalExpectedRecorded}
           overallRate={overallRate}
           lessonsData={lessonsAttendanceData}
           branchName={branchName}

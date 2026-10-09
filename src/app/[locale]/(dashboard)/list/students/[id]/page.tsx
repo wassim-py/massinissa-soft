@@ -16,7 +16,7 @@ import { StudentAvatar } from "@/components/ui/UserAvatar";
 import { serializeForClient } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
 import { canUserAccessBranch } from "@/lib/settings";
-import { computeStudentSessionFee, computeStudentConsumedSessions } from "@/lib/studentBilling";
+import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions } from "@/lib/studentBilling";
 import StudentPayerStatusControl from "@/components/students/StudentPayerStatusControl";
 import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 import {
@@ -94,6 +94,11 @@ const SingleStudentPage = async (
                 include: {
                   branch: true,
                   level: true,
+                  FormationLevel: {
+                    include: {
+                      Language: true,
+                    },
+                  },
                   teacherClassRates: true,
                   teacher: {
                     include: {
@@ -203,52 +208,53 @@ const SingleStudentPage = async (
     // Group metrics & remaining session count per enrolled group across all branches (§1.0 & Rule 3)
     const groupSummaries = (studentPaymentData?.enrollments || []).map((enr) => {
       const c = enr.class;
+      const isFormation = Boolean(c.isFormation || (c as any).FormationLevel || (c as any).formationLevelId);
       const classVouchers = (studentPaymentData?.vouchers || []).filter(
         (v) => !v.isVoided && !v.isRefund && (v.classId === c.id || v.class?.id === c.id)
       );
-      const tuitionVouchers = classVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
-      const cyclePrice = Number(c?.pricePerCycle || 0);
-      const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-      const effectiveLessonPrice =
-        siblingDiscountPct > 0 && siblingDiscountPct < 100
-          ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-          : siblingDiscountPct >= 100
-          ? 0
-          : baseLessonPrice;
 
-      let purchasedSessions = 0;
-      if (isSiblingWaived100) {
-        purchasedSessions = 16;
-      } else if (effectiveLessonPrice > 0) {
-        let totalPaidTuition = 0;
+      // Formation Level metrics
+      const formationVouchers = classVouchers.filter((v) => v.paymentType === "FORMATION");
+      const tuitionVouchers = classVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
+      const formationLevelPrice = Number((c as any).FormationLevel?.lumpSumPrice ?? c.pricePerCycle ?? 0);
+      let totalPaidFormation = 0;
+      formationVouchers.forEach((v) => {
+        const vAmount = Number(v.amount || 0);
+        const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+        totalPaidFormation += Math.max(0, vAmount - vRefunded);
+      });
+      if (totalPaidFormation === 0 && isFormation && tuitionVouchers.length > 0) {
         tuitionVouchers.forEach((v) => {
           const vAmount = Number(v.amount || 0);
           const vRefunded = (v as any).refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
-          totalPaidTuition += Math.max(0, vAmount - vRefunded);
+          totalPaidFormation += Math.max(0, vAmount - vRefunded);
         });
-        purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
-      } else {
-        purchasedSessions = tuitionVouchers.length * 4;
       }
-      const transferredOut = (enr.transfersFrom || []).reduce(
-        (sum, t) => sum + t.transferredSessions,
-        0
-      );
-      const transferredIn = (enr.transfersTo || []).reduce(
-        (sum, t) => sum + t.transferredSessions,
-        0
-      );
+      const isLevelPaid = isFormation && totalPaidFormation >= formationLevelPrice && formationLevelPrice > 0;
+      const isLevelPartiallyPaid = isFormation && totalPaidFormation > 0 && totalPaidFormation < formationLevelPrice;
+      const levelRemainingBalance = Math.max(0, formationLevelPrice - totalPaidFormation);
 
-      const classAtts = (studentPaymentData?.attendances || []).filter(
-        (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
-      );
-      const classLessons = classAtts.map((att: any) => att.lesson);
-      const attendedSessions = computeStudentConsumedSessions({
-        lessons: classLessons,
-        attendances: classAtts.map((att: any) => ({ lessonId: att.lesson.id, status: att.status })),
+      const enrStatus = enr.payerStatus || "NORMAL";
+      const creditMetrics = computeStudentCreditAndSessions({
+        pricePerCycle: Number(c?.pricePerCycle || 0),
+        isFormation,
+        payerStatus: enrStatus,
+        siblingDiscountPercentage: siblingDiscountPct,
+        isSiblingWaived: isSiblingWaived100,
+        tuitionVouchers,
+        transfersIn: enr.transfersTo,
+        transfersOut: enr.transfersFrom,
+        creditResetOffset: (enr as any).creditResetOffset,
+        attendances: (studentPaymentData?.attendances || []).filter(
+          (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
+        ),
       });
 
-      const netSessions = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + Number((enr as any).creditResetOffset || 0);
+      const purchasedSessions = creditMetrics.purchasedSessions;
+      const transferredIn = creditMetrics.transferredIn;
+      const transferredOut = creditMetrics.transferredOut;
+      const attendedSessions = creditMetrics.attendedSessions;
+      const netSessions = creditMetrics.netSessions;
 
       const teacherClassOverride = (c.teacherClassRates as any[])?.find(
         (tcr: any) => tcr.teacherId === c.teacherId
@@ -259,7 +265,6 @@ const SingleStudentPage = async (
           ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
           : null;
 
-      const enrStatus = enr.payerStatus || "NORMAL";
       const feeCalc = computeStudentSessionFee({
         payerStatus: enrStatus,
         pricePerCycle: Number(c.pricePerCycle || 0),
@@ -275,6 +280,14 @@ const SingleStudentPage = async (
         branchId: c.branchId,
         branchName: c.branch.name,
         levelName: c.level?.name || null,
+        isFormation,
+        formationLevelName: (c as any).FormationLevel?.name || null,
+        formationLanguageName: (c as any).FormationLevel?.Language?.name || null,
+        formationLevelPrice,
+        totalPaidFormation,
+        isLevelPaid,
+        isLevelPartiallyPaid,
+        levelRemainingBalance,
         teacherName: c.teacher?.name || null,
         netSessions,
         isSiblingWaived: isSiblingWaived100,
@@ -293,23 +306,25 @@ const SingleStudentPage = async (
     const inactiveGroupSummaries = groupSummaries.filter((g) => g.status !== "ACTIVE");
 
     // SORTING RULE (§1.0 / Payment-Renewal Signal - Rule 4):
-    // Active groups with 1 session left appear FIRST.
+    // Active non-formation groups with 1 session left appear FIRST.
     // Secondary sort: exhausted/unpaid (<= 0), then paid (> 1), then by class name.
     const sortedActiveGroupSummaries = [...activeGroupSummaries].sort((a, b) => {
-      const aIsOne = a.netSessions === 1;
-      const bIsOne = b.netSessions === 1;
+      const aIsOne = !a.isFormation && a.netSessions === 1;
+      const bIsOne = !b.isFormation && b.netSessions === 1;
       if (aIsOne && !bIsOne) return -1;
       if (!aIsOne && bIsOne) return 1;
 
-      if (a.netSessions <= 0 && b.netSessions > 1) return -1;
-      if (a.netSessions > 1 && b.netSessions <= 0) return 1;
+      const aIsUnpaid = a.isFormation ? !a.isLevelPaid : a.netSessions <= 0;
+      const bIsUnpaid = b.isFormation ? !b.isLevelPaid : b.netSessions <= 0;
+      if (aIsUnpaid && !bIsUnpaid) return -1;
+      if (!aIsUnpaid && bIsUnpaid) return 1;
 
       return a.className.localeCompare(b.className);
     });
 
     const sortedGroupSummaries = [...sortedActiveGroupSummaries, ...inactiveGroupSummaries];
 
-    const expiringGroupsCount = sortedActiveGroupSummaries.filter((g) => g.netSessions === 1).length;
+    const expiringGroupsCount = sortedActiveGroupSummaries.filter((g) => !g.isFormation && g.netSessions === 1).length;
 
     const classIds = (studentPaymentData?.enrollments || [])
       .filter((e) => (e as any).status === "ACTIVE" || !(e as any).status)
@@ -631,9 +646,14 @@ const SingleStudentPage = async (
                                 <Building2 className="w-3 h-3 inline me-1" />
                                 {g.branchName}
                               </Badge>
-                              {g.levelName && (
+                              {g.levelName && !g.isFormation && (
                                 <Badge variant="neutral" size="sm">
                                   {g.levelName}
+                                </Badge>
+                              )}
+                              {g.isFormation && g.formationLevelName && (
+                                <Badge variant="primary" size="sm">
+                                  {g.formationLanguageName ? `${g.formationLanguageName} • ${g.formationLevelName}` : g.formationLevelName}
                                 </Badge>
                               )}
                               {g.payerStatus === "NON_PAYER" && (
@@ -668,6 +688,30 @@ const SingleStudentPage = async (
                               <Badge variant="neutral" size="sm" withDot>
                                 {locale === "ar" ? "ملغى التسجيل" : "Désinscrit"}
                               </Badge>
+                            ) : g.isFormation ? (
+                              g.isLevelPaid ? (
+                                <Badge variant="success" size="sm" withDot>
+                                  {locale === "ar" ? "المستوى خالص بالكامل" : "Niveau payé"}
+                                </Badge>
+                              ) : g.isLevelPartiallyPaid ? (
+                                <Badge variant="warning" size="sm" withDot>
+                                  {locale === "ar"
+                                    ? `دفع جزئي (متبقي ${g.levelRemainingBalance.toLocaleString()} د.ج)`
+                                    : `Partiel (reste ${g.levelRemainingBalance.toLocaleString()} DZD)`}
+                                </Badge>
+                              ) : (
+                                <Badge variant="danger" size="sm" withDot>
+                                  {locale === "ar" ? "المستوى غير مدفوع" : "Niveau non payé"}
+                                </Badge>
+                              )
+                            ) : g.payerStatus === "NON_PAYER" ? (
+                              <Badge variant="success" size="sm" withDot>
+                                {t("badgeNonPayer")}
+                              </Badge>
+                            ) : g.isSiblingWaived ? (
+                              <Badge variant="neutral" size="sm" withDot>
+                                {t("statusSiblingWaived")}
+                              </Badge>
                             ) : isOne ? (
                               <Badge variant="warning" size="sm" withDot className="font-bold shadow-xs">
                                 {t("statusOneSessionLeft")}
@@ -679,10 +723,6 @@ const SingleStudentPage = async (
                             ) : isUnpaid ? (
                               <Badge variant="danger" size="sm" withDot>
                                 {t("statusUnpaid", { count: g.netSessions })}
-                              </Badge>
-                            ) : g.isSiblingWaived ? (
-                              <Badge variant="neutral" size="sm" withDot>
-                                {t("statusSiblingWaived")}
                               </Badge>
                             ) : null}
                           </div>

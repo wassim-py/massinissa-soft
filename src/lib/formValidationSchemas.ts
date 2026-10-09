@@ -199,6 +199,7 @@ export const voucherPaymentTypeEnum = z.enum([
   "EXTRA_SESSION",
   "CATCHUP",
   "WORKSHOP",
+  "FORMATION",
 ]);
 
 export const voucherSchema = z.object({

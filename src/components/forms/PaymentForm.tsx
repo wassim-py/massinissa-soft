@@ -77,9 +77,14 @@ const PaymentForm = ({
   const enrollment = (student.enrollments as any[])?.find((e) => e.classId === classData.id);
   const currentPayerStatus = enrollment?.payerStatus || (student as any).payerStatus || "NORMAL";
 
+  const isFormation = Boolean((classData as any)?.isFormation || (classData as any)?.FormationLevel || (classData as any)?.formationLevelId);
+  const formationLevelPrice = Number(
+    (classData as any)?.FormationLevel?.lumpSumPrice ?? classData.pricePerCycle ?? (classData as any)?.price ?? 0
+  );
+
   const feeCalc = computeStudentSessionFee({
     payerStatus: currentPayerStatus,
-    pricePerCycle: Number(classData.pricePerCycle || (classData as any).price || 0),
+    pricePerCycle: isFormation ? formationLevelPrice : Number(classData.pricePerCycle || (classData as any).price || 0),
     teacherPercentage,
     isSiblingWaived,
     siblingDiscountPercentage: siblingDiscountPct,
@@ -95,8 +100,8 @@ const PaymentForm = ({
     amountOwedByStudent !== undefined
       ? amountOwedByStudent > 0
         ? amountOwedByStudent
-        : feeCalc.studentCycleFee
-      : feeCalc.studentCycleFee;
+        : isFormation ? formationLevelPrice : feeCalc.studentCycleFee
+      : isFormation ? formationLevelPrice : feeCalc.studentCycleFee;
   const initialTuitionChecked =
     amountOwedByStudent !== undefined ? amountOwedByStudent > 0 : true;
 
@@ -378,7 +383,7 @@ const PaymentForm = ({
                 id: issuedBundle.voucherNumber,
                 number: issuedBundle.voucherNumber,
                 amount: issuedBundle.totalAmount,
-                paymentType: (classData as any)?.isFormation ? "FORMATION" : "MULTI_ITEM",
+                paymentType: isFormation ? "FORMATION" : "MULTI_ITEM",
                 student,
                 class: classData,
                 series: { scope: issuedBundle.seriesScope, id: issuedBundle.seriesId },
@@ -516,10 +521,10 @@ const PaymentForm = ({
                 className="w-4 h-4 rounded text-primary focus:ring-primary/20 cursor-pointer"
               />
               <span>
-                {(classData as any)?.isFormation
+                {isFormation
                   ? locale === "ar"
-                    ? "رسوم الدورة التكوينية"
-                    : "Frais de formation"
+                    ? "رسوم الدورة التكوينية (المستوى)"
+                    : "Frais de formation (niveau)"
                   : locale === "ar"
                   ? "اشتراك دراسي (4 حصص)"
                   : "Cycle d'études (4 séances)"}
