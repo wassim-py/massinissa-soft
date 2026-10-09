@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
-import { getAuthRole } from "@/lib/auth";
+import { getAuthRole, getAuthSession } from "@/lib/auth";
 import ExportButton from "@/components/ExportButton";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -23,6 +23,12 @@ export default async function FormationDetailsPage(props: {
   const params = await props.params;
   const searchParams = props.searchParams ? await props.searchParams : {};
   const role = await getAuthRole();
+  const session = await getAuthSession();
+  const canCreateStudent =
+    session.can("create", "student") ||
+    session.isOwner ||
+    session.isBranchAdmin ||
+    session.isOwnerOrAdmin;
   const t = await getTranslations("formations");
   const locale = await getLocale();
 
@@ -285,6 +291,33 @@ export default async function FormationDetailsPage(props: {
     select: { id: true, name: true, phone: true },
     orderBy: { name: "asc" },
   });
+
+  // Fetch grades and classes for rapid student registration to this formation group
+  let studentRelatedData = { grades: [] as any[], classes: [] as any[] };
+  if (canCreateStudent) {
+    try {
+      const [levels, classes] = await Promise.all([
+        prisma.level.findMany({
+          select: { id: true, name: true },
+          orderBy: { id: "asc" },
+        }),
+        prisma.class.findMany({
+          where: session.isOwner
+            ? {}
+            : { OR: [{ branchId: formationGroup.branchId }, { id: formationGroup.id }] },
+          select: { id: true, name: true, levelId: true },
+          orderBy: { name: "asc" },
+        }),
+      ]);
+
+      studentRelatedData = {
+        grades: levels.map((lvl) => ({ id: lvl.id, level: lvl.name, name: lvl.name })),
+        classes: classes.map((c) => ({ id: c.id, name: c.name, levelId: c.levelId })),
+      };
+    } catch (e) {
+      console.error("Error fetching student registration relatedData in formation details:", e);
+    }
+  }
 
   // Map vouchers and tests by student
   const vouchersByStudent = new Map<string, any[]>();
@@ -693,6 +726,8 @@ export default async function FormationDetailsPage(props: {
               availableNextGroups={serializeForClient(availableNextGroups)}
               enrolledStudents={serializeForClient(enrolledStudentsData)}
               allStudents={serializeForClient(allStudents)}
+              studentRelatedData={serializeForClient(studentRelatedData) as any}
+              canCreateStudent={canCreateStudent}
               role={role}
             />
           </div>

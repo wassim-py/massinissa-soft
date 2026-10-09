@@ -41,6 +41,8 @@ const TakeAttendancePage = async (
            c."inscriptionFee",
            c."bookFee",
            c."hasBooks",
+           c."isFormation",
+           c."formationLevelId",
            c."teacherId" as "classTeacherId",
            c."levelId" as "classLevelId",
            t.name as "teacherName"
@@ -94,6 +96,8 @@ const TakeAttendancePage = async (
       inscriptionFee: l.inscriptionFee != null ? Number(l.inscriptionFee) : 0,
       bookFee: l.bookFee != null ? Number(l.bookFee) : 0,
       hasBooks: Boolean(l.hasBooks),
+      isFormation: Boolean(l.isFormation),
+      formationLevelId: l.formationLevelId != null ? Number(l.formationLevelId) : null,
       levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
       branchId: l.branchId != null ? Number(l.branchId) : null,
     },
@@ -390,7 +394,7 @@ const TakeAttendancePage = async (
 
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: Number(rawLesson[0]?.pricePerCycle || rawLesson[0]?.classPrice || 0),
-      isFormation: false,
+      isFormation: Boolean(l.isFormation),
       payerStatus: enrPayerStatus,
       siblingDiscountPercentage: siblingDiscountPct,
       isSiblingWaived: isSiblingWaived100,
@@ -447,14 +451,14 @@ const TakeAttendancePage = async (
       enrollmentStatus === "TRANSFERRED";
 
     const classVouchers = (details?.vouchers || []).filter(
-      (v: any) => v.classId === l.classId || (!v.classId && v.paymentType === "TUITION_4SESSION")
+      (v: any) => v.classId === l.classId || (!v.classId && (v.paymentType === "TUITION_4SESSION" || v.paymentType === "FORMATION"))
     );
     const hasRefundRecord = classVouchers.some(
       (v: any) => v.status === "REFUNDED" || v.isRefund || (v.refunds && v.refunds.length > 0)
     );
     const hasActiveTuitionVoucher = (details?.vouchers || []).some(
       (v: any) =>
-        v.paymentType === "TUITION_4SESSION" &&
+        (v.paymentType === "TUITION_4SESSION" || v.paymentType === "FORMATION") &&
         (v.classId === l.classId || !v.classId) &&
         !v.isVoided &&
         !v.isRefund &&

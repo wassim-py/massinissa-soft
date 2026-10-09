@@ -611,9 +611,11 @@ export const createStudent = async (
       safeRevalidatePath("/list/students");
       safeRevalidatePath("/list/attendance");
       safeRevalidatePath("/list/parents");
+      safeRevalidatePath("/list/formations");
       if (data.classes && data.classes.length > 0) {
         for (const classId of data.classes) {
           safeRevalidatePath(`/list/attendance/class/${classId}`);
+          safeRevalidatePath(`/list/formations/${classId}`);
         }
       }
     } catch {
@@ -1901,7 +1903,7 @@ export const saveAttendance = async (
         });
       }
 
-      // Check for 3+ consecutive absences among absent students
+      // Check for 4+ consecutive absences among absent students
       if (absentStudentIds.length > 0) {
         const [classLessons, allAttendances, allCatchUps] = await Promise.all([
           prisma.lesson.findMany({
@@ -1934,7 +1936,7 @@ export const saveAttendance = async (
             attendances: sAtts,
             catchUps: sCatchUps,
           });
-          if (consecutive >= 3) {
+          if (consecutive >= 4) {
             toSuspendStudentIds.push(sid);
           }
         }
@@ -2058,12 +2060,12 @@ export const markSingleAttendanceAction = async (input: {
             },
             data: { status: "ACTIVE" },
           });
-        } else if (input.status === "ABSENT") {
-          // Check for >= 3 consecutive absences (Rules 5 & 9)
+        } else if (input.status === "NOT_DEFINED") {
+          // If student was SUSPENDED and the absence was justified, restore ACTIVE if consecutive unexcused absences are now < 4
           const [classLessons, studentAtts, studentCatchUps] = await Promise.all([
             prisma.lesson.findMany({
-              where: { classId: lessonInfo.classId, isFree: false },
-              select: { id: true, startsAt: true, isFree: true },
+              where: { classId: lessonInfo.classId, isFree: false, isTeacherAbsent: false },
+              select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
               orderBy: { startsAt: "asc" },
             }),
             prisma.attendance.findMany({
@@ -2088,7 +2090,47 @@ export const markSingleAttendanceAction = async (input: {
             catchUps: studentCatchUps,
           });
 
-          if (consecutiveAbsences >= 3) {
+          if (consecutiveAbsences < 4) {
+            await prisma.enrollment.updateMany({
+              where: {
+                studentId: input.studentId,
+                classId: lessonInfo.classId,
+                status: "SUSPENDED",
+              },
+              data: { status: "ACTIVE" },
+            });
+          }
+        } else if (input.status === "ABSENT") {
+          // Check for >= 4 consecutive absences (Rules 5 & 9)
+          const [classLessons, studentAtts, studentCatchUps] = await Promise.all([
+            prisma.lesson.findMany({
+              where: { classId: lessonInfo.classId, isFree: false, isTeacherAbsent: false },
+              select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+              orderBy: { startsAt: "asc" },
+            }),
+            prisma.attendance.findMany({
+              where: {
+                studentId: input.studentId,
+                lesson: { classId: lessonInfo.classId },
+              },
+              select: { lessonId: true, status: true },
+            }),
+            prisma.catchUpAttendance.findMany({
+              where: {
+                studentId: input.studentId,
+                missedLesson: { classId: lessonInfo.classId },
+              },
+              select: { missedLessonId: true },
+            }),
+          ]);
+
+          const consecutiveAbsences = computeStudentConsecutiveAbsences({
+            lessons: classLessons,
+            attendances: studentAtts,
+            catchUps: studentCatchUps,
+          });
+
+          if (consecutiveAbsences >= 4) {
             await prisma.enrollment.updateMany({
               where: {
                 studentId: input.studentId,
@@ -2949,6 +2991,8 @@ export async function enrollStudentInClassAction({
       safeRevalidatePath(`/list/attendance/class/${classId}`);
       safeRevalidatePath(`/list/classes/${classId}`);
       safeRevalidatePath(`/list/students/${studentId}`);
+      safeRevalidatePath("/list/formations");
+      safeRevalidatePath(`/list/formations/${classId}`);
     } catch {
       // Tolerate revalidation outside request
     }

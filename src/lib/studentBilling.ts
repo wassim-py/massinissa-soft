@@ -481,6 +481,11 @@ export function computeStudentRefundableSessions({
 /**
  * Computes the number of consecutive unexcused trailing absences for a student.
  * Breaks on PRESENT or CatchUp attendance. Passes through NOT_DEFINED.
+ *
+ * Rule: Non-starting students (students who have not yet attended any session
+ * in this class) are never marked as suspended, regardless of how many pre-start
+ * absences they have. Consecutive absences only begin tracking toward suspension
+ * after the student's first attendance (PRESENT or CatchUp) in the class.
  */
 export function computeStudentConsecutiveAbsences({
   lessons,
@@ -502,6 +507,17 @@ export function computeStudentConsecutiveAbsences({
   attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
   const catchUpSet = new Set<number>();
   catchUps.forEach((c) => catchUpSet.add(c.missedLessonId));
+
+  // Determine if the student has started attending in this group (at least one PRESENT or CatchUp)
+  const hasStarted = sortedLessons.some((l) => {
+    const status = attendanceMap.get(l.id);
+    return status === "PRESENT" || catchUpSet.has(l.id);
+  });
+
+  // Non-starting students are never marked as suspended, regardless of how many pre-start absences they have.
+  if (!hasStarted) {
+    return 0;
+  }
 
   let consecutiveAbsences = 0;
   for (let i = sortedLessons.length - 1; i >= 0; i--) {

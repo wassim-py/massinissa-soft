@@ -880,13 +880,13 @@ export default function StudentPaymentDetails({
                             </span>
                             <span className="text-[10px] block mt-1">
                               {cm.isInscriptionPaid ? (
-                                <span className="text-emerald-700 font-bold">{t("settled")}</span>
+                                <span className="text-emerald-700 font-bold">{t("inscriptionSettled")}</span>
                               ) : cm.enrollment.feeOverriddenByOwner ? (
-                                <span className="text-amber-700 font-semibold">{t("waivedOwner")}</span>
+                                <span className="text-amber-700 font-semibold">{t("inscriptionOwnerWaived")}</span>
                               ) : !cm.enrollment.inscriptionFeeCharged ? (
-                                <span className="text-blue-700 font-semibold">{t("waivedAuto")}</span>
+                                <span className="text-blue-700 font-semibold">{t("inscriptionGroupWaived")}</span>
                               ) : (
-                                <span className="text-danger font-bold">{t("unsettled")}</span>
+                                <span className="text-danger font-bold">{t("inscriptionDue")}</span>
                               )}
                             </span>
                           </div>

@@ -5,7 +5,7 @@ import { Link } from "@/i18n/navigation";
 import Image from "next/image";
 import EnrollStudentModal from "./EnrollStudentModal";
 import PaymentForm from "@/components/forms/PaymentForm";
-import { X } from "lucide-react";
+import { X, UserPlus } from "lucide-react";
 import RecordLevelTestModal from "./RecordLevelTestModal";
 import AssistedLevelUpModal from "./AssistedLevelUpModal";
 import RetakeLevelModal from "./RetakeLevelModal";
@@ -28,6 +28,8 @@ export default function FormationRoster({
   availableNextGroups = [],
   enrolledStudents,
   allStudents = [],
+  studentRelatedData = { grades: [], classes: [] },
+  canCreateStudent = true,
   role = "admin",
 }: {
   formationClass: {
@@ -65,6 +67,11 @@ export default function FormationRoster({
     levelTests: any[];
   }>;
   allStudents?: Array<{ id: string; name: string; phone?: string | null }>;
+  studentRelatedData?: {
+    grades: Array<{ id: number; level?: string; name?: string }>;
+    classes: Array<{ id: number; name: string; levelId?: number | null }>;
+  };
+  canCreateStudent?: boolean;
   role?: string;
 }) {
   const router = useRouter();
@@ -128,22 +135,35 @@ export default function FormationRoster({
           <h2 className="text-xl font-bold text-gray-800">
             {t("enrolledStudents", { count: enrolledStudents.length })}
           </h2>
-          {role === "admin" && (
+          {(canCreateStudent || role === "admin") && (
             <button
+              type="button"
               onClick={() => setIsEnrollModalOpen(true)}
-              className="w-8 h-8 flex items-center justify-center rounded-full bg-wsmYellow hover:opacity-90 transition-opacity"
-              title={t("enrollStudent")}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-xs cursor-pointer active:scale-95"
             >
-              <Image src="/create.png" alt={t("enrollStudent")} width={16} height={16} />
+              <UserPlus className="w-4 h-4" />
+              <span>{locale === "ar" ? "إضافة تلميذ" : "Ajouter un élève"}</span>
             </button>
           )}
         </div>
 
         {/* STUDENTS LIST */}
         {enrolledStudents.length === 0 ? (
-          <p className="text-gray-500 text-sm py-4 text-center">
-            {t("noStudentsEnrolled")}
-          </p>
+          <div className="text-center py-8">
+            <p className="text-gray-500 text-sm mb-3">
+              {t("noStudentsEnrolled")}
+            </p>
+            {(canCreateStudent || role === "admin") && (
+              <button
+                type="button"
+                onClick={() => setIsEnrollModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-xs cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>{locale === "ar" ? "إضافة تلميذ" : "Ajouter un élève"}</span>
+              </button>
+            )}
+          </div>
         ) : (
           <div className="space-y-3">
             {enrolledStudents.map((enr) => {
@@ -451,10 +471,28 @@ export default function FormationRoster({
           isOpen={isEnrollModalOpen}
           onClose={() => {
             setIsEnrollModalOpen(false);
+          }}
+          formationClass={{
+            ...formationClass,
+            FormationLevel: formationLevel,
+          }}
+          studentRelatedData={studentRelatedData}
+          students={allStudents}
+          onSuccess={() => {
+            setIsEnrollModalOpen(false);
             router.refresh();
           }}
-          formationClass={formationClass}
-          students={allStudents}
+          onEnrollAndPay={(student) => {
+            setIsEnrollModalOpen(false);
+            setPaymentModalState({
+              isOpen: true,
+              student,
+              amountOwed: levelPrice,
+              isRetake: false,
+              isBookPaid: false,
+            });
+            router.refresh();
+          }}
         />
       )}
 

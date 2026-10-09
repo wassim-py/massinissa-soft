@@ -88,7 +88,14 @@ type FullStudent = Student & {
 };
 
 type FullLesson = Lesson & {
-  class: Class & { price?: number; levelId?: number | null; branchId?: number | null };
+  class: Class & {
+    price?: number;
+    pricePerCycle?: number;
+    levelId?: number | null;
+    branchId?: number | null;
+    isFormation?: boolean;
+    formationLevelId?: number | null;
+  };
   teacher: Teacher & { surname?: string };
   subject?: { id: number; name: string };
   branchId?: number | null;
@@ -659,6 +666,21 @@ const AttendanceRoster = ({
               (lesson.class as any)?.formationLevelId
             );
 
+            const formationVouchers = (student.vouchers || []).filter(
+              (v: any) =>
+                (v.paymentType === "FORMATION" || v.paymentType === "TUITION_4SESSION") &&
+                !v.isVoided &&
+                (v.classId === lesson.class.id || !v.classId)
+            );
+            const totalPaidFormation = formationVouchers.reduce((sum: number, v: any) => {
+              const paid = Number(v.amount || 0);
+              const refunded = (v.refunds || []).reduce((rSum: number, r: any) => rSum + Number(r.amount || 0), 0);
+              return sum + (paid - refunded);
+            }, 0);
+            const formationPrice = Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0);
+            const isFormationPaidInFull = formationPrice > 0 && totalPaidFormation >= formationPrice;
+            const isFormationPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
+
             const creditMetrics = computeStudentCreditAndSessions({
               pricePerCycle: Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0),
               isFormation,
@@ -693,22 +715,45 @@ const AttendanceRoster = ({
             const hasConsecutiveAbsenceAlert = consecutiveAbsences >= 3;
 
             let statusBubble = { text: t("unpaidDue"), color: "bg-red-500" };
-            if (isSiblingWaived100) {
-              if (!isPayerSiblingPaid) {
-                statusBubble = { text: locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)", color: "bg-red-500" };
+            if (isFormation) {
+              if (isSiblingWaived100) {
+                if (!isPayerSiblingPaid) {
+                  statusBubble = { text: locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)", color: "bg-red-500" };
+                } else {
+                  statusBubble = { text: t("waivedSibling"), color: "bg-amber-600" };
+                }
+              } else if (isNonPayer) {
+                statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
+              } else if (isFormationPaidInFull) {
+                statusBubble = { text: locale === "ar" ? "تم الدفع بالكامل" : "Payé en totalité", color: "bg-green-500" };
+              } else if (isFormationPartiallyPaid) {
+                statusBubble = {
+                  text: locale === "ar"
+                    ? `دفع جزئي (متبقي ${(formationPrice - totalPaidFormation).toLocaleString("ar-DZ")} دج)`
+                    : `Paiement partiel (reste ${(formationPrice - totalPaidFormation).toLocaleString("fr-DZ")} DZD)`,
+                  color: "bg-yellow-500",
+                };
               } else {
-                statusBubble = { text: t("waivedSibling"), color: "bg-amber-600" };
+                statusBubble = { text: t("unpaidDue"), color: "bg-red-500" };
               }
-            } else if (isNonPayer) {
-              statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
-            } else if (isSchoolFeesOnly) {
-              statusBubble = { text: locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls", color: "bg-sky-500" };
-            } else if (sessionsRemaining >= 2) {
-              statusBubble = { text: isSiblingDiscount ? (locale === "ar" ? `مدفوع (-${siblingDiscountPct}%)` : `Payé (-${siblingDiscountPct}%)`) : t("paidGood"), color: "bg-green-500" };
-            } else if (sessionsRemaining >= 1) {
-              statusBubble = { text: t("expiringSoon"), color: "bg-yellow-500" };
-            } else if (isSiblingDiscount) {
-              statusBubble = { text: locale === "ar" ? `غير مدفوع (خصم ${siblingDiscountPct}%)` : `Dû (-${siblingDiscountPct}%)`, color: "bg-amber-600" };
+            } else {
+              if (isSiblingWaived100) {
+                if (!isPayerSiblingPaid) {
+                  statusBubble = { text: locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)", color: "bg-red-500" };
+                } else {
+                  statusBubble = { text: t("waivedSibling"), color: "bg-amber-600" };
+                }
+              } else if (isNonPayer) {
+                statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
+              } else if (isSchoolFeesOnly) {
+                statusBubble = { text: locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls", color: "bg-sky-500" };
+              } else if (sessionsRemaining >= 2) {
+                statusBubble = { text: isSiblingDiscount ? (locale === "ar" ? `مدفوع (-${siblingDiscountPct}%)` : `Payé (-${siblingDiscountPct}%)`) : t("paidGood"), color: "bg-green-500" };
+              } else if (sessionsRemaining >= 1) {
+                statusBubble = { text: t("expiringSoon"), color: "bg-yellow-500" };
+              } else if (isSiblingDiscount) {
+                statusBubble = { text: locale === "ar" ? `غير مدفوع (خصم ${siblingDiscountPct}%)` : `Dû (-${siblingDiscountPct}%)`, color: "bg-amber-600" };
+              }
             }
 
             const mostRecentVoucher =
@@ -840,7 +885,7 @@ const AttendanceRoster = ({
                           </Badge>
                         )}
 
-                        {hasConsecutiveAbsenceAlert && (
+                        {hasConsecutiveAbsenceAlert && !isSuspended && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-950 border border-amber-300 text-[11px] font-bold shadow-2xs">
                             <span>⚠️</span>
                             <span>{locale === "ar" ? `${consecutiveAbsences} غيابات متتالية` : `${consecutiveAbsences}x Absences`}</span>
@@ -876,18 +921,22 @@ const AttendanceRoster = ({
                       </div>
                       <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
                         <span>{statusBubble.text}</span>
-                        <span>•</span>
-                        <span className={sessionsRemaining < 0 && !isNonPayer && !isSiblingWaived100 ? "font-semibold text-rose-600" : ""}>
-                          {isSiblingWaived100
-                            ? (!isPayerSiblingPaid
-                                ? (locale === "ar" ? "الأخ الدافع غير مسدد" : "Frère payeur non soldé")
-                                : t("tuitionWaivedSibling"))
-                            : isNonPayer
-                            ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
-                            : isSchoolFeesOnly
-                            ? (locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls")
-                            : t("sessionsRemainingCount", { count: sessionsRemaining })}
-                        </span>
+                        {!isFormation && (
+                          <>
+                            <span>•</span>
+                            <span className={sessionsRemaining < 0 && !isNonPayer && !isSiblingWaived100 ? "font-semibold text-rose-600" : ""}>
+                              {isSiblingWaived100
+                                ? (!isPayerSiblingPaid
+                                    ? (locale === "ar" ? "الأخ الدافع غير مسدد" : "Frère payeur non soldé")
+                                    : t("tuitionWaivedSibling"))
+                                : isNonPayer
+                                ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
+                                : isSchoolFeesOnly
+                                ? (locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls")
+                                : t("sessionsRemainingCount", { count: sessionsRemaining })}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
