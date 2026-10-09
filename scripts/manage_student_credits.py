@@ -3,29 +3,32 @@
 manage_student_credits.py — Student Financial & Academic Credit Alignment Tool
 Designed for Android (Termux) and Desktop.
 
-Allows administrators to:
-  1. Inspect student profile, enrolled classes, payments, and credit balance.
-  2. List all vouchers with full metadata.
-  3. Create custom vouchers with any date, branch, amount, and class.
-  4. Edit existing vouchers (amount, date, branch, class, payment type, void status).
-  5. Delete or soft-void vouchers.
-  6. View and fix lesson attendances (flip PRESENT / ABSENT / EXCUSED to fix session credit).
-  7. Toggle inscription fee charged & payer status (NORMAL / NON_PAYER / SCHOOL_FEES_ONLY).
-
-REQUIREMENTS IN TERMUX:
-  pkg install python -y
-  python -m pip install pg8000
-
-USAGE:
-  python manage_student_credits.py           # Interactive search
-  python manage_student_credits.py 136       # Direct by Global Number
-  python manage_student_credits.py "ناردين"  # Direct by name search
-"""
+# Allows administrators to:
+#   1. Inspect student profile, enrolled classes, payments, and credit balance.
+#   2. List all vouchers with full metadata.
+#   3. Create custom vouchers with any date, branch, amount, and class.
+#   4. Edit existing vouchers (amount, date, branch, class, payment type, void status).
+#   5. Delete or soft-void vouchers (with automatic Daily Ledger reconciliation).
+#   6. View and fix lesson attendances (flip PRESENT / ABSENT / EXCUSED to fix session credit).
+#   7. Toggle inscription fee charged & payer status (NORMAL / NON_PAYER / SCHOOL_FEES_ONLY).
+#   8. Reconcile / Sync Daily Ledger with all vouchers and refunds.
+# 
+# REQUIREMENTS IN TERMUX:
+#   pkg install python -y
+#   python -m pip install pg8000
+# 
+# USAGE:
+#   python manage_student_credits.py               # Interactive search
+#   python manage_student_credits.py 136           # Direct by Global Number
+#   python manage_student_credits.py "ناردين"      # Direct by name search
+#   python manage_student_credits.py --sync-ledger # Sync Daily Ledger and exit
+# """
 
 import sys
 import os
 import re
 import json
+import time
 import argparse
 from datetime import datetime, date
 from urllib.parse import urlparse
@@ -257,7 +260,8 @@ def get_student_full_profile(conn, student_id):
         """SELECT v.id, v.number, v."seriesId", v."paymentType", v.amount, v."isVoided",
                   v."issuedAt", v."issuedBy", v."classId", c.name as class_name,
                   ib.name as issuing_branch, tb.name as target_branch,
-                  v."isPartial", v."remainingBalance"
+                  v."isPartial", v."remainingBalance",
+                  v."issuingBranchId", v."targetBranchId"
            FROM "Voucher" v
            LEFT JOIN "Class" c ON c.id = v."classId"
            LEFT JOIN "Branch" ib ON ib.id = v."issuingBranchId"
@@ -282,6 +286,8 @@ def get_student_full_profile(conn, student_id):
             "target_branch": r[11] or "—",
             "isPartial": bool(r[12]),
             "remainingBalance": float(r[13] or 0) if r[13] is not None else None,
+            "issuingBranchId": r[14],
+            "targetBranchId": r[15],
         }
         for r in v_rows
     ]
@@ -367,6 +373,146 @@ def get_or_create_voucher_series(conn, branch_id):
             bid=branch_id
         )
         return created[0][0], 1
+
+
+# ── Daily Ledger Reconciliation ────────────────────────────────────────
+
+def reconcile_daily_ledger_for_branch_date(conn, branch_id, date_val):
+    """
+    Reconciles the DailyLedger table for a specific branch and calendar day.
+    Re-aggregates active vouchers and refunds for (branch_id, date) and updates DailyLedger atomically.
+    Ensures that adding, editing, voiding, or deleting vouchers never leaves drift in DailyLedger.
+    """
+    if not branch_id or not date_val:
+        return
+
+    # Normalize date to calendar day
+    if isinstance(date_val, datetime):
+        d = date_val.date()
+    elif isinstance(date_val, date):
+        d = date_val
+    else:
+        d = datetime.strptime(str(date_val)[:10], "%Y-%m-%d").date()
+
+    norm_dt = datetime(d.year, d.month, d.day, 0, 0, 0)
+    dt_start = datetime(d.year, d.month, d.day, 0, 0, 0)
+    dt_end = datetime(d.year, d.month, d.day, 23, 59, 59, 999999)
+
+    # 1. Clear existing summary records for that branch and calendar day
+    conn.run(
+        'DELETE FROM "DailyLedger" WHERE "branchId" = :bid AND date = :norm_dt',
+        bid=branch_id, norm_dt=norm_dt
+    )
+
+    # 2. Insert freshly calculated aggregates matching src/lib/ledger.ts
+    insert_sql = """
+    INSERT INTO "DailyLedger" ("branchId", date, type, amount)
+    WITH voucher_agg AS (
+        SELECT
+            v."issuingBranchId" as "branchId",
+            :norm_dt::timestamp as date,
+            CASE
+                WHEN v."paymentType" = 'INSCRIPTION' THEN 'INSCRIPTION'
+                WHEN v."paymentType" = 'BOOK' THEN 'BOOK'
+                WHEN c."isFormation" = true OR v."paymentType" IN ('WORKSHOP', 'FORMATION') THEN 'ATELIER_FORMATION'
+                ELSE 'TUITION'
+            END as type,
+            SUM(v.amount) as amount
+        FROM "Voucher" v
+        LEFT JOIN "Class" c ON c.id = v."classId"
+        WHERE v."issuingBranchId" = :bid
+          AND v."issuedAt" >= :dt_start AND v."issuedAt" <= :dt_end
+          AND v."isVoided" = false
+          AND v."isRefund" = false
+          AND v.amount > 0
+        GROUP BY 1, 2, 3
+    ),
+    refund_agg AS (
+        SELECT
+            v."issuingBranchId" as "branchId",
+            :norm_dt::timestamp as date,
+            'REFUND'::text as type,
+            SUM(r.amount) as amount
+        FROM "Refund" r
+        JOIN "Voucher" v ON v.id = r."voucherId"
+        WHERE v."issuingBranchId" = :bid
+          AND r."refundedAt" >= :dt_start AND r."refundedAt" <= :dt_end
+          AND r.amount > 0
+        GROUP BY 1, 2, 3
+    ),
+    combined AS (
+        SELECT * FROM voucher_agg
+        UNION ALL
+        SELECT * FROM refund_agg
+    )
+    SELECT "branchId", date, type, SUM(amount)
+    FROM combined
+    GROUP BY "branchId", date, type
+    """
+
+    conn.run(
+        insert_sql,
+        bid=branch_id, norm_dt=norm_dt, dt_start=dt_start, dt_end=dt_end
+    )
+
+
+def sync_all_daily_ledger(conn):
+    """
+    Re-synchronize the entire DailyLedger table from all active vouchers and refunds.
+    Guarantees zero drift between raw vouchers and DailyLedger summaries across all branches and history.
+    """
+    t0 = time.time()
+    conn.run("BEGIN")
+    try:
+        conn.run('DELETE FROM "DailyLedger"')
+        sync_sql = """
+        INSERT INTO "DailyLedger" ("branchId", date, type, amount)
+        WITH voucher_agg AS (
+            SELECT
+                v."issuingBranchId" as "branchId",
+                DATE_TRUNC('day', v."issuedAt") as date,
+                CASE
+                    WHEN v."paymentType" = 'INSCRIPTION' THEN 'INSCRIPTION'
+                    WHEN v."paymentType" = 'BOOK' THEN 'BOOK'
+                    WHEN c."isFormation" = true OR v."paymentType" IN ('WORKSHOP', 'FORMATION') THEN 'ATELIER_FORMATION'
+                    ELSE 'TUITION'
+                END as type,
+                SUM(v.amount) as amount
+            FROM "Voucher" v
+            LEFT JOIN "Class" c ON c.id = v."classId"
+            WHERE v."isVoided" = false
+              AND v."isRefund" = false
+              AND v.amount > 0
+            GROUP BY 1, 2, 3
+        ),
+        refund_agg AS (
+            SELECT
+                v."issuingBranchId" as "branchId",
+                DATE_TRUNC('day', r."refundedAt") as date,
+                'REFUND'::text as type,
+                SUM(r.amount) as amount
+            FROM "Refund" r
+            JOIN "Voucher" v ON v.id = r."voucherId"
+            WHERE r.amount > 0
+            GROUP BY 1, 2, 3
+        ),
+        combined AS (
+            SELECT * FROM voucher_agg
+            UNION ALL
+            SELECT * FROM refund_agg
+        )
+        SELECT "branchId", date, type, SUM(amount)
+        FROM combined
+        GROUP BY "branchId", date, type
+        """
+        conn.run(sync_sql)
+        conn.run("COMMIT")
+        count = conn.run('SELECT COUNT(*) FROM "DailyLedger"')[0][0]
+        elapsed = (time.time() - t0) * 1000
+        return True, count, elapsed
+    except Exception as e:
+        conn.run("ROLLBACK")
+        return False, str(e), 0
 
 
 # ── Action Handlers ───────────────────────────────────────────────────
@@ -466,8 +612,11 @@ def handle_create_voucher(conn, student):
             dtl=f"Created voucher #{v_number} for student #{student['globalNumber']} ({format_money(amount)}) on {issue_date_str}"
         )
 
+        # Reconcile DailyLedger immediately
+        reconcile_daily_ledger_for_branch_date(conn, issuing_branch_id, issued_at_dt)
+
         conn.run("COMMIT")
-        print(f"\n✅ Voucher #{v_number} created successfully! (ID: {new_v_id})")
+        print(f"\n✅ Voucher #{v_number} created successfully and Daily Ledger updated! (ID: {new_v_id})")
     except Exception as e:
         conn.run("ROLLBACK")
         print(f"\n❌ Error creating voucher: {e}")
@@ -502,6 +651,9 @@ def handle_edit_voucher(conn, student):
     print("  [6] Toggle Void / Active Status")
     print("  [0] Cancel")
 
+    issuing_bid = voucher.get("issuingBranchId") or student.get("registeredBranchId") or 1
+    issued_dt = voucher["issuedAt"]
+
     action = input("\nSelect field to edit: ").strip()
 
     if action == "1":
@@ -509,12 +661,19 @@ def handle_edit_voucher(conn, student):
         if not new_amt_str:
             return
         new_amt = float(new_amt_str)
-        conn.run(
-            """UPDATE "Voucher" SET amount = :amt, "lastEditedAt" = NOW(), "lastEditedBy" = 'termux'
-               WHERE id = :vid""",
-            amt=new_amt, vid=voucher["id"]
-        )
-        print(f"✅ Amount updated to {format_money(new_amt)}.")
+        conn.run("BEGIN")
+        try:
+            conn.run(
+                """UPDATE "Voucher" SET amount = :amt, "lastEditedAt" = NOW(), "lastEditedBy" = 'termux'
+                   WHERE id = :vid""",
+                amt=new_amt, vid=voucher["id"]
+            )
+            reconcile_daily_ledger_for_branch_date(conn, issuing_bid, issued_dt)
+            conn.run("COMMIT")
+            print(f"✅ Amount updated to {format_money(new_amt)} and Daily Ledger reconciled.")
+        except Exception as e:
+            conn.run("ROLLBACK")
+            print(f"❌ Error updating amount: {e}")
 
     elif action == "2":
         new_date_str = input(f"Enter new date (YYYY-MM-DD) [current {format_date(voucher['issuedAt'])}]: ").strip()
@@ -522,14 +681,23 @@ def handle_edit_voucher(conn, student):
             return
         try:
             new_date = datetime.strptime(new_date_str, "%Y-%m-%d")
+        except Exception as e:
+            print(f"❌ Invalid date format: {e}")
+            return
+        conn.run("BEGIN")
+        try:
             conn.run(
                 """UPDATE "Voucher" SET "issuedAt" = :dt, "lastEditedAt" = NOW(), "lastEditedBy" = 'termux'
                    WHERE id = :vid""",
                 dt=new_date, vid=voucher["id"]
             )
-            print(f"✅ Date updated to {new_date_str}.")
+            reconcile_daily_ledger_for_branch_date(conn, issuing_bid, issued_dt)
+            reconcile_daily_ledger_for_branch_date(conn, issuing_bid, new_date)
+            conn.run("COMMIT")
+            print(f"✅ Date updated to {new_date_str} and Daily Ledger reconciled.")
         except Exception as e:
-            print(f"❌ Invalid date format: {e}")
+            conn.run("ROLLBACK")
+            print(f"❌ Error updating date: {e}")
 
     elif action == "3":
         print("\nSelect new class:")
@@ -543,12 +711,19 @@ def handle_edit_voucher(conn, student):
                 new_cid = student["enrollments"][int(c_choice) - 1]["classId"]
             except Exception:
                 pass
-        conn.run(
-            """UPDATE "Voucher" SET "classId" = :cid, "lastEditedAt" = NOW(), "lastEditedBy" = 'termux'
-               WHERE id = :vid""",
-            cid=new_cid, vid=voucher["id"]
-        )
-        print("✅ Class updated.")
+        conn.run("BEGIN")
+        try:
+            conn.run(
+                """UPDATE "Voucher" SET "classId" = :cid, "lastEditedAt" = NOW(), "lastEditedBy" = 'termux'
+                   WHERE id = :vid""",
+                cid=new_cid, vid=voucher["id"]
+            )
+            reconcile_daily_ledger_for_branch_date(conn, issuing_bid, issued_dt)
+            conn.run("COMMIT")
+            print("✅ Class updated and Daily Ledger reconciled.")
+        except Exception as e:
+            conn.run("ROLLBACK")
+            print(f"❌ Error updating class: {e}")
 
     elif action == "4":
         branches = get_all_branches(conn)
@@ -558,14 +733,23 @@ def handle_edit_voucher(conn, student):
         b_choice = input("Choose: ").strip()
         try:
             new_bid = branches[int(b_choice) - 1]["id"]
+        except Exception:
+            print("Invalid branch.")
+            return
+        conn.run("BEGIN")
+        try:
             conn.run(
                 """UPDATE "Voucher" SET "issuingBranchId" = :bid, "targetBranchId" = :bid, "lastEditedAt" = NOW()
                    WHERE id = :vid""",
                 bid=new_bid, vid=voucher["id"]
             )
-            print(f"✅ Branch updated to {branches[int(b_choice) - 1]['name']}.")
-        except Exception:
-            print("Invalid branch.")
+            reconcile_daily_ledger_for_branch_date(conn, issuing_bid, issued_dt)
+            reconcile_daily_ledger_for_branch_date(conn, new_bid, issued_dt)
+            conn.run("COMMIT")
+            print(f"✅ Branch updated to {branches[int(b_choice) - 1]['name']} and Daily Ledger reconciled.")
+        except Exception as e:
+            conn.run("ROLLBACK")
+            print(f"❌ Error updating branch: {e}")
 
     elif action == "5":
         types = ["FORMATION", "TUITION_4SESSION", "INSCRIPTION", "BOOK", "WORKSHOP"]
@@ -574,22 +758,36 @@ def handle_edit_voucher(conn, student):
         t_choice = input("Choose type: ").strip()
         if t_choice in ("1", "2", "3", "4", "5"):
             new_type = types[int(t_choice) - 1]
-            conn.run(
-                """UPDATE "Voucher" SET "paymentType" = :pt, "lastEditedAt" = NOW()
-                   WHERE id = :vid""",
-                pt=new_type, vid=voucher["id"]
-            )
-            print(f"✅ Type updated to {new_type}.")
+            conn.run("BEGIN")
+            try:
+                conn.run(
+                    """UPDATE "Voucher" SET "paymentType" = :pt, "lastEditedAt" = NOW()
+                       WHERE id = :vid""",
+                    pt=new_type, vid=voucher["id"]
+                )
+                reconcile_daily_ledger_for_branch_date(conn, issuing_bid, issued_dt)
+                conn.run("COMMIT")
+                print(f"✅ Type updated to {new_type} and Daily Ledger reconciled.")
+            except Exception as e:
+                conn.run("ROLLBACK")
+                print(f"❌ Error updating type: {e}")
 
     elif action == "6":
         new_void = not voucher["isVoided"]
         status_str = "VOIDED" if new_void else "ACTIVE"
-        conn.run(
-            """UPDATE "Voucher" SET "isVoided" = :v, status = :st, "lastEditedAt" = NOW()
-               WHERE id = :vid""",
-            v=new_void, st=status_str, vid=voucher["id"]
-        )
-        print(f"✅ Voucher status toggled to {status_str}.")
+        conn.run("BEGIN")
+        try:
+            conn.run(
+                """UPDATE "Voucher" SET "isVoided" = :v, status = :st, "lastEditedAt" = NOW()
+                   WHERE id = :vid""",
+                v=new_void, st=status_str, vid=voucher["id"]
+            )
+            reconcile_daily_ledger_for_branch_date(conn, issuing_bid, issued_dt)
+            conn.run("COMMIT")
+            print(f"✅ Voucher status toggled to {status_str} and Daily Ledger reconciled.")
+        except Exception as e:
+            conn.run("ROLLBACK")
+            print(f"❌ Error toggling void status: {e}")
 
 
 def handle_delete_voucher(conn, student):
@@ -601,7 +799,8 @@ def handle_delete_voucher(conn, student):
     print("\nSelect Voucher to Delete:")
     for i, v in enumerate(student["vouchers"], 1):
         v_date = format_date(v["issuedAt"])
-        print(f"  [{i}] #{v['number']} | {format_money(v['amount'])} | {v['paymentType']} | {v['class_name']} | {v_date}")
+        void_str = " [VOIDED]" if v["isVoided"] else ""
+        print(f"  [{i}] #{v['number']} | {format_money(v['amount'])} | {v['paymentType']} | {v['class_name']} | {v_date}{void_str}")
 
     choice = input(f"\nChoose voucher (1-{len(student['vouchers'])}): ").strip()
     try:
@@ -617,17 +816,52 @@ def handle_delete_voucher(conn, student):
     print("  [0] Cancel")
 
     mode = input("Choose action: ").strip()
+    issuing_bid = voucher.get("issuingBranchId") or student.get("registeredBranchId") or 1
+    issued_dt = voucher["issuedAt"]
+
     if mode == "1":
-        conn.run(
-            'UPDATE "Voucher" SET "isVoided" = true, status = \'VOIDED\', "lastEditedAt" = NOW() WHERE id = :id',
-            id=voucher["id"]
-        )
-        print("✅ Voucher marked as VOIDED.")
+        conn.run("BEGIN")
+        try:
+            conn.run(
+                'UPDATE "Voucher" SET "isVoided" = true, status = \'VOIDED\', "lastEditedAt" = NOW(), "lastEditedBy" = \'termux\' WHERE id = :id',
+                id=voucher["id"]
+            )
+            reconcile_daily_ledger_for_branch_date(conn, issuing_bid, issued_dt)
+            conn.run(
+                """INSERT INTO "AuditLog" ("entityType", "entityId", action, "branchId", "userId", "userName", details, timestamp)
+                   VALUES ('Voucher', :vid, 'VOID_VOUCHER_TERMUX', :bid, 'termux', 'Termux Admin', :dtl, NOW())""",
+                vid=str(voucher["id"]), bid=issuing_bid,
+                dtl=f"Voided voucher #{voucher['number']} for student #{student['globalNumber']} ({format_money(voucher['amount'])})"
+            )
+            conn.run("COMMIT")
+            print("✅ Voucher marked as VOIDED and Daily Ledger reconciled.")
+        except Exception as e:
+            conn.run("ROLLBACK")
+            print(f"❌ Error voiding voucher: {e}")
+
     elif mode == "2":
         confirm = input(f"Are you ABSOLUTELY sure you want to permanently delete voucher #{voucher['number']}? (yes/no): ").strip().lower()
         if confirm in ("yes", "y"):
-            conn.run('DELETE FROM "Voucher" WHERE id = :id', id=voucher["id"])
-            print("✅ Voucher permanently deleted.")
+            conn.run("BEGIN")
+            try:
+                # 1. Clean up VoucherEdit records referencing this voucher
+                conn.run('DELETE FROM "VoucherEdit" WHERE "voucherId" = :id', id=voucher["id"])
+                # 2. Delete the voucher
+                conn.run('DELETE FROM "Voucher" WHERE id = :id', id=voucher["id"])
+                # 3. Reconcile DailyLedger immediately so the voucher value is removed from the daily ledger
+                reconcile_daily_ledger_for_branch_date(conn, issuing_bid, issued_dt)
+                # 4. Audit log
+                conn.run(
+                    """INSERT INTO "AuditLog" ("entityType", "entityId", action, "branchId", "userId", "userName", details, timestamp)
+                       VALUES ('Voucher', :vid, 'DELETE_VOUCHER_TERMUX', :bid, 'termux', 'Termux Admin', :dtl, NOW())""",
+                    vid=str(voucher["id"]), bid=issuing_bid,
+                    dtl=f"Permanently deleted voucher #{voucher['number']} for student #{student['globalNumber']} ({format_money(voucher['amount'])})"
+                )
+                conn.run("COMMIT")
+                print(f"✅ Voucher #{voucher['number']} permanently deleted and Daily Ledger reconciled.")
+            except Exception as e:
+                conn.run("ROLLBACK")
+                print(f"❌ Error permanently deleting voucher: {e}")
         else:
             print("Cancelled.")
 
@@ -879,10 +1113,11 @@ def student_action_loop(conn, student_id):
         print("  [4] Delete or Void a Voucher")
         print("  [5] View & Fix Lesson Attendances (Presence / Absence / Excused)")
         print("  [6] Toggle Inscription Fee & Payer Status")
-        print("  [7] Switch Student")
+        print("  [7] Reconcile / Sync Daily Ledger (Fix any discrepancies)")
+        print("  [8] Switch Student")
         print("  [0] Exit")
 
-        cmd = input("\nSelect action (0-7): ").strip()
+        cmd = input("\nSelect action (0-8): ").strip()
 
         if cmd == "1":
             list_all_vouchers(student)
@@ -903,6 +1138,14 @@ def student_action_loop(conn, student_id):
             handle_toggle_inscription_and_payer(conn, student)
             input("\nPress Enter to return to menu...")
         elif cmd == "7":
+            print("\nSynchronizing DailyLedger from all vouchers and refunds...")
+            ok, res, el = sync_all_daily_ledger(conn)
+            if ok:
+                print(f"✅ DailyLedger fully synchronized ({res} entries in {el:.0f}ms).")
+            else:
+                print(f"❌ Error syncing DailyLedger: {res}")
+            input("\nPress Enter to return to menu...")
+        elif cmd == "8":
             return "SWITCH"
         elif cmd in ("0", "q", "exit"):
             return "EXIT"
@@ -912,6 +1155,7 @@ def main():
     parser = argparse.ArgumentParser(description="Student Credit & Voucher Alignment Tool")
     parser.add_argument("identifier", nargs="?", help="Student Global Number or Name")
     parser.add_argument("--db", help="PostgreSQL connection string")
+    parser.add_argument("--sync-ledger", action="store_true", help="Sync DailyLedger table from all vouchers and exit")
     args = parser.parse_args()
 
     db_url = args.db or load_env_database_url()
@@ -926,6 +1170,15 @@ def main():
         print(f"❌ Database connection failed: {e}")
         sys.exit(1)
 
+    if args.sync_ledger:
+        print("\nSynchronizing DailyLedger from all vouchers and refunds...")
+        ok, res, el = sync_all_daily_ledger(conn)
+        if ok:
+            print(f"✅ DailyLedger fully synchronized ({res} entries in {el:.0f}ms).")
+        else:
+            print(f"❌ Error syncing DailyLedger: {res}")
+        return
+
     initial_query = args.identifier
 
     while True:
@@ -933,9 +1186,18 @@ def main():
             print("\n" + "═" * 50)
             print("  🎓 STUDENT CREDIT & VOUCHER MANAGER")
             print("═" * 50)
-            initial_query = input("Enter Student Global # or Name (or 'q' to quit): ").strip()
+            initial_query = input("Enter Student Global # or Name (or 'sync' to reconcile ledger, 'q' to quit): ").strip()
             if not initial_query or initial_query.lower() in ("q", "quit", "exit"):
                 break
+            if initial_query.lower() in ("sync", "sync-ledger", "ledger"):
+                print("\nSynchronizing DailyLedger from all vouchers and refunds...")
+                ok, res, el = sync_all_daily_ledger(conn)
+                if ok:
+                    print(f"✅ DailyLedger fully synchronized ({res} entries in {el:.0f}ms).")
+                else:
+                    print(f"❌ Error syncing DailyLedger: {res}")
+                initial_query = None
+                continue
 
         matches = search_students(conn, initial_query)
         if not matches:

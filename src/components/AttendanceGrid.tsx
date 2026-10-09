@@ -17,7 +17,6 @@ type AttendanceGridProps = {
 
 const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: AttendanceGridProps) => {
     const t = useTranslations("attendance");
-    const tSearch = useTranslations("search");
     const locale = useLocale();
 
     const searchParams = useSearchParams();
@@ -75,7 +74,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                             type="text"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder={tSearch("searchStudentPlaceholder")}
+                            placeholder={t.has("searchStudentPlaceholder") ? t("searchStudentPlaceholder") : (locale === "ar" ? "البحث باسم التلميذ أو رقمه..." : "Rechercher par nom ou identifiant...")}
                             className="w-full ps-9 pe-8 py-2 text-xs sm:text-sm bg-surface border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-gray-900 placeholder:text-muted transition-all shadow-2xs"
                         />
                         {searchQuery && (

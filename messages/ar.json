@@ -427,6 +427,7 @@
     "catchUpConfirm": "تأكيد تسجيل الاستدراك",
     "missedLesson": "الحصة الغائب عنها: {lesson} مع {teacher}",
     "attendanceGridTitle": "سجل الحضور",
+    "searchStudentPlaceholder": "البحث باسم التلميذ أو رقمه...",
     "studentCol": "التلميذ",
     "freeSessionNoticeTitle": "حصة مجانية (Free Session):",
     "freeSessionNoticeBody": "تسجيل الحضور في هذه الحصة لن يخصم من رصيد الحصص المدفوعة للتلاميذ.",

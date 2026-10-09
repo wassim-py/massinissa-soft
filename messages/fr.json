@@ -427,6 +427,7 @@
     "catchUpConfirm": "Confirmer le rattrapage",
     "missedLesson": "Séance manquée : {lesson} avec {teacher}",
     "attendanceGridTitle": "Feuille de présence",
+    "searchStudentPlaceholder": "Rechercher par nom ou identifiant...",
     "studentCol": "Élève",
     "freeSessionNoticeTitle": "Séance gratuite (Free Session) :",
     "freeSessionNoticeBody": "L'enregistrement de la présence à cette séance ne sera pas décompté du solde payé des élèves.",
