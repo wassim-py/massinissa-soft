@@ -11,7 +11,11 @@ import FinalLevelEnrollmentButton from "@/components/formations/FinalLevelEnroll
 import DeleteFormationLevelModal from "@/components/formations/DeleteFormationLevelModal";
 import Image from "next/image";
 import Link from "next/link";
-import { serializeForClient } from "@/lib/utils";
+import {
+  serializeForClient,
+  getAlgiersWeekBounds,
+  resolveRecurringLessonsForWeek,
+} from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
 import { GraduationCap, ArrowLeft, ArrowRight, Layers, Users, Calendar } from "lucide-react";
 import { Prisma } from "@prisma/client";
@@ -793,7 +797,12 @@ export default async function FormationDetailsPage(props: {
 
             <FormationSchedule
               formationClass={serializeForClient(formationGroup)}
-              sessions={serializeForClient(formationGroup.lessons)}
+              sessions={serializeForClient(
+                resolveRecurringLessonsForWeek(
+                  formationGroup.lessons,
+                  getAlgiersWeekBounds(0)
+                )
+              )}
               enrolledStudents={serializeForClient(enrolledStudentsList)}
               classrooms={serializeForClient(classrooms)}
               teachers={serializeForClient(teachers)}

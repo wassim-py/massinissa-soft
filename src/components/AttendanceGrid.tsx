@@ -156,12 +156,22 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                     key={instance.key}
                                     className="p-2.5 sm:p-3 text-table-header font-semibold text-center text-muted border-b-2 border-border min-w-[85px] sm:min-w-[120px] sticky top-0 z-20 bg-surface-muted shadow-[0_2px_4px_-2px_rgba(0,0,0,0.06)]"
                                 >
-                                    <div className="flex flex-col items-center">
-                                        <span className="font-bold text-gray-800">{instance.lessonName}</span>
-                                        <span className="font-normal text-form-helper text-muted">
+                                    <Link
+                                        href={`/list/attendance/take/${instance.lessonId}?date=${encodeURIComponent(instance.date)}`}
+                                        className="flex flex-col items-center group/col hover:text-primary transition-colors"
+                                        title={
+                                            locale === "ar"
+                                                ? `تعديل حضور حصة ${formatDateHeader(instance.date)}`
+                                                : `Modifier la présence du ${formatDateHeader(instance.date)}`
+                                        }
+                                    >
+                                        <span className="font-bold text-gray-800 group-hover/col:text-primary group-hover/col:underline">
+                                            {instance.lessonName}
+                                        </span>
+                                        <span className="font-normal text-form-helper text-muted group-hover/col:text-primary/80">
                                             {formatDateHeader(instance.date)}
                                         </span>
-                                    </div>
+                                    </Link>
                                 </th>
                             ))}
                         </tr>

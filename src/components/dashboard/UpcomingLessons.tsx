@@ -21,6 +21,7 @@ export interface DashboardLessonItem {
   branchName: string;
   startsAt: string; // ISO format
   endsAt: string; // ISO format
+  dateStr?: string; // YYYY-MM-DD in Africa/Algiers
   className: string;
   teacherName: string;
   classroomName: string;
@@ -298,7 +299,17 @@ export default function UpcomingLessons({
                 {/* Right: Take Attendance button ONLY for logged-in branch */}
                 <div className="shrink-0 flex items-center">
                   {lesson.canTakeAttendance ? (
-                    <Link href={`/list/attendance/take/${lesson.id}`}>
+                    <Link
+                      href={`/list/attendance/take/${lesson.id}?date=${encodeURIComponent(
+                        lesson.dateStr ||
+                          new Intl.DateTimeFormat("en-CA", {
+                            timeZone: "Africa/Algiers",
+                            year: "numeric",
+                            month: "2-digit",
+                            day: "2-digit",
+                          }).format(new Date(lesson.startsAt))
+                      )}`}
+                    >
                       <Button
                         size="sm"
                         variant={hasEnded ? "outline" : "primary"}

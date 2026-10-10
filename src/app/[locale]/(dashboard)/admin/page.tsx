@@ -12,7 +12,11 @@ import TodayAttendanceChart, {
 } from "@/components/dashboard/TodayAttendanceChart";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
 import { computeStudentCreditAndSessions } from "@/lib/studentBilling";
-import { serializeForClient } from "@/lib/utils";
+import {
+  serializeForClient,
+  getAlgiersDateInfo,
+  resolveRecurringLessonsForDate,
+} from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -27,33 +31,6 @@ const AdminPage = async () => {
     select: { id: true, name: true },
   });
   const branchName = branch?.name || `Siège #${activeBranchId}`;
-
-  // Helper to extract date and weekday information in Africa/Algiers timezone (constant UTC+1 without DST)
-  const getAlgiersDateInfo = (date: Date) => {
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Africa/Algiers",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      weekday: "long",
-    }).formatToParts(date);
-    const m: Record<string, string> = {};
-    parts.forEach((p) => {
-      m[p.type] = p.value;
-    });
-    return {
-      year: parseInt(m.year, 10),
-      month: parseInt(m.month, 10),
-      day: parseInt(m.day, 10),
-      hour: parseInt(m.hour, 10),
-      minute: parseInt(m.minute, 10),
-      weekday: (m.weekday || "").toUpperCase(),
-      dateStr: `${m.year}-${m.month}-${m.day}`,
-    };
-  };
 
   const now = new Date();
   const todayInfo = getAlgiersDateInfo(now);
@@ -144,42 +121,7 @@ const AdminPage = async () => {
     },
   });
 
-  const isOneOffLesson = (l: any) => Boolean(l.isExtra || l.isCatchUp || l.isFree);
-
-  const allTodaysLessons = candidateLessons
-    .filter((l) => {
-      const isOneOff = isOneOffLesson(l);
-      const lInfo = getAlgiersDateInfo(new Date(l.startsAt));
-      if (isOneOff) {
-        return lInfo.dateStr === todayInfo.dateStr;
-      }
-      return lInfo.weekday === todayInfo.weekday;
-    })
-    .map((l) => {
-      const isOneOff = isOneOffLesson(l);
-      if (!isOneOff) {
-        const lInfo = getAlgiersDateInfo(new Date(l.startsAt));
-        const durationMs =
-          new Date(l.endsAt).getTime() - new Date(l.startsAt).getTime();
-        // Project to today in Africa/Algiers (UTC hour = Algiers hour - 1)
-        const projectedStartsAt = new Date(
-          Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, lInfo.hour - 1, lInfo.minute, 0, 0)
-        );
-        const projectedEndsAt = new Date(
-          projectedStartsAt.getTime() + durationMs
-        );
-        return {
-          ...l,
-          startsAt: projectedStartsAt,
-          endsAt: projectedEndsAt,
-        };
-      }
-      return l;
-    })
-    .sort(
-      (a, b) =>
-        new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
-    );
+  const allTodaysLessons = resolveRecurringLessonsForDate(candidateLessons, now);
 
   // Today's lessons strictly for THIS branch
   const thisBranchTodaysLessons = allTodaysLessons.filter(
@@ -210,6 +152,7 @@ const AdminPage = async () => {
         branchName: l.branch?.name || `Siège #${l.branchId}`,
         startsAt: new Date(l.startsAt).toISOString(),
         endsAt: new Date(l.endsAt).toISOString(),
+        dateStr: l.instanceDate || todayInfo.dateStr,
         className: l.class.name,
         teacherName: l.teacher.name,
         classroomName: l.classroom?.name || "",

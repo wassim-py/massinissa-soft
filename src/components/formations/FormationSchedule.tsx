@@ -29,6 +29,7 @@ export default function FormationSchedule({
     id: number;
     startsAt: Date | string;
     endsAt: Date | string;
+    instanceDate?: string;
     teacher?: { id: string; name: string } | null;
     classroom?: { id: number; name: string } | null;
     attendances?: Array<{ id: number; studentId: string; status: string }>;
@@ -82,10 +83,18 @@ export default function FormationSchedule({
               const presentCount =
                 session.attendances?.filter((a) => a.status === "PRESENT").length || 0;
               const isAttendanceDone = attendancesCount > 0;
+              const sessionDateStr =
+                session.instanceDate ||
+                new Intl.DateTimeFormat("en-CA", {
+                  timeZone: "Africa/Algiers",
+                  year: "numeric",
+                  month: "2-digit",
+                  day: "2-digit",
+                }).format(new Date(session.startsAt));
 
               return (
                 <li
-                  key={session.id}
+                  key={`${session.id}_${sessionDateStr}`}
                   className="text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-surface-subtle border border-border/60 rounded-xl hover:border-border transition-colors group"
                 >
                   <div className="space-y-1">
@@ -93,6 +102,9 @@ export default function FormationSchedule({
                       <p className="font-bold text-gray-900 capitalize">
                         {new Date(session.startsAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
                           weekday: "long",
+                          day: "numeric",
+                          month: "short",
+                          timeZone: "Africa/Algiers",
                         })}
                       </p>
                       <span className="bg-teal-100 text-teal-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-teal-300">
@@ -110,14 +122,18 @@ export default function FormationSchedule({
                       )}
                     </div>
                     <p className="text-xs text-muted font-mono font-medium" dir="ltr">
-                      {new Date(session.startsAt).toLocaleTimeString([], {
+                      {new Date(session.startsAt).toLocaleTimeString("en-GB", {
                         hour: "2-digit",
                         minute: "2-digit",
+                        hour12: false,
+                        timeZone: "Africa/Algiers",
                       })}{" "}
                       -{" "}
-                      {new Date(session.endsAt).toLocaleTimeString([], {
+                      {new Date(session.endsAt).toLocaleTimeString("en-GB", {
                         hour: "2-digit",
                         minute: "2-digit",
+                        hour12: false,
+                        timeZone: "Africa/Algiers",
                       })}
                     </p>
                     {(session.classroom || session.teacher) && (
@@ -138,7 +154,7 @@ export default function FormationSchedule({
 
                   <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
                     <Link
-                      href={`/list/attendance/take/${session.id}`}
+                      href={`/list/attendance/take/${session.id}?date=${encodeURIComponent(sessionDateStr)}`}
                       className={`text-xs font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors shadow-2xs ${
                         isAttendanceDone
                           ? "text-emerald-700 border-emerald-300 bg-emerald-50/60 hover:bg-emerald-100/80"

@@ -17,6 +17,7 @@ export type TimetableLesson = {
   endTime: Date | string;
   startsAt: Date | string;
   endsAt: Date | string;
+  instanceDate?: string;
   classId?: number;
   teacherId?: string;
   classroomId?: number | null;
@@ -112,6 +113,7 @@ const Timetable = ({
   userRole,
   isCurrentWeek = true,
   currentWeekRange,
+  dayDates,
 }: {
   lessons: TimetableLesson[];
   actions: { [key: number]: React.JSX.Element };
@@ -119,22 +121,67 @@ const Timetable = ({
   userRole: string;
   isCurrentWeek?: boolean;
   currentWeekRange?: { start: Date; end: Date; offset: number };
+  dayDates?: Record<string, string>;
 }) => {
   const t = useTranslations("lessons");
   const locale = useLocale();
-  const [absenceOverrides, setAbsenceOverrides] = useState<Record<number, boolean>>({});
+  const [absenceOverrides, setAbsenceOverrides] = useState<Record<string, boolean>>({});
+
+  const getDayDateStr = (day: Day): string => {
+    if (dayDates && dayDates[day]) {
+      return dayDates[day];
+    }
+    if (currentWeekRange?.start) {
+      const idx = daysOfWeek.indexOf(day);
+      if (idx >= 0) {
+        const d = new Date(currentWeekRange.start);
+        d.setDate(d.getDate() + idx);
+        return getAlgiersDateString(d);
+      }
+    }
+    return "";
+  };
+
+  const formatDayDateBadge = (dateStr: string): string => {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(`${dateStr}T12:00:00+01:00`);
+      if (isNaN(d.getTime())) return dateStr;
+      return d.toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-FR", {
+        day: "2-digit",
+        month: "short",
+        timeZone: "Africa/Algiers",
+      });
+    } catch {
+      return dateStr;
+    }
+  };
 
   const enrichedLessons = useMemo(() => {
     const raw = Array.isArray(lessons) ? lessons : [];
-    return raw.map((l) => ({
-      ...l,
-      isTeacherAbsent: absenceOverrides[l.id] !== undefined ? absenceOverrides[l.id] : Boolean(l.isTeacherAbsent),
-    }));
-  }, [lessons, absenceOverrides]);
+    return raw.map((l) => {
+      const lessonDay = l.day && daysOfWeek.includes(l.day) ? l.day : undefined;
+      const resolvedDate = l.instanceDate || (lessonDay ? getDayDateStr(lessonDay) : "") || getAlgiersDateString(l.startsAt);
+      const overrideKey = `${l.id}_${resolvedDate}`;
+      return {
+        ...l,
+        instanceDate: resolvedDate,
+        isTeacherAbsent:
+          absenceOverrides[overrideKey] !== undefined
+            ? absenceOverrides[overrideKey]
+            : Boolean(l.isTeacherAbsent),
+      };
+    });
+  }, [lessons, absenceOverrides, dayDates, currentWeekRange]);
 
-  const handleLessonUpdated = (lessonId: number, isTeacherAbsent: boolean) => {
-    setAbsenceOverrides((prev) => ({ ...prev, [lessonId]: isTeacherAbsent }));
-    setSelectedLesson((prev) => (prev && prev.id === lessonId ? { ...prev, isTeacherAbsent } : prev));
+  const handleLessonUpdated = (lessonId: number, isTeacherAbsent: boolean, dateStr?: string) => {
+    const key = `${lessonId}_${dateStr || selectedLesson?.instanceDate || ""}`;
+    setAbsenceOverrides((prev) => ({ ...prev, [key]: isTeacherAbsent }));
+    setSelectedLesson((prev) =>
+      prev && (prev.id === lessonId || prev.instanceDate === dateStr)
+        ? { ...prev, id: lessonId, isTeacherAbsent }
+        : prev
+    );
   };
 
   const getDayTranslation = (day: Day) => {
@@ -175,19 +222,23 @@ const Timetable = ({
       const wsId = lesson.workshopSessionId || Math.abs(lesson.id);
       return `/list/workshops/${lesson.workshopId}?session=${wsId}`;
     }
-    return `/list/attendance/take/${lesson.id}`;
+    const lessonDay = getLessonDay(lesson);
+    const dateStr = lesson.instanceDate || getDayDateStr(lessonDay) || getAlgiersDateString(lesson.startsAt);
+    return dateStr
+      ? `/list/attendance/take/${lesson.id}?date=${encodeURIComponent(dateStr)}`
+      : `/list/attendance/take/${lesson.id}`;
   };
 
   const isLessonToday = (lesson: TimetableLesson): boolean => {
+    const nowDateStr = getAlgiersDateString(new Date());
+    const lessonDateStr = lesson.instanceDate || getAlgiersDateString(lesson.startsAt);
+
+    if (nowDateStr && lessonDateStr) {
+      return nowDateStr === lessonDateStr;
+    }
+
     if (!isCurrentWeek) return false;
 
-    const nowDateStr = getAlgiersDateString(new Date());
-    const lessonDateStr = getAlgiersDateString(lesson.startsAt);
-
-    // Exact calendar day match for one-off / dated sessions
-    if (nowDateStr && lessonDateStr && nowDateStr === lessonDateStr) return true;
-
-    // Recurring normal / formation lesson on today's weekday during current week
     const isOneOff = Boolean(
       lesson.isExtra ||
       lesson.isCatchUp ||
@@ -216,7 +267,7 @@ const Timetable = ({
   };
 
   useEffect(() => {
-    if (selectedLesson && !enrichedLessons.find(l => l.id === selectedLesson.id)) {
+    if (selectedLesson && !enrichedLessons.find(l => l.id === selectedLesson.id || (l.classId === selectedLesson.classId && l.instanceDate === selectedLesson.instanceDate))) {
       handleCloseModal();
     }
   }, [enrichedLessons, selectedLesson]);
@@ -354,7 +405,8 @@ const Timetable = ({
             {daysOfWeek.map((day) => {
               const count = enrichedLessons.filter((l) => getLessonDay(l) === day).length;
               const isSelected = selectedDay === day;
-              const isCurrent = day === today;
+              const isCurrent = isCurrentWeek && day === today;
+              const dayDateBadge = formatDayDateBadge(getDayDateStr(day));
               return (
                 <button
                   key={day}
@@ -369,6 +421,15 @@ const Timetable = ({
                   }`}
                 >
                   <span>{getDayTranslation(day)}</span>
+                  {dayDateBadge && (
+                    <span
+                      className={`text-[10px] font-medium ${
+                        isSelected ? "text-blue-100" : "text-gray-600"
+                      }`}
+                    >
+                      {dayDateBadge}
+                    </span>
+                  )}
                   <span
                     className={`text-[10px] mt-0.5 ${
                       isSelected ? "text-blue-100" : "text-gray-500"
@@ -404,12 +465,12 @@ const Timetable = ({
               return dayLessons.map((lesson) => {
                 const formattedStart = formatLessonTimeInAlgiers(lesson.startsAt);
                 const formattedEnd = formatLessonTimeInAlgiers(lesson.endsAt);
-                const isClickable = userRole === "admin";
+                const isClickable = userRole === "admin" || userRole === "owner" || userRole === "teacher";
                 const clickHandler = isClickable ? () => handleLessonClick(lesson) : undefined;
 
                 return (
                   <div
-                    key={lesson.id}
+                    key={`${lesson.id}_${lesson.instanceDate || ""}`}
                     onClick={clickHandler}
                     className={`p-3 rounded-xl border space-y-2 transition-all ${
                       lesson.isTeacherAbsent
@@ -499,8 +560,8 @@ const Timetable = ({
                       </span>
                     </div>
 
-                    {/* Take Attendance button */}
-                    {(isLessonToday(lesson) || selectedDay === getLessonDay(lesson)) && (
+                    {/* Take Attendance button ONLY on today's lesson cards */}
+                    {isLessonToday(lesson) && (
                       <div className="pt-1.5">
                         <Link
                           href={getTakeAttendanceHref(lesson)}
@@ -557,7 +618,8 @@ const Timetable = ({
 
           {/* Rows: One row per Day */}
           {daysOfWeek.map((day, idx) => {
-            const isToday = day === today;
+            const isToday = isCurrentWeek && day === today;
+            const dayDateBadge = formatDayDateBadge(getDayDateStr(day));
             const rowBgClass = idx % 2 === 0 ? "bg-white" : "bg-gray-50/40";
             return (
               <div
@@ -578,6 +640,11 @@ const Timetable = ({
                   <span className="font-bold text-xs sm:text-sm text-center">
                     {getDayTranslation(day)}
                   </span>
+                  {dayDateBadge && (
+                    <span className="text-[11px] font-medium text-gray-600 mt-0.5">
+                      {dayDateBadge}
+                    </span>
+                  )}
                   {isToday && (
                     <span className="text-[10px] font-bold text-blue-700 bg-blue-200/80 px-1.5 py-0.5 rounded-full mt-1">
                       {locale === "ar" ? "اليوم" : "Aujourd'hui"}
@@ -597,13 +664,13 @@ const Timetable = ({
                         const formattedEndTime = formatLessonTimeInAlgiers(lesson.endsAt);
                         const formattedStartTime = formatLessonTimeInAlgiers(lesson.startsAt);
 
-                        const isClickable = userRole === "admin";
+                        const isClickable = userRole === "admin" || userRole === "owner" || userRole === "teacher";
                         const clickHandler = isClickable ? () => handleLessonClick(lesson) : undefined;
                         const cardClassName = getLessonCardStyle(lesson, isClickable);
 
                         return (
                           <div
-                            key={lesson.id}
+                            key={`${lesson.id}_${lesson.instanceDate || ""}`}
                             onClick={clickHandler}
                             className={cardClassName}
                           >
@@ -653,6 +720,7 @@ const Timetable = ({
                               </div>
                               <h4 className="font-bold text-xs">{lesson.class?.name || lesson.name}</h4>
                               {(userRole === "admin" ||
+                                userRole === "owner" ||
                                 userRole === "student" ||
                                 userRole === "parent") && (
                                 <p className="text-gray-600 italic text-[11px] mt-0.5">

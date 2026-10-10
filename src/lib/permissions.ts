@@ -175,7 +175,8 @@ const BRANCH_ADMIN_ALLOWED_PERMISSIONS: Record<string, ReadonlySet<string>> = {
   teachers: new Set(["view", "restricted_actions"]),
   // "create", "update", "delete", "view_profile" are intentionally NOT allowed for branch_admin on teachers
   teacher_profile: new Set([]), // Explicitly OWNER-ONLY
-  students: new Set(["view", "create", "update", "delete", "view_profile"]),
+  students: new Set(["view", "create", "update", "view_profile"]),
+  // "delete" is intentionally NOT allowed for branch_admin on students
   student_profile: new Set(["view"]),
   parents: new Set(["view", "create", "update", "delete"]),
   subjects: new Set(["view"]), // Read-only: create, update, delete are OWNER-ONLY

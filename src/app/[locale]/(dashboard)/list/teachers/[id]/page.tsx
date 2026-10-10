@@ -19,7 +19,11 @@ import TeacherLessonRecordsSection from "@/components/teachers/TeacherLessonReco
 import TeacherPhotocopySection from "@/components/teachers/TeacherPhotocopySection";
 import TeacherBooksSection from "@/components/teachers/TeacherBooksSection";
 import { calculateTeacherPayroll } from "@/lib/payroll";
-import { serializeForClient } from "@/lib/utils";
+import {
+  serializeForClient,
+  getAlgiersWeekBounds,
+  resolveRecurringLessonsForWeek,
+} from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
 import {
   GraduationCap,
@@ -269,7 +273,12 @@ const SingleTeacherPage = async (
   ];
 
   // Timetable data preparation
-  const lessonsForTimetable = allLessonsForTimetable.map((r) => ({
+  const currentWeekBounds = getAlgiersWeekBounds(0);
+  const resolvedTeacherWeekLessons = resolveRecurringLessonsForWeek(
+    allLessonsForTimetable,
+    currentWeekBounds
+  );
+  const lessonsForTimetable = resolvedTeacherWeekLessons.map((r) => ({
     ...r,
     subject: { name: r.class?.name || (locale === "ar" ? "مادة" : "Matière") },
   }));
@@ -663,6 +672,7 @@ const SingleTeacherPage = async (
             actions={lessonActions}
             relatedDataForForms={serializeForClient(relatedDataForForms)}
             userRole={session.role}
+            dayDates={currentWeekBounds.dayDates}
           />
         </CardContent>
       </Card>

@@ -114,10 +114,84 @@ def get_db_connection(db_url):
 
     if HAS_PG8000:
         import ssl
+        from pg8000.native import State, literal, InterfaceError
+
+        def inline_sql_params(query, params):
+            if not params:
+                return query
+            in_quote_escape = False
+            output_query = []
+            state = State.OUT
+            prev_c = None
+            curr_param = ""
+            for i, c in enumerate(query):
+                next_c = query[i + 1] if i + 1 < len(query) else None
+                if state == State.OUT:
+                    if c == "'":
+                        output_query.append(c)
+                        state = State.IN_ES if prev_c == "E" else State.IN_SQ
+                    elif c == '"':
+                        output_query.append(c)
+                        state = State.IN_QI
+                    elif c == "-":
+                        output_query.append(c)
+                        if prev_c == "-":
+                            state = State.IN_CO
+                    elif c == "$":
+                        output_query.append(c)
+                        if prev_c == "$":
+                            state = State.IN_DQ
+                    elif c == ":" and (next_c is None or next_c not in ":=") and prev_c != ":":
+                        state = State.IN_PN
+                        curr_param = ""
+                    else:
+                        output_query.append(c)
+                elif state == State.IN_SQ:
+                    if c == "'":
+                        if in_quote_escape:
+                            in_quote_escape = False
+                        elif next_c == "'":
+                            in_quote_escape = True
+                        else:
+                            state = State.OUT
+                    output_query.append(c)
+                elif state == State.IN_QI:
+                    if c == '"':
+                        state = State.OUT
+                    output_query.append(c)
+                elif state == State.IN_ES:
+                    if c == "'" and prev_c != "\\":
+                        state = State.OUT
+                    output_query.append(c)
+                elif state == State.IN_PN:
+                    curr_param += c
+                    if next_c is None or (not next_c.isalnum() and next_c != "_"):
+                        state = State.OUT
+                        if curr_param not in params:
+                            raise InterfaceError(f"Missing parameter: {curr_param}")
+                        output_query.append(literal(params[curr_param]))
+                elif state == State.IN_CO:
+                    output_query.append(c)
+                    if c == "\n":
+                        state = State.OUT
+                elif state == State.IN_DQ:
+                    output_query.append(c)
+                    if c == "$" and prev_c == "$":
+                        state = State.OUT
+                prev_c = c
+            return "".join(output_query)
+
+        class SafePg8000Connection(pg8000.native.Connection):
+            """Executes queries via Simple Query Protocol to eliminate unnamed portal collisions."""
+            def run(self, sql, stream=None, types=None, **params):
+                final_sql = inline_sql_params(sql, params) if params else sql
+                self._context = self.execute_simple(final_sql)
+                return self._context.rows
+
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        conn = pg8000.native.Connection(
+        conn = SafePg8000Connection(
             user=user,
             password=password,
             host=host,
@@ -1038,6 +1112,8 @@ def display_dashboard(student):
                 bal_str = f"🔴 {net_bal} Sessions Debt"
             else:
                 bal_str = "⚪ Balanced (0 Sessions)"
+
+            fee_status = "Paid / Charged" if enr.get("inscriptionFeeCharged") else "Not Charged / Waived"
 
             if enr.get("isFormation"):
                 level_price = enr["pricePerCycle"]

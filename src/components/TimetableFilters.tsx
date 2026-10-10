@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import { useTranslations, useLocale } from "next-intl";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 type LevelForFilter = {
   id: number;
@@ -155,9 +156,10 @@ const TimetableFilters = ({
       : "all";
 
   const formatWeekDate = (d: Date) => {
-    return d.toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-FR", {
+    return new Date(d).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-FR", {
       day: "numeric",
       month: "short",
+      timeZone: "Africa/Algiers",
     });
   };
 
@@ -350,10 +352,15 @@ const TimetableFilters = ({
           <button
             type="button"
             title={t("weekNav.prev")}
+            aria-label={t("weekNav.prev")}
             onClick={() => handleWeekChange(currentOffset - 1)}
-            className="px-2.5 py-1 rounded-full text-gray-700 hover:bg-white hover:shadow-xs transition-all font-bold"
+            className="p-1.5 rounded-full text-gray-700 hover:bg-white hover:shadow-xs transition-all flex items-center justify-center cursor-pointer"
           >
-            ←
+            {locale === "ar" ? (
+              <ChevronRight className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronLeft className="w-3.5 h-3.5" />
+            )}
           </button>
 
           <span className="px-2 text-gray-700 font-semibold whitespace-nowrap">
@@ -363,17 +370,22 @@ const TimetableFilters = ({
           <button
             type="button"
             title={t("weekNav.next")}
+            aria-label={t("weekNav.next")}
             onClick={() => handleWeekChange(currentOffset + 1)}
-            className="px-2.5 py-1 rounded-full text-gray-700 hover:bg-white hover:shadow-xs transition-all font-bold"
+            className="p-1.5 rounded-full text-gray-700 hover:bg-white hover:shadow-xs transition-all flex items-center justify-center cursor-pointer"
           >
-            →
+            {locale === "ar" ? (
+              <ChevronLeft className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
           </button>
 
           {currentOffset !== 0 && (
             <button
               type="button"
               onClick={() => handleWeekChange(0)}
-              className="px-2 py-0.5 bg-blue-600 text-white rounded-full text-[10px] font-bold shadow-xs hover:bg-blue-700 transition-colors ms-1"
+              className="px-2 py-0.5 bg-blue-600 text-white rounded-full text-[10px] font-bold shadow-xs hover:bg-blue-700 transition-colors ms-1 cursor-pointer"
             >
               {t("weekNav.today")}
             </button>

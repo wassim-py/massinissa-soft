@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { getTranslations, getLocale } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences } from "@/lib/studentBilling";
+import { getAlgiersDateInfo } from "@/lib/utils";
 
 // This type will represent a unique column in our grid
 export type LessonInstance = {
@@ -47,19 +48,39 @@ const ClassAttendancePage = async (
         notFound();
     }
 
-    const [classHeader, latestLesson] = await Promise.all([
+    const [classHeader, allClassLessons] = await Promise.all([
         prisma.class.findUnique({
             where: { id: classId },
             include: {
                 branch: { select: { id: true, name: true } },
             },
         }),
-        prisma.lesson.findFirst({
+        prisma.lesson.findMany({
             where: { classId },
             orderBy: { startsAt: "desc" },
-            select: { id: true },
+            select: { id: true, startsAt: true, isExtra: true, isCatchUp: true, isFree: true },
         }),
     ]);
+    const latestLesson = allClassLessons[0] || null;
+    const todayInfo = getAlgiersDateInfo(new Date());
+    const todayMatchingLesson =
+        allClassLessons.find((l) => getAlgiersDateInfo(l.startsAt).dateStr === todayInfo.dateStr) ||
+        allClassLessons.find(
+            (l) =>
+                !l.isExtra &&
+                !l.isCatchUp &&
+                !l.isFree &&
+                getAlgiersDateInfo(l.startsAt).weekday === todayInfo.weekday
+        ) ||
+        latestLesson;
+    const takeAttendanceDateStr = todayMatchingLesson
+        ? !todayMatchingLesson.isExtra &&
+          !todayMatchingLesson.isCatchUp &&
+          !todayMatchingLesson.isFree &&
+          getAlgiersDateInfo(todayMatchingLesson.startsAt).weekday === todayInfo.weekday
+            ? todayInfo.dateStr
+            : getAlgiersDateInfo(todayMatchingLesson.startsAt).dateStr
+        : todayInfo.dateStr;
 
     if (!classHeader) {
         notFound();
@@ -208,7 +229,7 @@ const ClassAttendancePage = async (
     const seenInstancesTemp = new Set<string>();
 
     allRecords.forEach((record: any) => {
-        const dateKey = new Date(record.date).toISOString().split('T')[0];
+        const dateKey = getAlgiersDateInfo(record.date).dateStr;
         const instanceKey = `${record.lessonId}-${dateKey}`;
         if (!seenInstancesTemp.has(instanceKey)) {
             seenInstancesTemp.add(instanceKey);
@@ -224,7 +245,7 @@ const ClassAttendancePage = async (
     // Also ensure any lesson referenced by a catch-up in this class appears as a column
     (classData.catchUpAttendances || []).forEach((cu: any) => {
         if (cu.missedLesson) {
-            const dateKey = new Date(cu.missedLesson.startsAt).toISOString().split('T')[0];
+            const dateKey = getAlgiersDateInfo(cu.missedLesson.startsAt).dateStr;
             const instanceKey = `${cu.missedLesson.id}-${dateKey}`;
             if (!seenInstancesTemp.has(instanceKey)) {
                 seenInstancesTemp.add(instanceKey);
@@ -319,7 +340,7 @@ const ClassAttendancePage = async (
         classified.forEach((item) => classificationMap.set(item.lessonId, item.classification));
 
         student.attendances.forEach((record: any) => {
-            const dateKey = new Date(record.date).toISOString().split('T')[0];
+            const dateKey = getAlgiersDateInfo(record.date).dateStr;
             const instanceKey = `${record.lessonId}-${dateKey}`;
             const catchUpInfo = studentCatchUps.find((cu) => cu.missedLessonId === record.lessonId);
             const isPreStart = classificationMap.get(record.lessonId) === "PRE_START_ABSENCE";
@@ -340,7 +361,7 @@ const ClassAttendancePage = async (
         // Ensure every catch-up entry for this student is represented in studentRecords
         studentCatchUps.forEach((cuInfo: any) => {
             if (cuInfo.missedLessonDate) {
-                const dateKey = new Date(cuInfo.missedLessonDate).toISOString().split('T')[0];
+                const dateKey = getAlgiersDateInfo(cuInfo.missedLessonDate).dateStr;
                 const instanceKey = `${cuInfo.missedLessonId}-${dateKey}`;
                 if (!studentRecords.has(instanceKey)) {
                     studentRecords.set(instanceKey, {
@@ -389,9 +410,9 @@ const ClassAttendancePage = async (
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap shrink-0">
-                        {latestLesson && (
+                        {todayMatchingLesson && (
                             <Link
-                                href={`/list/attendance/take/${latestLesson.id}`}
+                                href={`/list/attendance/take/${todayMatchingLesson.id}?date=${encodeURIComponent(takeAttendanceDateStr)}`}
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors shrink-0 shadow-xs"
                             >
                                 <span>{locale === "ar" ? "تسجيل الحضور للفوج ←" : "Prendre la présence →"}</span>

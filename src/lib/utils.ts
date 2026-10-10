@@ -164,3 +164,212 @@ export function getLessonDateTime(day: string, time: string, dateStr?: string | 
   // guarantees the saved UTC time exactly matches the entered local hour when read back.
   return new Date(Date.UTC(year, month, dayNum, (hours || 0) - 1, minutes || 0, 0, 0));
 }
+
+export interface AlgiersDateInfo {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  weekday: "SATURDAY" | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY";
+  dateStr: string; // YYYY-MM-DD in Africa/Algiers
+  timeStr: string; // HH:mm in Africa/Algiers
+}
+
+export function getAlgiersDateInfo(date: Date | string = new Date()): AlgiersDateInfo {
+  const d = date instanceof Date ? date : new Date(date);
+  const safeDate = isNaN(d.getTime()) ? new Date() : d;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Africa/Algiers",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "long",
+  }).formatToParts(safeDate);
+  const m: Record<string, string> = {};
+  for (const p of parts) {
+    m[p.type] = p.value;
+  }
+  const rawHour = parseInt(m.hour || "0", 10);
+  const hour = rawHour === 24 ? 0 : rawHour;
+  const minute = parseInt(m.minute || "0", 10);
+  const year = parseInt(m.year || "2026", 10);
+  const month = parseInt(m.month || "1", 10);
+  const day = parseInt(m.day || "1", 10);
+  const weekday = (m.weekday || "SATURDAY").toUpperCase() as AlgiersDateInfo["weekday"];
+  const dateStr = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const timeStr = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  return { year, month, day, hour, minute, weekday, dateStr, timeStr };
+}
+
+export interface AlgiersWeekBounds {
+  startOfWeek: Date;
+  endOfWeek: Date;
+  dayDates: Record<string, string>; // { SATURDAY: "YYYY-MM-DD", ..., FRIDAY: "YYYY-MM-DD" }
+}
+
+export function getAlgiersWeekBounds(
+  weekOffset: number = 0,
+  referenceDate: Date = new Date()
+): AlgiersWeekBounds {
+  const refInfo = getAlgiersDateInfo(referenceDate);
+  const refMiddayUtc = new Date(
+    Date.UTC(refInfo.year, refInfo.month - 1, refInfo.day + weekOffset * 7, 12, 0, 0, 0)
+  );
+  const dow = refMiddayUtc.getUTCDay(); // 0 = Sun, ..., 6 = Sat
+  const diffToSaturday = (dow + 1) % 7;
+  const satMiddayUtc = new Date(refMiddayUtc.getTime() - diffToSaturday * 86400000);
+
+  const satYear = satMiddayUtc.getUTCFullYear();
+  const satMonth = satMiddayUtc.getUTCMonth();
+  const satDay = satMiddayUtc.getUTCDate();
+
+  // Africa/Algiers is UTC+1 (no DST). 00:00:00 Algiers = -1h UTC; 23:59:59.999 Algiers = 22:59:59.999 UTC
+  const startOfWeek = new Date(Date.UTC(satYear, satMonth, satDay, -1, 0, 0, 0));
+  const endOfWeek = new Date(Date.UTC(satYear, satMonth, satDay + 6, 22, 59, 59, 999));
+
+  const orderedDays = [
+    "SATURDAY",
+    "SUNDAY",
+    "MONDAY",
+    "TUESDAY",
+    "WEDNESDAY",
+    "THURSDAY",
+    "FRIDAY",
+  ];
+  const dayDates: Record<string, string> = {};
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(Date.UTC(satYear, satMonth, satDay + i, 12, 0, 0, 0));
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dayNum = String(d.getUTCDate()).padStart(2, "0");
+    dayDates[orderedDays[i]] = `${y}-${m}-${dayNum}`;
+  }
+
+  return { startOfWeek, endOfWeek, dayDates };
+}
+
+export function projectLessonTimeToDateStr(
+  startsAt: Date | string,
+  endsAt: Date | string,
+  targetDateStr: string
+): { startsAt: Date; endsAt: Date } {
+  const sDate = new Date(startsAt);
+  const eDate = new Date(endsAt);
+  const durationMs = Math.max(0, eDate.getTime() - sDate.getTime());
+  const sInfo = getAlgiersDateInfo(sDate);
+  const [year, month, day] = targetDateStr.split("-").map(Number);
+  if (!year || !month || !day) {
+    return { startsAt: sDate, endsAt: eDate };
+  }
+  const projectedStartsAt = new Date(
+    Date.UTC(year, month - 1, day, sInfo.hour - 1, sInfo.minute, 0, 0)
+  );
+  const projectedEndsAt = new Date(projectedStartsAt.getTime() + durationMs);
+  return { startsAt: projectedStartsAt, endsAt: projectedEndsAt };
+}
+
+/**
+ * Deduplicates recurring lessons by (classId, weekday, startTime, endTime) and projects them
+ * onto the exact calendar dates of the requested week.
+ * If a Lesson row already exists in the DB for that exact date in the week, it is selected directly
+ * so its date-specific id, attendances, and isTeacherAbsent are preserved.
+ */
+export function resolveRecurringLessonsForWeek<T extends Record<string, any>>(
+  rawLessons: T[],
+  weekBounds: AlgiersWeekBounds
+): Array<T & { instanceDate: string }> {
+  const oneOffs: Array<T & { instanceDate: string }> = [];
+  const recurringGroups = new Map<string, T[]>();
+
+  for (const r of rawLessons) {
+    const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFree || r.isWorkshop);
+    const sInfo = getAlgiersDateInfo(r.startsAt);
+    if (isOneOff) {
+      const d = new Date(r.startsAt);
+      if (d >= weekBounds.startOfWeek && d <= weekBounds.endOfWeek) {
+        oneOffs.push({ ...r, instanceDate: sInfo.dateStr });
+      }
+      continue;
+    }
+
+    const eInfo = getAlgiersDateInfo(r.endsAt);
+    const slotKey = `${r.classId ?? 0}-${sInfo.weekday}-${sInfo.timeStr}-${eInfo.timeStr}`;
+    const group = recurringGroups.get(slotKey) || [];
+    group.push(r);
+    recurringGroups.set(slotKey, group);
+  }
+
+  const resolvedRecurring: Array<T & { instanceDate: string }> = [];
+
+  for (const [, group] of recurringGroups.entries()) {
+    if (group.length === 0) continue;
+    const sampleInfo = getAlgiersDateInfo(group[0].startsAt);
+    const targetDateStr = weekBounds.dayDates[sampleInfo.weekday] || sampleInfo.dateStr;
+
+    const matchingOnTargetDate = group.filter(
+      (item) => getAlgiersDateInfo(item.startsAt).dateStr === targetDateStr
+    );
+
+    if (matchingOnTargetDate.length > 0) {
+      matchingOnTargetDate.sort((a, b) => {
+        const aAtt = Array.isArray(a.attendances) ? a.attendances.length : 0;
+        const bAtt = Array.isArray(b.attendances) ? b.attendances.length : 0;
+        if (aAtt !== bAtt) return bAtt - aAtt;
+        if (Boolean(a.isTeacherAbsent) !== Boolean(b.isTeacherAbsent)) {
+          return a.isTeacherAbsent ? -1 : 1;
+        }
+        return (Number(b.id) || 0) - (Number(a.id) || 0);
+      });
+      const chosen = matchingOnTargetDate[0];
+      resolvedRecurring.push({
+        ...chosen,
+        instanceDate: targetDateStr,
+      });
+    } else {
+      const sorted = [...group].sort((a, b) => {
+        const tDiff = new Date(b.startsAt).getTime() - new Date(a.startsAt).getTime();
+        if (tDiff !== 0) return tDiff;
+        return (Number(b.id) || 0) - (Number(a.id) || 0);
+      });
+      const template = sorted[0];
+      const projected = projectLessonTimeToDateStr(
+        template.startsAt,
+        template.endsAt,
+        targetDateStr
+      );
+      const cloned: any = {
+        ...template,
+        startsAt: projected.startsAt,
+        endsAt: projected.endsAt,
+        isTeacherAbsent: false,
+        instanceDate: targetDateStr,
+      };
+      if ("startTime" in cloned) cloned.startTime = projected.startsAt;
+      if ("endTime" in cloned) cloned.endTime = projected.endsAt;
+      if (Array.isArray(cloned.attendances)) cloned.attendances = [];
+      resolvedRecurring.push(cloned);
+    }
+  }
+
+  return [...resolvedRecurring, ...oneOffs].sort(
+    (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+  );
+}
+
+/**
+ * Resolves and deduplicates recurring + one-off lessons occurring on a specific single date (e.g. today).
+ */
+export function resolveRecurringLessonsForDate<T extends Record<string, any>>(
+  rawLessons: T[],
+  targetDate: Date = new Date()
+): Array<T & { instanceDate: string }> {
+  const targetInfo = getAlgiersDateInfo(targetDate);
+  const weekBounds = getAlgiersWeekBounds(0, targetDate);
+  const weekLessons = resolveRecurringLessonsForWeek(rawLessons, weekBounds);
+  return weekLessons.filter((l) => l.instanceDate === targetInfo.dateStr);
+}
+

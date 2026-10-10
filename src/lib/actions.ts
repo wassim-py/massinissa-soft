@@ -45,6 +45,11 @@ import { getTranslations } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions } from "./studentBilling";
 import { getFixedInscriptionFeeAction } from "./configurationActions";
 import { splitFullName, getLessonDateTime } from "./utils";
+import {
+  resolveOrCreateLessonForDate,
+  findSiblingRecurringLessonIds,
+  syncSiblingRecurringLessons,
+} from "./lessonInstances";
 
 type CurrentState = { success: boolean; error: boolean; message?: string };
 
@@ -828,14 +833,14 @@ export const deleteStudent = async (
 
   try {
     const session = await getAuthSession();
+    if (!session.isOwner || !session.can("delete", "students")) {
+      return { success: false, error: true, message: "Action réservée au propriétaire / حذف التلميذ متاح للمالك فقط." };
+    }
     const existing = await prisma.$queryRaw<Array<{ registeredBranchId: number }>>`
       SELECT "registeredBranchId" FROM "Student" WHERE id = ${id} LIMIT 1
     `;
     if (existing.length === 0) {
       return { success: false, error: true, message: "Élève introuvable / التلميذ غير موجود." };
-    }
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, existing[0].registeredBranchId)) {
-      return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بحذف تلاميذ هذا الفرع." };
     }
 
     // Clean up all referencing foreign keys safely
@@ -1067,6 +1072,10 @@ export const checkForConflicts = async ({
   try {
     const startsAt = explicitStartsAt || getLessonDateTime(day, startTime);
     const endsAt = explicitEndsAt || getLessonDateTime(day, endTime);
+    const excludedIds =
+      excludeId && excludeId > 0
+        ? await findSiblingRecurringLessonIds(excludeId)
+        : [-1];
 
     // 1. Teacher conflict check:
     // Full start-end time range comparison. Flag overlapping-but-offset lessons:
@@ -1076,7 +1085,7 @@ export const checkForConflicts = async ({
       const teacherConflict = await prisma.$queryRaw<any[]>`
         SELECT id FROM "Lesson"
         WHERE "teacherId" = ${teacherId}
-          AND id != ${excludeId}
+          AND id NOT IN (${Prisma.join(excludedIds)})
           AND (
             ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
             OR
@@ -1099,7 +1108,7 @@ export const checkForConflicts = async ({
       const classConflict = await prisma.$queryRaw<any[]>`
         SELECT id FROM "Lesson"
         WHERE "classId" = ${Number(classId)}
-          AND id != ${excludeId}
+          AND id NOT IN (${Prisma.join(excludedIds)})
           AND (
             ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
             OR
@@ -1122,7 +1131,7 @@ export const checkForConflicts = async ({
       const classroomConflict = await prisma.$queryRaw<any[]>`
         SELECT id FROM "Lesson"
         WHERE "classroomId" = ${Number(classroomId)}
-          AND id != ${excludeId}
+          AND id NOT IN (${Prisma.join(excludedIds)})
           AND (
             ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
             OR
@@ -1461,6 +1470,11 @@ export const updateLesson = async (
       return { success: false, error: true, message: conflict };
     }
 
+    const siblingIds =
+      !isExtra && !isCatchUp && !isFree
+        ? await findSiblingRecurringLessonIds(lessonId)
+        : [lessonId];
+
     const updatedLesson = await prisma.lesson.update({
       where: { id: lessonId },
       data: {
@@ -1481,6 +1495,19 @@ export const updateLesson = async (
         class: { select: { id: true, name: true } },
       },
     });
+
+    if (!isExtra && !isCatchUp && !isFree && siblingIds.length > 1) {
+      await syncSiblingRecurringLessons({
+        siblingIds,
+        updatedLessonId: lessonId,
+        classId,
+        teacherId,
+        classroomId,
+        branchId,
+        newStartsAt: startsAt,
+        newEndsAt: endsAt,
+      });
+    }
 
     // Sync automatic announcement if exists, or create if missing
     try {
@@ -1577,7 +1604,7 @@ export const deleteLesson = async (
     const session = await getAuthSession();
     const existing = await prisma.lesson.findUnique({
       where: { id },
-      select: { branchId: true, classId: true },
+      select: { branchId: true, classId: true, isExtra: true, isCatchUp: true, isFree: true },
     });
     if (!existing) {
       return { success: false, error: true, message: "Leçon introuvable / الحصة غير موجودة." };
@@ -1586,11 +1613,36 @@ export const deleteLesson = async (
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بحذف حصة في هذا الفرع." };
     }
 
+    const siblingIds =
+      !existing.isExtra && !existing.isCatchUp && !existing.isFree
+        ? await findSiblingRecurringLessonIds(id)
+        : [id];
+
     // Automatically delete associated announcement, attendances, and lesson
-    await prisma.announcement.deleteMany({ where: { lessonId: id } });
+    await prisma.announcement.deleteMany({ where: { lessonId: { in: siblingIds } } });
     await prisma.catchUpAttendance.deleteMany({ where: { OR: [{ missedLessonId: id }, { catchUpLessonId: id }] } });
     await prisma.attendance.deleteMany({ where: { lessonId: id } });
     await prisma.lesson.delete({ where: { id } });
+
+    // Also remove any unused sibling recurring rows of this slot
+    const otherSiblings = siblingIds.filter((sid) => sid !== id);
+    if (otherSiblings.length > 0) {
+      const unusedSiblings = await prisma.lesson.findMany({
+        where: {
+          id: { in: otherSiblings },
+          isTeacherAbsent: false,
+          attendances: { none: {} },
+          missedByCatchUps: { none: {} },
+          catchUpVisitsHosted: { none: {} },
+        },
+        select: { id: true },
+      });
+      if (unusedSiblings.length > 0) {
+        await prisma.lesson.deleteMany({
+          where: { id: { in: unusedSiblings.map((u) => u.id) } },
+        });
+      }
+    }
 
     safeRevalidatePath("/list/announcements");
     safeRevalidatePath("/admin");
@@ -1612,6 +1664,7 @@ export const deleteLesson = async (
 export const toggleTeacherLessonAbsenceAction = async (input: {
   lessonId: number;
   isTeacherAbsent: boolean;
+  dateStr?: string;
 }) => {
   try {
     const session = await getAuthSession();
@@ -1619,8 +1672,30 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
       return { success: false, error: true, message: "Non autorisé / غير مصرح" };
     }
 
-    const lesson = await prisma.lesson.findUnique({
+    const baseCheck = await prisma.lesson.findUnique({
       where: { id: input.lessonId },
+      select: { id: true, branchId: true },
+    });
+
+    if (!baseCheck) {
+      return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
+    }
+
+    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, baseCheck.branchId)) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé pour cette succursale / غير مصرح لك بتعديل حصة في هذا الفرع.",
+      };
+    }
+
+    const targetLessonId = await resolveOrCreateLessonForDate(
+      input.lessonId,
+      input.dateStr
+    );
+
+    const lesson = await prisma.lesson.findUnique({
+      where: { id: targetLessonId },
       select: {
         id: true,
         branchId: true,
@@ -1634,16 +1709,8 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
       return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
     }
 
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, lesson.branchId)) {
-      return {
-        success: false,
-        error: true,
-        message: "Non autorisé pour cette succursale / غير مصرح لك بتعديل حصة في هذا الفرع.",
-      };
-    }
-
     const updated = await prisma.lesson.update({
-      where: { id: input.lessonId },
+      where: { id: targetLessonId },
       data: { isTeacherAbsent: input.isTeacherAbsent },
       select: { id: true, isTeacherAbsent: true },
     });
@@ -1653,22 +1720,23 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
       data: {
         action: input.isTeacherAbsent ? "TEACHER_ABSENCE_MARKED" : "TEACHER_ABSENCE_UNMARKED",
         entityType: "Lesson",
-        entityId: String(input.lessonId),
+        entityId: String(targetLessonId),
         branchId: lesson.branchId,
         userId: adminId,
         userName: adminId,
         details: JSON.stringify({
-          lessonId: input.lessonId,
+          lessonId: targetLessonId,
           teacherId: lesson.teacherId,
           classId: lesson.classId,
           isTeacherAbsent: input.isTeacherAbsent,
+          dateStr: input.dateStr,
           timestamp: new Date().toISOString(),
         }),
       },
     });
 
     safeRevalidatePath("/list/lessons");
-    safeRevalidatePath(`/list/attendance/take/${input.lessonId}`);
+    safeRevalidatePath(`/list/attendance/take/${targetLessonId}`);
     if (lesson.classId) {
       safeRevalidatePath(`/list/attendance/class/${lesson.classId}`);
       safeRevalidatePath(`/list/payments/class/${lesson.classId}`);
@@ -1681,6 +1749,7 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
     return {
       success: true,
       error: false,
+      lessonId: targetLessonId,
       isTeacherAbsent: updated.isTeacherAbsent,
       message: input.isTeacherAbsent
         ? "Absence de l'enseignant enregistrée / تم تسجيل غياب الأستاذ بنجاح."

@@ -88,6 +88,8 @@ type FullStudent = Student & {
 };
 
 type FullLesson = Lesson & {
+  startTime?: Date | string;
+  endTime?: Date | string;
   class: Class & {
     price?: number;
     pricePerCycle?: number;
@@ -466,14 +468,32 @@ const AttendanceRoster = ({
             <Badge variant="neutral" size="md">
               {t("teacher")}: {lesson.teacher.surname ? `${lesson.teacher.surname} ${lesson.teacher.name}` : lesson.teacher.name}
             </Badge>
-            <span className="text-form-helper text-muted ms-1">
-              {new Date().toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
+            <Badge variant="primary" size="md" className="font-semibold">
+              {new Date(lesson.startTime || lesson.startsAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
                 weekday: "long",
                 year: "numeric",
                 month: "long",
                 day: "numeric",
+                timeZone: "Africa/Algiers",
               })}
-            </span>
+              {(lesson.endTime || lesson.endsAt) ? (
+                <span className="ms-1.5 font-mono" dir="ltr">
+                  ({new Date(lesson.startTime || lesson.startsAt).toLocaleTimeString("en-GB", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                    timeZone: "Africa/Algiers",
+                  })}{" "}
+                  -{" "}
+                  {new Date((lesson.endTime || lesson.endsAt)!).toLocaleTimeString("en-GB", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                    timeZone: "Africa/Algiers",
+                  })})
+                </span>
+              ) : null}
+            </Badge>
           </div>
         </div>
 

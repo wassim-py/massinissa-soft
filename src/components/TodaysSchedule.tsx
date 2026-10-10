@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
+import { getAlgiersDateInfo, resolveRecurringLessonsForDate } from "@/lib/utils";
 
 const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
   const { userId } = await auth();
@@ -20,12 +21,14 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
     );
   }
 
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-
-  const endOfDay = new Date();
-  endOfDay.setHours(23, 59, 59, 999);
-  const todayDow = startOfDay.getDay();
+  const now = new Date();
+  const todayInfo = getAlgiersDateInfo(now);
+  const startOfDay = new Date(
+    Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, -1, 0, 0, 0)
+  );
+  const endOfDay = new Date(
+    Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, 22, 59, 59, 999)
+  );
 
   const userCondition: Prisma.LessonWhereInput = studentId
     ? {
@@ -52,6 +55,7 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
         {
           isExtra: false,
           isCatchUp: false,
+          isFree: false,
           class: {
             isCompleted: false,
           },
@@ -68,46 +72,10 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
     },
   });
 
-  const todaysLessons = candidateLessons
-    .filter((l) => {
-      if (l.class?.isCompleted) return false;
-      const isOneOff = Boolean(
-        l.isExtra || l.isCatchUp
-      );
-      if (isOneOff) {
-        const d = new Date(l.startsAt);
-        return d >= startOfDay && d <= endOfDay;
-      }
-      return new Date(l.startsAt).getDay() === todayDow;
-    })
-    .map((l) => {
-      const isOneOff = Boolean(
-        l.isExtra || l.isCatchUp
-      );
-      if (!isOneOff) {
-        const durationMs =
-          new Date(l.endsAt).getTime() - new Date(l.startsAt).getTime();
-        const projectedStartsAt = new Date(l.startsAt);
-        projectedStartsAt.setFullYear(
-          startOfDay.getFullYear(),
-          startOfDay.getMonth(),
-          startOfDay.getDate()
-        );
-        const projectedEndsAt = new Date(
-          projectedStartsAt.getTime() + durationMs
-        );
-        return {
-          ...l,
-          startsAt: projectedStartsAt,
-          endsAt: projectedEndsAt,
-        };
-      }
-      return l;
-    })
-    .sort(
-      (a, b) =>
-        new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
-    );
+  const todaysLessons = resolveRecurringLessonsForDate(
+    candidateLessons.filter((l) => !l.class?.isCompleted),
+    now
+  );
 
   return (
     <Card className="p-6 h-full font-sans">
@@ -116,7 +84,12 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
           {t("todaysScheduleTitle")}
         </h1>
         <Badge variant="neutral" size="sm">
-          {new Date().toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", { weekday: "long" })}
+          {now.toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
+            weekday: "long",
+            day: "numeric",
+            month: "short",
+            timeZone: "Africa/Algiers",
+          })}
         </Badge>
       </div>
       <div className="space-y-3">
@@ -124,11 +97,11 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
           todaysLessons.map((lesson) => {
             const startTime = new Date(lesson.startsAt).toLocaleTimeString(
               "en-GB",
-              { hour: "2-digit", minute: "2-digit", hour12: false }
+              { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Africa/Algiers" }
             );
             const endTime = new Date(lesson.endsAt).toLocaleTimeString(
               "en-GB",
-              { hour: "2-digit", minute: "2-digit", hour12: false }
+              { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Africa/Algiers" }
             );
 
             return (

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
 import { getActiveTrimester, getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 import { computeStudentConsumedSessions, computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
 
 // This is the Server Component that fetches all the necessary data for taking attendance.
 const TakeAttendancePage = async (
@@ -26,10 +27,12 @@ const TakeAttendancePage = async (
   const t = await getTranslations("attendance");
   const locale = await getLocale();
 
-  const lessonId = parseInt(params.id, 10);
-  if (isNaN(lessonId)) {
+  const rawLessonId = parseInt(params.id, 10);
+  if (isNaN(rawLessonId)) {
     notFound();
   }
+
+  const lessonId = await resolveOrCreateLessonForDate(rawLessonId, searchParams.date);
 
   const searchQuery = searchParams.search;
 
@@ -503,7 +506,7 @@ const TakeAttendancePage = async (
     status: a.status,
     justification: a.justification || null,
     present: a.status === "PRESENT",
-    date: new Date(),
+    date: l.startsAt,
   }));
 
   // Fetch grades and classes for rapid student registration to this group

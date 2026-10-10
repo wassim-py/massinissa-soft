@@ -10,6 +10,7 @@ import BackButton from "@/components/BackButton";
 import { Card, CardContent } from "@/components/ui/Card";
 import { getTranslations } from "next-intl/server";
 import Link from "next/link";
+import { getAlgiersWeekBounds, resolveRecurringLessonsForWeek, getAlgiersDateInfo } from "@/lib/utils";
 
 type TimetableLesson = {
   id: number;
@@ -19,6 +20,7 @@ type TimetableLesson = {
   endTime: Date | string;
   startsAt: Date | string;
   endsAt: Date | string;
+  instanceDate?: string;
   classId?: number;
   teacherId?: string;
   classroomId?: number | null;
@@ -29,6 +31,7 @@ type TimetableLesson = {
   isFree: boolean;
   isFormation: boolean;
   isWorkshop: boolean;
+  isTeacherAbsent?: boolean;
   workshopId?: number;
   workshopSessionId?: number;
   extraFee: number | null;
@@ -62,27 +65,13 @@ const LessonListPage = async (props: {
 
   const { search, levelId, subjectId, teacherId, classId, branchId, weekOffset } = searchParams;
 
-  // Calculate Saturday-to-Friday week boundaries based on weekOffset
+  // Calculate Saturday-to-Friday week boundaries in Africa/Algiers based on weekOffset
   const offset = weekOffset ? parseInt(weekOffset, 10) : 0;
   const validOffset = isNaN(offset) ? 0 : offset;
 
-  const now = new Date();
-  const targetDate = new Date(now);
-  if (validOffset !== 0) {
-    targetDate.setDate(targetDate.getDate() + validOffset * 7);
-  }
-
-  // Algerian school week starts on Saturday (getDay() === 6) and ends on Friday (getDay() === 5)
-  const dayOfWeek = targetDate.getDay(); // 0 is Sun, ..., 6 is Sat
-  const diffToSaturday = (dayOfWeek + 1) % 7;
-
-  const startOfWeek = new Date(targetDate);
-  startOfWeek.setDate(targetDate.getDate() - diffToSaturday);
-  startOfWeek.setHours(0, 0, 0, 0);
-
-  const endOfWeek = new Date(startOfWeek);
-  endOfWeek.setDate(startOfWeek.getDate() + 6);
-  endOfWeek.setHours(23, 59, 59, 999);
+  const weekBounds = getAlgiersWeekBounds(validOffset);
+  const startOfWeek = weekBounds.startOfWeek;
+  const endOfWeek = weekBounds.endOfWeek;
 
   let selectedBranchId: number | null = null;
   if (branchId && branchId !== "all") {
@@ -274,7 +263,9 @@ const LessonListPage = async (props: {
       return true;
     });
 
-    lessons = displayedRawLessons.map((r) => {
+    const resolvedWeekLessons = resolveRecurringLessonsForWeek(displayedRawLessons, weekBounds);
+
+    lessons = resolvedWeekLessons.map((r) => {
       const d = new Date(r.startsAt);
       const day = new Intl.DateTimeFormat("en-US", {
         weekday: "long",
@@ -296,6 +287,7 @@ const LessonListPage = async (props: {
         endTime: r.endsAt,
         startsAt: r.startsAt,
         endsAt: r.endsAt,
+        instanceDate: r.instanceDate,
         classId: r.classId,
         teacherId: r.teacherId,
         classroomId: r.classroomId,
@@ -537,6 +529,7 @@ const LessonListPage = async (props: {
               end: endOfWeek,
               offset: validOffset,
             }}
+            dayDates={weekBounds.dayDates}
           />
         </div>
       </CardContent>

@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { getAuthSession } from "@/lib/auth";
 
 type StudentList = {
   id: string;
@@ -30,11 +31,13 @@ const StudentListPage = async (props: {
   const searchParams = await props.searchParams;
   const params = await props.params;
   const locale = params.locale;
+  const session = await getAuthSession();
+  const canDeleteStudent = session.can("delete", "student");
 
   const t = await getTranslations("students");
   const tSearch = await getTranslations("search");
 
-  // Exact column order: ID number → full name → level → groups enrolled in → phone number → actions (view profile, delete)
+  // Exact column order: ID number → full name → level → groups enrolled in → phone number → actions (view profile, delete for owner)
   const columns: Column<StudentList>[] = [
     { header: t("idNumber"), accessor: "globalNumber" },
     { header: t("fullName"), accessor: "name" },
@@ -113,7 +116,7 @@ const StudentListPage = async (props: {
         )}
       </td>
 
-      {/* 6. Actions (View Profile, Delete) - Same for both roles */}
+      {/* 6. Actions (View Profile, Delete for Owner only) */}
       <td className="text-end pe-3.5 p-3.5">
         <div className="flex items-center justify-end gap-2">
           <Link href={`/list/students/${item.id}`}>
@@ -126,7 +129,9 @@ const StudentListPage = async (props: {
               <Image src="/view.png" alt="view" width={14} height={14} />
             </Button>
           </Link>
-          <FormContainer table="student" type="delete" id={item.id} />
+          {canDeleteStudent && (
+            <FormContainer table="student" type="delete" id={item.id} />
+          )}
         </div>
       </td>
     </tr>

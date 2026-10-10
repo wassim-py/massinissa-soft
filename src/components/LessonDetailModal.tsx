@@ -20,6 +20,7 @@ type TimetableLesson = {
   branchName?: string;
   startsAt: Date | string;
   endsAt: Date | string;
+  instanceDate?: string;
   isExtra?: boolean;
   isCatchUp?: boolean;
   isFree?: boolean;
@@ -30,6 +31,21 @@ type TimetableLesson = {
   workshopSessionId?: number;
   classId?: number;
   level?: { id?: number; name?: string } | null;
+};
+
+const getAlgiersDateStr = (date: Date | string): string => {
+  try {
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return "";
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Algiers",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  } catch {
+    return "";
+  }
 };
 
 const LessonDetailModal = ({
@@ -47,29 +63,35 @@ const LessonDetailModal = ({
   relatedData: any;
   isToday?: boolean;
   canManage?: boolean;
-  onLessonUpdated?: (lessonId: number, isTeacherAbsent: boolean) => void;
+  onLessonUpdated?: (lessonId: number, isTeacherAbsent: boolean, dateStr?: string) => void;
 }) => {
   const t = useTranslations("lessons");
   const locale = useLocale();
 
+  const [currentLessonId, setCurrentLessonId] = useState<number>(lesson.id);
   const [isTeacherAbsent, setIsTeacherAbsent] = useState<boolean>(Boolean(lesson.isTeacherAbsent));
   const [isUpdating, setIsUpdating] = useState<boolean>(false);
 
+  const lessonDateStr = lesson.instanceDate || getAlgiersDateStr(lesson.startsAt);
+
   const handleToggleAbsence = async () => {
-    if (isUpdating || lesson.isWorkshop || lesson.id <= 0) return;
+    if (isUpdating || lesson.isWorkshop || currentLessonId <= 0) return;
     const nextVal = !isTeacherAbsent;
     setIsTeacherAbsent(nextVal);
     setIsUpdating(true);
 
     try {
       const res = await toggleTeacherLessonAbsenceAction({
-        lessonId: lesson.id,
+        lessonId: currentLessonId,
         isTeacherAbsent: nextVal,
+        dateStr: lessonDateStr || undefined,
       });
 
       if (res.success) {
+        const resolvedId = (res as any).lessonId || currentLessonId;
+        setCurrentLessonId(resolvedId);
         toast.success(res.message);
-        onLessonUpdated?.(lesson.id, nextVal);
+        onLessonUpdated?.(resolvedId, nextVal, lessonDateStr);
       } else {
         setIsTeacherAbsent(!nextVal); // revert
         toast.error(res.message || "Erreur");
@@ -82,17 +104,29 @@ const LessonDetailModal = ({
     }
   };
 
-  const dayName = new Date(lesson.startsAt).toLocaleDateString(
+  const dateToFormat = lessonDateStr
+    ? new Date(`${lessonDateStr}T12:00:00+01:00`)
+    : new Date(lesson.startsAt);
+
+  const dayName = dateToFormat.toLocaleDateString(
     locale === "ar" ? "ar-DZ" : "fr-FR",
-    { weekday: "long" }
+    {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone: "Africa/Algiers",
+    }
   );
 
   const getTakeAttendanceHref = () => {
     if (lesson.isWorkshop) {
-      const wsId = lesson.workshopSessionId || Math.abs(lesson.id);
+      const wsId = lesson.workshopSessionId || Math.abs(currentLessonId);
       return `/list/workshops/${lesson.workshopId}?session=${wsId}`;
     }
-    return `/list/attendance/take/${lesson.id}`;
+    return lessonDateStr
+      ? `/list/attendance/take/${currentLessonId}?date=${encodeURIComponent(lessonDateStr)}`
+      : `/list/attendance/take/${currentLessonId}`;
   };
 
   return (
@@ -219,14 +253,18 @@ const LessonDetailModal = ({
           <div className="flex justify-between">
             <span className="font-semibold text-gray-600">{t("timeLabel")}:</span>
             <span className="text-gray-800 font-mono" dir="ltr">
-              {new Date(lesson.startsAt).toLocaleTimeString([], {
+              {new Date(lesson.startsAt).toLocaleTimeString("en-GB", {
                 hour: "2-digit",
                 minute: "2-digit",
+                hour12: false,
+                timeZone: "Africa/Algiers",
               })}{" "}
               -{" "}
-              {new Date(lesson.endsAt).toLocaleTimeString([], {
+              {new Date(lesson.endsAt).toLocaleTimeString("en-GB", {
                 hour: "2-digit",
                 minute: "2-digit",
+                hour12: false,
+                timeZone: "Africa/Algiers",
               })}
             </span>
           </div>
