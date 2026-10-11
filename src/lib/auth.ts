@@ -67,28 +67,54 @@ export async function getAuthSession(): Promise<AuthSession> {
       }
     }
 
-    if (userId && (!rawRole || branchIds.length === 0)) {
-      try {
-        const user = await clerkCurrentUser({ treatPendingAsSignedOut: false });
-        if (!rawRole) rawRole = (user?.publicMetadata as any)?.role;
-        const metaBranchId = (user?.publicMetadata as any)?.branchId;
-        if (metaBranchId !== undefined && metaBranchId !== null && !isNaN(Number(metaBranchId))) {
-          const num = Number(metaBranchId);
-          if (!branchIds.includes(num)) {
-            branchIds = [num, ...branchIds];
-          }
-        }
-        const metaBranchIds = (user?.publicMetadata as any)?.branchIds;
-        if (Array.isArray(metaBranchIds)) {
-          metaBranchIds.forEach((b: any) => {
-            const num = Number(b);
-            if (!isNaN(num) && !branchIds.includes(num)) {
-              branchIds.push(num);
+    // Owners do not require a specific branchId in sessionClaims; skip Clerk API call if already owner
+    if (userId && (!rawRole || (!checkIsOwner(rawRole) && branchIds.length === 0))) {
+      const globalForAuthCache = globalThis as unknown as {
+        __clerkUserMetaCache?: Map<
+          string,
+          { rawRole?: string; branchIds: number[]; expiresAt: number }
+        >;
+      };
+      if (!globalForAuthCache.__clerkUserMetaCache) {
+        globalForAuthCache.__clerkUserMetaCache = new Map();
+      }
+      const cache = globalForAuthCache.__clerkUserMetaCache;
+      const now = Date.now();
+      const cached = cache.get(userId);
+
+      if (cached && cached.expiresAt > now) {
+        if (!rawRole && cached.rawRole) rawRole = cached.rawRole;
+        cached.branchIds.forEach((num) => {
+          if (!branchIds.includes(num)) branchIds.push(num);
+        });
+      } else {
+        try {
+          const user = await clerkCurrentUser({ treatPendingAsSignedOut: false });
+          if (!rawRole) rawRole = (user?.publicMetadata as any)?.role;
+          const metaBranchId = (user?.publicMetadata as any)?.branchId;
+          if (metaBranchId !== undefined && metaBranchId !== null && !isNaN(Number(metaBranchId))) {
+            const num = Number(metaBranchId);
+            if (!branchIds.includes(num)) {
+              branchIds = [num, ...branchIds];
             }
+          }
+          const metaBranchIds = (user?.publicMetadata as any)?.branchIds;
+          if (Array.isArray(metaBranchIds)) {
+            metaBranchIds.forEach((b: any) => {
+              const num = Number(b);
+              if (!isNaN(num) && !branchIds.includes(num)) {
+                branchIds.push(num);
+              }
+            });
+          }
+          cache.set(userId, {
+            rawRole,
+            branchIds: [...branchIds],
+            expiresAt: now + 5 * 60 * 1000,
           });
+        } catch {
+          // ignore fallback errors
         }
-      } catch {
-        // ignore fallback errors
       }
     }
 

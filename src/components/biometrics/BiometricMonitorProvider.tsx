@@ -355,12 +355,23 @@ export default function BiometricMonitorProvider({
     [openLessonId, router]
   );
 
-  // Background polling loop when isEnabled === true
+  const isPollingRef = useRef<boolean>(false);
+  const lastLocalBridgeFailAtRef = useRef<number>(0);
+
+  // Background polling loop when isEnabled === true (pauses when tab is hidden)
   useEffect(() => {
     if (!isEnabled) return;
 
     let isMounted = true;
+    let interval: NodeJS.Timeout | null = null;
+
     const pollFeed = async () => {
+      if (isPollingRef.current) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      isPollingRef.current = true;
+
       try {
         const lessonQuery = openLessonId ? `&openLessonId=${openLessonId}` : "";
         const res = await fetch(
@@ -385,13 +396,19 @@ export default function BiometricMonitorProvider({
         }
 
         // Sync with School PC Local Bridge (http://127.0.0.1:4375) for Online/Cloud Deployment
-        if (!data.hardwareConnected && typeof window !== "undefined") {
+        // Back off for 30s if 127.0.0.1:4375 is unreachable on this client machine
+        if (
+          !data.hardwareConnected &&
+          typeof window !== "undefined" &&
+          nowMs - lastLocalBridgeFailAtRef.current > 30000
+        ) {
           try {
             const bridgeUrl = `http://127.0.0.1:4375/status?appUrl=${encodeURIComponent(
               window.location.origin
             )}&branchId=${data.branchId || 1}&openLessonId=${openLessonId || ""}`;
             const bridgeRes = await fetch(bridgeUrl, { cache: "no-store" });
             if (bridgeRes.ok) {
+              lastLocalBridgeFailAtRef.current = 0;
               const bridgeData = await bridgeRes.json();
               if (bridgeData.connected) {
                 anyOnline = true;
@@ -418,9 +435,12 @@ export default function BiometricMonitorProvider({
                   });
                 }
               }
+            } else {
+              lastLocalBridgeFailAtRef.current = nowMs;
             }
           } catch {
-            // Local bridge not running on 127.0.0.1:4375
+            // Local bridge not running on 127.0.0.1:4375 — wait 30s before retrying
+            lastLocalBridgeFailAtRef.current = nowMs;
           }
         }
 
@@ -483,16 +503,47 @@ export default function BiometricMonitorProvider({
         }
       } catch {
         // Silently retry on next interval
+      } finally {
+        isPollingRef.current = false;
       }
     };
 
+    const startPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      const pollIntervalMs = openLessonId || isDrawerOpen ? 2500 : 5000;
+      interval = setInterval(pollFeed, pollIntervalMs);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        pollFeed();
+      }
+      startPolling();
+    };
+
+    const onFocus = () => {
+      pollFeed();
+    };
+
     pollFeed();
-    const interval = setInterval(pollFeed, 1200);
+    startPolling();
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
     };
-  }, [isEnabled, announceIncomingScan, isHoveringActionZone, openLessonId]);
+  }, [isEnabled, announceIncomingScan, isHoveringActionZone, openLessonId, isDrawerOpen]);
 
   // Resolve or dismiss a pinned alert or journal entry
   const handleResolveAlert = useCallback(

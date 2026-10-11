@@ -509,18 +509,23 @@ export default function AnnouncementNotificationProvider({
   }, [checkForNewAnnouncements]);
 
   // Real-time Heartbeat:
-  // - 3.5s when page is active/visible
-  // - 15s when backgrounded
-  // - Instant on focus, visibility change, online
+  // - 60s when page is active/visible
+  // - Paused when backgrounded/hidden
+  // - Instant on focus, visibility change, online, or local BroadcastChannel event
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
 
     const startHeartbeat = () => {
-      if (interval) clearInterval(interval);
-      const delay = document.visibilityState === "visible" ? 3500 : 15000;
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
       interval = setInterval(() => {
         checkForNewAnnouncements();
-      }, delay);
+      }, 60000);
     };
 
     startHeartbeat();

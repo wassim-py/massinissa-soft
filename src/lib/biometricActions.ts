@@ -33,6 +33,47 @@ export interface BiometricScanResult {
   scannedAt: string;
 }
 
+interface BiometricFeedCacheEntry {
+  allScans: BiometricScanResult[];
+  pinnedAlerts: BiometricScanResult[];
+  devices: Array<{
+    id: number;
+    name: string;
+    ipAddress: string;
+    port: number;
+    lastSeenAt: string | null;
+  }>;
+  fetchedAt: number;
+}
+
+const globalForBiometricFeed = globalThis as unknown as {
+  __biometricFeedCache?: Map<number, BiometricFeedCacheEntry>;
+  __biometricLastCleanupAt?: number;
+};
+
+const BIOMETRIC_FEED_CACHE_TTL_MS = 15 * 1000; // 15s in-memory cache when idle (invalidated immediately on scan/action)
+const BIOMETRIC_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Run stale log cleanup at most once every 5 minutes
+
+function getBiometricFeedCacheMap(): Map<number, BiometricFeedCacheEntry> {
+  if (!globalForBiometricFeed.__biometricFeedCache) {
+    globalForBiometricFeed.__biometricFeedCache = new Map();
+  }
+  return globalForBiometricFeed.__biometricFeedCache;
+}
+
+function invalidateBiometricFeedCache(branchId?: number | null) {
+  const map = getBiometricFeedCacheMap();
+  if (branchId && !isNaN(Number(branchId))) {
+    map.delete(Number(branchId));
+  } else {
+    map.clear();
+  }
+}
+
+export async function invalidateBiometricFeedCacheAction(branchId?: number | null) {
+  invalidateBiometricFeedCache(branchId);
+}
+
 /**
  * Helper to determine if a lesson L falls inside the Continuous Scan Window at `scanTime`:
  * - Window starts: L.startsAt - 30 minutes
@@ -606,7 +647,10 @@ export async function processBiometricScan(input: {
   };
 }
 
-function serializeScanLog(log: any): BiometricScanResult {
+function serializeScanLog(log: any, index?: number): BiometricScanResult {
+  if (typeof index !== "number") {
+    invalidateBiometricFeedCache(log?.branchId);
+  }
   const isAlreadyPresent = log.nextLessonInfo === "ALREADY_PRESENT";
   return {
     id: log.id,
@@ -632,7 +676,7 @@ function serializeScanLog(log: any): BiometricScanResult {
 
 /**
  * Fetches live biometric feed & unresolved pinned alerts (State 2 & State 3) for the active branch.
- * Automatically purges previous-day logs and transient UNRECOGNIZED logs (> 2 min) so the journal never gets stuck.
+ * Serves from a 15s in-memory cache when no new scan has arrived and throttles DB cleanup writes to once per 5 minutes.
  */
 export async function getBiometricLiveFeedAction(params?: {
   branchId?: number;
@@ -641,37 +685,60 @@ export async function getBiometricLiveFeedAction(params?: {
   try {
     const activeBranchId = params?.branchId || (await getActiveBranchId()) || 1;
     const now = Date.now();
+    const sinceId = params?.sinceId ? Number(params.sinceId) : 0;
+
+    // 1. Serve from in-memory cache if valid (0 database queries when idle!)
+    const cacheMap = getBiometricFeedCacheMap();
+    const cached = cacheMap.get(activeBranchId);
+    if (cached && now - cached.fetchedAt < BIOMETRIC_FEED_CACHE_TTL_MS) {
+      const recentScans =
+        sinceId > 0
+          ? cached.allScans.filter((s) => s.id > sinceId)
+          : cached.allScans;
+      return {
+        success: true,
+        branchId: activeBranchId,
+        recentScans,
+        pinnedAlerts: cached.pinnedAlerts,
+        devices: cached.devices,
+      };
+    }
+
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    const twoMinAgo = new Date(now - 2 * 60 * 1000);
-    const thirtyMinAgo = new Date(now - 30 * 60 * 1000);
 
-    // Auto-clean stale logs so nothing ever gets stuck in the journal
-    await Promise.all([
-      prisma.biometricScanLog.deleteMany({
-        where: {
-          OR: [
-            { scannedAt: { lt: todayStart } },
-            { status: "UNRECOGNIZED", scannedAt: { lt: twoMinAgo } },
-          ],
-        },
-      }),
-      prisma.biometricScanLog.updateMany({
-        where: {
-          isResolved: false,
-          status: "NO_UPCOMING_GROUP",
-          scannedAt: { lt: thirtyMinAgo },
-        },
-        data: { isResolved: true },
-      }),
-    ]);
+    // 2. Throttle stale log cleanup writes to run at most once every 5 minutes (prevents constant DB WAL writes)
+    const lastCleanupAt = globalForBiometricFeed.__biometricLastCleanupAt || 0;
+    if (now - lastCleanupAt > BIOMETRIC_CLEANUP_INTERVAL_MS) {
+      globalForBiometricFeed.__biometricLastCleanupAt = now;
+      const twoMinAgo = new Date(now - 2 * 60 * 1000);
+      const thirtyMinAgo = new Date(now - 30 * 60 * 1000);
 
-    const [recentScans, pinnedAlerts, devices] = await Promise.all([
+      await Promise.all([
+        prisma.biometricScanLog.deleteMany({
+          where: {
+            OR: [
+              { scannedAt: { lt: todayStart } },
+              { status: "UNRECOGNIZED", scannedAt: { lt: twoMinAgo } },
+            ],
+          },
+        }),
+        prisma.biometricScanLog.updateMany({
+          where: {
+            isResolved: false,
+            status: "NO_UPCOMING_GROUP",
+            scannedAt: { lt: thirtyMinAgo },
+          },
+          data: { isResolved: true },
+        }),
+      ]).catch(() => {});
+    }
+
+    const [allScansRaw, pinnedAlertsRaw, devicesRaw] = await Promise.all([
       prisma.biometricScanLog.findMany({
         where: {
           branchId: activeBranchId,
           scannedAt: { gte: todayStart },
-          ...(params?.sinceId ? { id: { gt: params.sinceId } } : {}),
         },
         orderBy: { id: "desc" },
         take: 40,
@@ -692,18 +759,32 @@ export async function getBiometricLiveFeedAction(params?: {
       }),
     ]);
 
+    const allScans = allScansRaw.map(serializeScanLog);
+    const pinnedAlerts = pinnedAlertsRaw.map(serializeScanLog);
+    const devices = devicesRaw.map((d) => ({
+      id: d.id,
+      name: d.name,
+      ipAddress: d.ipAddress,
+      port: d.port,
+      lastSeenAt: d.lastSeenAt ? d.lastSeenAt.toISOString() : null,
+    }));
+
+    cacheMap.set(activeBranchId, {
+      allScans,
+      pinnedAlerts,
+      devices,
+      fetchedAt: now,
+    });
+
+    const recentScans =
+      sinceId > 0 ? allScans.filter((s) => s.id > sinceId) : allScans;
+
     return {
       success: true,
       branchId: activeBranchId,
-      recentScans: recentScans.map(serializeScanLog),
-      pinnedAlerts: pinnedAlerts.map(serializeScanLog),
-      devices: devices.map((d) => ({
-        id: d.id,
-        name: d.name,
-        ipAddress: d.ipAddress,
-        port: d.port,
-        lastSeenAt: d.lastSeenAt ? d.lastSeenAt.toISOString() : null,
-      })),
+      recentScans,
+      pinnedAlerts,
+      devices,
     };
   } catch (err: any) {
     console.error("getBiometricLiveFeedAction error:", err);
@@ -740,6 +821,7 @@ export async function resolveBiometricAlertAction(input: {
     });
 
     if (!scanLog) {
+      invalidateBiometricFeedCache();
       return {
         success: true,
         message: "Alerte traitée / تمت معالجة التنبيه",
@@ -763,6 +845,7 @@ export async function resolveBiometricAlertAction(input: {
           ],
         },
       });
+      invalidateBiometricFeedCache(scanLog.branchId);
       return {
         success: true,
         message: "Entrée supprimée / تم حذف الإشعار",
@@ -820,6 +903,8 @@ export async function resolveBiometricAlertAction(input: {
       },
     });
 
+    invalidateBiometricFeedCache(scanLog.branchId);
+
     return {
       success: true,
       message:
@@ -854,6 +939,7 @@ export async function clearBiometricJournalAction(params?: {
         ...(params?.onlyResolved ? { isResolved: true } : {}),
       },
     });
+    invalidateBiometricFeedCache(activeBranchId);
     return {
       success: true,
       message: "Journal vidé / تم مسح السجل",
@@ -1117,6 +1203,8 @@ export async function recordBiometricCatchUpAction(input: {
         status: "SUCCESS",
       },
     });
+
+    invalidateBiometricFeedCache();
 
     try {
       revalidatePath(`/list/attendance/take/${input.catchUpLessonId}`);

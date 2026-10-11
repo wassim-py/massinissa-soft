@@ -12,6 +12,25 @@ const NO_CACHE_HEADERS = {
   "Surrogate-Control": "no-store",
 };
 
+const globalForAnnouncementCache = globalThis as unknown as {
+  __announcementCheckCache?: Map<
+    string,
+    {
+      payload: {
+        recentNewAnnouncements: any[];
+        dashboardAnnouncements: any[];
+        newAnnouncementIds: number[];
+        topAnnouncementIds: number[];
+        unreadCount: number;
+        latestId: number;
+      };
+      fetchedAt: number;
+    }
+  >;
+};
+
+const ANNOUNCEMENT_CACHE_TTL_MS = 15 * 1000; // 15s server cache
+
 export async function GET(req: NextRequest) {
   try {
     const session = await getAuthSession().catch(() => null);
@@ -39,6 +58,29 @@ export async function GET(req: NextRequest) {
         ? parsedBranchParam
         : null;
 
+    const targetBranchId = session.isOwner
+      ? requestedBranchId
+      : requestedBranchId || activeBranchId;
+    const cacheKey = `${session.isOwner ? "owner" : "branch"}:${targetBranchId ?? "all"}`;
+
+    if (!globalForAnnouncementCache.__announcementCheckCache) {
+      globalForAnnouncementCache.__announcementCheckCache = new Map();
+    }
+    const cacheMap = globalForAnnouncementCache.__announcementCheckCache;
+    const now = Date.now();
+    const cached = cacheMap.get(cacheKey);
+
+    if (cached && now - cached.fetchedAt < ANNOUNCEMENT_CACHE_TTL_MS) {
+      return NextResponse.json(
+        {
+          ...cached.payload,
+          userId: session.userId,
+          timestamp: now,
+        },
+        { headers: NO_CACHE_HEADERS }
+      );
+    }
+
     let recentNewAnnouncements: Array<{
       id: number;
       title: string;
@@ -65,17 +107,7 @@ export async function GET(req: NextRequest) {
       isNew: boolean;
     }> = [];
 
-    let latestId = 0;
-
     if (session.isOwner) {
-      const latest = await prisma.$queryRaw<Array<{ max_id: number | null }>>`
-        SELECT MAX(id) as max_id
-        FROM "Announcement"
-        WHERE ("expiresAt" IS NULL OR "expiresAt" > NOW())
-      `.catch(() => [{ max_id: null }]);
-
-      latestId = latest[0]?.max_id || 0;
-
       // All active announcements created within the last 72 hours (the "NEW" window)
       recentNewAnnouncements = await prisma.$queryRaw<typeof recentNewAnnouncements>`
         SELECT a.id, a.title, a.description, a."createdAt" as date, a.pinned as "isPinned",
@@ -122,16 +154,6 @@ export async function GET(req: NextRequest) {
         `.catch(() => []);
       }
     } else {
-      const targetBranchId = requestedBranchId || activeBranchId;
-      const latest = await prisma.$queryRaw<Array<{ max_id: number | null }>>`
-        SELECT MAX(id) as max_id
-        FROM "Announcement"
-        WHERE ("expiresAt" IS NULL OR "expiresAt" > NOW())
-          AND ("branchId" = ${targetBranchId} OR "branchId" IS NULL OR "authorBranchId" = ${targetBranchId})
-      `.catch(() => [{ max_id: null }]);
-
-      latestId = latest[0]?.max_id || 0;
-
       // Active announcements in the last 72 hours targeted to branch or whole school
       recentNewAnnouncements = await prisma.$queryRaw<typeof recentNewAnnouncements>`
         SELECT a.id, a.title, a.description, a."createdAt" as date, a.pinned as "isPinned",
@@ -165,18 +187,29 @@ export async function GET(req: NextRequest) {
 
     const newAnnouncementIds = recentNewAnnouncements.map((a) => a.id);
     const topAnnouncementIds = rawTopAnnouncements.map((item) => item.id);
+    const allIds = [...newAnnouncementIds, ...topAnnouncementIds];
+    const latestId = allIds.length > 0 ? Math.max(...allIds) : 0;
     const dashboardAnnouncements = rawTopAnnouncements.slice(0, 3);
+
+    const payload = {
+      recentNewAnnouncements,
+      dashboardAnnouncements,
+      newAnnouncementIds,
+      topAnnouncementIds,
+      unreadCount: newAnnouncementIds.length,
+      latestId,
+    };
+
+    cacheMap.set(cacheKey, {
+      payload,
+      fetchedAt: now,
+    });
 
     return NextResponse.json(
       {
-        recentNewAnnouncements,
-        dashboardAnnouncements,
-        newAnnouncementIds,
-        topAnnouncementIds,
-        unreadCount: newAnnouncementIds.length,
-        latestId,
+        ...payload,
         userId: session.userId,
-        timestamp: Date.now(),
+        timestamp: now,
       },
       { headers: NO_CACHE_HEADERS }
     );

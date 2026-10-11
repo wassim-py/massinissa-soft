@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import {
   processBiometricScan,
   getBiometricLiveFeedAction,
+  invalidateBiometricFeedCacheAction,
 } from "@/lib/biometricActions";
 import { ensureK50Connected } from "@/lib/zkK50Manager";
 
@@ -112,6 +113,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.heartbeatOnly) {
+      await invalidateBiometricFeedCacheAction(branchId);
       return NextResponse.json({
         success: true,
         deviceId,
