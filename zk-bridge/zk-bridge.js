@@ -1,13 +1,12 @@
 /**
  * ============================================================================
- * MASSINISSA ACADEMY — PONT LOCAL BIOMÉTRIQUE ZKTECO K50 PRO (zk-bridge.js)
+ * MASSINISSA ACADEMY — LOCAL BIOMETRIC BRIDGE FOR ZKTECO K50 PRO (zk-bridge.js)
  * ============================================================================
- * Ce service ultra-léger (0 dépendance externe, Node.js pur) tourne sur le PC
- * de chaque annexe (ECOLE, ANNEX, AMPHI) et relie :
- *   1. Le(s) lecteur(s) physique(s) ZKTeco K50 Pro branché(s) par câble RJ45
- *      (ex: 192.168.50.201:4370, 192.168.50.202:4370)
- *   2. L'application Massinissa Academy déployée en ligne (Cloud HTTPS)
- *      via un serveur local sur http://127.0.0.1:4375 compatible CORS & PNA.
+ * Ultra-fast, zero-dependency Node.js service that runs on each School PC
+ * (ECOLE, ANNEX, AMPHI) and connects:
+ *   1. Physical ZKTeco K50 Pro reader(s) via Ethernet (192.168.50.201:4370, etc.)
+ *   2. The Online Deployed Application via instant Server-Sent Events (SSE)
+ *      on http://127.0.0.1:4375/events (0ms local push, minimal NeonDB quota).
  * ============================================================================
  */
 
@@ -60,7 +59,6 @@ const state = {
   appUrl: process.env.CLOUD_APP_URL || "",
   branchId: Number(process.env.BRANCH_ID || 1),
   openLessonId: null,
-  lastCloudHeartbeatAt: 0,
   lastAttLogAt: 0,
   lastUnrecognizedAt: 0,
   verifyFailTimer: null,
@@ -81,6 +79,23 @@ const state = {
 
 // Map of connected K50 Pro sockets by IP
 const devices = new Map();
+
+// Active browser Server-Sent Events (SSE) clients for 0ms instant scan push
+const sseClients = new Set();
+
+function broadcastSse(eventObj) {
+  const payload = `data: ${JSON.stringify(eventObj)}\n\n`;
+  let delivered = false;
+  for (const res of sseClients) {
+    try {
+      res.write(payload);
+      delivered = true;
+    } catch {
+      sseClients.delete(res);
+    }
+  }
+  return delivered;
+}
 
 function createChecksum(buf) {
   let chksum = 0;
@@ -206,13 +221,10 @@ function deleteHardwareUserOnAllDevices(globalNumber) {
   sendToAllDevices(CMD_DELETE_USER, delBuf);
   sendToAllDevices(CMD_REFRESHDATA);
   console.log(
-    `[Pont K50 Pro] Utilisateur #${globalNumber} supprime de la memoire flash du lecteur K50 Pro.`
+    `[K50 Bridge] Deleted user #${globalNumber} from K50 Pro flash memory.`
   );
 }
 
-/**
- * Posts JSON to the online Cloud App (/api/biometrics/scan)
- */
 function postToCloud(path, payload) {
   return new Promise((resolve) => {
     if (!state.appUrl) {
@@ -259,15 +271,27 @@ function postToCloud(path, payload) {
   });
 }
 
-async function dispatchScanToCloud(scanPayload) {
-  const fullPayload = {
-    branchId: state.branchId,
-    openLessonId: state.openLessonId,
-    ...scanPayload,
-  };
+async function dispatchScanEvent(scanPayload) {
+  // 1. Instant 0ms path: Push directly to open browser tab(s) via Server-Sent Events (SSE)
+  // The browser immediately calls POST /api/biometrics/scan and renders the popup from the response in 0ms!
+  if (sseClients.size > 0) {
+    const delivered = broadcastSse({
+      type: "scan",
+      ...scanPayload,
+      timestamp: Date.now(),
+    });
+    if (delivered) {
+      return;
+    }
+  }
 
+  // 2. Fallback path (if no browser tab has SSE open right now):
   if (state.appUrl) {
-    const cloudRes = await postToCloud("/api/biometrics/scan", fullPayload);
+    const cloudRes = await postToCloud("/api/biometrics/scan", {
+      branchId: state.branchId,
+      openLessonId: state.openLessonId,
+      ...scanPayload,
+    });
     if (cloudRes && cloudRes.success) {
       if (
         cloudRes.scan?.status === "UNRECOGNIZED" &&
@@ -279,30 +303,29 @@ async function dispatchScanToCloud(scanPayload) {
     }
   }
 
-  // Fallback: queue scan for the browser's BiometricMonitorProvider (which polls 127.0.0.1:4375/status)
   state.pendingScans.push(scanPayload);
   if (state.pendingScans.length > 25) {
     state.pendingScans.shift();
   }
 }
 
-function scheduleUnrecognizedFingerCheck(delayMs = 450) {
+function scheduleUnrecognizedFingerCheck(delayMs = 220) {
   if (state.verifyFailTimer) clearTimeout(state.verifyFailTimer);
   state.verifyFailTimer = setTimeout(() => {
     state.verifyFailTimer = null;
     const now = Date.now();
     if (
-      now - state.lastAttLogAt < 900 ||
-      now - state.lastUnrecognizedAt < 1500 ||
+      now - state.lastAttLogAt < 800 ||
+      now - state.lastUnrecognizedAt < 1400 ||
       state.enrollment.active
     ) {
       return;
     }
     state.lastUnrecognizedAt = now;
     console.log(
-      `[Pont K50 Pro] ✗ Empreinte non reconnue ("Try again") -> Envoi Etat 4`
+      `[K50 Bridge] ✗ Unrecognized Finger ("Try again") -> Instant State 4`
     );
-    dispatchScanToCloud({ isUnrecognizedFinger: true });
+    dispatchScanEvent({ isUnrecognizedFinger: true });
   }, delayMs);
 }
 
@@ -320,8 +343,12 @@ function handleRealTimeEvent(dev, eventType, payload) {
       if (score > 0 || eventType !== EF_FPFTR) {
         state.enrollment.step = Math.min(3, state.enrollment.step + 1);
         state.enrollment.updatedAt = Date.now();
+        broadcastSse({
+          type: "enroll_progress",
+          enrollment: state.enrollment,
+        });
         console.log(
-          `[Pont K50 Enroll] Eleve #${state.enrollment.globalNumber} -> Pression ${state.enrollment.step}/3`
+          `[K50 Enroll] Student #${state.enrollment.globalNumber} -> Tap ${state.enrollment.step}/3`
         );
       }
       return;
@@ -339,19 +366,23 @@ function handleRealTimeEvent(dev, eventType, payload) {
         state.enrollment.step = 3;
         state.enrollment.active = false;
         state.enrollment.status = "SUCCESS";
-        state.enrollment.message = `Empreinte enregistree sur le K50 Pro (#${enrolledNum}) !`;
+        state.enrollment.message = `Fingerprint enrolled on K50 Pro (#${enrolledNum})!`;
         state.enrollment.updatedAt = Date.now();
-        console.log(`[Pont K50 Enroll] ✓ SUCCES pour Eleve #${enrolledNum}`);
+        console.log(`[K50 Enroll] ✓ SUCCESS for Student #${enrolledNum}`);
       } else {
         state.enrollment.active = false;
         state.enrollment.status = "FAILED";
         state.enrollment.message =
-          "Echec de lecture sur le K50 Pro (doigt deja utilise ou mal pose). Reessayez.";
+          "Failed to read finger on K50 Pro (finger already registered or poorly placed). Please try again.";
         state.enrollment.updatedAt = Date.now();
         console.warn(
-          `[Pont K50 Enroll] ✗ ECHEC (code=${enrollRes}) pour #${enrolledNum}`
+          `[K50 Enroll] ✗ FAILED (code=${enrollRes}) for #${enrolledNum}`
         );
       }
+      broadcastSse({
+        type: "enroll_progress",
+        enrollment: state.enrollment,
+      });
       return;
     }
     return;
@@ -383,11 +414,11 @@ function handleRealTimeEvent(dev, eventType, payload) {
     const globalNumber = parseInt(userIdStr, 10);
     if (!isNaN(globalNumber) && globalNumber > 0) {
       console.log(
-        `[Pont K50 Pro] ✓ Empreinte reconnue -> Eleve #${globalNumber} (Annexe=${state.branchId})`
+        `[K50 Bridge] ✓ Finger Recognized -> Student #${globalNumber} (Instant Push)`
       );
-      dispatchScanToCloud({ globalNumber });
+      dispatchScanEvent({ globalNumber });
     } else {
-      dispatchScanToCloud({ isUnrecognizedFinger: true });
+      dispatchScanEvent({ isUnrecognizedFinger: true });
     }
     return;
   }
@@ -398,7 +429,7 @@ function handleRealTimeEvent(dev, eventType, payload) {
     eventType === EF_FINGER ||
     eventType === EF_VERIFY
   ) {
-    const delayMs = eventType === EF_ALARM ? 150 : 450;
+    const delayMs = eventType === EF_ALARM ? 120 : 240;
     scheduleUnrecognizedFingerCheck(delayMs);
   }
 }
@@ -470,13 +501,18 @@ function connectDevice(ip) {
         dev.isConnected = true;
         dev.isConnecting = false;
         console.log(
-          `[Pont K50 Pro] ✓ Connecte au lecteur ZKTeco K50 Pro (${ip}:${DEVICE_PORT})`
+          `[K50 Bridge] ✓ Connected to ZKTeco K50 Pro (${ip}:${DEVICE_PORT})`
         );
         const maskBuf = Buffer.alloc(4);
         maskBuf.writeUInt32LE(EVENT_MASK, 0);
         sendToDevice(dev, CMD_REG_EVENT, maskBuf);
         sendToDevice(dev, CMD_ENABLEDEVICE);
         sendToDevice(dev, CMD_STARTVERIFY);
+        broadcastSse({
+          type: "status",
+          connected: true,
+          deviceIp: CONFIGURED_IPS.join(","),
+        });
       } else if (cmd === CMD_REG_EVENT) {
         if (dev.socket && !dev.socket.destroyed) {
           dev.socket.write(buildZkTcpPacket(CMD_ACK_OK, dev.sessionId, 0));
@@ -494,8 +530,13 @@ function connectDevice(ip) {
   sock.on("close", () => {
     if (dev.isConnected) {
       console.log(
-        `[Pont K50 Pro] ! Deconnecte de ${ip}:${DEVICE_PORT}. Reconnexion auto...`
+        `[K50 Bridge] ! Disconnected from ${ip}:${DEVICE_PORT}. Auto-reconnecting...`
       );
+      broadcastSse({
+        type: "status",
+        connected: isAnyDeviceConnected(),
+        deviceIp: CONFIGURED_IPS.join(","),
+      });
     }
     dev.isConnected = false;
     dev.isConnecting = false;
@@ -512,7 +553,7 @@ for (const ip of CONFIGURED_IPS) {
   connectDevice(ip);
 }
 
-// Local HTTP Server on 127.0.0.1:4375 for browser communication
+// Local HTTP & SSE Server on 127.0.0.1:4375 for browser communication
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
@@ -524,7 +565,6 @@ function setCorsHeaders(res) {
     "Content-Type, Access-Control-Request-Private-Network"
   );
   res.setHeader("Access-Control-Allow-Private-Network", "true");
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
 }
 
 const server = http.createServer((req, res) => {
@@ -538,6 +578,40 @@ const server = http.createServer((req, res) => {
 
   const parsedUrl = new URL(req.url || "/", `http://127.0.0.1:${BRIDGE_PORT}`);
   const pathname = parsedUrl.pathname;
+
+  // Instant 0ms Server-Sent Events (SSE) stream for the browser on this PC
+  if (req.method === "GET" && pathname === "/events") {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+
+    sseClients.add(res);
+
+    // Immediately push current hardware connection state & any pending scans
+    res.write(
+      `data: ${JSON.stringify({
+        type: "status",
+        connected: isAnyDeviceConnected(),
+        deviceIp: CONFIGURED_IPS.join(","),
+      })}\n\n`
+    );
+
+    if (state.pendingScans.length > 0) {
+      const drained = state.pendingScans.splice(0, state.pendingScans.length);
+      for (const ev of drained) {
+        res.write(`data: ${JSON.stringify({ type: "scan", ...ev })}\n\n`);
+      }
+    }
+
+    req.on("close", () => {
+      sseClients.delete(res);
+    });
+    return;
+  }
+
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
 
   if (req.method === "GET" && pathname === "/status") {
     const appUrlParam = parsedUrl.searchParams.get("appUrl");
@@ -555,21 +629,8 @@ const server = http.createServer((req, res) => {
     state.openLessonId = openLessonParam > 0 ? openLessonParam : null;
 
     const connected = isAnyDeviceConnected();
-
-    // Send cloud heartbeat every 20 seconds when connected
-    if (
-      connected &&
-      state.appUrl &&
-      Date.now() - state.lastCloudHeartbeatAt > 20000
-    ) {
-      state.lastCloudHeartbeatAt = Date.now();
-      postToCloud("/api/biometrics/scan", {
-        branchId: state.branchId,
-        heartbeatOnly: true,
-      });
-    }
-
     const drainedScans = state.pendingScans.splice(0, state.pendingScans.length);
+
     res.writeHead(200);
     res.end(
       JSON.stringify({
@@ -610,7 +671,7 @@ const server = http.createServer((req, res) => {
           res.end(
             JSON.stringify({
               success: false,
-              message: `Impossible de joindre le lecteur K50 Pro (${CONFIGURED_IPS.join(", ")}). Verifiez le cable Ethernet.`,
+              message: `Cannot reach K50 Pro (${CONFIGURED_IPS.join(", ")}). Please check the Ethernet cable.`,
             })
           );
           return;
@@ -643,7 +704,7 @@ const server = http.createServer((req, res) => {
           fingerIndex,
           step: 0,
           status: "WAITING_FINGER",
-          message: `Posez le doigt 3 fois sur le lecteur K50 Pro (ID #${globalNumber})...`,
+          message: `Place finger 3 times on the K50 Pro reader (ID #${globalNumber})...`,
           startedAt: Date.now(),
           updatedAt: Date.now(),
         };
@@ -693,8 +754,8 @@ const server = http.createServer((req, res) => {
 
 server.listen(BRIDGE_PORT, "127.0.0.1", () => {
   console.log("==============================================================");
-  console.log("  PONT BIOMETRIQUE MASSINISSA ACADEMY (ZKTeco K50 Pro)");
-  console.log(`  Serveur Local Actif : http://127.0.0.1:${BRIDGE_PORT}`);
-  console.log(`  Lecteur(s) K50 Pro  : ${CONFIGURED_IPS.join(", ")}:${DEVICE_PORT}`);
+  console.log("  MASSINISSA ACADEMY — ZKTECO K50 PRO LOCAL BRIDGE (SSE)");
+  console.log(`  Local Server Active : http://127.0.0.1:${BRIDGE_PORT}`);
+  console.log(`  K50 Pro Reader(s)   : ${CONFIGURED_IPS.join(", ")}:${DEVICE_PORT}`);
   console.log("==============================================================");
 });

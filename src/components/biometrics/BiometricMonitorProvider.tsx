@@ -357,6 +357,150 @@ export default function BiometricMonitorProvider({
 
   const isPollingRef = useRef<boolean>(false);
   const lastLocalBridgeFailAtRef = useRef<number>(0);
+  const localSseConnectedRef = useRef<boolean>(false);
+  const openLessonIdRef = useRef<number | null>(openLessonId);
+  useEffect(() => {
+    openLessonIdRef.current = openLessonId;
+  }, [openLessonId]);
+
+  // Immediately ingests a BiometricScanResult returned directly from POST /api/biometrics/scan (0ms UI update!)
+  const ingestDirectScanResult = useCallback(
+    (scan: BiometricScanResult) => {
+      if (!scan || !scan.id) return;
+      if (scan.id > lastSeenIdRef.current) {
+        lastSeenIdRef.current = scan.id;
+      }
+      setRecentScans((prev) => {
+        const filtered = prev.filter((p) => {
+          if (p.id === scan.id) return false;
+          if (scan.status === "UNRECOGNIZED" && p.status === "UNRECOGNIZED") {
+            return false;
+          }
+          if (
+            scan.status === "SUCCESS" &&
+            p.status === "SUCCESS" &&
+            p.studentId === scan.studentId &&
+            p.lessonId === scan.lessonId
+          ) {
+            return false;
+          }
+          return true;
+        });
+        return [scan, ...filtered].slice(0, 40);
+      });
+
+      if (scan.status === "SUCCESS" && scan.studentId && scan.lessonId) {
+        setPinnedAlerts((prev) =>
+          prev.filter(
+            (a) =>
+              !(
+                a.studentId === scan.studentId &&
+                a.lessonId === scan.lessonId &&
+                a.status === "NO_CREDITS"
+              )
+          )
+        );
+      }
+
+      announceIncomingScan(scan);
+    },
+    [announceIncomingScan]
+  );
+
+  // Instant 0ms Local Bridge SSE stream (http://127.0.0.1:4375/events) for Online Cloud Deployment
+  useEffect(() => {
+    if (!isEnabled || typeof window === "undefined" || typeof EventSource === "undefined") {
+      return;
+    }
+
+    let es: EventSource | null = null;
+    let retryTimer: NodeJS.Timeout | null = null;
+    let isCancelled = false;
+
+    const connectLocalSse = () => {
+      if (isCancelled) return;
+      try {
+        es = new EventSource("http://127.0.0.1:4375/events");
+
+        es.onopen = () => {
+          localSseConnectedRef.current = true;
+          lastLocalBridgeFailAtRef.current = 0;
+        };
+
+        es.onmessage = async (event) => {
+          try {
+            const msg = JSON.parse(event.data || "{}");
+            if (msg.type === "status") {
+              setDeviceConnected(Boolean(msg.connected));
+              if (msg.deviceIp) {
+                setDeviceEndpoint(`${msg.deviceIp}:4370`);
+              }
+              return;
+            }
+
+            if (msg.type === "scan") {
+              // Instant scan event received in <2ms from K50 Pro via Local Bridge!
+              // Post directly to /api/biometrics/scan and render the popup immediately from the response
+              const branchId = currentBranchIdRef.current || 1;
+              const res = await fetch("/api/biometrics/scan", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  globalNumber: msg.globalNumber ?? null,
+                  isUnrecognizedFinger: Boolean(msg.isUnrecognizedFinger),
+                  branchId,
+                  openLessonId: openLessonIdRef.current || null,
+                }),
+              });
+              if (res.ok) {
+                const resData = await res.json();
+                if (resData?.success && resData.scan) {
+                  ingestDirectScanResult(resData.scan);
+                  // Self-heal deleted student from K50 Pro flash memory
+                  if (
+                    resData.scan.status === "UNRECOGNIZED" &&
+                    msg.globalNumber &&
+                    Number(msg.globalNumber) > 0
+                  ) {
+                    fetch(
+                      `http://127.0.0.1:4375/enroll?mode=delete&globalNumber=${Number(
+                        msg.globalNumber
+                      )}`,
+                      { method: "DELETE" }
+                    ).catch(() => {});
+                  }
+                }
+              }
+            }
+          } catch {
+            // Ignore malformed SSE message
+          }
+        };
+
+        es.onerror = () => {
+          localSseConnectedRef.current = false;
+          if (es) {
+            es.close();
+            es = null;
+          }
+          if (!isCancelled) {
+            retryTimer = setTimeout(connectLocalSse, 15000);
+          }
+        };
+      } catch {
+        localSseConnectedRef.current = false;
+      }
+    };
+
+    connectLocalSse();
+
+    return () => {
+      isCancelled = true;
+      localSseConnectedRef.current = false;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (es) es.close();
+    };
+  }, [isEnabled, ingestDirectScanResult]);
 
   // Background polling loop when isEnabled === true (pauses when tab is hidden)
   useEffect(() => {
@@ -395,8 +539,7 @@ export default function BiometricMonitorProvider({
           setDeviceEndpoint(`${data.deviceIp}:${data.devicePort || 4370}`);
         }
 
-        // Sync with School PC Local Bridge (http://127.0.0.1:4375) for Online/Cloud Deployment
-        // Back off for 30s if 127.0.0.1:4375 is unreachable on this client machine
+        // Sync context with School PC Local Bridge (http://127.0.0.1:4375) for Online/Cloud Deployment
         if (
           !data.hardwareConnected &&
           typeof window !== "undefined" &&
@@ -418,13 +561,13 @@ export default function BiometricMonitorProvider({
                   `${bridgeData.deviceIp}:${bridgeData.devicePort || 4370}`
                 );
               }
-              // If the local bridge queued any fallback scan events, process them immediately
+              // If the local bridge queued any fallback scan events, process and render them immediately
               if (
                 Array.isArray(bridgeData.pendingScans) &&
                 bridgeData.pendingScans.length > 0
               ) {
                 for (const ev of bridgeData.pendingScans) {
-                  await fetch("/api/biometrics/scan", {
+                  const postRes = await fetch("/api/biometrics/scan", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -433,6 +576,12 @@ export default function BiometricMonitorProvider({
                       openLessonId: openLessonId || null,
                     }),
                   });
+                  if (postRes.ok) {
+                    const postData = await postRes.json();
+                    if (postData?.success && postData.scan) {
+                      ingestDirectScanResult(postData.scan);
+                    }
+                  }
                 }
               }
             } else {
@@ -482,7 +631,6 @@ export default function BiometricMonitorProvider({
           setRecentScans((prev) => {
             const existingIds = new Set(prev.map((p) => p.id));
             const uniqueNew = newScans.filter((s) => !existingIds.has(s.id));
-            // If new scan is UNRECOGNIZED, replace older UNRECOGNIZED entries so journal stays clean
             const hasNewUnrecognized = uniqueNew.some(
               (s) => s.status === "UNRECOGNIZED"
             );
@@ -516,7 +664,13 @@ export default function BiometricMonitorProvider({
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
         return;
       }
-      const pollIntervalMs = openLessonId || isDrawerOpen ? 2500 : 5000;
+      // When Local Bridge SSE (127.0.0.1:4375/events) is active, scans arrive in <2ms via SSE,
+      // so background cloud polling can run gently every 12s to save NeonDB quota!
+      const pollIntervalMs = localSseConnectedRef.current
+        ? 12000
+        : openLessonId || isDrawerOpen
+        ? 2000
+        : 4500;
       interval = setInterval(pollFeed, pollIntervalMs);
     };
 
@@ -543,7 +697,7 @@ export default function BiometricMonitorProvider({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
     };
-  }, [isEnabled, announceIncomingScan, isHoveringActionZone, openLessonId, isDrawerOpen]);
+  }, [isEnabled, announceIncomingScan, ingestDirectScanResult, isHoveringActionZone, openLessonId, isDrawerOpen]);
 
   // Resolve or dismiss a pinned alert or journal entry
   const handleResolveAlert = useCallback(

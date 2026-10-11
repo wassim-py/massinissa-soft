@@ -51,8 +51,8 @@ const globalForBiometricFeed = globalThis as unknown as {
   __biometricLastCleanupAt?: number;
 };
 
-const BIOMETRIC_FEED_CACHE_TTL_MS = 15 * 1000; // 15s in-memory cache when idle (invalidated immediately on scan/action)
-const BIOMETRIC_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Run stale log cleanup at most once every 5 minutes
+const BIOMETRIC_FEED_CACHE_TTL_MS = 30 * 1000; // 30s in-memory cache when idle (invalidated immediately on scan/action)
+const BIOMETRIC_CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // Run stale log cleanup at most once every 10 minutes
 
 function getBiometricFeedCacheMap(): Map<number, BiometricFeedCacheEntry> {
   if (!globalForBiometricFeed.__biometricFeedCache) {
@@ -119,13 +119,11 @@ function isLessonInContinuousScanWindow(
 }
 
 /**
- * Core high-speed biometric scan processor.
- * Handles:
- * 1. Student identification via globalNumber
- * 2. Strict branch-based continuous scan window matching
- * 3. Multi-group separation (8:00 AM vs 10:00 AM)
- * 4. Student session balance verification via computeStudentCreditAndSessions
- * 5. Automatic attendance marking (PRESENT) & duplicate protection
+ * Core high-speed biometric scan processor (Optimized for low-latency Cloud / NeonDB).
+ * Collapses DB lookups into 2-3 pipelined round-trips:
+ * 1. Student + Enrollments + Candidate Lessons fetched in a single query
+ * 2. Vouchers + Attendances + CatchUps + PayerSibling fetched in a single Promise.all
+ * 3. Attendance upsert + ScanLog creation executed in a single pipelined $transaction([...]) batch
  */
 export async function processBiometricScan(input: {
   globalNumber?: number | null;
@@ -146,19 +144,7 @@ export async function processBiometricScan(input: {
   }
   if (!branchId) branchId = 1;
 
-  // Update device heartbeat if deviceId provided
-  if (input.deviceId) {
-    try {
-      await prisma.biometricDevice.update({
-        where: { id: Number(input.deviceId) },
-        data: { lastSeenAt: new Date() },
-      });
-    } catch {
-      // Ignore if device record doesn't exist yet
-    }
-  }
-
-  // STATE 4: UNRECOGNIZED FINGERPRINT
+  // STATE 4: UNRECOGNIZED FINGERPRINT (Single pipelined round-trip)
   if (
     input.isUnrecognizedFinger ||
     input.globalNumber === undefined ||
@@ -166,20 +152,21 @@ export async function processBiometricScan(input: {
     isNaN(Number(input.globalNumber)) ||
     Number(input.globalNumber) <= 0
   ) {
-    // Remove previous transient UNRECOGNIZED logs so they never pile up in the journal
-    await prisma.biometricScanLog.deleteMany({
-      where: { branchId, status: "UNRECOGNIZED" },
-    });
-    const log = await prisma.biometricScanLog.create({
-      data: {
-        branchId,
-        deviceId: input.deviceId ? Number(input.deviceId) : null,
-        globalNumber: input.globalNumber ? Number(input.globalNumber) : null,
-        status: "UNRECOGNIZED",
-        isResolved: true, // State 4 is transient in Lower Live Stream
-        scannedAt: scanTime,
-      },
-    });
+    const [, log] = await prisma.$transaction([
+      prisma.biometricScanLog.deleteMany({
+        where: { branchId, status: "UNRECOGNIZED" },
+      }),
+      prisma.biometricScanLog.create({
+        data: {
+          branchId,
+          deviceId: input.deviceId ? Number(input.deviceId) : null,
+          globalNumber: input.globalNumber ? Number(input.globalNumber) : null,
+          status: "UNRECOGNIZED",
+          isResolved: true,
+          scannedAt: scanTime,
+        },
+      }),
+    ]);
     return {
       success: true,
       scan: serializeScanLog(log),
@@ -187,8 +174,10 @@ export async function processBiometricScan(input: {
   }
 
   const globalNumber = Number(input.globalNumber);
+  const rangeStart = new Date(scanTime.getTime() - 6 * 60 * 60 * 1000);
+  const rangeEnd = new Date(scanTime.getTime() + 36 * 60 * 60 * 1000);
 
-  // Lookup student by globalNumber
+  // ROUND-TRIP 1: Fetch Student + Enrollments + Classes + Candidate Lessons in ONE query
   const student = await prisma.student.findUnique({
     where: { globalNumber },
     include: {
@@ -202,6 +191,20 @@ export async function processBiometricScan(input: {
               branchId: true,
               pricePerCycle: true,
               isFormation: true,
+              lessons: {
+                where: {
+                  startsAt: { gte: rangeStart, lte: rangeEnd },
+                },
+                include: {
+                  classroom: {
+                    select: {
+                      id: true,
+                      name: true,
+                    },
+                  },
+                },
+                orderBy: { startsAt: "asc" },
+              },
             },
           },
           transfersFrom: true,
@@ -213,19 +216,21 @@ export async function processBiometricScan(input: {
 
   // If no student found in DB with this globalNumber -> STATE 4: UNRECOGNIZED
   if (!student) {
-    await prisma.biometricScanLog.deleteMany({
-      where: { branchId, status: "UNRECOGNIZED" },
-    });
-    const log = await prisma.biometricScanLog.create({
-      data: {
-        branchId,
-        deviceId: input.deviceId ? Number(input.deviceId) : null,
-        globalNumber,
-        status: "UNRECOGNIZED",
-        isResolved: true,
-        scannedAt: scanTime,
-      },
-    });
+    const [, log] = await prisma.$transaction([
+      prisma.biometricScanLog.deleteMany({
+        where: { branchId, status: "UNRECOGNIZED" },
+      }),
+      prisma.biometricScanLog.create({
+        data: {
+          branchId,
+          deviceId: input.deviceId ? Number(input.deviceId) : null,
+          globalNumber,
+          status: "UNRECOGNIZED",
+          isResolved: true,
+          scannedAt: scanTime,
+        },
+      }),
+    ]);
     return {
       success: true,
       scan: serializeScanLog(log),
@@ -240,43 +245,24 @@ export async function processBiometricScan(input: {
         e.status.toUpperCase()
       )
   );
-  const enrolledClassIds = activeEnrollments.map((e) => e.classId);
 
-  // Query today's and upcoming lessons for this student's enrolled classes
-  // Window: scanTime - 6 hours to scanTime + 36 hours
-  const rangeStart = new Date(scanTime.getTime() - 6 * 60 * 60 * 1000);
-  const rangeEnd = new Date(scanTime.getTime() + 36 * 60 * 60 * 1000);
-
-  const studentLessons =
-    enrolledClassIds.length > 0
-      ? await prisma.lesson.findMany({
-          where: {
-            classId: { in: enrolledClassIds },
-            startsAt: { gte: rangeStart, lte: rangeEnd },
-          },
-          include: {
-            class: {
-              select: {
-                id: true,
-                name: true,
-                branchId: true,
-                pricePerCycle: true,
-                isFormation: true,
-              },
-            },
-            classroom: {
-              select: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-          orderBy: { startsAt: "asc" },
-        })
-      : [];
+  // Flatten lessons from active enrollments and attach class metadata
+  const studentLessons = activeEnrollments
+    .flatMap((e) =>
+      (e.class.lessons || []).map((l) => ({
+        ...l,
+        class: {
+          id: e.class.id,
+          name: e.class.name,
+          branchId: e.class.branchId,
+          pricePerCycle: e.class.pricePerCycle,
+          isFormation: e.class.isFormation,
+        },
+      }))
+    )
+    .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
   // STRICTLY BRANCH-BASED: Only match lessons taking place at the current scan branch (`branchId`)!
-  // A lesson at ECOLE must NEVER be marked present when scanning at AMPHI or ANNEX.
   const candidateLessons = studentLessons.filter((l) => l.branchId === branchId);
 
   // Match lesson using Continuous Scan Window rule
@@ -288,7 +274,6 @@ export async function processBiometricScan(input: {
       const diffMs = new Date(lesson.startsAt).getTime() - new Date(pl.startsAt).getTime();
       return diffMs >= 30 * 60 * 1000 && diffMs <= 8 * 60 * 60 * 1000;
     });
-    // Find the next lesson on the same day for this student (or next slot)
     const nextLesson = candidateLessons.slice(i + 1).find((nl) => {
       const diffMs = new Date(nl.startsAt).getTime() - new Date(lesson.startsAt).getTime();
       return diffMs >= 30 * 60 * 1000 && diffMs <= 6 * 60 * 60 * 1000;
@@ -307,7 +292,7 @@ export async function processBiometricScan(input: {
     }
   }
 
-  // Fallback check: What if the student arrived late near the end of their lesson AND they do NOT have a next lesson starting right after?
+  // Fallback check for late arrivals near the end of a lesson with no immediate next lesson
   if (!matchedLesson) {
     for (let i = 0; i < candidateLessons.length; i++) {
       const lesson = candidateLessons[i];
@@ -343,11 +328,13 @@ export async function processBiometricScan(input: {
 
   // STATE 3: NO UPCOMING GROUP IN CURRENT SCAN WINDOW AT THIS BRANCH
   if (!matchedLesson) {
-    const nextFutureLesson = candidateLessons.find(
-      (l) => new Date(l.startsAt).getTime() > scanTime.getTime()
-    ) || studentLessons.find(
-      (l) => new Date(l.startsAt).getTime() > scanTime.getTime()
-    );
+    const nextFutureLesson =
+      candidateLessons.find(
+        (l) => new Date(l.startsAt).getTime() > scanTime.getTime()
+      ) ||
+      studentLessons.find(
+        (l) => new Date(l.startsAt).getTime() > scanTime.getTime()
+      );
     let nextLessonInfo: string | null = null;
     if (nextFutureLesson) {
       const timeStr = new Date(nextFutureLesson.startsAt).toLocaleTimeString("fr-DZ", {
@@ -365,30 +352,29 @@ export async function processBiometricScan(input: {
       nextLessonInfo = `${dateStr} à ${timeStr} (${nextFutureLesson.class.name})`;
     }
 
-    // Replace any previous unresolved NO_UPCOMING_GROUP row for this student at this branch
-    // so the new row gets a fresh ID (`id > sinceId`) and triggers the popup without piling up duplicates
-    await prisma.biometricScanLog.deleteMany({
-      where: {
-        branchId,
-        studentId: student.id,
-        status: "NO_UPCOMING_GROUP",
-        isResolved: false,
-      },
-    });
-
-    const log = await prisma.biometricScanLog.create({
-      data: {
-        branchId,
-        deviceId: input.deviceId ? Number(input.deviceId) : null,
-        globalNumber: student.globalNumber,
-        studentId: student.id,
-        studentName: student.name,
-        status: "NO_UPCOMING_GROUP",
-        nextLessonInfo,
-        isResolved: false, // Pinned in Upper Action Zone (for Catch-up / Rattrapage or dismissal)
-        scannedAt: scanTime,
-      },
-    });
+    const [, log] = await prisma.$transaction([
+      prisma.biometricScanLog.deleteMany({
+        where: {
+          branchId,
+          studentId: student.id,
+          status: "NO_UPCOMING_GROUP",
+          isResolved: false,
+        },
+      }),
+      prisma.biometricScanLog.create({
+        data: {
+          branchId,
+          deviceId: input.deviceId ? Number(input.deviceId) : null,
+          globalNumber: student.globalNumber,
+          studentId: student.id,
+          studentName: student.name,
+          status: "NO_UPCOMING_GROUP",
+          nextLessonInfo,
+          isResolved: false,
+          scannedAt: scanTime,
+        },
+      }),
+    ]);
 
     return {
       success: true,
@@ -396,11 +382,20 @@ export async function processBiometricScan(input: {
     };
   }
 
-  // We have a matchedLesson! Now verify student credits & existing attendance for matchedLesson
+  // ROUND-TRIP 2: Fetch Vouchers, Class Attendances, CatchUps, Current Lesson Attendance, and Payer Sibling in ONE Promise.all
   const classId = matchedLesson.classId;
   const enrollment = activeEnrollments.find((e) => e.classId === classId);
+  const effectivePayerStatus =
+    (enrollment as any)?.payerStatus || student.payerStatus || "NORMAL";
+  const siblingDiscountPct = (enrollment as any)?.siblingDiscountPercentage ?? null;
+  const isSiblingWaived = Boolean((enrollment as any)?.isSiblingWaived);
+  const needsPayerSiblingCheck = Boolean(
+    isSiblingWaived &&
+      student.family?.payerStudentId &&
+      student.family.payerStudentId !== student.id
+  );
 
-  const [vouchers, classAttendances, catchUps, existingLessonAttendance] =
+  const [vouchers, classAttendances, catchUps, existingRows, payerVouchersCount] =
     await Promise.all([
       prisma.voucher.findMany({
         where: {
@@ -435,31 +430,26 @@ export async function processBiometricScan(input: {
           missedLesson: { classId },
         },
       }),
-      prisma.attendance.findFirst({
+      prisma.attendance.findMany({
         where: {
           studentId: student.id,
           lessonId: matchedLesson.id,
         },
+        orderBy: { id: "asc" },
       }),
+      needsPayerSiblingCheck
+        ? prisma.voucher.count({
+            where: {
+              studentId: student.family!.payerStudentId!,
+              isVoided: false,
+              isRefund: false,
+            },
+          })
+        : Promise.resolve(1),
     ]);
 
-  const effectivePayerStatus =
-    (enrollment as any)?.payerStatus || student.payerStatus || "NORMAL";
-  const siblingDiscountPct = (enrollment as any)?.siblingDiscountPercentage ?? null;
-  const isSiblingWaived = Boolean((enrollment as any)?.isSiblingWaived);
-
-  // Check if payer sibling has paid (if sibling waived)
-  let isPayerSiblingPaid = true;
-  if (isSiblingWaived && student.family?.payerStudentId && student.family.payerStudentId !== student.id) {
-    const payerVouchers = await prisma.voucher.count({
-      where: {
-        studentId: student.family.payerStudentId,
-        isVoided: false,
-        isRefund: false,
-      },
-    });
-    isPayerSiblingPaid = payerVouchers > 0;
-  }
+  const isPayerSiblingPaid = needsPayerSiblingCheck ? payerVouchersCount > 0 : true;
+  const primaryRow = existingRows[0] || null;
 
   const tuitionVouchers = vouchers.filter(
     (v) => v.paymentType !== "INSCRIPTION" && v.paymentType !== "BOOK"
@@ -485,7 +475,6 @@ export async function processBiometricScan(input: {
     catchUps,
   });
 
-  // Check formation payment if isFormation
   let hasAvailableCredit = false;
   if (matchedLesson.isFree || matchedLesson.isTeacherAbsent || creditMetricsBefore.isNonPayer) {
     hasAvailableCredit = true;
@@ -499,20 +488,106 @@ export async function processBiometricScan(input: {
     hasAvailableCredit = creditMetricsBefore.netSessions > 0;
   }
 
-  // STATE 2: NO CREDITS LEFT (0 SESSIONS)
-  if (!hasAvailableCredit && existingLessonAttendance?.status !== "PRESENT") {
-    // Replace any previous unresolved NO_CREDITS scan log for this student & lesson
-    // so the new row gets a fresh ID (`id > sinceId`) and triggers the popup immediately
-    await prisma.biometricScanLog.deleteMany({
+  // STATE 2: NO CREDITS LEFT (0 SESSIONS) — Single pipelined round-trip
+  if (!hasAvailableCredit && primaryRow?.status !== "PRESENT") {
+    const [, log] = await prisma.$transaction([
+      prisma.biometricScanLog.deleteMany({
+        where: {
+          studentId: student.id,
+          lessonId: matchedLesson.id,
+          status: "NO_CREDITS",
+          isResolved: false,
+        },
+      }),
+      prisma.biometricScanLog.create({
+        data: {
+          branchId: matchedLesson.branchId,
+          deviceId: input.deviceId ? Number(input.deviceId) : null,
+          globalNumber: student.globalNumber,
+          studentId: student.id,
+          studentName: student.name,
+          lessonId: matchedLesson.id,
+          classId: matchedLesson.classId,
+          className: matchedLesson.class.name,
+          classroomName: matchedLesson.classroom?.name || null,
+          lessonStartsAt: matchedLesson.startsAt,
+          lessonEndsAt: matchedLesson.endsAt,
+          status: "NO_CREDITS",
+          remainingCredits: 0,
+          isResolved: false,
+          scannedAt: scanTime,
+        },
+      }),
+    ]);
+
+    return {
+      success: true,
+      scan: serializeScanLog(log),
+    };
+  }
+
+  // ROUND-TRIP 3: STATE 1 SUCCESS — Single pipelined $transaction([...]) batch (Zero extra round-trips!)
+  const alreadyMarkedPresent = primaryRow?.status === "PRESENT";
+  const consumesOneCredit =
+    !matchedLesson.isFree &&
+    !matchedLesson.isTeacherAbsent &&
+    !creditMetricsBefore.isNonPayer &&
+    !matchedLesson.class.isFormation;
+
+  const remainingCreditsAfter = consumesOneCredit
+    ? Math.max(0, creditMetricsBefore.netSessions - 1)
+    : creditMetricsBefore.netSessions;
+
+  const writeOps: any[] = [];
+
+  // Clean up any duplicate attendance rows if more than 1 ever existed
+  if (existingRows.length > 1) {
+    const extraIds = existingRows.slice(1).map((r) => r.id);
+    writeOps.push(
+      prisma.attendance.deleteMany({
+        where: { id: { in: extraIds } },
+      })
+    );
+  }
+
+  if (primaryRow) {
+    if (primaryRow.status !== "PRESENT") {
+      writeOps.push(
+        prisma.attendance.update({
+          where: { id: primaryRow.id },
+          data: { status: "PRESENT", justification: null },
+        })
+      );
+    }
+  } else {
+    writeOps.push(
+      prisma.attendance.create({
+        data: {
+          studentId: student.id,
+          lessonId: matchedLesson.id,
+          status: "PRESENT",
+        },
+      })
+    );
+  }
+
+  // Clear any prior unresolved NO_CREDITS alert or duplicate SUCCESS scan log in one deleteMany
+  writeOps.push(
+    prisma.biometricScanLog.deleteMany({
       where: {
         studentId: student.id,
         lessonId: matchedLesson.id,
-        status: "NO_CREDITS",
-        isResolved: false,
+        OR: [
+          { status: "NO_CREDITS", isResolved: false },
+          ...(alreadyMarkedPresent ? [{ status: "SUCCESS" }] : []),
+        ],
       },
-    });
+    })
+  );
 
-    const log = await prisma.biometricScanLog.create({
+  // Create the fresh SUCCESS scan log as the final operation in the batch
+  writeOps.push(
+    prisma.biometricScanLog.create({
       data: {
         branchId: matchedLesson.branchId,
         deviceId: input.deviceId ? Number(input.deviceId) : null,
@@ -525,121 +600,17 @@ export async function processBiometricScan(input: {
         classroomName: matchedLesson.classroom?.name || null,
         lessonStartsAt: matchedLesson.startsAt,
         lessonEndsAt: matchedLesson.endsAt,
-        status: "NO_CREDITS",
-        remainingCredits: 0,
-        isResolved: false, // Pinned in Upper Action Zone until paid or authorized
+        status: "SUCCESS",
+        remainingCredits: remainingCreditsAfter,
+        nextLessonInfo: alreadyMarkedPresent ? "ALREADY_PRESENT" : null,
+        isResolved: true,
         scannedAt: scanTime,
       },
-    });
+    })
+  );
 
-    return {
-      success: true,
-      scan: serializeScanLog(log),
-    };
-  }
-
-  // STATE 1: SUCCESS (Transactional Attendance Check + Upsert — strictly zero duplicates)
-  let alreadyMarkedPresent = false;
-  await prisma.$transaction(async (tx) => {
-    const existingRows = await tx.attendance.findMany({
-      where: {
-        studentId: student.id,
-        lessonId: matchedLesson!.id,
-      },
-      orderBy: { id: "asc" },
-    });
-
-    // Clean up any extra rows if more than 1 ever existed
-    if (existingRows.length > 1) {
-      const extraIds = existingRows.slice(1).map((r) => r.id);
-      await tx.attendance.deleteMany({
-        where: { id: { in: extraIds } },
-      });
-    }
-
-    const primaryRow = existingRows[0];
-    if (primaryRow) {
-      if (primaryRow.status === "PRESENT") {
-        alreadyMarkedPresent = true;
-      } else {
-        await tx.attendance.update({
-          where: { id: primaryRow.id },
-          data: { status: "PRESENT", justification: null },
-        });
-      }
-    } else {
-      await tx.attendance.create({
-        data: {
-          studentId: student.id,
-          lessonId: matchedLesson!.id,
-          status: "PRESENT",
-        },
-      });
-    }
-
-    // Clear any prior unresolved NO_CREDITS alert for this student & lesson
-    await tx.biometricScanLog.deleteMany({
-      where: {
-        studentId: student.id,
-        lessonId: matchedLesson!.id,
-        status: "NO_CREDITS",
-        isResolved: false,
-      },
-    });
-
-    // If the student is scanning a 2nd/3rd time for the same lesson, replace the previous SUCCESS scan log
-    // so the journal never piles up duplicate rows for the same student & lesson
-    if (alreadyMarkedPresent) {
-      await tx.biometricScanLog.deleteMany({
-        where: {
-          studentId: student.id,
-          lessonId: matchedLesson!.id,
-          status: "SUCCESS",
-        },
-      });
-    }
-  });
-
-  // Remaining credits AFTER this lesson's presence is consumed (always uses priorAttendances + 1 for this lesson)
-  const consumesOneCredit =
-    !matchedLesson.isFree &&
-    !matchedLesson.isTeacherAbsent &&
-    !creditMetricsBefore.isNonPayer &&
-    !matchedLesson.class.isFormation;
-
-  const remainingCreditsAfter = consumesOneCredit
-    ? Math.max(0, creditMetricsBefore.netSessions - 1)
-    : creditMetricsBefore.netSessions;
-
-  const log = await prisma.biometricScanLog.create({
-    data: {
-      branchId: matchedLesson.branchId,
-      deviceId: input.deviceId ? Number(input.deviceId) : null,
-      globalNumber: student.globalNumber,
-      studentId: student.id,
-      studentName: student.name,
-      lessonId: matchedLesson.id,
-      classId: matchedLesson.classId,
-      className: matchedLesson.class.name,
-      classroomName: matchedLesson.classroom?.name || null,
-      lessonStartsAt: matchedLesson.startsAt,
-      lessonEndsAt: matchedLesson.endsAt,
-      status: "SUCCESS",
-      remainingCredits: remainingCreditsAfter,
-      nextLessonInfo: alreadyMarkedPresent ? "ALREADY_PRESENT" : null,
-      isResolved: true,
-      scannedAt: scanTime,
-    },
-  });
-
-  try {
-    revalidatePath(`/list/attendance/take/${matchedLesson.id}`);
-    revalidatePath(`/fr/list/attendance/take/${matchedLesson.id}`);
-    revalidatePath(`/ar/list/attendance/take/${matchedLesson.id}`);
-    revalidatePath(`/list/students/${student.id}`);
-  } catch {
-    // Safe revalidate
-  }
+  const txResults = await prisma.$transaction(writeOps);
+  const log = txResults[txResults.length - 1];
 
   return {
     success: true,

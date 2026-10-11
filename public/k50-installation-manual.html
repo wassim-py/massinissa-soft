@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZKTeco K50 Pro — School PC Installation Manual (Online App)</title>
+  <style>
+    :root {
+      --primary: #1e3a8a;
+      --primary-light: #eff6ff;
+      --emerald: #059669;
+      --emerald-light: #ecfdf5;
+      --amber: #d97706;
+      --amber-light: #fffbeb;
+      --slate-900: #0f172a;
+      --slate-700: #334155;
+      --slate-500: #64748b;
+      --slate-200: #e2e8f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--slate-900);
+      background: #f8fafc;
+      margin: 0;
+      padding: 32px 16px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid var(--slate-200);
+      border-radius: 16px;
+      padding: 40px;
+      box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.06);
+    }
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid var(--slate-200);
+      padding-bottom: 24px;
+      margin-bottom: 28px;
+      gap: 16px;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 26px;
+      color: var(--primary);
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--slate-500);
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .print-btn {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .print-btn:hover { opacity: 0.92; }
+    h2 {
+      font-size: 19px;
+      color: var(--primary);
+      margin-top: 32px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--slate-200);
+    }
+    h3 {
+      font-size: 15px;
+      color: var(--slate-900);
+      margin-top: 18px;
+      margin-bottom: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--slate-200);
+      padding: 10px 14px;
+      text-align: left;
+    }
+    th {
+      background: #f1f5f9;
+      font-weight: 600;
+      color: var(--slate-700);
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #f1f5f9;
+      border-radius: 6px;
+    }
+    code {
+      padding: 2px 6px;
+      font-size: 13px;
+      color: #0f172a;
+    }
+    pre {
+      padding: 12px 16px;
+      overflow-x: auto;
+      border: 1px solid var(--slate-200);
+      font-size: 13px;
+    }
+    .callout {
+      padding: 14px 18px;
+      border-radius: 10px;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    .callout-warn {
+      background: var(--amber-light);
+      border-left: 4px solid var(--amber);
+    }
+    .callout-success {
+      background: var(--emerald-light);
+      border-left: 4px solid var(--emerald);
+    }
+    .callout-info {
+      background: var(--primary-light);
+      border-left: 4px solid var(--primary);
+    }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .container { border: none; box-shadow: none; padding: 0; }
+      .print-btn { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-bar">
+      <div>
+        <h1>ZKTeco K50 Pro — School PC Installation Manual</h1>
+        <p class="subtitle">Massinissa School Software (Online Cloud Deployment) • Branches: ECOLE, ANNEX, AMPHI</p>
+      </div>
+      <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+    </div>
+
+    <h2>1. Prerequisites on Each School PC</h2>
+    <ol>
+      <li><strong>Wi-Fi Internet Connection:</strong> Ensure the School PC connects to the internet via <strong>Wi-Fi</strong> so the Ethernet (RJ45) port stays dedicated to the ZKTeco K50 Pro.</li>
+      <li><strong>Node.js Installed:</strong> Install <strong>Node.js LTS</strong> from <a href="https://nodejs.org" target="_blank">https://nodejs.org</a> if not already installed.</li>
+      <li><strong>Copy the <code>zk-bridge</code> Folder:</strong> Copy the <code>zk-bridge</code> folder from the project onto the School PC (contains <code>zk-bridge.js</code>, <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code>, and <code>ARRETER_PONT_K50.bat</code>).</li>
+    </ol>
+
+    <h2>2. Step 1 — Configure the ZKTeco K50 Pro Hardware</h2>
+    <p>Hold the <strong><code>M/OK</code></strong> key on the K50 Pro for 2 seconds to open the menu, then select <strong><code>Comm.</code> &rarr; <code>Ethernet</code></strong>:</p>
+
+    <h3>A. Single Reader on the PC (Direct Ethernet Cable to PC)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>K50 Pro Setting</th>
+          <th>Value to Enter</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>IP Address</strong></td><td><code>192.168.50.201</code></td></tr>
+        <tr><td><strong>Subnet Mask</strong></td><td><code>255.255.255.0</code></td></tr>
+        <tr><td><strong>Gateway</strong></td><td><code>0.0.0.0</code> (or <code>192.168.50.1</code>)</td></tr>
+        <tr><td><strong>TCP Port</strong></td><td><code>4370</code></td></tr>
+        <tr><td><strong>DHCP</strong></td><td><code>OFF</code> (Disabled)</td></tr>
+        <tr><td><strong>Comm Key (Password)</strong></td><td><code>0</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>B. Multiple Readers on the Same PC (via 5-Port Ethernet Switch)</h3>
+    <p>Connect the PC and all K50 Pro readers to an Ethernet switch with RJ45 cables and assign a unique IP to each reader:</p>
+    <ul>
+      <li><strong>Reader #1:</strong> <code>192.168.50.201</code> (Subnet <code>255.255.255.0</code>, Port <code>4370</code>, DHCP <code>OFF</code>)</li>
+      <li><strong>Reader #2:</strong> <code>192.168.50.202</code> (Subnet <code>255.255.255.0</code>, Port <code>4370</code>, DHCP <code>OFF</code>)</li>
+      <li><strong>Reader #3:</strong> <code>192.168.50.203</code> (Subnet <code>255.255.255.0</code>, Port <code>4370</code>, DHCP <code>OFF</code>)</li>
+    </ul>
+
+    <h2>3. Step 2 — Configure the Windows PC Ethernet Port</h2>
+    <ol>
+      <li>Press <strong><code>Win + R</code></strong>, type <strong><code>ncpa.cpl</code></strong>, and press <strong>Enter</strong>.</li>
+      <li>Right-click on <strong>Ethernet</strong> (wired adapter connected to the K50 Pro) &rarr; click <strong>Properties</strong>.</li>
+      <li>Double-click on <strong>Internet Protocol Version 4 (TCP/IPv4)</strong>.</li>
+      <li>Select <strong>Use the following IP address</strong> and enter:
+        <ul>
+          <li><strong>IP address:</strong> <code>192.168.50.1</code></li>
+          <li><strong>Subnet mask:</strong> <code>255.255.255.0</code></li>
+          <li><strong>Default gateway:</strong> <strong>LEAVE COMPLETELY BLANK!</strong></li>
+        </ul>
+      </li>
+      <li>Click <strong>OK</strong>, then <strong>OK</strong>.</li>
+    </ol>
+
+    <div class="callout callout-warn">
+      <strong>Important:</strong> Always leave the <strong>Default Gateway</strong> blank on the Ethernet adapter. This guarantees Windows keeps using Wi-Fi for internet while routing <code>192.168.50.x</code> over the Ethernet cable.
+    </div>
+
+    <p>To verify the hardware connection, open <strong>PowerShell</strong> and run:</p>
+    <pre>Test-NetConnection 192.168.50.201 -Port 4370</pre>
+    <p>Confirm that the output shows <code>TcpTestSucceeded : True</code>.</p>
+
+    <h2>4. Step 3 — Run the 1-Click Local Bridge Installer (<code>zk-bridge</code>)</h2>
+    <p>Because the application is hosted online, the School PC runs a tiny local service (<code>zk-bridge</code>) that streams finger scans to the browser in <strong>&lt; 2 milliseconds</strong>:</p>
+    <ol>
+      <li>Open the <strong><code>zk-bridge</code></strong> folder on the School PC.</li>
+      <li><strong>Right-click</strong> on <strong><code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code></strong> and click <strong>Run as administrator</strong>.</li>
+      <li>Press <strong><code>[Enter]</code></strong> to keep the default IP <code>192.168.50.201</code> (or type <code>192.168.50.201,192.168.50.202</code> if you have 2 readers on this PC).</li>
+    </ol>
+
+    <div class="callout callout-success">
+      <strong>What the 1-Click Installer Does Automatically:</strong>
+      <ul style="margin: 6px 0 0 0;">
+        <li>Copies <code>zk-bridge.js</code> to <code>%USERPROFILE%\MassinissaK50Bridge\</code></li>
+        <li>Opens ports <code>4370</code> and <code>4375</code> in Windows Firewall</li>
+        <li>Installs a silent auto-startup launcher in Windows Startup (<code>shell:startup</code>) so it starts invisibly every morning when the PC turns on</li>
+        <li>Starts the bridge immediately on <code>http://127.0.0.1:4375</code></li>
+      </ul>
+    </div>
+
+    <h2>5. Step 4 — Open the Online Application</h2>
+    <ol>
+      <li>Open your online Massinissa School Software URL in <strong>Chrome</strong> or <strong>Edge</strong>.</li>
+      <li>Select the PC's branch in the top navigation bar (<strong>ECOLE</strong>, <strong>ANNEX</strong>, or <strong>AMPHI</strong>).</li>
+      <li>Ensure the <strong>Fingerprint</strong> button in the top bar is toggled <strong>ON</strong>.</li>
+      <li>If Chrome asks for permission to <em>"Look for and connect to any device on your local network"</em>, click <strong>Allow</strong>.</li>
+      <li>The status dot on the <strong>Fingerprint ON</strong> button will immediately turn <strong>Green (Connected)</strong>!</li>
+    </ol>
+
+    <h2>6. Troubleshooting Checklist</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Issue</th>
+          <th>Cause</th>
+          <th>Solution</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Wi-Fi internet disconnects when Ethernet cable is plugged in</strong></td>
+          <td>A Default Gateway was entered in the Ethernet IPv4 properties</td>
+          <td>Open <code>ncpa.cpl</code> &rarr; Ethernet &rarr; IPv4 and clear the <em>Default Gateway</em> field.</td>
+        </tr>
+        <tr>
+          <td><strong>Fingerprint button stays Red/Offline in the online app</strong></td>
+          <td>Local Bridge not started or Chrome blocked local network access</td>
+          <td>Run <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code> once and allow <em>Local network access</em> in Chrome site permissions.</td>
+        </tr>
+        <tr>
+          <td><strong>Student scans finger at AMPHI and sees Catch-Up card</strong></td>
+          <td>Normal if their scheduled group is at ECOLE (or wrong branch selected in navbar)</td>
+          <td>Verify the active branch in the top bar matches the physical building (<code>ECOLE</code>, <code>ANNEX</code>, or <code>AMPHI</code>).</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
