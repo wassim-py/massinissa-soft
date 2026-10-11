@@ -31,8 +31,8 @@ export type ExtendedTransferItem = {
   notes?: string | null;
   transferredAt: Date | string;
   transferredBy: string;
-  fromClass?: { id: number; name: string; branchId: number; branch?: { id: number; name: string } };
-  toClass?: { id: number; name: string; branchId: number; branch?: { id: number; name: string } };
+  fromClass?: { id: number; name: string; branchId: number; pricePerCycle?: any; branch?: { id: number; name: string } };
+  toClass?: { id: number; name: string; branchId: number; pricePerCycle?: any; branch?: { id: number; name: string } };
 };
 
 export type ExtendedEnrollmentItem = {
@@ -204,6 +204,7 @@ export default function StudentPaymentDetails({
   const [refundModal, setRefundModal] = useState<{
     isOpen: boolean;
     voucher?: ExtendedVoucherItem;
+    transfer?: ExtendedTransferItem;
     remainingBalance: number;
     maxRefundable: number;
     unconsumedSessions?: number;
@@ -312,6 +313,27 @@ export default function StudentPaymentDetails({
     ? combinedItems
     : combinedItems.slice(0, INITIAL_HISTORY_COUNT);
 
+  // Calculate paid inscription groups across all classes for the 3-groups exemption rule
+  const paidInscByClass = new Map<number, number>();
+  for (const v of allVouchers) {
+    if (!v.isVoided && !v.isRefund && v.paymentType === "INSCRIPTION") {
+      const cid = v.classId || (v.class && v.class.id);
+      if (cid) {
+        const vAmount = Number(v.amount || 0);
+        const vRefunded =
+          (v as any).refunds?.reduce(
+            (rSum: number, r: any) => rSum + Number(r.amount || 0),
+            0
+          ) || 0;
+        const netPaid = Math.max(0, vAmount - vRefunded);
+        if (netPaid > 0) {
+          paidInscByClass.set(cid, (paidInscByClass.get(cid) || 0) + netPaid);
+        }
+      }
+    }
+  }
+  const hasPaidThreeInscriptions = paidInscByClass.size >= 3;
+
   // Calculate per-class metrics
   const allClassMetrics = allEnrollments.map((enr) => {
     const c = enr.class;
@@ -325,13 +347,22 @@ export default function StudentPaymentDetails({
     const activeClassVouchers = classVouchers.filter((v) => !v.isVoided && !v.isRefund);
 
     const inscVouchers = activeClassVouchers.filter((v) => v.paymentType === "INSCRIPTION");
-    const totalInscPaid = inscVouchers.reduce((sum, v) => sum + Number(v.amount || 0), 0);
+    const totalInscPaid = paidInscByClass.get(c.id) || 0;
     const requiredInscFee =
-      Number(c?.inscriptionFee || 0) > 0
+      configuredInscriptionFee && configuredInscriptionFee > 0
+        ? configuredInscriptionFee
+        : Number(c?.inscriptionFee || 0) > 0
         ? Number(c?.inscriptionFee)
-        : (configuredInscriptionFee || 1000);
-    const isInscriptionPaid = totalInscPaid >= requiredInscFee && requiredInscFee > 0;
+        : 1000;
+    const isInscriptionPaid = totalInscPaid > 0;
     const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
+    const enrPayerStatusForInsc = (enr as any).payerStatus || student.payerStatus || "NORMAL";
+    const isOwnerWaived = Boolean(enr.feeOverriddenByOwner && !enr.inscriptionFeeCharged);
+    const isGroupWaived =
+      !isInscriptionPaid &&
+      !isOwnerWaived &&
+      (hasPaidThreeInscriptions || !enr.inscriptionFeeCharged || enrPayerStatusForInsc === "NON_PAYER");
+    const isInscriptionWaived = isOwnerWaived || isGroupWaived;
 
     // Books calculation
     const bookVouchers = activeClassVouchers.filter((v) => v.paymentType === "BOOK");
@@ -392,7 +423,9 @@ export default function StudentPaymentDetails({
     const transferredIn = creditMetrics.transferredIn;
     const attendedSessions = creditMetrics.attendedSessions;
     const netSessions = creditMetrics.netSessions;
-    const unconsumedInCycle = Math.max(0, Math.min(4, netSessions));
+    const unconsumedInCycle = creditMetrics.refundableSessions;
+    const refundableAmount = creditMetrics.refundableAmount;
+    const effectiveLessonPrice = creditMetrics.effectiveLessonPrice;
 
     // Identify the student's most recent active cycle for this class (§7.8)
     const activeTuitionVouchersWithBalance = tuitionVouchers.filter((v) => {
@@ -461,6 +494,9 @@ export default function StudentPaymentDetails({
       formationVouchers,
       inscVoucher,
       isInscriptionPaid,
+      isOwnerWaived,
+      isGroupWaived,
+      isInscriptionWaived,
       totalInscPaid,
       requiredInscFee,
       bookVoucher,
@@ -471,6 +507,8 @@ export default function StudentPaymentDetails({
       attendedSessions,
       netSessions,
       unconsumedInCycle,
+      refundableAmount,
+      effectiveLessonPrice,
       mostRecentActiveCycle,
       status,
       feeCalc,
@@ -554,6 +592,7 @@ export default function StudentPaymentDetails({
     setRefundModal({
       isOpen: true,
       voucher: v,
+      transfer: undefined,
       remainingBalance: remBal,
       maxRefundable: effectiveCap,
       unconsumedSessions,
@@ -562,8 +601,28 @@ export default function StudentPaymentDetails({
     setRefundReason("");
   };
 
+  const handleOpenTransferRefund = (
+    trf: ExtendedTransferItem,
+    remainingBalance: number,
+    maxRefundable: number,
+    unconsumedSessions?: number
+  ) => {
+    const effectiveCap = Math.min(remainingBalance, maxRefundable);
+
+    setRefundModal({
+      isOpen: true,
+      voucher: undefined,
+      transfer: trf,
+      remainingBalance,
+      maxRefundable: effectiveCap,
+      unconsumedSessions,
+    });
+    setRefundAmount(effectiveCap);
+    setRefundReason("");
+  };
+
   const handleExecuteRefund = () => {
-    if (!refundModal.voucher || !refundAmount || Number(refundAmount) <= 0) {
+    if ((!refundModal.voucher && !refundModal.transfer) || !refundAmount || Number(refundAmount) <= 0) {
       toast.error(t("refundAmountError"));
       return;
     }
@@ -581,7 +640,8 @@ export default function StudentPaymentDetails({
       const res = await createRefund(
         { success: false, error: false },
         {
-          voucherId: refundModal.voucher!.id,
+          voucherId: refundModal.voucher?.id,
+          transferId: refundModal.transfer?.id,
           amount: Number(refundAmount),
           reason: refundReason.trim(),
         }
@@ -876,14 +936,14 @@ export default function StudentPaymentDetails({
                           <div className="bg-surface-subtle p-2 rounded-lg border border-border/60">
                             <span className="text-[10px] text-muted block mb-0.5 font-medium">{t("typeInscription")}</span>
                             <span className="font-mono font-bold text-sm text-gray-900 block">
-                              {cm.requiredInscFee.toLocaleString()} DZD
+                              {(cm.isInscriptionPaid ? cm.totalInscPaid : cm.requiredInscFee).toLocaleString()} DZD
                             </span>
                             <span className="text-[10px] block mt-1">
                               {cm.isInscriptionPaid ? (
                                 <span className="text-emerald-700 font-bold">{t("inscriptionSettled")}</span>
-                              ) : cm.enrollment.feeOverriddenByOwner ? (
+                              ) : cm.isOwnerWaived ? (
                                 <span className="text-amber-700 font-semibold">{t("inscriptionOwnerWaived")}</span>
-                              ) : !cm.enrollment.inscriptionFeeCharged ? (
+                              ) : cm.isGroupWaived ? (
                                 <span className="text-blue-700 font-semibold">{t("inscriptionGroupWaived")}</span>
                               ) : (
                                 <span className="text-danger font-bold">{t("inscriptionDue")}</span>
@@ -894,7 +954,7 @@ export default function StudentPaymentDetails({
 
                         {/* Summary / Owed Strip */}
                         <div className="mt-2.5 py-2 px-2.5 bg-surface-subtle rounded-lg border border-border/70 flex items-center justify-between gap-2 text-[11px] flex-wrap">
-                          {isLevelPaid && (!cm.hasBooks || cm.isBookPaid) && cm.isInscriptionPaid ? (
+                          {isLevelPaid && (!cm.hasBooks || cm.isBookPaid) && (cm.isInscriptionPaid || cm.isInscriptionWaived) ? (
                             <div className="flex items-center gap-1.5 text-emerald-800 font-semibold w-full">
                               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                               <span>{t("formationFullySettled")}</span>
@@ -915,7 +975,7 @@ export default function StudentPaymentDetails({
                                     {locale === "ar" ? "الكتب:" : "Livres :"} {cm.bookFee.toLocaleString()} DZD
                                   </span>
                                 )}
-                                {!cm.isInscriptionPaid && (
+                                {!cm.isInscriptionPaid && !cm.isInscriptionWaived && (
                                   <span className="text-blue-800 font-mono">
                                     {locale === "ar" ? "التسجيل:" : "Insc :"} {cm.requiredInscFee.toLocaleString()} DZD
                                   </span>
@@ -1098,9 +1158,9 @@ export default function StudentPaymentDetails({
                           <span className="text-xs font-semibold text-gray-800">
                             {cm.isInscriptionPaid ? (
                               <span className="text-success-text font-bold">{t("inscriptionSettled")}</span>
-                            ) : cm.enrollment.feeOverriddenByOwner ? (
+                            ) : cm.isOwnerWaived ? (
                               <span className="text-amber-700">{t("inscriptionOwnerWaived")}</span>
-                            ) : !cm.enrollment.inscriptionFeeCharged ? (
+                            ) : cm.isGroupWaived ? (
                               <span className="text-blue-700">{t("inscriptionGroupWaived")}</span>
                             ) : (
                               <span className="text-danger font-bold">{t("inscriptionDue")}</span>
@@ -1271,10 +1331,57 @@ export default function StudentPaymentDetails({
                     displayedHistoryItems.map((item) => {
                       if (item.kind === "transfer") {
                         const trf = item.transfer;
+                        const toClassMetric =
+                          (trf.toClass?.id ? classMetricsMap.get(trf.toClass.id) : null) ||
+                          allClassMetrics.find((m) => m.enrollment.id === trf.toEnrollmentId) ||
+                          null;
+                        const trfRefunds = allVouchers
+                          .flatMap((v) => v.refunds || [])
+                          .filter((r) => r.reason?.startsWith(`[TRF-#${trf.id}]`));
+                        const trfTotalRefunded = trfRefunds.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+                        const fallbackCyclePrice = Number(
+                          trf.toClass?.pricePerCycle ||
+                            trf.fromClass?.pricePerCycle ||
+                            toClassMetric?.class?.pricePerCycle ||
+                            0
+                        );
+                        const fallbackSessionPrice = fallbackCyclePrice > 0 ? fallbackCyclePrice / 4 : 0;
+                        const trfAmount =
+                          Number(trf.amount || 0) > 0
+                            ? Number(trf.amount)
+                            : Math.round(Number(trf.transferredSessions || 0) * fallbackSessionPrice);
+                        const trfRemainingBalance = Math.max(0, trfAmount - trfTotalRefunded);
+                        const trfPricePerSession =
+                          trf.transferredSessions > 0 ? trfAmount / trf.transferredSessions : fallbackSessionPrice;
+                        const prevRefundedSessions =
+                          trfPricePerSession > 0 ? Math.round(trfTotalRefunded / trfPricePerSession) : 0;
+                        const remainingTransferSessions = Math.max(
+                          0,
+                          Number(trf.transferredSessions || 0) - prevRefundedSessions
+                        );
+                        const destNetSessions = toClassMetric ? toClassMetric.netSessions : remainingTransferSessions;
+                        const unconsumedTransferSessions = Math.max(
+                          0,
+                          Math.min(remainingTransferSessions, destNetSessions)
+                        );
+                        const effectiveCap = Math.round(unconsumedTransferSessions * trfPricePerSession);
+                        const maxRefundableTransfer = Math.min(trfRemainingBalance, effectiveCap);
+                        const canRefundTransfer =
+                          !isSiblingDiscount &&
+                          trfRemainingBalance > 0 &&
+                          maxRefundableTransfer > 0 &&
+                          unconsumedTransferSessions > 0;
+                        const isFullyRefundedTransfer = trfRemainingBalance <= 0 && trfTotalRefunded > 0;
+                        const isPartiallyRefundedTransfer = trfTotalRefunded > 0 && trfRemainingBalance > 0;
+
                         return (
                           <tr
                             key={`transfer-${trf.id}`}
-                            className="hover:bg-purple-50/40 transition-colors bg-purple-50/20"
+                            className={`hover:bg-purple-50/40 transition-colors ${
+                              isFullyRefundedTransfer
+                                ? "bg-red-50/30 line-through text-muted"
+                                : "bg-purple-50/20"
+                            }`}
                           >
                             {/* Reference */}
                             <td className="p-3 text-start">
@@ -1329,29 +1436,56 @@ export default function StudentPaymentDetails({
                                 +{trf.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
                               </span>
                               <span className="text-[10px] text-muted font-mono block">
-                                ({Number(trf.amount || 0).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD)
+                                ({trfAmount.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD)
                               </span>
                             </td>
 
                             {/* Status */}
                             <td className="p-3 text-center">
-                              <Badge variant="success" size="sm" className="bg-emerald-50 text-emerald-800 border-emerald-200">
-                                {locale === "ar" ? "محول بنجاح" : "Transféré"}
-                              </Badge>
+                              {isFullyRefundedTransfer ? (
+                                <Badge variant="danger" size="sm">
+                                  {t("statusFullyRefunded")}
+                                </Badge>
+                              ) : isPartiallyRefundedTransfer ? (
+                                <Badge variant="warning" size="sm">
+                                  {t("statusPartiallyRefunded")}
+                                </Badge>
+                              ) : (
+                                <Badge variant="success" size="sm" className="bg-emerald-50 text-emerald-800 border-emerald-200">
+                                  {locale === "ar" ? "محول بنجاح" : "Transféré"}
+                                </Badge>
+                              )}
                             </td>
 
-                            {/* Actions: Audit Button */}
+                            {/* Actions: Audit & Refund Buttons */}
                             <td className="p-3 text-end">
                               <div className="flex items-center justify-end gap-1.5">
                                 <button
                                   type="button"
-                                  onClick={() => setAuditModal({ isOpen: true, transfer: trf })}
+                                  onClick={() => setAuditModal({ isOpen: true, transfer: { ...trf, amount: trfAmount } })}
                                   className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 transition-colors inline-flex items-center gap-1 cursor-pointer"
                                   title={locale === "ar" ? "عرض تدقيق التحويل" : "Détails et audit du transfert"}
                                 >
                                   <ArrowRightLeft className="w-3 h-3 text-purple-700" />
                                   <span>{t("auditBtn")}</span>
                                 </button>
+                                {canRefundTransfer && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenTransferRefund(
+                                        { ...trf, amount: trfAmount },
+                                        trfRemainingBalance,
+                                        maxRefundableTransfer,
+                                        unconsumedTransferSessions
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded text-[11px] font-semibold bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 transition-colors cursor-pointer"
+                                    title={t("refundTooltip")}
+                                  >
+                                    {t("refundBtn")}
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -1374,16 +1508,32 @@ export default function StudentPaymentDetails({
                       let maxRefundable = 0;
                       let unconsumedSessions: number | undefined = undefined;
 
-                      if (!isRefundVoucher && targetClassId && classMetric) {
+                      if (!isRefundVoucher && v.paymentType === "INSCRIPTION") {
+                        const hasNeverAttended = classMetric
+                          ? classMetric.attendedSessions === 0
+                          : !(student.attendances || []).some(
+                              (att: any) =>
+                                (!targetClassId || att.lesson?.classId === targetClassId) &&
+                                !att.lesson?.isFree &&
+                                !att.lesson?.isTeacherAbsent &&
+                                att.status === "PRESENT"
+                            );
+                        maxRefundable = hasNeverAttended ? remainingBalance : 0;
+                        unconsumedSessions = undefined;
+                        canRefund = !isVoidedOrFullyRefunded && remainingBalance > 0 && hasNeverAttended;
+                      } else if (!isRefundVoucher && targetClassId && classMetric) {
                         const isMostRecentCycle = Boolean(
                           classMetric.mostRecentActiveCycle && classMetric.mostRecentActiveCycle.id === v.id
                         );
                         const pricePerSession = Number(v.amount) / 4;
-                        const effectiveCap = Math.round(classMetric.unconsumedInCycle * pricePerSession);
+                        const effectiveCap =
+                          classMetric.effectiveLessonPrice > 0
+                            ? classMetric.refundableAmount
+                            : Math.round(classMetric.unconsumedInCycle * pricePerSession);
                         maxRefundable = Math.min(remainingBalance, effectiveCap);
                         unconsumedSessions = classMetric.unconsumedInCycle;
                         canRefund =
-                          !isSiblingDiscount &&
+                          !isSiblingWaived100 &&
                           v.paymentType === "TUITION_4SESSION" &&
                           isMostRecentCycle &&
                           !isVoidedOrFullyRefunded &&
@@ -1392,7 +1542,7 @@ export default function StudentPaymentDetails({
                       } else if (!isRefundVoucher && !targetClassId) {
                         // Non-class voucher (e.g. workshop / formation)
                         maxRefundable = remainingBalance;
-                        canRefund = !isVoidedOrFullyRefunded && remainingBalance > 0 && v.paymentType !== "INSCRIPTION";
+                        canRefund = !isVoidedOrFullyRefunded && remainingBalance > 0;
                       }
 
                       return (
@@ -1764,6 +1914,107 @@ export default function StudentPaymentDetails({
                         (locale === "ar" ? "لا توجد ملاحظات مسجلة." : "Aucune remarque spécifiée lors du transfert.")}
                     </p>
                   </div>
+
+                  {/* Refunds trail for this transfer */}
+                  {(() => {
+                    const trf = auditModal.transfer!;
+                    const trfRefunds = allVouchers
+                      .flatMap((v) => v.refunds || [])
+                      .filter((r) => r.reason?.startsWith(`[TRF-#${trf.id}]`));
+                    const toClassMetric =
+                      (trf.toClass?.id ? classMetricsMap.get(trf.toClass.id) : null) ||
+                      allClassMetrics.find((m) => m.enrollment.id === trf.toEnrollmentId) ||
+                      null;
+                    const trfTotalRefunded = trfRefunds.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+                    const fallbackCyclePrice = Number(
+                      trf.toClass?.pricePerCycle ||
+                        trf.fromClass?.pricePerCycle ||
+                        toClassMetric?.class?.pricePerCycle ||
+                        0
+                    );
+                    const fallbackSessionPrice = fallbackCyclePrice > 0 ? fallbackCyclePrice / 4 : 0;
+                    const trfAmount =
+                      Number(trf.amount || 0) > 0
+                        ? Number(trf.amount)
+                        : Math.round(Number(trf.transferredSessions || 0) * fallbackSessionPrice);
+                    const trfRemainingBalance = Math.max(0, trfAmount - trfTotalRefunded);
+                    const trfPricePerSession =
+                      trf.transferredSessions > 0 ? trfAmount / trf.transferredSessions : fallbackSessionPrice;
+                    const prevRefundedSessions =
+                      trfPricePerSession > 0 ? Math.round(trfTotalRefunded / trfPricePerSession) : 0;
+                    const remainingTransferSessions = Math.max(
+                      0,
+                      Number(trf.transferredSessions || 0) - prevRefundedSessions
+                    );
+                    const destNetSessions = toClassMetric ? toClassMetric.netSessions : remainingTransferSessions;
+                    const unconsumedTransferSessions = Math.max(
+                      0,
+                      Math.min(remainingTransferSessions, destNetSessions)
+                    );
+                    const effectiveCap = Math.round(unconsumedTransferSessions * trfPricePerSession);
+                    const maxRefundableTransfer = Math.min(trfRemainingBalance, effectiveCap);
+                    const canRefundTransfer =
+                      !isSiblingDiscount &&
+                      trfRemainingBalance > 0 &&
+                      maxRefundableTransfer > 0 &&
+                      unconsumedTransferSessions > 0;
+
+                    return (
+                      <>
+                        {trfRefunds.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="font-bold text-red-800">{t("modalAuditRefundsTitle")}</p>
+                            {trfRefunds.map((rf) => (
+                              <div key={rf.id} className="bg-red-50 p-2.5 rounded border border-red-200">
+                                <div className="flex justify-between font-bold text-red-700">
+                                  <span>
+                                    {t("modalAuditRefundItem", {
+                                      amount: Number(rf.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
+                                    })}
+                                  </span>
+                                  <span className="text-muted text-[10px] font-normal" dir="ltr">
+                                    {formatPaymentDateTime(rf.refundedAt)}
+                                  </span>
+                                </div>
+                                <div className="mt-1 text-gray-700">
+                                  {t("modalAuditRefundReason", {
+                                    reason: rf.reason.replace(/^\[TRF-#\d+\]\s*/, ""),
+                                  })}
+                                </div>
+                                <div className="text-[10px] text-muted mt-0.5">
+                                  {t("modalAuditRefundBy", { user: rf.refundedBy })}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {canRefundTransfer && (
+                          <div className="pt-2 border-t border-border flex items-center justify-between gap-2">
+                            <span className="text-xs text-muted">
+                              {t("cashbackCapInfo", {
+                                count: unconsumedTransferSessions,
+                                amount: maxRefundableTransfer.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
+                              })}
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() =>
+                                handleOpenTransferRefund(
+                                  { ...trf, amount: trfAmount },
+                                  trfRemainingBalance,
+                                  maxRefundableTransfer,
+                                  unconsumedTransferSessions
+                                )
+                              }
+                            >
+                              {t("refundBtn")}
+                            </Button>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             ) : auditModal.voucher ? (
@@ -1837,7 +2088,7 @@ export default function StudentPaymentDetails({
       )}
 
       {/* MODAL 4: Refund Modal */}
-      {refundModal.isOpen && refundModal.voucher && (
+      {refundModal.isOpen && (refundModal.voucher || refundModal.transfer) && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4">
           <div className="bg-white rounded-xl shadow-xl relative w-full max-w-md p-5 font-sans">
             <button
@@ -1849,7 +2100,11 @@ export default function StudentPaymentDetails({
 
             <h3 className="text-base font-bold text-gray-900 border-b pb-2 flex items-center gap-2">
               <span className="text-red-600 font-mono" dir="ltr">
-                {t("modalRefundTitle", { voucher: formatVoucherDisplay(refundModal.voucher) })}
+                {t("modalRefundTitle", {
+                  voucher: refundModal.voucher
+                    ? formatVoucherDisplay(refundModal.voucher)
+                    : `TRF-#${refundModal.transfer!.id}`,
+                })}
               </span>
             </h3>
 
@@ -1859,7 +2114,11 @@ export default function StudentPaymentDetails({
                 <div className="flex justify-between">
                   <span className="text-muted">{t("originalVoucherAmount")}</span>
                   <span className="font-bold text-gray-900">
-                    {Number(refundModal.voucher.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
+                    {Number(
+                      refundModal.voucher
+                        ? refundModal.voucher.amount
+                        : refundModal.transfer?.amount ?? refundModal.remainingBalance
+                    ).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
                   </span>
                 </div>
                 <div className="flex justify-between text-green-700 font-bold">

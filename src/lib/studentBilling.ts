@@ -568,6 +568,10 @@ export interface StudentCreditResult {
   attendedSessions: number;
   creditResetOffset: number;
   netSessions: number;
+  effectiveLessonPrice: number;
+  totalPaidTuition: number;
+  refundableSessions: number;
+  refundableAmount: number;
   isFormation: boolean;
   isNonPayer: boolean;
   isSiblingWaived: boolean;
@@ -614,6 +618,16 @@ export function computeStudentCreditAndSessions({
       ? 0
       : baseLessonPrice;
 
+  const validVouchers = tuitionVouchers.filter(
+    (v) => !v.isVoided && !v.isRefund && v.status !== "REFUNDED"
+  );
+  let totalPaidTuition = 0;
+  validVouchers.forEach((v) => {
+    const vAmount = Number(v.amount || 0);
+    const vRefunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    totalPaidTuition += Math.max(0, vAmount - vRefunded);
+  });
+
   let purchasedSessions = 0;
   if (!isForm) {
     if (isNonPayer) {
@@ -621,20 +635,8 @@ export function computeStudentCreditAndSessions({
     } else if (isSiblingWaived100) {
       purchasedSessions = isPayerSiblingPaid ? 16 : 0;
     } else if (effectiveLessonPrice > 0) {
-      let totalPaidTuition = 0;
-      const validVouchers = tuitionVouchers.filter(
-        (v) => !v.isVoided && !v.isRefund && v.status !== "REFUNDED"
-      );
-      validVouchers.forEach((v) => {
-        const vAmount = Number(v.amount || 0);
-        const vRefunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
-        totalPaidTuition += Math.max(0, vAmount - vRefunded);
-      });
       purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
     } else {
-      const validVouchers = tuitionVouchers.filter(
-        (v) => !v.isVoided && !v.isRefund && v.status !== "REFUNDED"
-      );
       validVouchers.forEach((v) => {
         const vAmount = Number(v.amount || 0);
         const vRefunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
@@ -684,13 +686,47 @@ export function computeStudentCreditAndSessions({
     });
   }
 
-  const attendedSessions = computeStudentConsumedSessions({
-    lessons: relevantLessons,
-    attendances: relevantAttendances,
-    catchUps,
-  });
+  const history =
+    relevantLessons.length > 0 && relevantAttendances.length > 0
+      ? classifyStudentAttendanceHistory({
+          lessons: relevantLessons,
+          attendances: relevantAttendances,
+          catchUps,
+        })
+      : [];
+
+  const attendedSessions = history.filter((h) => h.isConsumedCredit).length;
+  const settledConsumedSessions = history.filter(
+    (h) =>
+      h.classification === "PRESENT" ||
+      h.classification === "INTERLEAVED_ABSENCE" ||
+      h.classification === "FORFEITED_DROPOUT"
+  ).length;
 
   const netSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - attendedSessions + offset;
+  const netRefundableSessions = isForm
+    ? 0
+    : (purchasedSessions + tIn - tOut) - settledConsumedSessions + offset;
+  const refundableSessions = Math.max(0, Math.min(4, netRefundableSessions));
+
+  let refundableAmount = 0;
+  if (!isForm && !isNonPayer && !isSiblingWaived100) {
+    if (effectiveLessonPrice > 0) {
+      refundableAmount = Math.max(
+        0,
+        Math.round(
+          totalPaidTuition +
+            (tIn - tOut - settledConsumedSessions + offset) * effectiveLessonPrice
+        )
+      );
+    } else {
+      const latestValidVoucher = validVouchers[0];
+      const fallbackLessonPrice = latestValidVoucher
+        ? Number(latestValidVoucher.amount || 0) / 4
+        : 0;
+      refundableAmount = Math.max(0, Math.round(refundableSessions * fallbackLessonPrice));
+    }
+  }
 
   let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER" = "UNPAID";
   if (isForm) {
@@ -714,6 +750,10 @@ export function computeStudentCreditAndSessions({
     attendedSessions,
     creditResetOffset: offset,
     netSessions,
+    effectiveLessonPrice,
+    totalPaidTuition,
+    refundableSessions,
+    refundableAmount,
     isFormation: isForm,
     isNonPayer,
     isSiblingWaived: isSiblingWaived100,

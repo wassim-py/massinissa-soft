@@ -19,9 +19,25 @@ import { createStudent, updateStudent, checkStudentDuplicateAction } from "@/lib
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
 import { Button } from "@/components/ui/Button";
-import { X, Search, AlertTriangle, CreditCard, UserCheck, ShieldAlert } from "lucide-react";
+import {
+  X,
+  Search,
+  AlertTriangle,
+  CreditCard,
+  UserCheck,
+  ShieldAlert,
+  Fingerprint,
+  RefreshCw,
+  Trash2,
+  CheckCircle2,
+} from "lucide-react";
 import { splitFullName } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
+import {
+  getStudentFingerprintStatusAction,
+  enrollStudentFingerprintAction,
+  deleteStudentFingerprintAction,
+} from "@/lib/biometricActions";
 
 type FormState = {
   success: boolean;
@@ -161,6 +177,169 @@ const StudentForm = ({
   const [classSearchTerm, setClassSearchTerm] = useState("");
   const classesDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Biometric Fingerprint Enrollment State (§5 & §7.4 - Real ZKTeco K50 Pro Hardware)
+  const [fpEnrolled, setFpEnrolled] = useState<boolean>(false);
+  const [fpIsEnrolling, setFpIsEnrolling] = useState<boolean>(false);
+  const [fpEnrollingStep, setFpEnrollingStep] = useState<number>(0); // 0..3 real finger taps on K50
+  const [fpTargetGlobalNumber, setFpTargetGlobalNumber] = useState<number>(
+    data?.globalNumber ? Number(data.globalNumber) : 0
+  );
+  const [fpPendingForNewStudent, setFpPendingForNewStudent] = useState<boolean>(false);
+  const fpTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (type === "update" && data?.id) {
+      getStudentFingerprintStatusAction(String(data.id)).then((res) => {
+        if (res.enrolled) {
+          setFpEnrolled(true);
+        }
+      });
+    }
+    return () => {
+      if (fpTimerRef.current) clearInterval(fpTimerRef.current);
+    };
+  }, [type, data?.id]);
+
+  const handleStartFingerprintEnroll = async () => {
+    if (fpTimerRef.current) clearInterval(fpTimerRef.current);
+    setFpIsEnrolling(true);
+    setFpEnrollingStep(0);
+
+    const fullName =
+      [watchedSurname, watchedName].filter(Boolean).join(" ").trim() ||
+      data?.name ||
+      "";
+
+    try {
+      const startRes = await fetch("/api/biometrics/enroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: type === "update" && data?.id ? String(data.id) : null,
+          globalNumber: data?.globalNumber ? Number(data.globalNumber) : 0,
+          studentName: fullName,
+          fingerIndex: 0,
+        }),
+      });
+      const startData = await startRes.json();
+
+      if (!startData.success) {
+        setFpIsEnrolling(false);
+        setFpEnrollingStep(0);
+        toast.error(
+          startData.message ||
+            (locale === "ar"
+              ? "تعذر الاتصال بجهاز البصمة K50 Pro (192.168.50.201)."
+              : "Impossible de joindre le lecteur K50 Pro (192.168.50.201).")
+        );
+        return;
+      }
+
+      if (startData.globalNumber) {
+        setFpTargetGlobalNumber(Number(startData.globalNumber));
+      }
+
+      // Poll live 3-tap progress from the physical K50 Pro every 500ms
+      fpTimerRef.current = setInterval(async () => {
+        try {
+          const pollRes = await fetch("/api/biometrics/enroll", {
+            cache: "no-store",
+          });
+          const pollData = await pollRes.json();
+          const enroll = pollData?.enrollment;
+          if (!enroll) return;
+
+          if (typeof enroll.step === "number") {
+            setFpEnrollingStep(enroll.step);
+          }
+
+          if (enroll.status === "SUCCESS") {
+            if (fpTimerRef.current) clearInterval(fpTimerRef.current);
+            setFpIsEnrolling(false);
+            setFpEnrollingStep(0);
+            setFpEnrolled(true);
+
+            if (type === "create") {
+              setFpPendingForNewStudent(true);
+              toast.success(
+                locale === "ar"
+                  ? `تم تسجيل البصمة بنجاح على جهاز K50 Pro (رقم #${enroll.globalNumber})! سيتم ربطها فور حفظ التلميذ.`
+                  : `Empreinte enregistrée sur le K50 Pro (ID #${enroll.globalNumber}) ! Elle sera liée dès la sauvegarde.`
+              );
+            } else {
+              toast.success(
+                locale === "ar"
+                  ? `تم تسجيل البصمة بنجاح على جهاز K50 Pro (رقم #${enroll.globalNumber})!`
+                  : `Empreinte enregistrée avec succès sur le K50 Pro (ID #${enroll.globalNumber}) !`
+              );
+            }
+          } else if (enroll.status === "FAILED") {
+            if (fpTimerRef.current) clearInterval(fpTimerRef.current);
+            setFpIsEnrolling(false);
+            setFpEnrollingStep(0);
+            toast.error(
+              locale === "ar"
+                ? "فشل تسجيل البصمة على جهاز K50 Pro (الأصبع مستعمل مسبقاً أو لم يوضع بشكل صحيح). يرجى المحاولة مجدداً."
+                : enroll.message ||
+                    "Échec de lecture sur le K50 Pro. Veuillez réessayer."
+            );
+          } else if (enroll.status === "CANCELLED") {
+            if (fpTimerRef.current) clearInterval(fpTimerRef.current);
+            setFpIsEnrolling(false);
+            setFpEnrollingStep(0);
+          }
+        } catch {
+          // Ignore transient poll errors
+        }
+      }, 500);
+    } catch {
+      setFpIsEnrolling(false);
+      setFpEnrollingStep(0);
+      toast.error(
+        locale === "ar"
+          ? "حدث خطأ أثناء الاتصال بجهاز K50 Pro."
+          : "Erreur de communication avec le lecteur K50 Pro."
+      );
+    }
+  };
+
+  const handleCancelFingerprintEnroll = async () => {
+    if (fpTimerRef.current) clearInterval(fpTimerRef.current);
+    setFpIsEnrolling(false);
+    setFpEnrollingStep(0);
+    await fetch("/api/biometrics/enroll?mode=cancel", { method: "DELETE" }).catch(
+      () => {}
+    );
+  };
+
+  const handleDeleteFingerprint = async () => {
+    const targetNum = data?.globalNumber || fpTargetGlobalNumber || 0;
+    const studentIdParam =
+      type === "update" && data?.id ? `&studentId=${encodeURIComponent(String(data.id))}` : "";
+    const res = await fetch(
+      `/api/biometrics/enroll?mode=delete&globalNumber=${targetNum}${studentIdParam}`,
+      { method: "DELETE" }
+    ).then((r) => r.json()).catch(() => ({ success: false }));
+
+    if (res.success) {
+      setFpEnrolled(false);
+      setFpPendingForNewStudent(false);
+      toast.success(
+        res.message ||
+          (locale === "ar"
+            ? "تم حذف البصمة من الجهاز والنظام."
+            : "Empreinte supprimée du lecteur K50 Pro et du système.")
+      );
+    } else {
+      toast.error(
+        res.message ||
+          (locale === "ar"
+            ? "تعذر حذف البصمة."
+            : "Erreur lors de la suppression de l'empreinte.")
+      );
+    }
+  };
+
   const executeStudentSubmit = async (
     formData: StudentSchema,
     mode: "create" | "create_and_pay"
@@ -174,6 +353,21 @@ const StudentForm = ({
         : updateStudent(initialState, formData));
 
       if (res.success) {
+        // If fingerprint was captured during student creation, persist it immediately!
+        const createdStudent = (res as any).student;
+        if (
+          type === "create" &&
+          fpPendingForNewStudent &&
+          createdStudent?.id &&
+          createdStudent?.globalNumber
+        ) {
+          await enrollStudentFingerprintAction({
+            studentId: String(createdStudent.id),
+            globalNumber: Number(createdStudent.globalNumber),
+            fingerIndex: 0,
+          });
+        }
+
         toast.success(
           res.message ||
             (type === "create"
@@ -642,6 +836,156 @@ const StudentForm = ({
                 </Button>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* §7.4 Biometric Fingerprint Enrollment Card (ZKTeco K50/ID PRO) */}
+      <div className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3.5 space-y-2.5">
+        {fpIsEnrolling ? (
+          /* State B: Waiting for 3 real finger taps on K50 Pro */
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-blue-700 font-semibold text-xs">
+                <span className="relative inline-flex items-center justify-center w-2.5 h-2.5 shrink-0">
+                  <span className="absolute inline-flex h-full w-full rounded-full bg-blue-500 opacity-35 animate-ping" />
+                  <span className="relative inline-flex rounded-full w-2 h-2 bg-blue-600" />
+                </span>
+                <span>
+                  {locale === "ar"
+                    ? `جاري تسجيل البصمة على جهاز K50 Pro${
+                        fpTargetGlobalNumber || data?.globalNumber
+                          ? ` (رقم #${fpTargetGlobalNumber || data?.globalNumber})`
+                          : ""
+                      }...`
+                    : `Enregistrement en cours sur le lecteur K50 Pro${
+                        fpTargetGlobalNumber || data?.globalNumber
+                          ? ` (ID #${fpTargetGlobalNumber || data?.globalNumber})`
+                          : ""
+                      }...`}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelFingerprintEnroll}
+                className="text-xs font-medium text-gray-500 hover:text-gray-800 px-2 py-0.5 rounded hover:bg-gray-200 cursor-pointer transition-colors"
+              >
+                {locale === "ar" ? "إلغاء" : "Annuler"}
+              </button>
+            </div>
+            <p className="text-xs text-gray-600">
+              {locale === "ar"
+                ? "اطلب من التلميذ وضع إصبعه 3 مرات على قارئ البصمة K50 Pro"
+                : "Demandez à l'étudiant de poser son doigt 3 fois sur le lecteur K50 Pro"}
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              {[1, 2, 3].map((stepIdx) => (
+                <span
+                  key={stepIdx}
+                  className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-[11px] font-semibold transition-all ${
+                    fpEnrollingStep >= stepIdx
+                      ? "bg-blue-600 text-white shadow-xs scale-105"
+                      : "bg-gray-200 text-gray-500"
+                  }`}
+                >
+                  {stepIdx}
+                </span>
+              ))}
+              <span className="text-xs font-medium text-blue-700 ms-1">
+                {locale === "ar"
+                  ? `(${fpEnrollingStep}/3 قراءات مكتملة...)`
+                  : `(${fpEnrollingStep}/3 lectures validées...)`}
+              </span>
+            </div>
+          </div>
+        ) : fpEnrolled ? (
+          /* State C: Enrolled & Synced Across All Branches */
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Fingerprint className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="text-xs font-semibold text-gray-900">
+                  {locale === "ar"
+                    ? "البصمة البيومترية (ZKTeco K50)"
+                    : "Empreinte Biométrique (ZKTeco K50)"}
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-medium">
+                  <span className="relative inline-flex items-center justify-center w-2 h-2 shrink-0">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-35 animate-ping" />
+                    <span className="relative inline-flex rounded-full w-1.5 h-1.5 bg-emerald-600" />
+                  </span>
+                  {locale === "ar"
+                    ? "مسجلة ومزامنة"
+                    : "Enregistrée & Synchro"}
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-500">
+                {data?.globalNumber
+                  ? locale === "ar"
+                    ? `رقم الجهاز: #${data.globalNumber} • صالحة في جميع الفروع`
+                    : `ID Appareil : #${data.globalNumber} • Synchronisée sur tous les sièges`
+                  : locale === "ar"
+                  ? "سيتم ربطها برقم التلميذ ومزامنتها في جميع الفروع تلقائياً"
+                  : "Sera associée à l'ID global et synchronisée sur tous les sièges"}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleStartFingerprintEnroll}
+                className="px-3 py-1.5 rounded-md bg-white hover:bg-gray-100 border border-gray-200 text-gray-700 font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
+                <span>
+                  {locale === "ar" ? "تحديث البصمة" : "Mettre à jour l'empreinte"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteFingerprint}
+                className="p-1.5 rounded-md bg-white hover:bg-red-50 border border-gray-200 hover:border-red-200 text-red-600 cursor-pointer transition-colors"
+                title={locale === "ar" ? "حذف البصمة" : "Supprimer l'empreinte"}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* State A: Not Yet Enrolled */
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Fingerprint className="w-4 h-4 text-gray-500 shrink-0" />
+                <span className="text-xs font-semibold text-gray-800">
+                  {locale === "ar"
+                    ? "البصمة البيومترية (ZKTeco K50)"
+                    : "Empreinte Biométrique (ZKTeco K50)"}
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 text-[11px] font-medium">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-gray-400" />
+                  {locale === "ar" ? "غير مسجلة" : "Non enregistrée"}
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-500">
+                {locale === "ar"
+                  ? "سجل البصمة مرة واحدة فقط لتعمل تلقائياً في جميع الفروع."
+                  : "Enregistrez l'empreinte une seule fois pour tous les sièges."}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleStartFingerprintEnroll}
+              className="px-3.5 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs inline-flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-colors shrink-0"
+            >
+              <Fingerprint className="w-4 h-4" />
+              <span>
+                {locale === "ar"
+                  ? "تسجيل البصمة على الجهاز"
+                  : "Enregistrer l'empreinte"}
+              </span>
+            </button>
           </div>
         )}
       </div>

@@ -152,12 +152,27 @@ Located permanently in the top navigation bar (next to the Branch Switcher and L
   - `🟢 Vert pulsant`: K50 device connected and listening in real time.
   - `🟡 Jaune`: Reconnecting to local K50 bridge.
   - `⚪ Gris`: Turned OFF by admin.
-- **Unpaid Alert Counter Badge (`🔴 2 Impayés`):** Shows how many students scanned with `0 credits` during the current rush hour so the admin never misses anyone even if they stepped away from the desk for 30 seconds.
+- **Unpaid / Pending Alert Counter Badge (`🔴 2 Impayés`) with Instant Hover Popover:**
+  - Shows how many students scanned with `0 credits` (or pending catch-up action) during the current rush hour so the admin never misses anyone even if they stepped away from the desk.
+  - **Hover Tooltip / Popover:** When the admin **hovers** the mouse over `🔴 2 Impayés`, a floating popover immediately lists each student's **Full Name**, `#globalNumber`, **Group Name**, and scan time, with one-click action buttons:
+    ```text
+    ┌───────────────────────────────────────────────────────────────┐
+    │ 🔴 Étudiants sans solde / en attente (2)                      │
+    │ ───────────────────────────────────────────────────────────── │
+    │ 1. Sara Mansouri (#1108)  •  Physique 2AS - G3      07:54     │
+    │    [ 💳 Encaisser ]  [ ✓ Ignorer ]                            │
+    │ 2. Mehdi Kaci (#1089)     •  Mathématiques 3AS - G1 07:56     │
+    │    [ 💳 Encaisser ]  [ ✓ Ignorer ]                            │
+    └───────────────────────────────────────────────────────────────┘
+    ```
 
 ---
 
-### 7.2. Non-Intrusive Floating Live Scan HUD (Bottom-Right Corner Overlay)
-When the background monitor is **ON**, scans appear as rich, color-coded floating cards in the **bottom-right corner** of the screen (`pointer-events-auto` on the card only, never blocking the rest of the screen or open modals). During rush hours, up to 3 recent cards stack smoothly:
+### 7.2. Non-Intrusive Floating Live Scan HUD (RTL / LTR Adaptive Corner Overlay)
+When the background monitor is **ON**, scans appear as rich, color-coded floating cards anchored to the logical **`bottom-4 end-4`** corner of the screen:
+- **French (`LTR` layout):** Anchored to the **Bottom-Right** corner (`right-4 bottom-4`), text aligned left-to-right.
+- **Arabic (`RTL` layout):** Anchored to the **Bottom-Left** corner (`left-4 bottom-4`), text aligned right-to-left (`dir="rtl"`).
+- `pointer-events-auto` is applied strictly on the cards themselves, never blocking clicks, typing, or modals on the rest of the page.
 
 #### 1️⃣ State: `SUCCESS` (Solid Green Card — Auto-dismisses in 4s)
 ```text
@@ -171,7 +186,7 @@ When the background monitor is **ON**, scans appear as rich, color-coded floatin
 ```
 *(Visual: Solid emerald-green border & header, soft green background, pleasant short chime).*
 
-#### 2️⃣ State: `NO_CREDITS` (Solid Red Card — Stays Pinned Until Dismissed or Paid)
+#### 2️⃣ State: `NO_CREDITS` (Solid Red Card — Pinned in Action Queue Until Resolved or Dismissed)
 ```text
 ╔══════════════════════════════════════════════════════════════════╗
 ║ 🔴 ALERTE : SOLDE ÉPUISÉ (0 SÉANCES)               [✕] 07:54:15 ║
@@ -185,21 +200,21 @@ When the background monitor is **ON**, scans appear as rich, color-coded floatin
 ```
 *(Visual: Solid crimson-red border & background, urgent double-beep alarm. Clicking **"💳 Encaisser maintenant"** opens the `PaymentForm` modal pre-filled for Sara Mansouri and Groupe Physique 2AS - G3 in 1 click!)*
 
-#### 3️⃣ State: `NO_UPCOMING_GROUP` (Flashing Green $\leftrightarrow$ Red Card — Auto-dismisses in 6s)
+#### 3️⃣ State: `NO_UPCOMING_GROUP` (Flashing Green $\leftrightarrow$ Red Card — Pinned in Action Queue for Catch-Up / Rattrapage)
 ```text
 ╔══════════════════════════════════════════════════════════════════╗
-║ 🟢↔🔴 AUCUNE SÉANCE PRÉVUE DANS CE CRÉNEAU            07:54:19  ║
+║ 🟢↔🔴 AUCUNE SÉANCE PRÉVUE DANS CE CRÉNEAU         [✕] 07:54:19 ║
 ║ ──────────────────────────────────────────────────────────────── ║
 ║ 👤 Yacine Touati (#1255) — Étudiant reconnu ✓                   ║
 ║ ⚠️ Inscrit dans aucun groupe ayant cours actuellement (08:00)   ║
 ║ 📅 Prochaine séance: Aujourd'hui à 14:00 (Anglais - G2)         ║
 ║                                                                  ║
-║   [ 🔍 Voir profil étudiant ]       [ 🔄 Marquer rattrapage ]    ║
+║   [ 🔄 Marquer rattrapage ]         [ 🔍 Voir profil étudiant ]  ║
 ╚══════════════════════════════════════════════════════════════════╝
 ```
-*(Visual: CSS keyframe animation alternating the card border & status badge between **Green and Red** every `400ms`, accompanied by a warning tone. Also shows their actual next scheduled lesson if they arrived at the wrong hour!)*
+*(Visual: CSS keyframe animation alternating the card border & status badge between **Green and Red** every `400ms`, accompanied by a warning tone. Stays pinned so the admin can click **`[ 🔄 Marquer rattrapage ]`** to assign them to an active catch-up group or dismiss it).*
 
-#### 4️⃣ State: `UNRECOGNIZED` (Flashing Red $\leftrightarrow$ Green Card — Auto-dismisses in 6s)
+#### 4️⃣ State: `UNRECOGNIZED` (Flashing Red $\leftrightarrow$ Green Card — Transient 5s or Until Re-Scanned)
 ```text
 ╔══════════════════════════════════════════════════════════════════╗
 ║ 🔴↔🟢 EMPREINTE NON RECONNUE                          07:54:22  ║
@@ -213,11 +228,58 @@ When the background monitor is **ON**, scans appear as rich, color-coded floatin
 
 ---
 
-### 7.3. Collapsible Rush-Hour Live Feed Drawer (Side Panel)
-Clicking `[ 📋 Journal (14) ]` in the top navbar slides open a compact right-hand drawer without leaving the current page:
-- **Filter Tabs:** `Tous (84)` | `🔴 Sans solde (3)` | `🟢↔🔴 Hors créneau (2)` | `🟢 Présents (79)`
+### 7.2.1. Rush-Hour Multi-Scan Behavior: What Happens When Another Student Scans During State 2, 3, or 4?
+
+During an `08:00 AM` rush hour, students scan every 1–2 seconds. If a new student scans while a **State 2 (`NO_CREDITS`)**, **State 3 (`NO_UPCOMING_GROUP` / Rattrapage)**, or **State 4 (`UNRECOGNIZED`)** card is on screen, a naive UI would either overwrite the alert (causing the admin to lose the student's alert) or jump around while the admin is trying to click a button.
+
+To prevent this, the Floating HUD uses a **Two-Zone Split Architecture**:
+
+```text
+   ┌──────────────────────────────────────────────────────────────┐
+   │ 📌 ZONE HAUTE : FILE D'ACTIONS ÉPINGLÉES (State 2 & State 3) │
+   │ (Ne disparaît JAMAIS quand d'autres étudiants pointent)      │
+   │                                                              │
+   │  [ +1 autre alerte en attente (Mehdi Kaci - Impayé) ▲ ]      │
+   │  ╔════════════════════════════════════════════════════════╗  │
+   │  ║ 🔴 SOLDE ÉPUISÉ : Sara Mansouri (#1108) — Physique G3  ║  │
+   │  ║    [ 💳 Encaisser maintenant ]            [✕ Ignorer]  ║  │
+   │  ╚════════════════════════════════════════════════════════╝  │
+   │  ╔════════════════════════════════════════════════════════╗  │
+   │  ║ 🟢↔🔴 HORS CRÉNEAU : Yacine Touati (#1255)             ║  │
+   │  ║    [ 🔄 Marquer rattrapage ]              [✕ Ignorer]  ║  │
+   │  ╚════════════════════════════════════════════════════════╝  │
+   ├──────────────────────────────────────────────────────────────┤
+   │ ⚡ ZONE BASSE : FLUX EN DIRECT (State 1 & State 4)           │
+   │ (Défilement rapide des étudiants valides sans bloquer)       │
+   │  ╔════════════════════════════════════════════════════════╗  │
+   │  ║ 🟢 PRÉSENT : Amine Benali (#1042) — Maths G1 (3 rest.) ║  │
+   │  ╚════════════════════════════════════════════════════════╝  │
+   └──────────────────────────────────────────────────────────────┘
+```
+
+1. **When State 2 (`NO_CREDITS`) or State 3 (`NO_UPCOMING_GROUP` / Rattrapage) occurs and another student scans right after:**
+   - **State 2 and State 3 cards are automatically pinned in the Upper Action Zone.**
+   - When the next student (e.g., Amine) scans 1 second later and gets `SUCCESS (Green)`, Amine's green card appears **only in the Lower Live Stream slot**.
+   - Sara's (`NO_CREDITS`) and Yacine's (`Rattrapage`) cards **stay locked in place above** — they are **never overwritten, never closed, and never lost**, even if 50 valid students scan right after them!
+2. **When the Admin Clicks `[ 🔄 Marquer rattrapage ]` or `[ 💳 Encaisser maintenant ]` While Others Keep Scanning:**
+   - The Rattrapage modal (`CatchUpVisitorModal`) or Payment modal (`PaymentForm`) opens in the center of the screen for that specific student.
+   - Meanwhile, the background engine **continues recording every new student who scans on the K50 in the background with zero interruption**.
+   - As soon as the admin completes the Rattrapage or Payment modal, that student's pinned alert card automatically resolves and disappears.
+3. **When State 4 (`UNRECOGNIZED`) occurs and the same (or next) student scans again:**
+   - Because `UNRECOGNIZED` usually means a student placed their finger badly and immediately retries 1 second later, State 4 sits in the **Lower Live Stream slot**.
+   - As soon as the student re-scans properly (or the next student scans), the `UNRECOGNIZED` card smoothly transitions to the new scan (while still logging the unrecognized attempt in the Journal).
+4. **Anti-Misclick Hover Lock:**
+   - Whenever the admin's mouse cursor is hovering inside the Upper Action Zone (about to click `[ 🔄 Marquer rattrapage ]` or `[ 💳 Encaisser ]`), the layout positions of the pinned cards **freeze** until the mouse leaves, guaranteeing a card never shifts under the cursor mid-click.
+5. **Overflow Pill (> 2 Pinned Alerts):**
+   - Maximum **2 pinned cards** are shown expanded at once so the corner never covers more than ~30% of the screen height. If a 3rd or 4th alert arrives before the admin clears the first two, a compact clickable counter bar appears at the top of the stack (`[ +2 autres alertes en attente ▲ ]`) and in the Navbar's `🔴 Impayés` hover badge.
+
+---
+
+### 7.3. Collapsible Rush-Hour Live Feed Drawer (RTL / LTR Slide-Over Panel)
+Clicking `[ 📋 Journal (14) ]` in the top navbar slides open a compact drawer from the logical `end` edge (**Right side in French LTR**, **Left side in Arabic RTL**) without leaving the current page:
+- **Filter Tabs:** `Tous (84)` | `🔴 Sans solde (3)` | `🟢↔🔴 Hors créneau / Rattrapage (2)` | `🟢 Présents (79)`
 - **Search Bar:** Instant filter by student name, `#globalNumber`, or group name.
-- **Live List:** Shows every scan of the day with timestamp, student name, group, classroom, status badge, and quick action buttons (`Encaisser`, `Voir groupe`).
+- **Live List:** Shows every scan of the day with timestamp, student name, group, classroom, status badge, and quick action buttons (`Encaisser`, `Marquer rattrapage`, `Voir groupe`).
 - **Sound Mute/Unmute Toggle:** Lets the admin toggle audio alerts on/off.
 
 ---
@@ -259,4 +321,81 @@ Inside the **Create / Update Student Modal** (`src/components/forms/StudentForm.
 ### 7.5. Real-Time Attendance Roster Auto-Update (`AttendanceRoster.tsx`)
 If an admin or teacher already has a group's attendance page open (`/list/attendance/take/[id]`) while students are scanning their fingers at the entrance:
 - Each student who scans is **highlighted in green in real time** on the roster table (`PRESENT`) with a small `🫆 Biométrie (07:54)` badge next to their status—no manual page refresh needed.
+
+---
+
+## 8. Step-by-Step Hardware Setup Manual (Dev Laptop & School Computers)
+
+### 8.1. Setting Up the K50/ID PRO on Your Development Laptop
+
+You have **two ways** to connect the K50 to your development laptop:
+
+#### Option 1: Via Your Home Wi-Fi Router / Modem (Recommended & Easiest)
+1. **Power on the K50** using its power adapter.
+2. **Find your Laptop's Network Subnet:**
+   - Open PowerShell on your laptop and run: `ipconfig`
+   - Look at your **IPv4 Address** and **Default Gateway**:
+     - If your Gateway is `192.168.1.1`, your subnet is `192.168.1.X`.
+     - If your Gateway is `192.168.100.1` *(common on Algérie Télécom Idoom Fibre modems)*, your subnet is `192.168.100.X`.
+3. **Configure the K50 Network Settings:**
+   - On the K50 keypad, press and hold **`M/OK`** for 2 seconds to open the **Menu Principal**.
+   - Select **`Comm.`** $\rightarrow$ press **`M/OK`**.
+   - **If connecting via Ethernet cable (RJ45):**
+     - Plug an RJ45 cable from the back of the K50 into any yellow LAN port on your home router.
+     - On the K50, go to `Comm.` $\rightarrow$ **`Ethernet`**:
+       - **`DHCP`**: Set to **`OFF` / `Désactivé`**.
+       - **`Adresse IP`**: Set to `192.168.1.201` *(or `192.168.100.201` if your router is `.100.1`)*.
+       - **`Masque sous-réseau`**: `255.255.255.0`
+       - **`Passerelle`**: `192.168.1.1` *(or `192.168.100.1`)*.
+       - **`Port TCP`**: `4370` (default).
+   - **If connecting via Wi-Fi (if your K50/ID PRO has Wi-Fi):**
+     - Go to `Comm.` $\rightarrow$ **`Réseau sans fil (Wi-Fi)`** $\rightarrow$ Turn **ON**, select your Wi-Fi name, enter the password, and then set a Static IP (`DHCP: OFF`, `IP: 192.168.1.201` or `.100.201`).
+   - Go to `Comm.` $\rightarrow$ **`Connexion PC` (PC Connection)**:
+     - Ensure **`Mot de passe Comm.` (Comm Key)** is **`0`**.
+4. **Verify Connection from Your Laptop:**
+   - In PowerShell, run:
+     ```powershell
+     Test-NetConnection 192.168.1.201 -Port 4370
+     ```
+     *(Use `.100.201` if on a `.100.1` router)*.
+   - When you see **`TcpTestSucceeded : True`**, your laptop and the K50 are officially talking!
+
+#### Option 2: Direct Cable from K50 to Laptop (No Router Needed)
+If you want to plug the RJ45 cable **directly** from the K50 into your laptop's Ethernet port while your laptop stays on Wi-Fi for internet:
+1. Plug the RJ45 cable between the K50 and your laptop.
+2. On Windows, press `Win + R`, type `ncpa.cpl`, and press Enter.
+3. Right-click **`Ethernet`** $\rightarrow$ **`Properties`** $\rightarrow$ double-click **`Internet Protocol Version 4 (TCP/IPv4)`**:
+   - Select **"Use the following IP address"**:
+     - **IP address:** `192.168.50.1`
+     - **Subnet mask:** `255.255.255.0`
+     - **Default gateway:** *(leave blank so Windows keeps using your Wi-Fi for internet!)*
+4. On the K50 (`Menu > Comm. > Ethernet`):
+   - **`DHCP`**: `OFF`
+   - **`Adresse IP`**: `192.168.50.201`
+   - **`Masque sous-réseau`**: `255.255.255.0`
+   - **`Passerelle`**: `192.168.50.1`
+5. Test in PowerShell: `Test-NetConnection 192.168.50.201 -Port 4370` $\rightarrow$ **`TcpTestSucceeded : True`**.
+
+---
+
+### 8.2. Setting Up on the School Computers (Each Branch)
+
+At each school branch (Main Branch, Annex, etc.):
+
+1. **Physical Mounting & Network:**
+   - Mount the K50 near the entrance or admin reception desk.
+   - Connect it via RJ45 Ethernet cable to the branch's router/switch (Ethernet cable is always recommended over Wi-Fi in a busy school for zero packet drop).
+2. **Assign Branch Static IP:**
+   - Check the branch PC's `ipconfig` Gateway (`192.168.1.1` or `192.168.100.1`).
+   - Set the K50 Static IP (`DHCP: OFF`) to `.201` on that subnet, Port `4370`, Comm Key `0`.
+3. **Sync Date & Time:**
+   - On the K50: `Menu` $\rightarrow$ `Système` $\rightarrow$ `Date/Heure` $\rightarrow$ Verify exact local date and 24-hour time.
+4. **Lock the K50 Menu Against Students (Crucial Security Step!):**
+   - Enroll at least one **Super Admin** on the K50 (`Menu` $\rightarrow$ `Utilisateurs` $\rightarrow$ `Nouvel Utilisateur` $\rightarrow$ `Rôle: Super Admin` + set a PIN or Admin Fingerprint).
+   - Once a Super Admin is set on a ZKTeco device, pressing `M/OK` on the keypad requires the Admin's finger or PIN—preventing students from entering the menu or deleting data!
+5. **Run the Local Bridge Service on the Branch Admin PC:**
+   - Install Node.js on the branch Admin PC and place the lightweight `zk-bridge` folder (or start it via a Windows Startup script).
+   - Set the `.env` of the bridge to point to the K50's IP (`192.168.1.201`) and that branch's `BRANCH_ID`.
+   - Open the web app on the Admin PC and toggle **`🟢 Empreinte: ACTIVE (ON)`**.
+
 

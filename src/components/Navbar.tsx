@@ -4,6 +4,7 @@ import { getTranslations } from "next-intl/server";
 import LanguageSwitcher from "./LanguageSwitcher";
 import BranchSwitcher from "./BranchSwitcher";
 import NavbarAnnouncementBadge from "./announcements/NavbarAnnouncementBadge";
+import NavbarBiometricControl from "./biometrics/NavbarBiometricControl";
 
 const Navbar = async ({
   mobileNav,
@@ -13,6 +14,12 @@ const Navbar = async ({
   const user = await currentUser({ treatPendingAsSignedOut: false });
   const rawRole = (user?.publicMetadata?.role as string) || "";
   const roleKey = rawRole.toLowerCase();
+  const isAdminOrOwner =
+    !roleKey ||
+    roleKey === "owner" ||
+    roleKey === "admin" ||
+    roleKey === "branch_admin" ||
+    roleKey === "branch";
 
   const tRoles = await getTranslations("roles");
   let translatedRole = rawRole;
@@ -41,8 +48,9 @@ const Navbar = async ({
         <BranchSwitcher />
       </div>
 
-      {/* END: NOTIFICATION BELL, LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
-      <div className="flex items-center gap-2 sm:gap-4 md:gap-6 justify-end shrink-0">
+      {/* END: BIOMETRIC MONITOR, NOTIFICATION BELL, LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
+      <div className="flex items-center gap-2 sm:gap-3 md:gap-4 justify-end shrink-0">
+        {isAdminOrOwner && <NavbarBiometricControl />}
         <NavbarAnnouncementBadge />
         <LanguageSwitcher />
 

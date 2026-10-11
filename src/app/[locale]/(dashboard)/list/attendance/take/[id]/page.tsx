@@ -96,7 +96,12 @@ const TakeAttendancePage = async (
       name: l.className || (locale === "ar" ? "قسم" : "Groupe"),
       price: Number(l.classPrice || 0),
       pricePerCycle: Number(l.pricePerCycle || l.classPrice || 0),
-      inscriptionFee: l.inscriptionFee != null ? Number(l.inscriptionFee) : 0,
+      inscriptionFee:
+        fixedInscriptionFee > 0
+          ? fixedInscriptionFee
+          : l.inscriptionFee != null
+          ? Number(l.inscriptionFee)
+          : 1000,
       bookFee: l.bookFee != null ? Number(l.bookFee) : 0,
       hasBooks: Boolean(l.hasBooks),
       isFormation: Boolean(l.isFormation),
@@ -425,24 +430,37 @@ const TakeAttendancePage = async (
     }));
 
     const enrollment = details?.enrollments?.[0];
-    const inscVouchers = details?.vouchers?.filter(
-      (v: any) => v.paymentType === "INSCRIPTION" && !v.isVoided
-    ) || [];
-    const totalInscPaid = inscVouchers.reduce((sum: number, v: any) => sum + Number(v.amount || 0), 0);
-    const requiredInscFee =
-      Number(rawLesson[0]?.inscriptionFee || 0) > 0
-        ? Number(rawLesson[0].inscriptionFee)
-        : fixedInscriptionFee;
-    const isInscriptionPaid = totalInscPaid >= requiredInscFee && requiredInscFee > 0;
-    const isOwnerWaived = enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged;
-    const isAutoWaived = enrollment && !enrollment.inscriptionFeeCharged;
+    const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
+
+    const paidInscByClass = new Map<number, number>();
+    for (const v of details?.vouchers || []) {
+      if (v.paymentType === "INSCRIPTION" && !v.isVoided && !v.isRefund && v.classId) {
+        const vAmount = Number(v.amount || 0);
+        const vRefunded = (v.refunds || []).reduce(
+          (rSum: number, r: any) => rSum + Number(r.amount || 0),
+          0
+        );
+        const netPaid = Math.max(0, vAmount - vRefunded);
+        if (netPaid > 0) {
+          paidInscByClass.set(v.classId, (paidInscByClass.get(v.classId) || 0) + netPaid);
+        }
+      }
+    }
+
+    const totalInscPaidThisClass = paidInscByClass.get(l.classId) || 0;
+    const isInscriptionPaid = totalInscPaidThisClass > 0;
+    const hasPaidThreeInscriptions = paidInscByClass.size >= 3;
+    const isOwnerWaived = Boolean(enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged);
+    const isAutoWaived = Boolean(
+      (enrollment && !enrollment.inscriptionFeeCharged) ||
+        hasPaidThreeInscriptions ||
+        effectivePayerStatus === "NON_PAYER"
+    );
     const inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" = isInscriptionPaid
       ? "PAID"
       : isOwnerWaived || isAutoWaived
       ? "WAIVED"
       : "UNPAID";
-
-    const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
     const enrollmentStatus = enrollment?.status || "ACTIVE";
     const payerStudentId = details?.family?.payerStudentId;
     const payerSessionsRemaining = payerStudentId ? payerRemainingMap.get(payerStudentId) : undefined;

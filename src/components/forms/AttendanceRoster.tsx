@@ -303,14 +303,14 @@ const AttendanceRoster = ({
     return initial;
   });
 
-  // Synchronize attendance state when active students change (e.g. newly registered student)
+  // Synchronize attendance state when active students or existingRecords change (e.g. newly registered student or biometric scan refresh)
   useEffect(() => {
     setAttendance((prev) => {
       let changed = false;
       const next = { ...prev };
       activeStudents.forEach((student) => {
+        const record = existingRecords.find((r) => r.studentId === student.id);
         if (next[student.id] === undefined) {
-          const record = existingRecords.find((r) => r.studentId === student.id);
           if (record?.status === "PRESENT") {
             next[student.id] = "PRESENT";
           } else if (record?.status === "NOT_DEFINED") {
@@ -318,6 +318,9 @@ const AttendanceRoster = ({
           } else {
             next[student.id] = "ABSENT";
           }
+          changed = true;
+        } else if (record?.status === "PRESENT" && next[student.id] !== "PRESENT") {
+          next[student.id] = "PRESENT";
           changed = true;
         }
       });
@@ -339,6 +342,35 @@ const AttendanceRoster = ({
       return changed ? next : prev;
     });
   }, [activeStudents]);
+
+  // §7.5 Live Biometric Scan Auto-Update on open Attendance Roster
+  useEffect(() => {
+    const handleBiometricScan = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const scan = customEvent.detail;
+      if (
+        scan &&
+        Number(scan.lessonId) === Number(lesson.id) &&
+        scan.studentId &&
+        scan.status === "SUCCESS"
+      ) {
+        setAttendance((prev) => ({
+          ...prev,
+          [String(scan.studentId)]: "PRESENT",
+        }));
+        startTransition(() => {
+          router.refresh();
+        });
+      }
+    };
+    window.addEventListener("biometric-attendance-marked", handleBiometricScan);
+    return () => {
+      window.removeEventListener(
+        "biometric-attendance-marked",
+        handleBiometricScan
+      );
+    };
+  }, [lesson.id, router]);
 
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<FullStudent | null>(null);
@@ -701,6 +733,39 @@ const AttendanceRoster = ({
             const isFormationPaidInFull = formationPrice > 0 && totalPaidFormation >= formationPrice;
             const isFormationPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
 
+            // Merge the live status for the current lesson into student.attendances so credits update instantaneously (0ms)
+            // when a student scans their fingerprint or when the admin toggles Present/Absent manually
+            const baseOtherAttendances = (student.attendances || []).filter(
+              (a: any) => Number(a.lessonId) !== Number(lesson.id)
+            );
+            const existingCurrentAtt: any = (student.attendances || []).find(
+              (a: any) => Number(a.lessonId) === Number(lesson.id)
+            );
+            const liveStudentAttendances =
+              !lesson.isFree &&
+              (currentStatus === "PRESENT" ||
+                currentStatus === "NOT_DEFINED" ||
+                Boolean(existingCurrentAtt))
+                ? [
+                    ...baseOtherAttendances,
+                    {
+                      ...(existingCurrentAtt || {}),
+                      lessonId: lesson.id,
+                      studentId: student.id,
+                      status: currentStatus || "ABSENT",
+                      lesson: existingCurrentAtt?.lesson || {
+                        id: lesson.id,
+                        startsAt:
+                          (lesson as any).startTime ||
+                          (lesson as any).startsAt ||
+                          new Date(),
+                        isFree: Boolean(lesson.isFree),
+                        isTeacherAbsent: Boolean(lesson.isTeacherAbsent),
+                      },
+                    },
+                  ]
+                : baseOtherAttendances;
+
             const creditMetrics = computeStudentCreditAndSessions({
               pricePerCycle: Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0),
               isFormation,
@@ -712,16 +777,16 @@ const AttendanceRoster = ({
               transfersIn: student.transfersTo || [],
               transfersOut: student.transfersFrom || [],
               creditResetOffset: student.creditResetOffset,
-              attendances: student.attendances || [],
+              attendances: liveStudentAttendances,
             });
 
             const sessionsRemaining = creditMetrics.netSessions;
             const sessionsConsumed = creditMetrics.attendedSessions;
 
-            const studentLessons = (student.attendances || [])
+            const studentLessons = liveStudentAttendances
               .map((a: any) => a.lesson)
               .filter(Boolean);
-            const studentAtts = (student.attendances || []).map((a: any) => ({
+            const studentAtts = liveStudentAttendances.map((a: any) => ({
               lessonId: a.lessonId,
               status: a.status,
             }));
@@ -1459,6 +1524,9 @@ const AttendanceRoster = ({
               classData={lesson.class}
               setOpen={setIsPaymentModalOpen}
               type="create"
+              defaultInscriptionFee={
+                lesson.class?.inscriptionFee ? Number(lesson.class.inscriptionFee) : undefined
+              }
             />
           </div>
         </div>

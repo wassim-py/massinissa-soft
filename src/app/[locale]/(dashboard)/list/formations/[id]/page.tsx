@@ -367,20 +367,31 @@ export default async function FormationDetailsPage(props: {
     testsByStudent.set(tst.studentId, list);
   }
 
-  const enrolledStudentsData = formationGroup.enrollments.map((enr) => ({
-    id: enr.id,
-    enrolledAt: enr.enrolledAt,
-    student: {
-      id: enr.student.id,
-      globalNumber: enr.student.globalNumber,
-      name: enr.student.name,
-      phone: enr.student.phone,
-      family: enr.student.family,
-      enrollments: enr.student.enrollments,
-    },
-    vouchers: vouchersByStudent.get(enr.student.id) || [],
-    levelTests: testsByStudent.get(enr.student.id) || [],
-  }));
+  const enrolledStudentsData = formationGroup.enrollments.map((enr) => {
+    const hasAttendedAnyLesson = formationGroup.lessons.some(
+      (l) =>
+        !l.isFree &&
+        !l.isTeacherAbsent &&
+        l.attendances.some(
+          (a) => a.studentId === enr.student.id && a.status === "PRESENT"
+        )
+    );
+    return {
+      id: enr.id,
+      enrolledAt: enr.enrolledAt,
+      hasNeverAttended: !hasAttendedAnyLesson,
+      student: {
+        id: enr.student.id,
+        globalNumber: enr.student.globalNumber,
+        name: enr.student.name,
+        phone: enr.student.phone,
+        family: enr.student.family,
+        enrollments: enr.student.enrollments,
+      },
+      vouchers: vouchersByStudent.get(enr.student.id) || [],
+      levelTests: testsByStudent.get(enr.student.id) || [],
+    };
+  });
 
   const enrolledStudentsList = formationGroup.enrollments.map((enr) => ({
     id: enr.student.id,

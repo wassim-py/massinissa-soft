@@ -30,6 +30,8 @@ model Branch {
   surplusMoney                                        SurplusMoney[]
   dailyExpenses                                       DailyExpense[]
   staffMembers                                        StaffMember[]
+  biometricDevices                                    BiometricDevice[]
+  biometricScanLogs                                   BiometricScanLog[]
 }
 
 model Student {
@@ -57,6 +59,8 @@ model Student {
   bookCopiesReceived                    BookCopyDistribution[]
   bookReceipts                          BookReceipt[]
   catchUpAttendances                    CatchUpAttendance[]
+  fingerprints                          StudentFingerprint[]
+  biometricScanLogs                     BiometricScanLog[]
 
   @@index([registeredBranchId])
   @@index([familyId])
@@ -774,3 +778,66 @@ model StaffPayroll {
   @@unique([staffMemberId, month, year])
   @@index([year, month])
 }
+
+model BiometricDevice {
+  id           Int                @id @default(autoincrement())
+  name         String
+  branchId     Int
+  ipAddress    String             @default("192.168.1.201")
+  port         Int                @default(4370)
+  serialNumber String?
+  isActive     Boolean            @default(true)
+  lastSeenAt   DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  branch       Branch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  scanLogs     BiometricScanLog[]
+
+  @@index([branchId])
+  @@index([isActive])
+}
+
+model StudentFingerprint {
+  id                  Int      @id @default(autoincrement())
+  studentId           String
+  globalNumber        Int
+  fingerIndex         Int      @default(0)
+  templateData        String?
+  enrolledBranchId    Int?
+  isSyncedAllBranches Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  student             Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, fingerIndex])
+  @@index([globalNumber])
+  @@index([studentId])
+}
+
+model BiometricScanLog {
+  id               Int              @id @default(autoincrement())
+  deviceId         Int?
+  branchId         Int
+  globalNumber     Int?
+  studentId        String?
+  studentName      String?
+  lessonId         Int?
+  classId          Int?
+  className        String?
+  classroomName    String?
+  lessonStartsAt   DateTime?
+  lessonEndsAt     DateTime?
+  status           String           // "SUCCESS" | "NO_CREDITS" | "NO_UPCOMING_GROUP" | "UNRECOGNIZED" | "DUPLICATE"
+  remainingCredits Int?
+  nextLessonInfo   String?
+  isResolved       Boolean          @default(false)
+  scannedAt        DateTime         @default(now())
+  device           BiometricDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  branch           Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  student          Student?         @relation(fields: [studentId], references: [id], onDelete: SetNull)
+
+  @@index([branchId, scannedAt])
+  @@index([branchId, isResolved, status])
+  @@index([studentId, lessonId])
+}
+

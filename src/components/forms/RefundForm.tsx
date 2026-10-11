@@ -32,6 +32,7 @@ export type PaymentData = {
   refunds: { amount: number }[];
   paymentType?: string;
   voucherId?: number;
+  hasNeverAttended?: boolean;
 };
 
 const RefundForm = ({ payment }: { payment: PaymentData }) => {
@@ -83,7 +84,7 @@ const RefundForm = ({ payment }: { payment: PaymentData }) => {
     }
   }, [isOpen]);
 
-  if (payment.paymentType === "INSCRIPTION") {
+  if (payment.paymentType === "INSCRIPTION" && payment.hasNeverAttended === false) {
     return null;
   }
 

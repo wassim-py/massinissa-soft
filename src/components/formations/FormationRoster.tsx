@@ -57,6 +57,7 @@ export default function FormationRoster({
   enrolledStudents: Array<{
     id: number;
     enrolledAt: Date | string;
+    hasNeverAttended?: boolean;
     student: {
       id: string;
       globalNumber?: number;
@@ -442,6 +443,7 @@ export default function FormationRoster({
                                           amount: v.amount,
                                           refunds: v.refunds || [],
                                           paymentType: v.paymentType || "FORMATION",
+                                          hasNeverAttended: enr.hasNeverAttended,
                                         }}
                                       />
                                     </td>

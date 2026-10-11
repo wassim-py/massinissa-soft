@@ -1758,8 +1758,15 @@ export async function updateFixedInscriptionFeeAction(
       update: { value: String(amount) },
     });
 
+    await prisma.class.updateMany({
+      data: { inscriptionFee: amount },
+    });
+
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/list/finance");
+    safeRevalidatePath("/list/payments");
+    safeRevalidatePath("/list/students");
+    safeRevalidatePath("/list/attendance");
     return {
       success: true,
       error: false,

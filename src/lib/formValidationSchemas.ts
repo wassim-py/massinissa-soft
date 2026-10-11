@@ -305,7 +305,8 @@ export const workshopPaymentSchema = z.object({
 export type WorkshopPaymentSchema = z.infer<typeof workshopPaymentSchema>;
 
 export const refundSchema = z.object({
-  voucherId: z.coerce.number({ required_error: "معرف الوصل مطلوب" }),
+  voucherId: z.coerce.number().optional(),
+  transferId: z.coerce.number().optional(),
   amount: z.coerce.number().positive({ message: "يجب أن يكون مبلغ الاسترجاع أكبر من 0!" }),
   reason: z.string().min(3, { message: "سبب الاسترداد إلزامي لضمان سجل المراجعة (3 أحرف على الأقل)." }),
 });

@@ -73,6 +73,16 @@ const ClassPaymentHistoryPage = async (
                   },
                 },
               },
+              vouchers: {
+                where: {
+                  paymentType: "INSCRIPTION",
+                  isVoided: false,
+                  isRefund: false,
+                },
+                include: {
+                  refunds: true,
+                },
+              },
             },
           },
           transfersFrom: {
@@ -161,7 +171,7 @@ const ClassPaymentHistoryPage = async (
         transfersFrom: [...existing.transfersFrom, ...enr.transfersFrom],
         transfersTo: [...existing.transfersTo, ...enr.transfersTo],
         feeOverriddenByOwner: existing.feeOverriddenByOwner || enr.feeOverriddenByOwner,
-        inscriptionFeeCharged: existing.inscriptionFeeCharged || enr.inscriptionFeeCharged,
+        inscriptionFeeCharged: existing.inscriptionFeeCharged && enr.inscriptionFeeCharged,
       });
     }
   }

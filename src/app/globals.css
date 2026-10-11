@@ -144,3 +144,99 @@
     box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25) !important;
   }
 }
+
+/* Biometric State 3: Smooth Green -> Red transition (No Upcoming Group / Catch-up candidate) */
+@keyframes biometric-green-then-red {
+  0%, 100% {
+    border-color: #34d399;
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2), 0 10px 25px -5px rgba(15, 23, 42, 0.08);
+  }
+  50% {
+    border-color: #f87171;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.22), 0 10px 25px -5px rgba(15, 23, 42, 0.08);
+  }
+}
+
+@keyframes biometric-badge-green-then-red {
+  0%, 100% {
+    background-color: #d1fae5;
+    color: #065f46;
+    border-color: #6ee7b7;
+  }
+  50% {
+    background-color: #fee2e2;
+    color: #991b1b;
+    border-color: #fca5a5;
+  }
+}
+
+@keyframes biometric-dot-green-then-red {
+  0%, 100% {
+    background-color: #10b981;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+  }
+  50% {
+    background-color: #ef4444;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+  }
+}
+
+.biometric-flash-green-red {
+  animation: biometric-green-then-red 2.2s ease-in-out infinite !important;
+}
+
+.biometric-badge-green-red {
+  animation: biometric-badge-green-then-red 2.2s ease-in-out infinite !important;
+}
+
+.biometric-dot-green-red {
+  animation: biometric-dot-green-then-red 1.8s ease-in-out infinite !important;
+}
+
+/* Biometric State 4: Smooth Red -> Green transition (Unrecognized Fingerprint) */
+@keyframes biometric-red-then-green {
+  0%, 100% {
+    border-color: #f87171;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.22), 0 10px 25px -5px rgba(15, 23, 42, 0.08);
+  }
+  50% {
+    border-color: #34d399;
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2), 0 10px 25px -5px rgba(15, 23, 42, 0.08);
+  }
+}
+
+@keyframes biometric-badge-red-then-green {
+  0%, 100% {
+    background-color: #fee2e2;
+    color: #991b1b;
+    border-color: #fca5a5;
+  }
+  50% {
+    background-color: #d1fae5;
+    color: #065f46;
+    border-color: #6ee7b7;
+  }
+}
+
+@keyframes biometric-dot-red-then-green {
+  0%, 100% {
+    background-color: #ef4444;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+  }
+  50% {
+    background-color: #10b981;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+  }
+}
+
+.biometric-flash-red-green {
+  animation: biometric-red-then-green 2.2s ease-in-out infinite !important;
+}
+
+.biometric-badge-red-green {
+  animation: biometric-badge-red-then-green 2.2s ease-in-out infinite !important;
+}
+
+.biometric-dot-red-green {
+  animation: biometric-dot-red-then-green 1.8s ease-in-out infinite !important;
+}

@@ -31,6 +31,7 @@ export type ExtendedEnrollment = Enrollment & {
       classId: number;
       class: { id: number; name: string; branchId: number; branch: { name: string } };
     }[];
+    vouchers?: (Voucher & { refunds?: Refund[] })[];
   };
   transfersFrom: (EnrollmentTransfer & {
     toEnrollment?: { class?: { name: string; branch?: { name: string } } };
@@ -69,6 +70,7 @@ type CombinedRecord = {
   user?: string;
   details?: string;
   rawVoucher?: any;
+  rawTransfer?: any;
   badgeVariant: "success" | "warning" | "danger" | "primary" | "secondary" | "neutral";
   canRefund?: boolean;
   maxRefundable?: number;
@@ -127,16 +129,17 @@ export default function PaymentGrid({
   const [refundModal, setRefundModal] = useState<{
     isOpen: boolean;
     voucher?: any;
+    transfer?: any;
     studentName: string;
     remainingBalance: number;
     maxRefundable: number;
-    unconsumedSessions: number;
+    unconsumedSessions?: number;
   }>({
     isOpen: false,
     studentName: "",
     remainingBalance: 0,
     maxRefundable: 0,
-    unconsumedSessions: 0,
+    unconsumedSessions: undefined,
   });
 
   const [refundAmount, setRefundAmount] = useState<number | "">("");
@@ -147,7 +150,7 @@ export default function PaymentGrid({
     v: any,
     studentName: string,
     maxRefundable: number,
-    unconsumedSessions: number
+    unconsumedSessions?: number
   ) => {
     const totalRefunded = v.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount), 0) || 0;
     const remBal = Number(v.remainingBalance ?? (Number(v.amount) - totalRefunded));
@@ -156,6 +159,28 @@ export default function PaymentGrid({
     setRefundModal({
       isOpen: true,
       voucher: v,
+      transfer: undefined,
+      studentName,
+      remainingBalance: remBal,
+      maxRefundable: effectiveCap,
+      unconsumedSessions,
+    });
+    setRefundAmount(effectiveCap);
+    setRefundReason("");
+  };
+
+  const handleOpenTransferRefund = (
+    tt: any,
+    studentName: string,
+    remBal: number,
+    maxRefundable: number,
+    unconsumedSessions: number
+  ) => {
+    const effectiveCap = Math.min(remBal, maxRefundable);
+    setRefundModal({
+      isOpen: true,
+      voucher: undefined,
+      transfer: tt,
       studentName,
       remainingBalance: remBal,
       maxRefundable: effectiveCap,
@@ -166,7 +191,7 @@ export default function PaymentGrid({
   };
 
   const handleExecuteRefund = () => {
-    if (!refundModal.voucher || !refundAmount || Number(refundAmount) <= 0) {
+    if ((!refundModal.voucher && !refundModal.transfer) || !refundAmount || Number(refundAmount) <= 0) {
       toast.error(t("amountPositiveError"));
       return;
     }
@@ -183,7 +208,8 @@ export default function PaymentGrid({
       const res = await createRefund(
         { success: false, error: false },
         {
-          voucherId: refundModal.voucher.id,
+          voucherId: refundModal.voucher?.id,
+          transferId: refundModal.transfer?.id,
           amount: Number(refundAmount),
           reason: refundReason.trim(),
         }
@@ -196,7 +222,7 @@ export default function PaymentGrid({
           studentName: "",
           remainingBalance: 0,
           maxRefundable: 0,
-          unconsumedSessions: 0,
+          unconsumedSessions: undefined,
         });
         setModificationModal({ isOpen: false, studentName: "", student: null, records: [] });
       } else {
@@ -223,7 +249,7 @@ export default function PaymentGrid({
         transfersFrom: [...(existing.transfersFrom || []), ...(enr.transfersFrom || [])],
         transfersTo: [...(existing.transfersTo || []), ...(enr.transfersTo || [])],
         feeOverriddenByOwner: existing.feeOverriddenByOwner || enr.feeOverriddenByOwner,
-        inscriptionFeeCharged: existing.inscriptionFeeCharged || enr.inscriptionFeeCharged,
+        inscriptionFeeCharged: existing.inscriptionFeeCharged && enr.inscriptionFeeCharged,
       });
     }
   }
@@ -235,17 +261,47 @@ export default function PaymentGrid({
     const studentVouchers = classData.vouchers.filter((v) => v.studentId === student.id);
     const activeVouchers = studentVouchers.filter((v) => !v.isVoided && !v.isRefund);
 
-    // Inscription fee
+    // Inscription fee & 3-groups exemption rule across all student inscription vouchers
     const inscVouchers = activeVouchers.filter((v) => v.paymentType === "INSCRIPTION");
-    const totalInscPaid = inscVouchers.reduce((sum, v) => sum + Number(v.amount || 0), 0);
+    const paidInscByClass = new Map<number, number>();
+    const allStudentInscVouchers = [
+      ...((student as any).vouchers || []),
+      ...inscVouchers,
+    ];
+    const seenInscVoucherIds = new Set<number>();
+    for (const v of allStudentInscVouchers) {
+      if (v.id && seenInscVoucherIds.has(v.id)) continue;
+      if (v.id) seenInscVoucherIds.add(v.id);
+      if (v.paymentType === "INSCRIPTION" && !v.isVoided && !v.isRefund && v.classId) {
+        const vAmount = Number(v.amount || 0);
+        const vRefunded =
+          (v as any).refunds?.reduce(
+            (rSum: number, r: any) => rSum + Number(r.amount || 0),
+            0
+          ) || 0;
+        const netPaid = Math.max(0, vAmount - vRefunded);
+        if (netPaid > 0) {
+          paidInscByClass.set(v.classId, (paidInscByClass.get(v.classId) || 0) + netPaid);
+        }
+      }
+    }
+
+    const totalInscPaid = paidInscByClass.get(classData.id) || 0;
     const requiredInscFee =
-      Number(classData.inscriptionFee || 0) > 0
+      configuredInscriptionFee && configuredInscriptionFee > 0
+        ? configuredInscriptionFee
+        : Number(classData.inscriptionFee || 0) > 0
         ? Number(classData.inscriptionFee)
-        : (configuredInscriptionFee || 1000);
-    const isInscriptionPaid = totalInscPaid >= requiredInscFee && requiredInscFee > 0;
+        : 1000;
+    const isInscriptionPaid = totalInscPaid > 0;
+    const hasPaidThreeInscriptions = paidInscByClass.size >= 3;
     const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
-    const isOwnerWaived = enrollment.feeOverriddenByOwner && !enrollment.inscriptionFeeCharged;
-    const isAutoWaived = !enrollment.inscriptionFeeCharged;
+    const enrPayerStatusForInsc = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
+    const isOwnerWaived = Boolean(enrollment.feeOverriddenByOwner && !enrollment.inscriptionFeeCharged);
+    const isAutoWaived =
+      !isInscriptionPaid &&
+      !isOwnerWaived &&
+      (!enrollment.inscriptionFeeCharged || hasPaidThreeInscriptions || enrPayerStatusForInsc === "NON_PAYER");
 
     // Books fee - scoped to active trimester (§7.20)
     const bookVoucher = activeVouchers.find(
@@ -299,6 +355,9 @@ export default function PaymentGrid({
     const transferredIn = creditMetrics.transferredIn;
     const attendedSessions = creditMetrics.attendedSessions;
     const netSessions = creditMetrics.netSessions;
+    const refundableSessions = creditMetrics.refundableSessions;
+    const refundableAmount = creditMetrics.refundableAmount;
+    const effectiveLessonPrice = creditMetrics.effectiveLessonPrice;
     const status = creditMetrics.status;
 
     const latestVoucher =
@@ -355,6 +414,9 @@ export default function PaymentGrid({
       transferredOut,
       attendedSessions,
       netSessions,
+      refundableSessions,
+      refundableAmount,
+      effectiveLessonPrice,
       status,
       bookReceivedCount,
       totalBooks: classBooks.length,
@@ -452,7 +514,7 @@ export default function PaymentGrid({
     const mostRecentActiveCycle = sortedActiveCycles[0] || null;
 
     // Remaining unconsumed sessions for this student in this class
-    const unconsumedInCycle = Math.max(0, Math.min(4, item.netSessions));
+    const unconsumedInCycle = item.refundableSessions ?? Math.max(0, Math.min(4, item.netSessions));
 
     // Add vouchers
     item.studentVouchers.forEach((v: any) => {
@@ -483,10 +545,32 @@ export default function PaymentGrid({
       const rem = Number(v.remainingBalance ?? (Number(v.amount) - totalRefunded));
       const isVoidedOrRefunded = v.isVoided || rem <= 0;
 
-      const isMostRecentCycle = Boolean(mostRecentActiveCycle && mostRecentActiveCycle.id === v.id);
-      const pricePerSession = Number(v.amount) / 4;
-      const maxRefundable = Math.min(rem, Math.round(unconsumedInCycle * pricePerSession));
-      const canRefund = !v.isRefund && !item.isWaivedSibling && isMostRecentCycle && !isVoidedOrRefunded && maxRefundable > 0 && v.paymentType === "TUITION_4SESSION";
+      let maxRefundable = 0;
+      let canRefund = false;
+      let recordUnconsumedInCycle: number | undefined = undefined;
+
+      if (v.paymentType === "INSCRIPTION") {
+        const hasNeverAttended = (item.attendedSessions ?? 0) === 0;
+        maxRefundable = hasNeverAttended ? rem : 0;
+        canRefund = !v.isRefund && !isVoidedOrRefunded && rem > 0 && hasNeverAttended;
+        recordUnconsumedInCycle = undefined;
+      } else {
+        const isMostRecentCycle = Boolean(mostRecentActiveCycle && mostRecentActiveCycle.id === v.id);
+        const pricePerSession = Number(v.amount) / 4;
+        const effectiveCap =
+          (item.effectiveLessonPrice ?? 0) > 0
+            ? (item.refundableAmount ?? 0)
+            : Math.round(unconsumedInCycle * pricePerSession);
+        maxRefundable = Math.min(rem, effectiveCap);
+        canRefund =
+          !v.isRefund &&
+          !item.isWaivedSibling &&
+          isMostRecentCycle &&
+          !isVoidedOrRefunded &&
+          maxRefundable > 0 &&
+          v.paymentType === "TUITION_4SESSION";
+        recordUnconsumedInCycle = unconsumedInCycle;
+      }
 
       records.push({
         id: `voucher-${v.id}`,
@@ -508,7 +592,7 @@ export default function PaymentGrid({
         rawVoucher: v,
         canRefund,
         maxRefundable,
-        unconsumedInCycle,
+        unconsumedInCycle: recordUnconsumedInCycle,
       });
 
       // Add legacy cashbacks / refunds linked to this voucher only if not already represented as a separate refund voucher
@@ -574,16 +658,49 @@ export default function PaymentGrid({
 
     if (item.enrollment.transfersTo && item.enrollment.transfersTo.length > 0) {
       item.enrollment.transfersTo.forEach((tt: any) => {
+        const tagPrefix = `[TRF-#${tt.id}]`;
+        const transferRefunds = item.studentVouchers
+          .filter((v: any) => v.isRefund)
+          .flatMap((v: any) => v.refunds || [])
+          .filter((r: any) => typeof r.reason === "string" && r.reason.startsWith(tagPrefix));
+        const totalRefunded = transferRefunds.reduce((sum: number, r: any) => sum + Number(r.amount), 0);
+        const origAmount =
+          Number(tt.transferredAmount) > 0
+            ? Number(tt.transferredAmount)
+            : Math.round(tt.transferredSessions * (Number(classData.pricePerCycle) / 4));
+        const remTransferAmount = Math.max(0, origAmount - totalRefunded);
+        const sessionRate =
+          tt.transferredSessions > 0
+            ? origAmount / tt.transferredSessions
+            : Number(classData.pricePerCycle) / 4;
+        const refundedSessionsApprox = sessionRate > 0 ? Math.round(totalRefunded / sessionRate) : 0;
+        const remainingTransferSessions = Math.max(0, tt.transferredSessions - refundedSessionsApprox);
+        const unconsumedTransferSessions = Math.max(
+          0,
+          Math.min(remainingTransferSessions, Math.max(0, item.netSessions))
+        );
+        const maxRefundableTransfer = Math.min(
+          remTransferAmount,
+          Math.round(unconsumedTransferSessions * sessionRate)
+        );
+        const canRefundTransfer =
+          !item.isWaivedSibling && remTransferAmount > 0 && maxRefundableTransfer > 0;
+
         records.push({
           id: `transfer-to-${tt.id}`,
           type: "TRANSFER",
-          title: t("recordTypeTransfer"),
+          title: `${t("recordTypeTransfer")} #TRF-${tt.id}`,
           subtitle: tt.notes || "",
+          amount: origAmount,
           sessions: +tt.transferredSessions,
           date: tt.transferredAt,
           user: tt.transferredBy,
-          badgeVariant: "primary",
+          badgeVariant: remTransferAmount <= 0 ? "danger" : "primary",
           details: tt.notes,
+          rawTransfer: { ...tt, _origAmount: origAmount, _remAmount: remTransferAmount },
+          canRefund: canRefundTransfer,
+          maxRefundable: maxRefundableTransfer,
+          unconsumedInCycle: unconsumedTransferSessions,
         });
       });
     }
@@ -1391,25 +1508,35 @@ export default function PaymentGrid({
                       <span>{new Date(record.date).toLocaleString(locale)}</span>
                     </div>
 
-                    {/* Action: Cashback / Refund on the most recent active paid cycle (§7.8) */}
+                    {/* Action: Cashback / Refund on the most recent active paid cycle or unstarted inscription (§7.8) */}
                     {record.canRefund && (
                       <div className="pt-2 border-t border-border/80 flex items-center justify-between gap-2 flex-wrap">
                         <span className="text-xs text-muted">
-                          {t("cashbackCapInfo", {
-                            count: record.unconsumedInCycle ?? 0,
-                            amount: (record.maxRefundable ?? 0).toLocaleString(),
-                          })}
+                          {record.unconsumedInCycle !== undefined
+                            ? t("cashbackCapInfo", {
+                                count: record.unconsumedInCycle ?? 0,
+                                amount: (record.maxRefundable ?? 0).toLocaleString(),
+                              })
+                            : `${t("availableForRefund")}: ${(record.maxRefundable ?? 0).toLocaleString()} DZD`}
                         </span>
                         <Button
                           variant="danger"
                           size="sm"
                           onClick={() =>
-                            handleOpenRefund(
-                              record.rawVoucher,
-                              modificationModal.studentName,
-                              record.maxRefundable!,
-                              record.unconsumedInCycle!
-                            )
+                            record.rawTransfer
+                              ? handleOpenTransferRefund(
+                                  record.rawTransfer,
+                                  modificationModal.studentName,
+                                  record.rawTransfer._remAmount,
+                                  record.maxRefundable!,
+                                  record.unconsumedInCycle ?? 0
+                                )
+                              : handleOpenRefund(
+                                  record.rawVoucher,
+                                  modificationModal.studentName,
+                                  record.maxRefundable!,
+                                  record.unconsumedInCycle
+                                )
                           }
                         >
                           {t("refundBtn")}
@@ -1428,7 +1555,7 @@ export default function PaymentGrid({
       )}
 
       {/* MODAL 4: Process Refund with Cashback Cap */}
-      {mounted && refundModal.isOpen && refundModal.voucher && createPortal(
+      {mounted && refundModal.isOpen && (refundModal.voucher || refundModal.transfer) && createPortal(
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
           <div className="bg-surface rounded-2xl shadow-xl relative w-full max-w-md max-h-[92vh] overflow-y-auto p-5 font-sans border border-border">
             <div className="flex items-start justify-between gap-4 border-b border-border pb-3">
@@ -1436,17 +1563,19 @@ export default function PaymentGrid({
                 <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
                   <span className="text-danger-text font-mono text-sm" dir="ltr">
                     {t("refundModalHeading", {
-                      voucher: formatVoucherDisplay(refundModal.voucher, {
-                        branchName: classData.branch.name,
-                        levelName: (classData as any).level?.name,
-                      }),
+                      voucher: refundModal.voucher
+                        ? formatVoucherDisplay(refundModal.voucher, {
+                            branchName: classData.branch.name,
+                            levelName: (classData as any).level?.name,
+                          })
+                        : `#TRF-${refundModal.transfer.id}`,
                     })}
                   </span>
                 </h3>
                 <p className="text-xs text-muted mt-1">
                   {t("refundStudentAndType", {
                     name: refundModal.studentName,
-                    type: refundModal.voucher.paymentType,
+                    type: refundModal.voucher ? refundModal.voucher.paymentType : t("recordTypeTransfer"),
                   })}
                 </p>
               </div>
@@ -1474,7 +1603,12 @@ export default function PaymentGrid({
                 <div className="flex justify-between">
                   <span className="text-muted">{t("originalVoucherAmount")}</span>
                   <span className="font-bold font-mono">
-                    {Number(refundModal.voucher.amount).toLocaleString()} DZD
+                    {Number(
+                      refundModal.voucher
+                        ? refundModal.voucher.amount
+                        : refundModal.transfer._origAmount ?? refundModal.transfer.transferredAmount
+                    ).toLocaleString()}{" "}
+                    DZD
                   </span>
                 </div>
                 <div className="flex justify-between text-success-text font-bold">
