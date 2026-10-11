@@ -129,6 +129,13 @@ ZK_DEVICE_PORT="4370"
 ZK_COMM_KEY="0"
 ```
 
+### Si l'application est déployée EN LIGNE (Cloud / Serveur distant) — Activation en 1 Clic :
+Puisque le lecteur K50 Pro (`192.168.50.201`) est branché physiquement par câble RJ45 au PC de l'école (réseau privé local), un serveur distant sur Internet ne peut pas voir le câble RJ45 directement sans un **Pont Local** sur le PC de l'école :
+1. Copiez le dossier **`zk-bridge`** sur chaque PC de l'école (**ECOLE**, **ANNEX**, **AMPHI**).
+2. Faites un **Clic droit $\rightarrow$ Exécuter en tant qu'administrateur** sur **`INSTALLER_ET_DEMARRER_PONT_K50.bat`**.
+3. Appuyez sur **Entrée** pour conserver `192.168.50.201` (ou tapez `192.168.50.201,192.168.50.202` si 2 lecteurs sont branchés sur ce PC).
+4. **C'est tout !** Le pont local (`http://127.0.0.1:4375`) démarre immédiatement en arrière-plan (invisible) et s'enregistre dans le démarrage automatique de Windows. Dès que vous ouvrez l'application en ligne dans Chrome/Edge, elle détecte le pont local automatiquement et allume le voyant vert **Connecté** !
+
 ---
 
 ## 6. Fonctionnement Multi-Sièges (**ECOLE**, **ANNEX**, **AMPHI**)

@@ -371,18 +371,60 @@ export default function BiometricMonitorProvider({
         const data = await res.json();
         if (!isMounted || !data.success) return;
 
-        // Check live K50 Pro TCP status or recent device heartbeat
+        // Check live K50 Pro TCP status (either direct localhost server or School PC Local Bridge at 127.0.0.1:4375)
         const nowMs = Date.now();
-        const anyOnline =
+        let anyOnline =
           Boolean(data.hardwareConnected) ||
           (data.devices || []).some((d: any) => {
             if (!d.lastSeenAt) return false;
             return nowMs - new Date(d.lastSeenAt).getTime() < 120000;
           });
-        setDeviceConnected(anyOnline);
+
         if (data.deviceIp) {
           setDeviceEndpoint(`${data.deviceIp}:${data.devicePort || 4370}`);
         }
+
+        // Sync with School PC Local Bridge (http://127.0.0.1:4375) for Online/Cloud Deployment
+        if (!data.hardwareConnected && typeof window !== "undefined") {
+          try {
+            const bridgeUrl = `http://127.0.0.1:4375/status?appUrl=${encodeURIComponent(
+              window.location.origin
+            )}&branchId=${data.branchId || 1}&openLessonId=${openLessonId || ""}`;
+            const bridgeRes = await fetch(bridgeUrl, { cache: "no-store" });
+            if (bridgeRes.ok) {
+              const bridgeData = await bridgeRes.json();
+              if (bridgeData.connected) {
+                anyOnline = true;
+              }
+              if (bridgeData.deviceIp) {
+                setDeviceEndpoint(
+                  `${bridgeData.deviceIp}:${bridgeData.devicePort || 4370}`
+                );
+              }
+              // If the local bridge queued any fallback scan events, process them immediately
+              if (
+                Array.isArray(bridgeData.pendingScans) &&
+                bridgeData.pendingScans.length > 0
+              ) {
+                for (const ev of bridgeData.pendingScans) {
+                  await fetch("/api/biometrics/scan", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      ...ev,
+                      branchId: data.branchId || 1,
+                      openLessonId: openLessonId || null,
+                    }),
+                  });
+                }
+              }
+            }
+          } catch {
+            // Local bridge not running on 127.0.0.1:4375
+          }
+        }
+
+        setDeviceConnected(anyOnline);
 
         // If the admin switched branches in the UI, re-initialize the feed for the new branch
         if (

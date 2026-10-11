@@ -25,11 +25,18 @@ export async function GET(request: NextRequest) {
       sinceId: sinceIdParam ? Number(sinceIdParam) : undefined,
     });
 
-    // Ensure direct TCP connection to ZKTeco K50 Pro is active & synced with active branch + open attendance page lesson
-    const k50 = ensureK50Connected(
-      result.branchId || (branchIdParam ? Number(branchIdParam) : undefined),
-      openLessonIdParam ? Number(openLessonIdParam) : null
-    );
+    // Only attempt direct server-to-K50 TCP socket when running locally (not on Vercel/Cloud)
+    const isCloudServer = Boolean(process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT || process.env.RENDER);
+    const k50 = isCloudServer
+      ? {
+          connected: false,
+          deviceIp: process.env.ZK_DEVICE_IP || "192.168.50.201",
+          devicePort: Number(process.env.ZK_DEVICE_PORT || 4370),
+        }
+      : ensureK50Connected(
+          result.branchId || (branchIdParam ? Number(branchIdParam) : undefined),
+          openLessonIdParam ? Number(openLessonIdParam) : null
+        );
 
     return NextResponse.json({
       ...result,
@@ -48,16 +55,18 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/biometrics/scan
- * Receives real-time fingerprint scan events from the ZKTeco K50/ID PRO bridge or test simulator.
+ * Receives real-time fingerprint scan events from the ZKTeco K50/ID PRO Local Bridge on the School PC.
  * Body:
  * {
  *   globalNumber?: number | null,
  *   branchId?: number,
+ *   openLessonId?: number | null,
  *   deviceId?: number,
  *   deviceIp?: string,
  *   serialNumber?: string,
  *   scanTime?: string,
- *   isUnrecognizedFinger?: boolean
+ *   isUnrecognizedFinger?: boolean,
+ *   heartbeatOnly?: boolean
  * }
  */
 export async function POST(request: NextRequest) {
@@ -89,9 +98,9 @@ export async function POST(request: NextRequest) {
       } else {
         const created = await prisma.biometricDevice.create({
           data: {
-            name: body.deviceName || `ZKTeco K50/ID PRO (Branch #${branchId})`,
+            name: body.deviceName || `ZKTeco K50 Pro (Branch #${branchId})`,
             branchId,
-            ipAddress: body.deviceIp ? String(body.deviceIp) : "192.168.1.201",
+            ipAddress: body.deviceIp ? String(body.deviceIp) : "192.168.50.201",
             port: body.devicePort ? Number(body.devicePort) : 4370,
             serialNumber: body.serialNumber ? String(body.serialNumber) : null,
             isActive: true,
@@ -100,6 +109,14 @@ export async function POST(request: NextRequest) {
         });
         deviceId = created.id;
       }
+    }
+
+    if (body.heartbeatOnly) {
+      return NextResponse.json({
+        success: true,
+        deviceId,
+        branchId,
+      });
     }
 
     const result = await processBiometricScan({
@@ -111,6 +128,7 @@ export async function POST(request: NextRequest) {
       deviceId,
       scanTime: body.scanTime || undefined,
       isUnrecognizedFinger: Boolean(body.isUnrecognizedFinger),
+      openLessonId: body.openLessonId ? Number(body.openLessonId) : null,
     });
 
     return NextResponse.json(result);

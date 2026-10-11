@@ -2,7 +2,12 @@ import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 
 const prismaClientSingleton = () => {
-  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL })
+  const adapter = new PrismaPg({
+    connectionString: process.env.DATABASE_URL,
+    max: 5,
+    idleTimeoutMillis: 15000,
+    connectionTimeoutMillis: 10000,
+  })
   return new PrismaClient({ adapter })
 }
 
@@ -24,9 +29,7 @@ const getPrismaInstance = () => {
     return globalThis.prismaGlobal
   }
   const client = prismaClientSingleton()
-  if (process.env.NODE_ENV !== 'production') {
-    globalThis.prismaGlobal = client
-  }
+  globalThis.prismaGlobal = client
   return client
 }
 
@@ -34,4 +37,4 @@ const prisma = getPrismaInstance()
 
 export default prisma
 
-if (process.env.NODE_ENV !== 'production') globalThis.prismaGlobal = prisma
+globalThis.prismaGlobal = prisma

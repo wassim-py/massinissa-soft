@@ -6,7 +6,10 @@ import {
   getK50Status,
 } from "@/lib/zkK50Manager";
 import { getNextGlobalStudentNumber } from "@/lib/actions";
-import { deleteStudentFingerprintAction } from "@/lib/biometricActions";
+import {
+  deleteStudentFingerprintAction,
+  enrollStudentFingerprintAction,
+} from "@/lib/biometricActions";
 
 export const dynamic = "force-dynamic";
 
@@ -31,11 +34,13 @@ export async function GET() {
 
 /**
  * POST /api/biometrics/enroll
- * Triggers real hardware enrollment (CMD_USER_WRQ + CMD_STARTENROLL) on the ZKTeco K50 Pro.
+ * Triggers real hardware enrollment (CMD_USER_WRQ + CMD_STARTENROLL) on the ZKTeco K50 Pro,
+ * or handles cloud-mode helper actions (`next_number`, `save_db`) for the School PC Local Bridge.
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const mode = body.mode ? String(body.mode) : "hardware";
     let globalNumber = body.globalNumber ? Number(body.globalNumber) : 0;
     const studentId = body.studentId ? String(body.studentId) : null;
     const studentName = body.studentName ? String(body.studentName) : "";
@@ -44,6 +49,34 @@ export async function POST(request: NextRequest) {
     // If enrolling during new student creation (before student is saved), get their upcoming globalNumber
     if (!globalNumber || globalNumber <= 0) {
       globalNumber = await getNextGlobalStudentNumber();
+    }
+
+    // Cloud helper 1: Return resolved globalNumber for the School PC Local Bridge
+    if (mode === "next_number") {
+      return NextResponse.json({
+        success: true,
+        globalNumber,
+      });
+    }
+
+    // Cloud helper 2: Persist completed 3-tap enrollment from School PC Local Bridge to PostgreSQL
+    if (mode === "save_db") {
+      if (studentId && globalNumber > 0) {
+        const dbRes = await enrollStudentFingerprintAction({
+          studentId,
+          globalNumber,
+          fingerIndex,
+          templateData: body.templateData ? String(body.templateData) : undefined,
+        });
+        return NextResponse.json({
+          ...dbRes,
+          globalNumber,
+        });
+      }
+      return NextResponse.json({
+        success: true,
+        globalNumber,
+      });
     }
 
     const res = await startK50HardwareEnrollment({

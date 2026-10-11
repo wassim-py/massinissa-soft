@@ -209,25 +209,74 @@ const StudentForm = ({
       [watchedSurname, watchedName].filter(Boolean).join(" ").trim() ||
       data?.name ||
       "";
+    const currentStudentId =
+      type === "update" && data?.id ? String(data.id) : null;
 
     try {
-      const startRes = await fetch("/api/biometrics/enroll", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          studentId: type === "update" && data?.id ? String(data.id) : null,
-          globalNumber: data?.globalNumber ? Number(data.globalNumber) : 0,
-          studentName: fullName,
-          fingerIndex: 0,
-        }),
-      });
-      const startData = await startRes.json();
+      // 1. Check if the School PC Local Bridge (http://127.0.0.1:4375) is running (for online cloud deployment)
+      let useLocalBridge = false;
+      try {
+        const bridgeCheck = await fetch("http://127.0.0.1:4375/status", {
+          cache: "no-store",
+        });
+        if (bridgeCheck.ok) {
+          useLocalBridge = true;
+        }
+      } catch {
+        useLocalBridge = false;
+      }
 
-      if (!startData.success) {
+      let startData: any = null;
+
+      if (useLocalBridge) {
+        // Resolve the student's globalNumber from the cloud database first
+        const numRes = await fetch("/api/biometrics/enroll", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "next_number",
+            studentId: currentStudentId,
+            globalNumber: data?.globalNumber ? Number(data.globalNumber) : 0,
+          }),
+        });
+        const numData = await numRes.json();
+        const targetGlobalNumber = Number(
+          numData?.globalNumber || data?.globalNumber || 1
+        );
+
+        // Start 3-tap hardware enrollment on the School PC's local K50 Pro via 127.0.0.1:4375
+        const bridgeStartRes = await fetch("http://127.0.0.1:4375/enroll", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentId: currentStudentId,
+            globalNumber: targetGlobalNumber,
+            studentName: fullName,
+            fingerIndex: 0,
+          }),
+        });
+        startData = await bridgeStartRes.json();
+        startData.globalNumber = targetGlobalNumber;
+      } else {
+        // Direct Next.js server -> K50 Pro enrollment (local network server mode)
+        const startRes = await fetch("/api/biometrics/enroll", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentId: currentStudentId,
+            globalNumber: data?.globalNumber ? Number(data.globalNumber) : 0,
+            studentName: fullName,
+            fingerIndex: 0,
+          }),
+        });
+        startData = await startRes.json();
+      }
+
+      if (!startData?.success) {
         setFpIsEnrolling(false);
         setFpEnrollingStep(0);
         toast.error(
-          startData.message ||
+          startData?.message ||
             (locale === "ar"
               ? "تعذر الاتصال بجهاز البصمة K50 Pro (192.168.50.201)."
               : "Impossible de joindre le lecteur K50 Pro (192.168.50.201).")
@@ -239,10 +288,14 @@ const StudentForm = ({
         setFpTargetGlobalNumber(Number(startData.globalNumber));
       }
 
+      const pollUrl = useLocalBridge
+        ? "http://127.0.0.1:4375/enroll"
+        : "/api/biometrics/enroll";
+
       // Poll live 3-tap progress from the physical K50 Pro every 500ms
       fpTimerRef.current = setInterval(async () => {
         try {
-          const pollRes = await fetch("/api/biometrics/enroll", {
+          const pollRes = await fetch(pollUrl, {
             cache: "no-store",
           });
           const pollData = await pollRes.json();
@@ -258,6 +311,20 @@ const StudentForm = ({
             setFpIsEnrolling(false);
             setFpEnrollingStep(0);
             setFpEnrolled(true);
+
+            // If using the School PC Local Bridge for an existing student, save the fingerprint record in the Cloud DB
+            if (useLocalBridge && currentStudentId && enroll.globalNumber > 0) {
+              await fetch("/api/biometrics/enroll", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  mode: "save_db",
+                  studentId: currentStudentId,
+                  globalNumber: Number(enroll.globalNumber),
+                  fingerIndex: 0,
+                }),
+              }).catch(() => {});
+            }
 
             if (type === "create") {
               setFpPendingForNewStudent(true);
@@ -307,6 +374,9 @@ const StudentForm = ({
     if (fpTimerRef.current) clearInterval(fpTimerRef.current);
     setFpIsEnrolling(false);
     setFpEnrollingStep(0);
+    await fetch("http://127.0.0.1:4375/enroll?mode=cancel", {
+      method: "DELETE",
+    }).catch(() => {});
     await fetch("/api/biometrics/enroll?mode=cancel", { method: "DELETE" }).catch(
       () => {}
     );
@@ -316,6 +386,10 @@ const StudentForm = ({
     const targetNum = data?.globalNumber || fpTargetGlobalNumber || 0;
     const studentIdParam =
       type === "update" && data?.id ? `&studentId=${encodeURIComponent(String(data.id))}` : "";
+    await fetch(
+      `http://127.0.0.1:4375/enroll?mode=delete&globalNumber=${targetNum}`,
+      { method: "DELETE" }
+    ).catch(() => {});
     const res = await fetch(
       `/api/biometrics/enroll?mode=delete&globalNumber=${targetNum}${studentIdParam}`,
       { method: "DELETE" }
