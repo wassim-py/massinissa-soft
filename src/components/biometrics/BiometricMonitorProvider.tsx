@@ -288,6 +288,11 @@ export default function BiometricMonitorProvider({
     }
     if (!val) {
       setLiveStreamCard(null);
+    } else if (typeof window !== "undefined") {
+      // Force an immediate fresh K50 Pro hardware handshake when toggled ON
+      fetch("http://127.0.0.1:4375/status?forceReconnect=1", {
+        cache: "no-store",
+      }).catch(() => {});
     }
   }, []);
 
@@ -518,8 +523,9 @@ export default function BiometricMonitorProvider({
 
       try {
         const lessonQuery = openLessonId ? `&openLessonId=${openLessonId}` : "";
+        const bridgeQuery = localSseConnectedRef.current ? "&bridgeActive=1" : "";
         const res = await fetch(
-          `/api/biometrics/scan?sinceId=${lastSeenIdRef.current}${lessonQuery}`,
+          `/api/biometrics/scan?sinceId=${lastSeenIdRef.current}${lessonQuery}${bridgeQuery}`,
           { cache: "no-store" }
         );
         if (!res.ok) return;
@@ -528,22 +534,18 @@ export default function BiometricMonitorProvider({
 
         // Check live K50 Pro TCP status (either direct localhost server or School PC Local Bridge at 127.0.0.1:4375)
         const nowMs = Date.now();
-        let anyOnline =
-          Boolean(data.hardwareConnected) ||
-          (data.devices || []).some((d: any) => {
-            if (!d.lastSeenAt) return false;
-            return nowMs - new Date(d.lastSeenAt).getTime() < 120000;
-          });
+        let anyOnline = Boolean(data.hardwareConnected);
 
         if (data.deviceIp) {
           setDeviceEndpoint(`${data.deviceIp}:${data.devicePort || 4370}`);
         }
 
-        // Sync context with School PC Local Bridge (http://127.0.0.1:4375) for Online/Cloud Deployment
+        // Sync context with School PC Local Bridge (http://127.0.0.1:4375)
         if (
-          !data.hardwareConnected &&
           typeof window !== "undefined" &&
-          nowMs - lastLocalBridgeFailAtRef.current > 30000
+          (localSseConnectedRef.current ||
+            (!data.hardwareConnected &&
+              nowMs - lastLocalBridgeFailAtRef.current > 15000))
         ) {
           try {
             const bridgeUrl = `http://127.0.0.1:4375/status?appUrl=${encodeURIComponent(
@@ -553,9 +555,8 @@ export default function BiometricMonitorProvider({
             if (bridgeRes.ok) {
               lastLocalBridgeFailAtRef.current = 0;
               const bridgeData = await bridgeRes.json();
-              if (bridgeData.connected) {
-                anyOnline = true;
-              }
+              // Authoritative live hardware state from the local PC bridge
+              anyOnline = Boolean(bridgeData.connected);
               if (bridgeData.deviceIp) {
                 setDeviceEndpoint(
                   `${bridgeData.deviceIp}:${bridgeData.devicePort || 4370}`
@@ -588,7 +589,7 @@ export default function BiometricMonitorProvider({
               lastLocalBridgeFailAtRef.current = nowMs;
             }
           } catch {
-            // Local bridge not running on 127.0.0.1:4375 — wait 30s before retrying
+            // Local bridge not running on 127.0.0.1:4375 — wait 15s before retrying
             lastLocalBridgeFailAtRef.current = nowMs;
           }
         }

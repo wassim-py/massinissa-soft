@@ -1,12 +1,16 @@
 /**
  * ============================================================================
- * MASSINISSA ACADEMY — LOCAL BIOMETRIC BRIDGE FOR ZKTECO K50 PRO (zk-bridge.js)
+ * MASSINISSA ACADEMY — SELF-HEALING LOCAL BRIDGE FOR ZKTECO K50 PRO (v3)
  * ============================================================================
- * Ultra-fast, zero-dependency Node.js service that runs on each School PC
- * (ECOLE, ANNEX, AMPHI) and connects:
- *   1. Physical ZKTeco K50 Pro reader(s) via Ethernet (192.168.50.201:4370, etc.)
- *   2. The Online Deployed Application via instant Server-Sent Events (SSE)
- *      on http://127.0.0.1:4375/events (0ms local push, minimal NeonDB quota).
+ * Features:
+ *   1. Active 8-second ZKTeco Protocol Heartbeat (CMD_REG_EVENT + CMD_ENABLEDEVICE)
+ *      -> Prevents K50 Pro session idle timeout & Realtek Ethernet sleep!
+ *   2. 12-second Zombie Socket Killer (lastRxAt verification)
+ *      -> Immediately detects unplugged cable or restarted K50 Pro device!
+ *   3. Strict 2.0-second Connect & Handshake Timeout
+ *      -> Prevents Windows from hanging in SYN_SENT on Wi-Fi when unplugged!
+ *   4. Pre-Enrollment Live Session Verification & Force-Reconnect Support
+ *   5. Instant 0ms Server-Sent Events (SSE) on http://127.0.0.1:4375/events
  * ============================================================================
  */
 
@@ -36,6 +40,7 @@ const CMD_DELETE_USERTEMP = 19;
 const CMD_STARTVERIFY = 60;
 const CMD_STARTENROLL = 61;
 const CMD_CANCELCAPTURE = 62;
+const CMD_GET_TIME = 201;
 const CMD_REG_EVENT = 500;
 const CMD_CONNECT = 1000;
 const CMD_ENABLEDEVICE = 1002;
@@ -54,6 +59,12 @@ const EF_VERIFY = 256;
 const EF_FPFTR = 512;
 const EF_ALARM = 1024;
 const EVENT_MASK = 0x0000ffff;
+
+// Timing Constants for Self-Healing Connection
+const CONNECT_TIMEOUT_MS = 2000; // Abort SYN_SENT after 2.0s if unplugged/unreachable
+const HEARTBEAT_INTERVAL_MS = 8000; // Send ZKTeco ping every 8s so session NEVER idles out
+const ZOMBIE_TIMEOUT_MS = 14000; // If no ACK received for 14s, kill zombie socket & reconnect
+const RECONNECT_LOOP_MS = 2500; // Check & reconnect every 2.5s
 
 const state = {
   appUrl: process.env.CLOUD_APP_URL || "",
@@ -187,10 +198,14 @@ function buildUser72Packet(uid, name, userId) {
 
 function sendToDevice(dev, cmd, data = Buffer.alloc(0)) {
   if (!dev || !dev.socket || dev.socket.destroyed) return false;
-  dev.replyId = (dev.replyId + 1) & 0xffff;
-  const pkt = buildZkTcpPacket(cmd, dev.sessionId, dev.replyId, data);
-  dev.socket.write(pkt);
-  return true;
+  try {
+    dev.replyId = (dev.replyId + 1) % 65530;
+    const pkt = buildZkTcpPacket(cmd, dev.sessionId, dev.replyId, data);
+    dev.socket.write(pkt);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function sendToAllDevices(cmd, data = Buffer.alloc(0)) {
@@ -203,11 +218,56 @@ function sendToAllDevices(cmd, data = Buffer.alloc(0)) {
   return sent;
 }
 
+/**
+ * A device is only considered truly connected if its socket is open AND it has responded
+ * to our ZKTeco protocol packets within ZOMBIE_TIMEOUT_MS (14s).
+ */
+function isDeviceTrulyAlive(dev) {
+  if (!dev || !dev.isConnected || !dev.socket || dev.socket.destroyed) {
+    return false;
+  }
+  if (Date.now() - dev.lastRxAt > ZOMBIE_TIMEOUT_MS) {
+    return false;
+  }
+  return true;
+}
+
 function isAnyDeviceConnected() {
   for (const dev of devices.values()) {
-    if (dev.isConnected && dev.socket && !dev.socket.destroyed) return true;
+    if (isDeviceTrulyAlive(dev)) return true;
   }
   return false;
+}
+
+function destroyDeviceSocket(dev, reason) {
+  if (!dev) return;
+  const wasConnected = dev.isConnected;
+  dev.isConnected = false;
+  dev.isConnecting = false;
+  dev.sessionId = 0;
+  if (dev.connectTimer) {
+    clearTimeout(dev.connectTimer);
+    dev.connectTimer = null;
+  }
+  if (dev.socket) {
+    try {
+      dev.socket.removeAllListeners();
+      dev.socket.destroy();
+    } catch {
+      // ignore
+    }
+    dev.socket = null;
+  }
+  if (wasConnected) {
+    console.log(
+      `[K50 Bridge] ! Connection reset for ${dev.ip}:${DEVICE_PORT} (${reason}). Auto-reconnecting...`
+    );
+    broadcastSse({
+      type: "status",
+      connected: isAnyDeviceConnected(),
+      deviceIp: CONFIGURED_IPS.join(","),
+    });
+  }
 }
 
 function deleteHardwareUserOnAllDevices(globalNumber) {
@@ -272,8 +332,6 @@ function postToCloud(path, payload) {
 }
 
 async function dispatchScanEvent(scanPayload) {
-  // 1. Instant 0ms path: Push directly to open browser tab(s) via Server-Sent Events (SSE)
-  // The browser immediately calls POST /api/biometrics/scan and renders the popup from the response in 0ms!
   if (sseClients.size > 0) {
     const delivered = broadcastSse({
       type: "scan",
@@ -285,7 +343,6 @@ async function dispatchScanEvent(scanPayload) {
     }
   }
 
-  // 2. Fallback path (if no browser tab has SSE open right now):
   if (state.appUrl) {
     const cloudRes = await postToCloud("/api/biometrics/scan", {
       branchId: state.branchId,
@@ -330,6 +387,8 @@ function scheduleUnrecognizedFingerCheck(delayMs = 220) {
 }
 
 function handleRealTimeEvent(dev, eventType, payload) {
+  dev.lastRxAt = Date.now();
+
   // 1. Enrollment mode (3 finger taps)
   if (state.enrollment.active) {
     if (
@@ -434,7 +493,7 @@ function handleRealTimeEvent(dev, eventType, payload) {
   }
 }
 
-function connectDevice(ip) {
+function connectDevice(ip, force = false) {
   let dev = devices.get(ip);
   if (!dev) {
     dev = {
@@ -445,32 +504,52 @@ function connectDevice(ip) {
       replyId: 0,
       isConnected: false,
       isConnecting: false,
+      lastRxAt: 0,
+      connectTimer: null,
     };
     devices.set(ip, dev);
   }
 
-  if (
-    (dev.isConnected && dev.socket && !dev.socket.destroyed) ||
-    dev.isConnecting
-  ) {
+  if (force) {
+    destroyDeviceSocket(dev, "manual force reconnect");
+  }
+
+  // Check if an existing connection has turned into a zombie (no reply in ZOMBIE_TIMEOUT_MS)
+  if (dev.isConnected && !isDeviceTrulyAlive(dev)) {
+    destroyDeviceSocket(dev, "idle/zombie session timeout");
+  }
+
+  if (dev.isConnected || dev.isConnecting) {
     return;
   }
 
   dev.isConnecting = true;
   const sock = new net.Socket();
   sock.setNoDelay(true);
-  sock.setKeepAlive(true, 10000);
+  sock.setKeepAlive(true, 5000);
   dev.socket = sock;
   dev.rxBuffer = Buffer.alloc(0);
 
+  // Strict 2.0-second connect & auth timeout so it NEVER hangs in SYN_SENT on Wi-Fi
+  dev.connectTimer = setTimeout(() => {
+    if (!dev.isConnected) {
+      destroyDeviceSocket(dev, "connect handshake timeout (2s)");
+    }
+  }, CONNECT_TIMEOUT_MS);
+
   sock.connect(DEVICE_PORT, ip, () => {
+    if (dev.socket !== sock) return;
     dev.sessionId = 0;
     dev.replyId = 0;
+    dev.lastRxAt = Date.now();
     sock.write(buildZkTcpPacket(CMD_CONNECT, 0, 0));
   });
 
   sock.on("data", (chunk) => {
+    if (dev.socket !== sock) return;
+    dev.lastRxAt = Date.now();
     dev.rxBuffer = Buffer.concat([dev.rxBuffer, Buffer.from(chunk)]);
+
     while (dev.rxBuffer.length >= 16) {
       const magicIdx = dev.rxBuffer.indexOf(TCP_MAGIC);
       if (magicIdx === -1) {
@@ -496,23 +575,29 @@ function connectDevice(ip) {
         dev.sessionId = sId;
         dev.replyId = rId;
         sendToDevice(dev, CMD_AUTH, makeCommKey(COMM_KEY, dev.sessionId));
-      } else if (cmd === CMD_ACK_OK && !dev.isConnected) {
-        if (sId !== 0 && dev.sessionId === 0) dev.sessionId = sId;
-        dev.isConnected = true;
-        dev.isConnecting = false;
-        console.log(
-          `[K50 Bridge] ✓ Connected to ZKTeco K50 Pro (${ip}:${DEVICE_PORT})`
-        );
-        const maskBuf = Buffer.alloc(4);
-        maskBuf.writeUInt32LE(EVENT_MASK, 0);
-        sendToDevice(dev, CMD_REG_EVENT, maskBuf);
-        sendToDevice(dev, CMD_ENABLEDEVICE);
-        sendToDevice(dev, CMD_STARTVERIFY);
-        broadcastSse({
-          type: "status",
-          connected: true,
-          deviceIp: CONFIGURED_IPS.join(","),
-        });
+      } else if (cmd === CMD_ACK_OK) {
+        if (!dev.isConnected) {
+          if (sId !== 0 && dev.sessionId === 0) dev.sessionId = sId;
+          dev.isConnected = true;
+          dev.isConnecting = false;
+          if (dev.connectTimer) {
+            clearTimeout(dev.connectTimer);
+            dev.connectTimer = null;
+          }
+          console.log(
+            `[K50 Bridge v3] ✓ Connected & Authenticated to ZKTeco K50 Pro (${ip}:${DEVICE_PORT}, Session #${dev.sessionId})`
+          );
+          const maskBuf = Buffer.alloc(4);
+          maskBuf.writeUInt32LE(EVENT_MASK, 0);
+          sendToDevice(dev, CMD_REG_EVENT, maskBuf);
+          sendToDevice(dev, CMD_ENABLEDEVICE);
+          sendToDevice(dev, CMD_STARTVERIFY);
+          broadcastSse({
+            type: "status",
+            connected: true,
+            deviceIp: CONFIGURED_IPS.join(","),
+          });
+        }
       } else if (cmd === CMD_REG_EVENT) {
         if (dev.socket && !dev.socket.destroyed) {
           dev.socket.write(buildZkTcpPacket(CMD_ACK_OK, dev.sessionId, 0));
@@ -523,34 +608,76 @@ function connectDevice(ip) {
   });
 
   sock.on("error", () => {
-    dev.isConnected = false;
-    dev.isConnecting = false;
+    if (dev.socket === sock) {
+      destroyDeviceSocket(dev, "socket error");
+    }
   });
 
   sock.on("close", () => {
-    if (dev.isConnected) {
-      console.log(
-        `[K50 Bridge] ! Disconnected from ${ip}:${DEVICE_PORT}. Auto-reconnecting...`
-      );
-      broadcastSse({
-        type: "status",
-        connected: isAnyDeviceConnected(),
-        deviceIp: CONFIGURED_IPS.join(","),
-      });
+    if (dev.socket === sock) {
+      destroyDeviceSocket(dev, "socket closed");
     }
-    dev.isConnected = false;
-    dev.isConnecting = false;
   });
 }
 
-// Reconnection loop every 3 seconds
+/**
+ * Ensures at least one K50 Pro has a verified fresh session (with live ACK in the last 5s),
+ * or forces a fast fresh reconnect before critical operations like Enrollment.
+ */
+async function ensureFreshConnectionForEnroll(timeoutMs = 2500) {
+  let needsFreshReconnect = true;
+  for (const dev of devices.values()) {
+    if (isDeviceTrulyAlive(dev) && Date.now() - dev.lastRxAt < 6000) {
+      needsFreshReconnect = false;
+      break;
+    }
+  }
+
+  if (needsFreshReconnect) {
+    for (const ip of CONFIGURED_IPS) {
+      connectDevice(ip, true);
+    }
+  }
+
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (isAnyDeviceConnected()) return true;
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  return isAnyDeviceConnected();
+}
+
+// 1. Reconnection & Zombie-Check Loop every 2.5 seconds
 setInterval(() => {
   for (const ip of CONFIGURED_IPS) {
-    connectDevice(ip);
+    connectDevice(ip, false);
   }
-}, 3000);
+}, RECONNECT_LOOP_MS);
+
+// 2. Active ZKTeco Protocol Heartbeat Loop every 8 seconds
+// Prevents K50 Pro session idle timeout AND keeps Realtek Ethernet awake!
+setInterval(() => {
+  for (const dev of devices.values()) {
+    if (!dev.isConnected) continue;
+    if (!isDeviceTrulyAlive(dev)) {
+      destroyDeviceSocket(dev, "heartbeat timeout - device unresponsive");
+      connectDevice(dev.ip, false);
+      continue;
+    }
+    // Do not interrupt an active 3-tap finger enrollment with CMD_STARTVERIFY
+    if (!state.enrollment.active) {
+      const maskBuf = Buffer.alloc(4);
+      maskBuf.writeUInt32LE(EVENT_MASK, 0);
+      sendToDevice(dev, CMD_REG_EVENT, maskBuf);
+      sendToDevice(dev, CMD_ENABLEDEVICE);
+    } else {
+      sendToDevice(dev, CMD_GET_TIME);
+    }
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
 for (const ip of CONFIGURED_IPS) {
-  connectDevice(ip);
+  connectDevice(ip, false);
 }
 
 // Local HTTP & SSE Server on 127.0.0.1:4375 for browser communication
@@ -589,7 +716,6 @@ const server = http.createServer((req, res) => {
 
     sseClients.add(res);
 
-    // Immediately push current hardware connection state & any pending scans
     res.write(
       `data: ${JSON.stringify({
         type: "status",
@@ -619,6 +745,8 @@ const server = http.createServer((req, res) => {
     const openLessonParam = Number(
       parsedUrl.searchParams.get("openLessonId") || 0
     );
+    const forceReconnect =
+      parsedUrl.searchParams.get("forceReconnect") === "1";
 
     if (appUrlParam && appUrlParam.startsWith("http")) {
       state.appUrl = appUrlParam;
@@ -627,6 +755,12 @@ const server = http.createServer((req, res) => {
       state.branchId = branchIdParam;
     }
     state.openLessonId = openLessonParam > 0 ? openLessonParam : null;
+
+    if (forceReconnect) {
+      for (const ip of CONFIGURED_IPS) {
+        connectDevice(ip, true);
+      }
+    }
 
     const connected = isAnyDeviceConnected();
     const drainedScans = state.pendingScans.splice(0, state.pendingScans.length);
@@ -659,19 +793,21 @@ const server = http.createServer((req, res) => {
   if (req.method === "POST" && pathname === "/enroll") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
+    req.on("end", async () => {
       try {
         const data = JSON.parse(body || "{}");
         const globalNumber = Number(data.globalNumber || 1);
         const fingerIndex = Number(data.fingerIndex || 0);
         const studentName = data.studentName || `Student #${globalNumber}`;
 
-        if (!isAnyDeviceConnected()) {
+        // Verify live session (or force a fresh reconnect if idle > 6s) before starting enrollment!
+        const connected = await ensureFreshConnectionForEnroll(2500);
+        if (!connected) {
           res.writeHead(200);
           res.end(
             JSON.stringify({
               success: false,
-              message: `Cannot reach K50 Pro (${CONFIGURED_IPS.join(", ")}). Please check the Ethernet cable.`,
+              message: `Cannot reach K50 Pro (${CONFIGURED_IPS.join(", ")}). Please check that the Ethernet cable is plugged in.`,
             })
           );
           return;
@@ -754,7 +890,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(BRIDGE_PORT, "127.0.0.1", () => {
   console.log("==============================================================");
-  console.log("  MASSINISSA ACADEMY — ZKTECO K50 PRO LOCAL BRIDGE (SSE)");
+  console.log("  MASSINISSA ACADEMY — ZKTECO K50 PRO LOCAL BRIDGE (v3)");
   console.log(`  Local Server Active : http://127.0.0.1:${BRIDGE_PORT}`);
   console.log(`  K50 Pro Reader(s)   : ${CONFIGURED_IPS.join(", ")}:${DEVICE_PORT}`);
   console.log("==============================================================");

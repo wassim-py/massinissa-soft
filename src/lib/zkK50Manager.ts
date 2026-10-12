@@ -532,16 +532,17 @@ function handleSocketData(chunk: Buffer) {
     if (cmd === CMD_ACK_UNAUTH) {
       st.sessionId = sId;
       st.replyId = rId;
+      st.lastHeartbeatAt = Date.now();
       const authPayload = makeCommKey(DEFAULT_COMM_KEY, st.sessionId);
       sendZkCommand(CMD_AUTH, authPayload);
     } else if (cmd === CMD_ACK_OK) {
+      st.lastHeartbeatAt = Date.now();
       if (!st.isConnected) {
         if (sId !== 0 && st.sessionId === 0) {
           st.sessionId = sId;
         }
         st.isConnected = true;
         st.isConnecting = false;
-        st.lastHeartbeatAt = Date.now();
         console.log(
           `[K50 Pro Manager v${MANAGER_VERSION}] ✓ Connected & Authenticated to ${st.deviceIp}:${st.devicePort} (Session #${st.sessionId})`
         );
@@ -555,6 +556,7 @@ function handleSocketData(chunk: Buffer) {
         touchDeviceHeartbeat(true);
       }
     } else if (cmd === CMD_REG_EVENT) {
+      st.lastHeartbeatAt = Date.now();
       const eventType = sId;
       // In ZKTeco protocol, ACK real-time events with CMD_ACK_OK, sessionId, replyId=0
       if (st.socket && !st.socket.destroyed) {
@@ -604,7 +606,7 @@ function ensureAuxiliaryDevicesConnected() {
     aux.isConnecting = true;
     const sock = new net.Socket();
     sock.setNoDelay(true);
-    sock.setKeepAlive(true, 10000);
+    sock.setKeepAlive(true, 5000);
     aux.socket = sock;
     aux.rxBuffer = Buffer.alloc(0);
 
@@ -613,6 +615,15 @@ function ensureAuxiliaryDevicesConnected() {
       aux.replyId = (aux.replyId + 1) % 65530;
       aux.socket.write(buildZkTcpPacket(cmd, aux.sessionId, aux.replyId, payload));
     };
+
+    const connectTimer = setTimeout(() => {
+      if (aux && !aux.isConnected) {
+        aux.isConnecting = false;
+        try {
+          sock.destroy();
+        } catch {}
+      }
+    }, 2000);
 
     sock.connect(DEFAULT_DEVICE_PORT, ip, () => {
       aux!.sessionId = 0;
@@ -649,6 +660,7 @@ function ensureAuxiliaryDevicesConnected() {
           aux.replyId = rId;
           sendAux(CMD_AUTH, makeCommKey(DEFAULT_COMM_KEY, aux.sessionId));
         } else if (cmd === CMD_ACK_OK && !aux.isConnected) {
+          clearTimeout(connectTimer);
           if (sId !== 0 && aux.sessionId === 0) aux.sessionId = sId;
           aux.isConnected = true;
           aux.isConnecting = false;
@@ -667,6 +679,7 @@ function ensureAuxiliaryDevicesConnected() {
     });
 
     sock.on("error", () => {
+      clearTimeout(connectTimer);
       if (aux) {
         aux.isConnected = false;
         aux.isConnecting = false;
@@ -674,6 +687,7 @@ function ensureAuxiliaryDevicesConnected() {
     });
 
     sock.on("close", () => {
+      clearTimeout(connectTimer);
       if (aux) {
         aux.isConnected = false;
         aux.isConnecting = false;
@@ -682,12 +696,30 @@ function ensureAuxiliaryDevicesConnected() {
   }
 }
 
+function destroyMainSocket() {
+  const st = getState();
+  st.isConnected = false;
+  st.isConnecting = false;
+  st.sessionId = 0;
+  if (st.socket) {
+    try {
+      st.socket.removeAllListeners();
+      st.socket.destroy();
+    } catch {
+      // ignore
+    }
+    st.socket = null;
+  }
+}
+
 /**
- * Ensures the Next.js server maintains a live TCP connection to the ZKTeco K50 Pro
+ * Ensures the Next.js server maintains a live TCP connection to the ZKTeco K50 Pro,
+ * actively sends ZKTeco keepalive pings every 8s, and kills zombie sockets if no ACK arrives within 14s.
  */
 export function ensureK50Connected(
   branchId?: number,
-  openLessonId?: number | null
+  openLessonId?: number | null,
+  forceReconnect: boolean = false
 ): {
   connected: boolean;
   deviceIp: string;
@@ -703,12 +735,33 @@ export function ensureK50Connected(
 
   ensureAuxiliaryDevicesConnected();
 
+  const now = Date.now();
+
+  if (forceReconnect) {
+    destroyMainSocket();
+  }
+
+  // Zombie check: if connected but no response from K50 Pro in 14s, reset the socket!
   if (st.isConnected && st.socket && !st.socket.destroyed) {
-    return {
-      connected: true,
-      deviceIp: st.deviceIp,
-      devicePort: st.devicePort,
-    };
+    if (st.lastHeartbeatAt > 0 && now - st.lastHeartbeatAt > 14000) {
+      console.warn(
+        `[K50 Pro Manager] ! Zombie/Idle session detected (>14s without ACK). Resetting connection...`
+      );
+      destroyMainSocket();
+    } else {
+      // Send active ZKTeco keepalive every 6s when polled so K50 Pro session never expires
+      if (now - st.lastHeartbeatAt > 6000 && !st.enrollment.active) {
+        const maskBuf = Buffer.alloc(4);
+        maskBuf.writeUInt32LE(EVENT_MASK, 0);
+        sendZkCommand(CMD_REG_EVENT, maskBuf);
+        sendZkCommand(CMD_ENABLEDEVICE);
+      }
+      return {
+        connected: true,
+        deviceIp: st.deviceIp,
+        devicePort: st.devicePort,
+      };
+    }
   }
 
   if (st.isConnecting) {
@@ -726,48 +779,59 @@ export function ensureK50Connected(
   }
 
   try {
-    if (st.socket) {
-      st.socket.removeAllListeners();
-      st.socket.destroy();
-      st.socket = null;
-    }
+    destroyMainSocket();
+    st.isConnecting = true;
 
     const sock = new net.Socket();
     sock.setNoDelay(true);
-    sock.setKeepAlive(true, 10000);
+    sock.setKeepAlive(true, 5000);
     st.socket = sock;
     st.rxBuffer = Buffer.alloc(0);
 
+    // Strict 2.0-second connect timeout so it never hangs in SYN_SENT on Wi-Fi
+    const connectTimer = setTimeout(() => {
+      if (st.socket === sock && !st.isConnected) {
+        destroyMainSocket();
+      }
+    }, 2000);
+
     sock.connect(st.devicePort, st.deviceIp, () => {
+      if (st.socket !== sock) return;
       st.sessionId = 0;
       st.replyId = 0;
+      st.lastHeartbeatAt = Date.now();
       const connectPkt = buildZkTcpPacket(CMD_CONNECT, 0, 0);
       sock.write(connectPkt);
     });
 
     sock.on("data", (chunk: Buffer) => {
+      if (st.socket !== sock) return;
+      clearTimeout(connectTimer);
+      st.lastHeartbeatAt = Date.now();
       handleSocketData(Buffer.from(chunk));
     });
 
     sock.on("error", () => {
-      st.isConnected = false;
-      st.isConnecting = false;
-      st.sessionId = 0;
+      clearTimeout(connectTimer);
+      if (st.socket === sock) {
+        destroyMainSocket();
+      }
     });
 
     sock.on("close", () => {
-      const wasConnected = st.isConnected;
-      st.isConnected = false;
-      st.isConnecting = false;
-      st.sessionId = 0;
-      if (wasConnected) {
-        touchDeviceHeartbeat(false);
-      }
-      if (!st.reconnectTimer) {
-        st.reconnectTimer = setTimeout(() => {
-          st.reconnectTimer = null;
-          ensureK50Connected();
-        }, 4000);
+      clearTimeout(connectTimer);
+      if (st.socket === sock) {
+        const wasConnected = st.isConnected;
+        destroyMainSocket();
+        if (wasConnected) {
+          touchDeviceHeartbeat(false);
+        }
+        if (!st.reconnectTimer) {
+          st.reconnectTimer = setTimeout(() => {
+            st.reconnectTimer = null;
+            ensureK50Connected();
+          }, 2500);
+        }
       }
     });
   } catch {
@@ -781,14 +845,26 @@ export function ensureK50Connected(
   };
 }
 
-async function waitForConnection(timeoutMs: number = 3000): Promise<boolean> {
+async function waitForConnection(
+  timeoutMs: number = 3000,
+  forceFreshIfIdle: boolean = false
+): Promise<boolean> {
   const st = getState();
-  if (st.isConnected && st.socket && !st.socket.destroyed) return true;
-  ensureK50Connected();
+  if (
+    forceFreshIfIdle &&
+    (!st.isConnected || Date.now() - st.lastHeartbeatAt > 6000)
+  ) {
+    ensureK50Connected(undefined, undefined, true);
+  } else if (st.isConnected && st.socket && !st.socket.destroyed) {
+    return true;
+  } else {
+    ensureK50Connected();
+  }
+
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (st.isConnected && st.socket && !st.socket.destroyed) return true;
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 80));
   }
   return st.isConnected;
 }
@@ -807,7 +883,7 @@ export async function startK50HardwareEnrollment(params: {
   enrollment: K50EnrollmentSession;
 }> {
   const st = getState();
-  const connected = await waitForConnection(3500);
+  const connected = await waitForConnection(3000, true);
 
   if (!connected || !st.socket || st.socket.destroyed) {
     return {
@@ -885,7 +961,7 @@ export async function deleteK50HardwareUser(
   globalNumber: number
 ): Promise<boolean> {
   const st = getState();
-  const connected = await waitForConnection(2500);
+  const connected = await waitForConnection(2500, true);
   if (!connected || !st.socket || !st.isConnected || st.socket.destroyed) {
     return false;
   }
@@ -911,8 +987,12 @@ export async function deleteK50HardwareUser(
 
 export function getK50Status() {
   const st = getState();
+  const isAlive =
+    st.isConnected &&
+    Boolean(st.socket && !st.socket.destroyed) &&
+    (st.lastHeartbeatAt === 0 || Date.now() - st.lastHeartbeatAt <= 14000);
   return {
-    connected: st.isConnected,
+    connected: isAlive,
     deviceIp: st.deviceIp,
     devicePort: st.devicePort,
     enrollment: st.enrollment,

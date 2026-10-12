@@ -20,15 +20,21 @@ export async function GET(request: NextRequest) {
     const branchIdParam = searchParams.get("branchId");
     const sinceIdParam = searchParams.get("sinceId");
     const openLessonIdParam = searchParams.get("openLessonId");
+    const bridgeActive = searchParams.get("bridgeActive") === "1";
 
     const result = await getBiometricLiveFeedAction({
       branchId: branchIdParam ? Number(branchIdParam) : undefined,
       sinceId: sinceIdParam ? Number(sinceIdParam) : undefined,
     });
 
-    // Only attempt direct server-to-K50 TCP socket when running locally (not on Vercel/Cloud)
-    const isCloudServer = Boolean(process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT || process.env.RENDER);
-    const k50 = isCloudServer
+    // Only attempt direct server-to-K50 TCP socket when running locally AND the standalone zk-bridge (127.0.0.1:4375) is NOT active
+    const isCloudOrBridge = Boolean(
+      bridgeActive ||
+        process.env.VERCEL ||
+        process.env.RAILWAY_ENVIRONMENT ||
+        process.env.RENDER
+    );
+    const k50 = isCloudOrBridge
       ? {
           connected: false,
           deviceIp: process.env.ZK_DEVICE_IP || "192.168.50.201",
