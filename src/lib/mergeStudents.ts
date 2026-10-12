@@ -366,6 +366,38 @@ export async function mergeStudents(
       });
     }
 
+    // 11b. Biometric Fingerprints & Scan Logs
+    const [sourceFps, targetFps] = await Promise.all([
+      tx.studentFingerprint.findMany({ where: { studentId: source.id } }),
+      tx.studentFingerprint.findMany({ where: { studentId: target.id } }),
+    ]);
+    const targetFingerIndices = new Set(targetFps.map((f) => f.fingerIndex));
+    for (const fp of sourceFps) {
+      if (targetFingerIndices.has(fp.fingerIndex)) {
+        await tx.studentFingerprint.delete({ where: { id: fp.id } });
+      } else {
+        await tx.studentFingerprint.update({
+          where: { id: fp.id },
+          data: {
+            studentId: target.id,
+            globalNumber: target.globalNumber,
+          },
+        });
+        targetFingerIndices.add(fp.fingerIndex);
+      }
+    }
+
+    await tx.biometricScanLog.updateMany({
+      where: {
+        OR: [{ studentId: source.id }, { globalNumber: source.globalNumber }],
+      },
+      data: {
+        studentId: target.id,
+        globalNumber: target.globalNumber,
+        studentName: input.preferredName?.trim() || target.name,
+      },
+    });
+
     // 12. Backfill target missing info (phone, address, birthday, gender)
     const targetUpdates: Record<string, any> = {};
     if ((!target.phone || target.phone.trim() === '' || target.phone === 'غير متوفر') && source.phone && source.phone !== 'غير متوفر') {

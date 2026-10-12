@@ -30,8 +30,8 @@ import re
 import json
 import time
 import argparse
-from datetime import datetime, date
-from urllib.parse import urlparse
+from datetime import datetime, date, timedelta
+from urllib.parse import urlparse, unquote
 
 # Ensure UTF-8 output encoding for Arabic text
 if hasattr(sys.stdout, "reconfigure"):
@@ -59,14 +59,70 @@ except ImportError:
     HAS_PSYCOPG2 = False
 
 
+def normalize_db_url(url):
+    """Normalize PostgreSQL connection string for Supabase / Neon / local."""
+    if not url:
+        return None
+    url = url.strip().strip('"').strip("'")
+    # Strip -pooler only for Neon hosts
+    if ".neon.tech" in url and "-pooler." in url:
+        url = url.replace("-pooler.", ".")
+    # For Supabase pooler hosts, prefer transaction pooler port 6543 (SafePg8000Connection uses Simple Query Protocol)
+    if ".pooler.supabase.com:5432/" in url:
+        url = url.replace(".pooler.supabase.com:5432/", ".pooler.supabase.com:6543/")
+    return url
+
+
+def parse_db_url(db_url):
+    """
+    Robustly parse a PostgreSQL connection URL, handling URL-encoded passwords
+    (e.g. %26 -> &) and special characters (@, :, &) in passwords.
+    """
+    clean_url = normalize_db_url(db_url)
+    without_scheme = re.sub(r"^postgres(?:ql)?://", "", clean_url)
+    without_query = without_scheme.split("?", 1)[0]
+
+    at_idx = without_query.rfind("@")
+    if at_idx != -1:
+        userinfo = without_query[:at_idx]
+        hostpath = without_query[at_idx + 1:]
+        if ":" in userinfo:
+            raw_user, raw_pass = userinfo.split(":", 1)
+            user = unquote(raw_user)
+            password = unquote(raw_pass)
+        else:
+            user = unquote(userinfo)
+            password = ""
+
+        if "/" in hostpath:
+            hostport, database = hostpath.split("/", 1)
+        else:
+            hostport, database = hostpath, "postgres"
+
+        if ":" in hostport:
+            host, port_str = hostport.rsplit(":", 1)
+            port = int(port_str) if port_str.isdigit() else 5432
+        else:
+            host, port = hostport, 5432
+
+        return user, password, host, port, database
+
+    parsed = urlparse(clean_url)
+    return (
+        unquote(parsed.username or ""),
+        unquote(parsed.password or ""),
+        parsed.hostname or "localhost",
+        parsed.port or 5432,
+        (parsed.path or "/postgres").lstrip("/"),
+    )
+
+
 def load_env_database_url():
-    """Load DATABASE_URL from environment or local .env file. Automatically strips -pooler."""
-    # Check DIRECT_URL first (bypasses PgBouncer pooler collision)
-    if os.environ.get("DIRECT_URL"):
-        return os.environ.get("DIRECT_URL")
+    """Load DATABASE_URL or DIRECT_URL from environment or local .env file."""
     if os.environ.get("DATABASE_URL"):
-        url = os.environ.get("DATABASE_URL")
-        return url.replace("-pooler.", ".")
+        return normalize_db_url(os.environ.get("DATABASE_URL"))
+    if os.environ.get("DIRECT_URL"):
+        return normalize_db_url(os.environ.get("DIRECT_URL"))
 
     # Search common .env locations
     candidates = [
@@ -87,30 +143,21 @@ def load_env_database_url():
                         elif line.startswith("DATABASE_URL="):
                             val = line.split("=", 1)[1].strip().strip('"').strip("'")
                             env_dict["DATABASE_URL"] = val
-                if "DIRECT_URL" in env_dict:
-                    return env_dict["DIRECT_URL"]
                 if "DATABASE_URL" in env_dict:
-                    return env_dict["DATABASE_URL"].replace("-pooler.", ".")
+                    return normalize_db_url(env_dict["DATABASE_URL"])
+                if "DIRECT_URL" in env_dict:
+                    return normalize_db_url(env_dict["DIRECT_URL"])
             except Exception:
                 pass
     return None
 
 
 def get_db_connection(db_url):
-    """Create a database connection to PostgreSQL (Neon direct or local)."""
+    """Create a database connection to PostgreSQL (Supabase, Neon, or local)."""
     if not db_url:
         raise ValueError("DATABASE_URL not found! Set DATABASE_URL or run inside the school software folder.")
 
-    # Automatically strip -pooler to avoid PgBouncer prepared-statement caching collision
-    if "-pooler." in db_url:
-        db_url = db_url.replace("-pooler.", ".")
-
-    parsed = urlparse(db_url)
-    user = parsed.username
-    password = parsed.password
-    host = parsed.hostname
-    port = parsed.port or 5432
-    database = parsed.path.lstrip("/")
+    user, password, host, port, database = parse_db_url(db_url)
 
     if HAS_PG8000:
         import ssl
@@ -191,17 +238,30 @@ def get_db_connection(db_url):
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        conn = SafePg8000Connection(
-            user=user,
-            password=password,
-            host=host,
-            port=port,
-            database=database,
-            ssl_context=ctx
-        )
+        try:
+            conn = SafePg8000Connection(
+                user=user,
+                password=password,
+                host=host,
+                port=port,
+                database=database,
+                ssl_context=ctx
+            )
+        except Exception:
+            if ".pooler.supabase.com" in host and port == 6543:
+                conn = SafePg8000Connection(
+                    user=user,
+                    password=password,
+                    host=host,
+                    port=5432,
+                    database=database,
+                    ssl_context=ctx
+                )
+            else:
+                raise
         return conn, "pg8000"
     elif HAS_PSYCOPG2:
-        conn = psycopg2.connect(db_url)
+        conn = psycopg2.connect(normalize_db_url(db_url))
         return conn, "psycopg2"
     else:
         raise RuntimeError("No PostgreSQL driver found!\nPlease run: python -m pip install pg8000")
@@ -274,11 +334,12 @@ def search_students(conn, query):
 
 
 def get_student_full_profile(conn, student_id):
-    """Fetch student profile, enrollments, vouchers, and attendance stats."""
+    """Fetch student profile, enrollments, vouchers, refunds, transfers, fingerprints, and attendance stats."""
     # Student basic info
     s_rows = conn.run(
         """SELECT s.id, s."globalNumber", s.name, s.phone, s.address, s.sex,
-                  s."payerStatus", s."registeredBranchId", b.name as branch_name, s."createdAt"
+                  s."payerStatus", s."registeredBranchId", b.name as branch_name, s."createdAt",
+                  (SELECT COUNT(*) FROM "StudentFingerprint" sf WHERE sf."studentId" = s.id) as fp_count
            FROM "Student" s
            LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
            WHERE s.id = :sid""",
@@ -298,18 +359,26 @@ def get_student_full_profile(conn, student_id):
         "registeredBranchId": sr[7],
         "branch_name": sr[8],
         "createdAt": sr[9],
+        "fingerprintsCount": int(sr[10] or 0),
     }
 
-    # Enrollments & Classes
+    # Enrollments & Classes (including FormationLevel lumpSumPrice fallback, creditResetOffset, status, and transfers)
     e_rows = conn.run(
-        """SELECT e.id, e."classId", c.name as class_name, c."pricePerCycle", c."inscriptionFee",
+        """SELECT e.id, e."classId", c.name as class_name,
+                  COALESCE(c."pricePerCycle", fl."lumpSumPrice", 0) as effective_price,
+                  c."inscriptionFee",
                   e."inscriptionFeeCharged", e."inscriptionFeeAmount", e."payerStatus",
-                  t.name as teacher_name, b.name as class_branch, c."isFormation"
+                  t.name as teacher_name, b.name as class_branch, c."isFormation",
+                  e."creditResetOffset", e.status, e."feeOverriddenByOwner",
+                  COALESCE((SELECT SUM(et."transferredSessions") FROM "EnrollmentTransfer" et WHERE et."toEnrollmentId" = e.id), 0) as transferred_in,
+                  COALESCE((SELECT SUM(et."transferredSessions") FROM "EnrollmentTransfer" et WHERE et."fromEnrollmentId" = e.id), 0) as transferred_out
            FROM "Enrollment" e
            JOIN "Class" c ON c.id = e."classId"
+           LEFT JOIN "FormationLevel" fl ON fl.id = c."formationLevelId"
            LEFT JOIN "Teacher" t ON t.id = c."teacherId"
            LEFT JOIN "Branch" b ON b.id = c."branchId"
-           WHERE e."studentId" = :sid""",
+           WHERE e."studentId" = :sid
+           ORDER BY e."enrolledAt" ASC, e.id ASC""",
         sid=student_id
     )
     student["enrollments"] = [
@@ -325,17 +394,24 @@ def get_student_full_profile(conn, student_id):
             "teacher_name": r[8] or "Unassigned",
             "class_branch": r[9] or "—",
             "isFormation": bool(r[10]),
+            "creditResetOffset": int(r[11] or 0),
+            "status": r[12] or "ACTIVE",
+            "feeOverriddenByOwner": bool(r[13]),
+            "transferred_in": int(r[14] or 0),
+            "transferred_out": int(r[15] or 0),
         }
         for r in e_rows
     ]
 
-    # Vouchers
+    # Vouchers (with Refund subqueries and isRefund / status fields)
     v_rows = conn.run(
         """SELECT v.id, v.number, v."seriesId", v."paymentType", v.amount, v."isVoided",
                   v."issuedAt", v."issuedBy", v."classId", c.name as class_name,
                   ib.name as issuing_branch, tb.name as target_branch,
                   v."isPartial", v."remainingBalance",
-                  v."issuingBranchId", v."targetBranchId"
+                  v."issuingBranchId", v."targetBranchId",
+                  v."isRefund", COALESCE(v.status, 'ACTIVE') as v_status,
+                  COALESCE((SELECT SUM(r.amount) FROM "Refund" r WHERE r."voucherId" = v.id), 0) as refunded_amount
            FROM "Voucher" v
            LEFT JOIN "Class" c ON c.id = v."classId"
            LEFT JOIN "Branch" ib ON ib.id = v."issuingBranchId"
@@ -344,14 +420,25 @@ def get_student_full_profile(conn, student_id):
            ORDER BY v."issuedAt" DESC, v.number DESC""",
         sid=student_id
     )
-    student["vouchers"] = [
-        {
+    student["vouchers"] = []
+    for r in v_rows:
+        gross_amt = float(r[4] or 0)
+        is_voided = bool(r[5])
+        is_refund = bool(r[16])
+        v_status = r[17] or "ACTIVE"
+        refunded_amt = float(r[18] or 0)
+        net_amt = 0.0 if (is_voided or is_refund) else max(0.0, gross_amt - refunded_amt)
+        student["vouchers"].append({
             "id": r[0],
             "number": r[1],
             "seriesId": r[2],
             "paymentType": r[3],
-            "amount": float(r[4] or 0),
-            "isVoided": bool(r[5]),
+            "amount": gross_amt,
+            "net_amount": net_amt,
+            "refunded_amount": refunded_amt,
+            "isVoided": is_voided,
+            "isRefund": is_refund,
+            "status": v_status,
             "issuedAt": r[6],
             "issuedBy": r[7],
             "classId": r[8],
@@ -362,45 +449,82 @@ def get_student_full_profile(conn, student_id):
             "remainingBalance": float(r[13] or 0) if r[13] is not None else None,
             "issuingBranchId": r[14],
             "targetBranchId": r[15],
-        }
-        for r in v_rows
-    ]
+        })
 
-    # Attendance stats per class
+    # 3-Group Inscription Waiver Rule (matches src/lib/studentBilling.ts):
+    # If student has paid INSCRIPTION in 3+ distinct classes, 4th+ classes are automatically waived.
+    paid_insc_by_class = {}
+    for v in student["vouchers"]:
+        if not v["isVoided"] and not v["isRefund"] and v["paymentType"] == "INSCRIPTION" and v["net_amount"] > 0:
+            cid_key = v["classId"] or -1
+            paid_insc_by_class[cid_key] = paid_insc_by_class.get(cid_key, 0.0) + v["net_amount"]
+    student["paid_insc_classes_count"] = len([cid for cid, amt in paid_insc_by_class.items() if cid > 0 and amt > 0])
+    student["has_3group_insc_waiver"] = student["paid_insc_classes_count"] >= 3
+
+    # Attendance & Credit stats per class (matching src/lib/actions.ts & src/lib/studentBilling.ts)
     student["class_stats"] = {}
     for enr in student["enrollments"]:
         cid = enr["classId"]
         is_formation = enr.get("isFormation", False)
-        # Tuition / Formation paid specifically for this class (or unassigned distributed)
         valid_types = ("FORMATION", "TUITION_4SESSION") if is_formation else ("TUITION_4SESSION",)
         class_vouchers = [
             v for v in student["vouchers"]
-            if not v["isVoided"] and v["paymentType"] in valid_types and (v["classId"] == cid or v["classId"] is None)
+            if not v["isVoided"] and not v["isRefund"] and v["paymentType"] in valid_types and (v["classId"] == cid or v["classId"] is None)
         ]
-        class_paid = sum(v["amount"] for v in class_vouchers)
+        class_paid = sum(v["net_amount"] for v in class_vouchers)
+        class_gross = sum(v["amount"] for v in class_vouchers)
+        class_refunded = sum(v["refunded_amount"] for v in class_vouchers)
 
-        # Total lessons attended
+        # Total lessons attended (excluding free lessons l."isFree" = false for credit deduction)
         att_rows = conn.run(
-            """SELECT a.status, COUNT(*)
+            """SELECT a.status, l."isFree", COUNT(*)
                FROM "Attendance" a
                JOIN "Lesson" l ON l.id = a."lessonId"
                WHERE a."studentId" = :sid AND l."classId" = :cid
-               GROUP BY a.status""",
+               GROUP BY a.status, l."isFree" """,
             sid=student_id, cid=cid
         )
-        att_counts = {r[0]: r[1] for r in att_rows}
-        present_count = att_counts.get("PRESENT", 0) + att_counts.get("LATE", 0)
-        absent_count = att_counts.get("ABSENT", 0)
-        excused_count = att_counts.get("NOT_DEFINED", 0)
+        present_count = 0
+        absent_count = 0
+        excused_count = 0
+        free_present_count = 0
+        billable_consumed = 0
 
-        # Consumed = present + unexcused absence
-        consumed_sessions = present_count + absent_count
+        for status_val, is_free_val, cnt_val in att_rows:
+            cnt = int(cnt_val or 0)
+            is_free_lesson = bool(is_free_val)
+            if status_val in ("PRESENT", "LATE"):
+                present_count += cnt
+                if is_free_lesson:
+                    free_present_count += cnt
+                else:
+                    billable_consumed += cnt
+            elif status_val == "ABSENT":
+                absent_count += cnt
+                if not is_free_lesson:
+                    billable_consumed += cnt
+            else:
+                excused_count += cnt
 
-        # Credit calculation
+        consumed_sessions = billable_consumed
+
+        # Credit calculation (matches src/lib/actions.ts: purchased + transferredIn - transferredOut - consumed + creditResetOffset)
         cycle_price = enr["pricePerCycle"]
         session_price = cycle_price / 4 if cycle_price > 0 else 0
         purchased_sessions = (class_paid / session_price) if session_price > 0 else 0
-        net_credit_sessions = purchased_sessions - consumed_sessions
+        transferred_in = enr.get("transferred_in", 0)
+        transferred_out = enr.get("transferred_out", 0)
+        credit_reset_offset = enr.get("creditResetOffset", 0)
+        net_credit_sessions = (
+            purchased_sessions
+            + transferred_in
+            - transferred_out
+            - consumed_sessions
+            + credit_reset_offset
+        )
+
+        insc_paid = paid_insc_by_class.get(cid, 0.0)
+        is_waived_by_3group = student["has_3group_insc_waiver"] and insc_paid <= 0
 
         student["class_stats"][cid] = {
             "class_name": enr["class_name"],
@@ -408,12 +532,20 @@ def get_student_full_profile(conn, student_id):
             "cycle_price": cycle_price,
             "session_price": session_price,
             "tuition_paid": class_paid,
+            "tuition_gross": class_gross,
+            "tuition_refunded": class_refunded,
             "purchased_sessions": round(purchased_sessions, 1),
+            "transferred_in": transferred_in,
+            "transferred_out": transferred_out,
+            "credit_reset_offset": credit_reset_offset,
             "present_count": present_count,
+            "free_present_count": free_present_count,
             "absent_count": absent_count,
             "excused_count": excused_count,
             "consumed_sessions": consumed_sessions,
             "net_credit_sessions": round(net_credit_sessions, 1),
+            "insc_paid": insc_paid,
+            "is_waived_by_3group": is_waived_by_3group,
         }
 
     return student
@@ -918,7 +1050,9 @@ def handle_delete_voucher(conn, student):
         if confirm in ("yes", "y"):
             conn.run("BEGIN")
             try:
-                # 1. Clean up VoucherEdit records referencing this voucher
+                # 1. Clean up refund links, Refund records, and VoucherEdit records referencing this voucher
+                conn.run('UPDATE "Voucher" SET "refundForVoucherId" = NULL WHERE "refundForVoucherId" = :id', id=voucher["id"])
+                conn.run('DELETE FROM "Refund" WHERE "voucherId" = :id', id=voucher["id"])
                 conn.run('DELETE FROM "VoucherEdit" WHERE "voucherId" = :id', id=voucher["id"])
                 # 2. Delete the voucher
                 conn.run('DELETE FROM "Voucher" WHERE id = :id', id=voucher["id"])
@@ -962,14 +1096,13 @@ def handle_fix_attendances(conn, student):
         print("Invalid choice.")
         return
 
-    # Fetch lessons and attendances for this class
+    # Fetch ALL recorded lessons and attendances for this class (ordered oldest -> newest)
     lessons = conn.run(
         """SELECT l.id, l."startsAt", l."isCatchUp", l."isFree", a.id as att_id, a.status, a.justification
            FROM "Lesson" l
            LEFT JOIN "Attendance" a ON a."lessonId" = l.id AND a."studentId" = :sid
            WHERE l."classId" = :cid
-           ORDER BY l."startsAt" DESC
-           LIMIT 25""",
+           ORDER BY l."startsAt" ASC, l.id ASC""",
         sid=student["id"], cid=class_id
     )
 
@@ -977,14 +1110,19 @@ def handle_fix_attendances(conn, student):
         print(f"\nNo lessons recorded for {class_name}.")
         return
 
-    print(f"\nRecent Lessons for {class_name}:")
-    print(f"{'#':<3} {'Date':<11} {'Status':<12} {'Notes'}")
-    print("-" * 45)
+    print(f"\nAll Recorded Lessons for {class_name} ({len(lessons)} total):")
+    print(f"{'#':<4} {'Date (Local)':<17} {'Status':<14} {'Notes'}")
+    print("-" * 55)
     for i, l in enumerate(lessons, 1):
-        l_date = format_date(l[1])
+        dt_val = l[1]
+        if isinstance(dt_val, datetime):
+            loc_dt = dt_val + timedelta(hours=1)
+            l_date = loc_dt.strftime("%Y-%m-%d %H:%M")
+        else:
+            l_date = format_date(dt_val)
         status = l[5] or "NOT_RECORDED"
-        notes = "Free" if l[3] else ("Catch-up" if l[2] else "")
-        print(f"[{i:<2}] {l_date:<11} {status:<12} {notes}")
+        notes = "Free (0 credit)" if l[3] else ("Catch-up" if l[2] else "")
+        print(f"[{i:<2}] {l_date:<17} {status:<14} {notes}")
 
     l_pick = input(f"\nSelect lesson to edit (1-{len(lessons)}) or [0] to exit: ").strip()
     if not l_pick or l_pick == "0":
@@ -1001,7 +1139,7 @@ def handle_fix_attendances(conn, student):
     current_status = lesson[5] or "NOT_RECORDED"
 
     print(f"\nSelected Lesson on {format_date(lesson[1])} (Current status: {current_status}):")
-    print("  [1] Mark PRESENT (Consumes 1 session credit)")
+    print("  [1] Mark PRESENT (Consumes 1 session credit unless Free lesson)")
     print("  [2] Mark ABSENT (Consumes 1 session credit per school rules)")
     print("  [3] Mark EXCUSED / NOT_DEFINED (0 session credit deducted — restores student credit!)")
     print("  [4] Delete attendance record")
@@ -1039,20 +1177,24 @@ def handle_fix_attendances(conn, student):
 
 
 def handle_toggle_inscription_and_payer(conn, student):
-    """Toggle inscription fee charged or student payer status."""
-    print("\n" + "═" * 50)
-    print("  🏷️ INSCRIPTION FEE & PAYER STATUS")
-    print("═" * 50)
+    """Toggle inscription fee charged, student payer status, or enrollment creditResetOffset."""
+    print("\n" + "═" * 55)
+    print("  🏷️ INSCRIPTION FEE, PAYER STATUS & CREDIT OFFSET")
+    print("═" * 55)
 
-    print(f"\nCurrent Payer Status: {student['payerStatus']}")
-    print("Enrollments Inscription Status:")
+    print(f"\nCurrent Student Payer Status: {student['payerStatus']}")
+    if student.get("has_3group_insc_waiver"):
+        print(f"🎁 3-Group Inscription Waiver ACTIVE ({student.get('paid_insc_classes_count', 0)} groups paid)")
+    print("Enrollments Status:")
     for enr in student["enrollments"]:
         fee_str = "CHARGED" if enr["inscriptionFeeCharged"] else "WAIVED / UNCHARGED"
-        print(f"  • {enr['class_name']}: {fee_str}")
+        offset_val = enr.get("creditResetOffset", 0)
+        print(f"  • {enr['class_name']} [{enr.get('status', 'ACTIVE')}]: Inscription={fee_str} | CreditOffset={offset_val:+d}")
 
     print("\nOptions:")
-    print("  [1] Change Payer Status (NORMAL / NON_PAYER / SCHOOL_FEES_ONLY)")
+    print("  [1] Change Student Payer Status (NORMAL / NON_PAYER / SCHOOL_FEES_ONLY)")
     print("  [2] Toggle Inscription Fee Charged flag on Class Enrollment")
+    print("  [3] Set Manual Session Credit Offset (creditResetOffset) on Class Enrollment")
     print("  [0] Cancel")
 
     choice = input("Select option: ").strip()
@@ -1086,15 +1228,36 @@ def handle_toggle_inscription_and_payer(conn, student):
         except Exception:
             print("Invalid choice.")
 
+    elif choice == "3":
+        for i, enr in enumerate(student["enrollments"], 1):
+            print(f"  [{i}] {enr['class_name']} (Current offset: {enr.get('creditResetOffset', 0):+d} sessions)")
+        e_choice = input("Choose class: ").strip()
+        try:
+            enr_target = student["enrollments"][int(e_choice) - 1]
+            val_str = input(f"Enter new session credit offset integer (e.g. 0, +2, -1) [current {enr_target.get('creditResetOffset', 0)}]: ").strip()
+            new_offset = int(val_str)
+            conn.run(
+                'UPDATE "Enrollment" SET "creditResetOffset" = :off WHERE id = :id',
+                off=new_offset, id=enr_target["id"]
+            )
+            print(f"✅ Credit offset updated to {new_offset:+d} session(s) for {enr_target['class_name']}.")
+        except Exception as e:
+            print(f"Invalid input: {e}")
+
 
 # ── Main Dashboard Display ───────────────────────────────────────────
 
 def display_dashboard(student):
     """Display clean mobile-responsive student dashboard in terminal."""
-    print("\n" + "═" * 60)
+    fp_cnt = student.get("fingerprintsCount", 0)
+    fp_str = f"🖐️ {fp_cnt} Enrolled" if fp_cnt > 0 else "None"
+    print("\n" + "═" * 64)
     print(f"  🎓 STUDENT: #{student['globalNumber']} - {student['name']}")
-    print(f"  📍 Branch: {student['branch_name']} | 📱 Phone: {student['phone'] or 'None'} | Payer: {student['payerStatus']}")
-    print("═" * 60)
+    print(f"  📍 Branch: {student['branch_name']} | 📱 Phone: {student['phone'] or 'None'}")
+    print(f"  💳 Payer: {student['payerStatus']} | Biometrics: {fp_str}")
+    if student.get("has_3group_insc_waiver"):
+        print(f"  🎁 3-Group Inscription Waiver: ACTIVE ({student.get('paid_insc_classes_count', 0)} classes paid)")
+    print("═" * 64)
 
     # Class & Credit Balance Table
     print("\n📊 CLASS ENROLLMENTS & SESSIONS BALANCE:")
@@ -1113,7 +1276,16 @@ def display_dashboard(student):
             else:
                 bal_str = "⚪ Balanced (0 Sessions)"
 
-            fee_status = "Paid / Charged" if enr.get("inscriptionFeeCharged") else "Not Charged / Waived"
+            if stats.get("is_waived_by_3group"):
+                fee_status = "Waived (3+ Groups Rule)"
+            elif stats.get("insc_paid", 0) > 0:
+                fee_status = f"Paid ({format_money(stats['insc_paid'])})"
+            elif enr.get("inscriptionFeeCharged"):
+                fee_status = "Charged (Unpaid)"
+            else:
+                fee_status = "Not Charged / Waived"
+
+            enr_status_tag = f" [{enr['status']}]" if enr.get("status", "ACTIVE") != "ACTIVE" else ""
 
             if enr.get("isFormation"):
                 level_price = enr["pricePerCycle"]
@@ -1126,28 +1298,43 @@ def display_dashboard(student):
                 else:
                     status_badge = f"🔴 Unpaid / غير مدفوع (Rest: {format_money(owed)})"
 
-                print(f"\n  ▶ {enr['class_name']} [FORMATION / دورة تدريبية] (Teacher: {enr['teacher_name']})")
+                print(f"\n  ▶ {enr['class_name']} [FORMATION / دورة تدريبية]{enr_status_tag} (Teacher: {enr['teacher_name']})")
                 print(f"    • Level Price: {format_money(level_price)}")
-                print(f"    • Paid Amount: {format_money(paid)}  -->  {status_badge}")
-                print(f"    • Attendance: {stats.get('present_count', 0)} Present, {stats.get('absent_count', 0)} Absent, {stats.get('excused_count', 0)} Excused")
-                print(f"    • Inscription Fee: {fee_status}")
+                print(f"    • Net Paid:    {format_money(paid)}  -->  {status_badge}")
+                if stats.get("tuition_refunded", 0) > 0:
+                    print(f"    • Refunded:    {format_money(stats['tuition_refunded'])} (Gross: {format_money(stats['tuition_gross'])})")
+                print(f"    • Attendance:  {stats.get('present_count', 0)} Present, {stats.get('absent_count', 0)} Absent, {stats.get('excused_count', 0)} Excused")
+                print(f"    • Inscription: {fee_status}")
             else:
-                print(f"\n  ▶ {enr['class_name']} (Teacher: {enr['teacher_name']})")
-                print(f"    • Price: {format_money(enr['pricePerCycle'])}/cycle (4 sessions)")
-                print(f"    • Tuition Paid: {format_money(stats.get('tuition_paid', 0))}  -->  {stats.get('purchased_sessions', 0)} sessions purchased")
-                print(f"    • Attendance: {stats.get('present_count', 0)} Present, {stats.get('absent_count', 0)} Absent, {stats.get('excused_count', 0)} Excused")
+                print(f"\n  ▶ {enr['class_name']}{enr_status_tag} (Teacher: {enr['teacher_name']})")
+                print(f"    • Price:           {format_money(enr['pricePerCycle'])}/cycle (4 sessions)")
+                print(f"    • Net Tuition:     {format_money(stats.get('tuition_paid', 0))}  -->  {stats.get('purchased_sessions', 0)} sessions purchased")
+                if stats.get("tuition_refunded", 0) > 0:
+                    print(f"    • Refunded:        {format_money(stats['tuition_refunded'])} (Gross: {format_money(stats['tuition_gross'])})")
+                extra_adj = []
+                if stats.get("transferred_in", 0) or stats.get("transferred_out", 0):
+                    extra_adj.append(f"Transfers: +{stats.get('transferred_in', 0)}/-{stats.get('transferred_out', 0)}")
+                if stats.get("credit_reset_offset", 0):
+                    extra_adj.append(f"CreditOffset: {stats.get('credit_reset_offset', 0):+d}")
+                if extra_adj:
+                    print(f"    • Adjustments:     {' | '.join(extra_adj)}")
+                free_note = f" (incl. {stats['free_present_count']} free)" if stats.get("free_present_count", 0) > 0 else ""
+                print(f"    • Attendance:      {stats.get('present_count', 0)} Present{free_note}, {stats.get('absent_count', 0)} Absent, {stats.get('excused_count', 0)} Excused")
                 print(f"    • Current Balance: {bal_str}")
                 print(f"    • Inscription Fee: {fee_status}")
 
     # Vouchers summary
-    total_paid = sum(v["amount"] for v in student["vouchers"] if not v["isVoided"])
-    active_vouchers = [v for v in student["vouchers"] if not v["isVoided"]]
+    active_vouchers = [v for v in student["vouchers"] if not v["isVoided"] and not v["isRefund"]]
+    total_net_paid = sum(v["net_amount"] for v in active_vouchers)
+    total_refunded = sum(v["refunded_amount"] for v in active_vouchers)
     voided_vouchers = [v for v in student["vouchers"] if v["isVoided"]]
 
-    print(f"\n💰 FINANCIAL TOTALS: {format_money(total_paid)} across {len(active_vouchers)} active voucher(s)")
+    print(f"\n💰 FINANCIAL TOTALS: {format_money(total_net_paid)} net across {len(active_vouchers)} active voucher(s)")
+    if total_refunded > 0:
+        print(f"   (Total Refunded: {format_money(total_refunded)})")
     if voided_vouchers:
         print(f"   (plus {len(voided_vouchers)} voided vouchers)")
-    print("-" * 60)
+    print("-" * 64)
 
 
 def list_all_vouchers(student):
@@ -1162,9 +1349,19 @@ def list_all_vouchers(student):
 
     for i, v in enumerate(student["vouchers"], 1):
         v_date = format_date(v["issuedAt"])
-        void_tag = " ❌ [VOIDED]" if v["isVoided"] else " ✅ [ACTIVE]"
+        if v["isVoided"]:
+            void_tag = " ❌ [VOIDED]"
+        elif v.get("isRefund") or v.get("status") == "REFUNDED":
+            void_tag = " ↩️ [REFUNDED]"
+        elif v.get("refunded_amount", 0) > 0:
+            void_tag = " 🟡 [PARTIAL REFUND]"
+        else:
+            void_tag = " ✅ [ACTIVE]"
         print(f"\n[{i}] Voucher #{v['number']}{void_tag}")
-        print(f"    Amount:   {format_money(v['amount'])}")
+        if v.get("refunded_amount", 0) > 0:
+            print(f"    Amount:   {format_money(v['net_amount'])} net (Gross: {format_money(v['amount'])}, Refunded: {format_money(v['refunded_amount'])})")
+        else:
+            print(f"    Amount:   {format_money(v['amount'])}")
         print(f"    Type:     {v['paymentType']}")
         print(f"    Class:    {v['class_name']}")
         print(f"    Date:     {v_date} (by {v['issuedBy'] or 'system'})")
@@ -1188,7 +1385,7 @@ def student_action_loop(conn, student_id):
         print("  [3] Edit a Voucher (Amount, Date, Class, Branch, Void)")
         print("  [4] Delete or Void a Voucher")
         print("  [5] View & Fix Lesson Attendances (Presence / Absence / Excused)")
-        print("  [6] Toggle Inscription Fee & Payer Status")
+        print("  [6] Toggle Inscription Fee, Payer Status & Credit Offset")
         print("  [7] Reconcile / Sync Daily Ledger (Fix any discrepancies)")
         print("  [8] Switch Student")
         print("  [0] Exit")

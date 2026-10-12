@@ -32,12 +32,16 @@ import argparse
 from urllib.parse import urlparse, parse_qs
 
 # Ensure UTF-8 output encoding for Arabic text
-if hasattr(sys.stdout, "buffer"):
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-if hasattr(sys.stderr, "buffer"):
-    import io
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Try importing pg8000 (pure python) or psycopg2
 try:
@@ -54,13 +58,70 @@ except ImportError:
     HAS_PSYCOPG2 = False
 
 
+def normalize_db_url(raw_url):
+    """Normalize PostgreSQL URL for Supabase (:6543 transaction pooler) and Neon."""
+    if not raw_url:
+        return None
+    url = raw_url.strip().strip('"').strip("'")
+    if ".neon.tech" in url and "-pooler." in url:
+        url = url.replace("-pooler.", ".")
+    if ".pooler.supabase.com" in url:
+        url = url.replace(":5432/", ":6543/")
+    return url
+
+
+def parse_db_url(db_url):
+    """Parse PostgreSQL URL safely even when password contains %, &, or @."""
+    from urllib.parse import unquote
+    clean = db_url.strip().strip('"').strip("'")
+    q_idx = clean.find("?")
+    if q_idx != -1:
+        clean = clean[:q_idx]
+
+    scheme_end = clean.find("://")
+    rest = clean[scheme_end + 3:] if scheme_end != -1 else clean
+    at_idx = rest.rfind("@")
+    if at_idx != -1:
+        user_info = rest[:at_idx]
+        host_part = rest[at_idx + 1:]
+        colon_idx = user_info.find(":")
+        if colon_idx != -1:
+            user = unquote(user_info[:colon_idx])
+            password = unquote(user_info[colon_idx + 1:])
+        else:
+            user = unquote(user_info)
+            password = ""
+    else:
+        parsed = urlparse(clean)
+        user = unquote(parsed.username or "")
+        password = unquote(parsed.password or "")
+        host_part = f"{parsed.hostname}:{parsed.port or 5432}{parsed.path}"
+
+    slash_idx = host_part.find("/")
+    if slash_idx != -1:
+        host_port = host_part[:slash_idx]
+        database = host_part[slash_idx + 1:] or "postgres"
+    else:
+        host_port = host_part
+        database = "postgres"
+
+    if ":" in host_port:
+        h, p = host_port.rsplit(":", 1)
+        host = h
+        port = int(p) if p.isdigit() else 5432
+    else:
+        host = host_port
+        port = 5432
+
+    return user, password, host, port, database
+
+
 def load_env_database_url():
-    """Load DATABASE_URL from environment or local .env file. Automatically strips -pooler."""
-    if os.environ.get("DIRECT_URL"):
-        return os.environ.get("DIRECT_URL")
+    """Load DATABASE_URL from environment or local .env file."""
     if os.environ.get("DATABASE_URL"):
-        url = os.environ.get("DATABASE_URL")
-        return url.replace("-pooler.", ".")
+        return normalize_db_url(os.environ.get("DATABASE_URL"))
+    if os.environ.get("DIRECT_URL"):
+        return normalize_db_url(os.environ.get("DIRECT_URL"))
 
     # Search common .env locations
     candidates = [
@@ -75,41 +136,30 @@ def load_env_database_url():
                 with open(path, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
-                        if line.startswith("DIRECT_URL="):
-                            val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                            env_dict["DIRECT_URL"] = val
-                        elif line.startswith("DATABASE_URL="):
+                        if line.startswith("DATABASE_URL="):
                             val = line.split("=", 1)[1].strip().strip('"').strip("'")
                             env_dict["DATABASE_URL"] = val
-                if "DIRECT_URL" in env_dict:
-                    return env_dict["DIRECT_URL"]
+                        elif line.startswith("DIRECT_URL="):
+                            val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            env_dict["DIRECT_URL"] = val
                 if "DATABASE_URL" in env_dict:
-                    return env_dict["DATABASE_URL"].replace("-pooler.", ".")
+                    return normalize_db_url(env_dict["DATABASE_URL"])
+                if "DIRECT_URL" in env_dict:
+                    return normalize_db_url(env_dict["DIRECT_URL"])
             except Exception:
                 pass
     return None
 
 
 def get_db_connection(db_url):
-    """Create a database connection to PostgreSQL (Neon direct or local)."""
+    """Create a database connection to PostgreSQL (Supabase / Neon / local)."""
     if not db_url:
         raise ValueError(
             "DATABASE_URL not found! Set DATABASE_URL environment variable or place .env in the folder."
         )
 
-    # Automatically strip -pooler to avoid PgBouncer prepared-statement caching collision
-    if "-pooler." in db_url:
-        db_url = db_url.replace("-pooler.", ".")
-
-    parsed = urlparse(db_url)
-    user = parsed.username
-    password = parsed.password
-    host = parsed.hostname
-    port = parsed.port or 5432
-    database = parsed.path.lstrip("/")
-
-    # Check for sslmode in query params
-    ssl_context = True
+    db_url = normalize_db_url(db_url)
+    user, password, host, port, database = parse_db_url(db_url)
 
     if HAS_PG8000:
         import ssl
@@ -187,20 +237,38 @@ def get_db_connection(db_url):
                 self._context = self.execute_simple(final_sql)
                 return self._context.rows
 
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        conn = SafePg8000Connection(
-            user=user,
-            password=password,
-            host=host,
-            port=port,
-            database=database,
-            ssl_context=ctx
-        )
-        return conn, "pg8000"
+        is_local = host in ("localhost", "127.0.0.1")
+        ctx = None
+        if not is_local:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+        ports_to_try = [port]
+        if ".pooler.supabase.com" in host:
+            alt_port = 5432 if port == 6543 else 6543
+            if alt_port not in ports_to_try:
+                ports_to_try.append(alt_port)
+
+        last_err = None
+        for p in ports_to_try:
+            try:
+                conn = SafePg8000Connection(
+                    user=user,
+                    password=password,
+                    host=host,
+                    port=p,
+                    database=database,
+                    ssl_context=ctx
+                )
+                return conn, "pg8000"
+            except Exception as e:
+                last_err = e
+        raise last_err
     elif HAS_PSYCOPG2:
-        conn = psycopg2.connect(db_url)
+        conn = psycopg2.connect(
+            user=user, password=password, host=host, port=port, dbname=database, sslmode="require"
+        )
         return conn, "psycopg2"
     else:
         raise RuntimeError(
@@ -257,10 +325,12 @@ def find_student(conn_type, conn, identifier):
     sql = """
         SELECT s.id, s."globalNumber", s.name, s.phone, s.address, s.birthday, s.sex,
                s."registeredBranchId", b.name as branch_name,
-               (SELECT COUNT(*) FROM "Voucher" v WHERE v."studentId" = s.id) as vouchers_count,
-               (SELECT COALESCE(SUM(amount), 0) FROM "Voucher" v WHERE v."studentId" = s.id) as vouchers_total,
+               (SELECT COUNT(*) FROM "Voucher" v WHERE v."studentId" = s.id AND v."isVoided" = false AND v."isRefund" = false) as vouchers_count,
+               (SELECT COALESCE(SUM(GREATEST(0, v.amount - COALESCE((SELECT SUM(r.amount) FROM "Refund" r WHERE r."voucherId" = v.id), 0))), 0)
+                FROM "Voucher" v WHERE v."studentId" = s.id AND v."isVoided" = false AND v."isRefund" = false) as vouchers_total,
                (SELECT COUNT(*) FROM "Enrollment" e WHERE e."studentId" = s.id) as enrollments_count,
-               (SELECT COUNT(*) FROM "Attendance" a WHERE a."studentId" = s.id) as attendances_count
+               (SELECT COUNT(*) FROM "Attendance" a WHERE a."studentId" = s.id) as attendances_count,
+               (SELECT COUNT(*) FROM "StudentFingerprint" f WHERE f."studentId" = s.id) as fingerprints_count
         FROM "Student" s
         LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
         WHERE """ + ('s."globalNumber" = :id' if is_num else "s.id = :id")
@@ -280,9 +350,10 @@ def find_student(conn_type, conn, identifier):
         "registeredBranchId": r[7],
         "branch_name": r[8],
         "vouchers_count": r[9],
-        "vouchers_total": r[10],
+        "vouchers_total": f"{float(r[10] or 0):,.0f}".replace(",", " "),
         "enrollments_count": r[11],
         "attendances_count": r[12],
+        "fingerprints_count": r[13] if len(r) > 13 else 0,
     }
 
 
@@ -295,7 +366,7 @@ def search_students(conn, term):
 
     rows = conn.run("""
         SELECT s.id, s."globalNumber", s.name, s.phone, b.name as branch_name,
-               (SELECT COUNT(*) FROM "Voucher" v WHERE v."studentId" = s.id) as vouchers_count,
+               (SELECT COUNT(*) FROM "Voucher" v WHERE v."studentId" = s.id AND v."isVoided" = false AND v."isRefund" = false) as vouchers_count,
                (SELECT COUNT(*) FROM "Enrollment" e WHERE e."studentId" = s.id) as enrollments_count
         FROM "Student" s
         LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
@@ -321,13 +392,14 @@ def search_students(conn, term):
 
 def print_card(title, s):
     print(f"\n--- {title} ---")
-    print(f"  ID Number:  #{s['globalNumber']}")
-    print(f"  Name:       {s['name']}")
-    print(f"  Phone:      {s['phone'] or 'None'}")
-    print(f"  Branch:     {s['branch_name'] or s['registeredBranchId']}")
-    print(f"  Vouchers:   {s['vouchers_count']} (Total: {s['vouchers_total']} DZD)")
-    print(f"  Enrollments:{s['enrollments_count']}")
-    print(f"  Attendance: {s['attendances_count']}")
+    print(f"  ID Number:    #{s['globalNumber']}")
+    print(f"  Name:         {s['name']}")
+    print(f"  Phone:        {s['phone'] or 'None'}")
+    print(f"  Branch:       {s['branch_name'] or s['registeredBranchId']}")
+    print(f"  Vouchers:     {s['vouchers_count']} (Total: {s['vouchers_total']} DZD)")
+    print(f"  Enrollments:  {s['enrollments_count']}")
+    print(f"  Attendance:   {s['attendances_count']}")
+    print(f"  Fingerprints: {s.get('fingerprints_count', 0)}")
 
 
 def execute_merge_transaction(conn, source, target, preferred_name=None, performed_by="termux_cli"):
@@ -354,6 +426,9 @@ def execute_merge_transaction(conn, source, target, preferred_name=None, perform
             "catchUpsDeduped": 0,
             "parentPhonesMoved": 0,
             "parentPhonesDeduped": 0,
+            "fingerprintsMoved": 0,
+            "fingerprintsDeduped": 0,
+            "scanLogsMoved": 0,
         }
 
         # 1. Parent Phone Numbers
@@ -389,23 +464,29 @@ def execute_merge_transaction(conn, source, target, preferred_name=None, perform
 
         # 3. Enrollments
         target_enr_res = conn.run(
-            'SELECT id, "classId", "academicYearId", "inscriptionFeeCharged" FROM "Enrollment" WHERE "studentId" = :tid',
+            'SELECT id, "classId", "academicYearId", "inscriptionFeeCharged", COALESCE("creditResetOffset", 0) FROM "Enrollment" WHERE "studentId" = :tid',
             tid=target_id
         )
-        target_enr_map = {(r[1], r[2]): (r[0], r[3]) for r in target_enr_res}
+        target_enr_map = {(r[1], r[2]): (r[0], r[3], int(r[4] or 0)) for r in target_enr_res}
 
         source_enr_res = conn.run(
-            'SELECT id, "classId", "academicYearId", "inscriptionFeeCharged", "inscriptionFeeAmount" FROM "Enrollment" WHERE "studentId" = :sid',
+            'SELECT id, "classId", "academicYearId", "inscriptionFeeCharged", "inscriptionFeeAmount", COALESCE("creditResetOffset", 0) FROM "Enrollment" WHERE "studentId" = :sid',
             sid=source_id
         )
-        for s_eid, s_cid, s_ayid, s_fee_charged, s_fee_amt in source_enr_res:
+        for s_eid, s_cid, s_ayid, s_fee_charged, s_fee_amt, s_offset in source_enr_res:
             key = (s_cid, s_ayid)
             if key in target_enr_map:
-                t_eid, t_fee_charged = target_enr_map[key]
+                t_eid, t_fee_charged, t_offset = target_enr_map[key]
+                combined_offset = int(t_offset or 0) + int(s_offset or 0)
                 if s_fee_charged and not t_fee_charged:
                     conn.run(
-                        'UPDATE "Enrollment" SET "inscriptionFeeCharged" = true, "inscriptionFeeAmount" = :amt WHERE id = :id',
-                        amt=s_fee_amt, id=t_eid
+                        'UPDATE "Enrollment" SET "inscriptionFeeCharged" = true, "inscriptionFeeAmount" = :amt, "creditResetOffset" = :ofs WHERE id = :id',
+                        amt=s_fee_amt, ofs=combined_offset, id=t_eid
+                    )
+                elif combined_offset != t_offset:
+                    conn.run(
+                        'UPDATE "Enrollment" SET "creditResetOffset" = :ofs WHERE id = :id',
+                        ofs=combined_offset, id=t_eid
                     )
                 # Re-point transfers
                 conn.run(
@@ -423,7 +504,7 @@ def execute_merge_transaction(conn, source, target, preferred_name=None, perform
                     'UPDATE "Enrollment" SET "studentId" = :tid WHERE id = :id',
                     tid=target_id, id=s_eid
                 )
-                target_enr_map[key] = (s_eid, s_fee_charged)
+                target_enr_map[key] = (s_eid, s_fee_charged, int(s_offset or 0))
                 summary["enrollmentsMoved"] += 1
 
         # 4. Attendance
@@ -603,6 +684,29 @@ def execute_merge_transaction(conn, source, target, preferred_name=None, perform
             tid=target_id, sid=source_id
         )
 
+        # 11b. Biometric Fingerprints & Scan Logs
+        target_fp_res = conn.run(
+            'SELECT "fingerIndex" FROM "StudentFingerprint" WHERE "studentId" = :tid',
+            tid=target_id
+        )
+        target_fp_set = {r[0] for r in target_fp_res}
+
+        source_fp_res = conn.run(
+            'SELECT id, "fingerIndex" FROM "StudentFingerprint" WHERE "studentId" = :sid',
+            sid=source_id
+        )
+        for s_fpid, s_fidx in source_fp_res:
+            if s_fidx in target_fp_set:
+                conn.run('DELETE FROM "StudentFingerprint" WHERE id = :id', id=s_fpid)
+                summary["fingerprintsDeduped"] += 1
+            else:
+                conn.run(
+                    'UPDATE "StudentFingerprint" SET "studentId" = :tid, "globalNumber" = :tgn, "updatedAt" = NOW() WHERE id = :id',
+                    tid=target_id, tgn=target["globalNumber"], id=s_fpid
+                )
+                target_fp_set.add(s_fidx)
+                summary["fingerprintsMoved"] += 1
+
         # 12. Backfill target phone / address / info
         t_phone = target.get("phone")
         s_phone = source.get("phone")
@@ -616,6 +720,16 @@ def execute_merge_transaction(conn, source, target, preferred_name=None, perform
                WHERE id = :tid""",
             phone=fill_phone, addr=fill_addr, name=fill_name, tid=target_id
         )
+
+        scan_res = conn.run(
+            """UPDATE "BiometricScanLog"
+               SET "studentId" = :tid, "globalNumber" = :tgn, "studentName" = :tname
+               WHERE "studentId" = :sid OR "globalNumber" = :sgn
+               RETURNING id""",
+            tid=target_id, tgn=target["globalNumber"], tname=fill_name,
+            sid=source_id, sgn=source["globalNumber"]
+        )
+        summary["scanLogsMoved"] = len(scan_res)
 
         # 13. AuditLog
         details_str = json.dumps({

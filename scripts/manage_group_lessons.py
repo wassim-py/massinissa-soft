@@ -30,15 +30,19 @@ import re
 import json
 import argparse
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 # Ensure UTF-8 output encoding for Arabic text
-if hasattr(sys.stdout, "buffer"):
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "buffer"):
-    import io
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 try:
     import pg8000.native
@@ -62,13 +66,70 @@ DAY_NAMES_EN_AR = {
 }
 
 
+def normalize_db_url(url):
+    """Normalize PostgreSQL connection string for Supabase / Neon / local."""
+    if not url:
+        return None
+    url = url.strip().strip('"').strip("'")
+    # Strip -pooler only for Neon hosts
+    if ".neon.tech" in url and "-pooler." in url:
+        url = url.replace("-pooler.", ".")
+    # For Supabase pooler hosts, prefer transaction pooler port 6543 (SafePg8000Connection uses Simple Query Protocol)
+    if ".pooler.supabase.com:5432/" in url:
+        url = url.replace(".pooler.supabase.com:5432/", ".pooler.supabase.com:6543/")
+    return url
+
+
+def parse_db_url(db_url):
+    """
+    Robustly parse a PostgreSQL connection URL, handling URL-encoded passwords
+    (e.g. %26 -> &) and special characters (@, :, &) in passwords.
+    """
+    clean_url = normalize_db_url(db_url)
+    without_scheme = re.sub(r"^postgres(?:ql)?://", "", clean_url)
+    without_query = without_scheme.split("?", 1)[0]
+
+    at_idx = without_query.rfind("@")
+    if at_idx != -1:
+        userinfo = without_query[:at_idx]
+        hostpath = without_query[at_idx + 1:]
+        if ":" in userinfo:
+            raw_user, raw_pass = userinfo.split(":", 1)
+            user = unquote(raw_user)
+            password = unquote(raw_pass)
+        else:
+            user = unquote(userinfo)
+            password = ""
+
+        if "/" in hostpath:
+            hostport, database = hostpath.split("/", 1)
+        else:
+            hostport, database = hostpath, "postgres"
+
+        if ":" in hostport:
+            host, port_str = hostport.rsplit(":", 1)
+            port = int(port_str) if port_str.isdigit() else 5432
+        else:
+            host, port = hostport, 5432
+
+        return user, password, host, port, database
+
+    parsed = urlparse(clean_url)
+    return (
+        unquote(parsed.username or ""),
+        unquote(parsed.password or ""),
+        parsed.hostname or "localhost",
+        parsed.port or 5432,
+        (parsed.path or "/postgres").lstrip("/"),
+    )
+
+
 def load_env_database_url():
-    """Load DATABASE_URL from environment or local .env file. Automatically strips -pooler."""
-    if os.environ.get("DIRECT_URL"):
-        return os.environ.get("DIRECT_URL")
+    """Load DATABASE_URL or DIRECT_URL from environment or local .env file."""
     if os.environ.get("DATABASE_URL"):
-        url = os.environ.get("DATABASE_URL")
-        return url.replace("-pooler.", ".")
+        return normalize_db_url(os.environ.get("DATABASE_URL"))
+    if os.environ.get("DIRECT_URL"):
+        return normalize_db_url(os.environ.get("DIRECT_URL"))
 
     candidates = [
         ".env",
@@ -88,10 +149,10 @@ def load_env_database_url():
                         elif line.startswith("DATABASE_URL="):
                             val = line.split("=", 1)[1].strip().strip('"').strip("'")
                             env_dict["DATABASE_URL"] = val
-                if "DIRECT_URL" in env_dict:
-                    return env_dict["DIRECT_URL"]
                 if "DATABASE_URL" in env_dict:
-                    return env_dict["DATABASE_URL"].replace("-pooler.", ".")
+                    return normalize_db_url(env_dict["DATABASE_URL"])
+                if "DIRECT_URL" in env_dict:
+                    return normalize_db_url(env_dict["DIRECT_URL"])
             except Exception:
                 pass
     return None
@@ -171,20 +232,12 @@ def get_db_connection(db_url):
             "DATABASE_URL not found! Set DATABASE_URL environment variable or place .env in the folder."
         )
 
-    if "-pooler." in db_url:
-        db_url = db_url.replace("-pooler.", ".")
-
     if not HAS_PG8000:
         raise RuntimeError(
             "pg8000 driver not found!\nPlease run: python -m pip install pg8000"
         )
 
-    parsed = urlparse(db_url)
-    user = parsed.username
-    password = parsed.password
-    host = parsed.hostname
-    port = parsed.port or 5432
-    database = parsed.path.lstrip("/")
+    user, password, host, port, database = parse_db_url(db_url)
 
     class SafePg8000Connection(pg8000.native.Connection):
         """Executes queries via Simple Query Protocol to eliminate unnamed portal collisions."""
@@ -197,14 +250,27 @@ def get_db_connection(db_url):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    conn = SafePg8000Connection(
-        user=user,
-        password=password,
-        host=host,
-        port=port,
-        database=database,
-        ssl_context=ctx,
-    )
+    try:
+        conn = SafePg8000Connection(
+            user=user,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
+            ssl_context=ctx,
+        )
+    except Exception:
+        if ".pooler.supabase.com" in host and port == 6543:
+            conn = SafePg8000Connection(
+                user=user,
+                password=password,
+                host=host,
+                port=5432,
+                database=database,
+                ssl_context=ctx,
+            )
+        else:
+            raise
     return conn
 
 
@@ -425,7 +491,7 @@ def get_class_details_and_lessons(conn, class_id):
 
 
 def update_lesson_datetime_in_db(conn, group, lesson, new_utc_start, new_utc_end):
-    """Atomically update a lesson's startsAt and endsAt, sync Announcement, and write AuditLog."""
+    """Atomically update a lesson's startsAt and endsAt, sync Announcement & BiometricScanLog, and write AuditLog."""
     old_date_str = lesson["date_str"]
     old_time_str = lesson["time_str"]
     new_date_str, new_day_str, new_time_str, _, _ = format_lesson_dt(new_utc_start, new_utc_end)
@@ -441,6 +507,12 @@ def update_lesson_datetime_in_db(conn, group, lesson, new_utc_start, new_utc_end
         conn.run(
             'UPDATE "Announcement" SET "expiresAt" = :e WHERE "lessonId" = :lid',
             e=new_utc_end, lid=lesson["id"],
+        )
+
+        # Update linked BiometricScanLog timestamps if present
+        conn.run(
+            'UPDATE "BiometricScanLog" SET "lessonStartsAt" = :s, "lessonEndsAt" = :e WHERE "lessonId" = :lid',
+            s=new_utc_start, e=new_utc_end, lid=lesson["id"],
         )
 
         # Write AuditLog
@@ -901,6 +973,7 @@ def handle_delete_lesson(conn, group):
 
     conn.run("BEGIN")
     try:
+        conn.run('UPDATE "BiometricScanLog" SET "lessonId" = NULL WHERE "lessonId" = :lid', lid=lesson["id"])
         conn.run('DELETE FROM "Announcement" WHERE "lessonId" = :lid', lid=lesson["id"])
         conn.run(
             'DELETE FROM "CatchUpAttendance" WHERE "missedLessonId" = :lid OR "catchUpLessonId" = :lid',
