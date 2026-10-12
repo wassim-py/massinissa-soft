@@ -15,7 +15,14 @@
 import "dotenv/config";
 import * as fs from "fs";
 import * as path from "path";
+import * as pg from "pg";
 import { Pool } from "pg";
+
+// Preserve exact PostgreSQL string representations for timestamps and dates
+// so local machine timezone (UTC+1) never shifts TIMESTAMP WITHOUT TIME ZONE values!
+pg.types.setTypeParser(1114, (val: string) => val); // timestamp without time zone
+pg.types.setTypeParser(1184, (val: string) => val); // timestamp with time zone
+pg.types.setTypeParser(1082, (val: string) => val); // date
 
 const BACKUP_DIR = path.join(process.cwd(), "backups");
 const BACKUP_FILE = path.join(BACKUP_DIR, "neon-full-backup.json");
@@ -99,8 +106,8 @@ async function getTopologicalTableOrder(pool: Pool): Promise<string[]> {
   return ordered;
 }
 
-async function runBackup() {
-  const dbUrl = process.env.DATABASE_URL;
+async function runBackup(overrideSourceUrl?: string) {
+  const dbUrl = overrideSourceUrl || process.env.SOURCE_DATABASE_URL || process.env.DATABASE_URL;
   if (!dbUrl) {
     throw new Error("DATABASE_URL is not set in .env");
   }
@@ -165,7 +172,7 @@ async function runBackup() {
 }
 
 async function runRestore() {
-  const targetUrl = process.env.TARGET_DATABASE_URL || process.env.DATABASE_URL;
+  const targetUrl = process.env.TARGET_DATABASE_URL || process.env.DIRECT_URL || process.env.DATABASE_URL;
   if (!targetUrl) {
     throw new Error("DATABASE_URL is not set in .env");
   }
@@ -184,6 +191,7 @@ async function runRestore() {
     connectionString: targetUrl,
     max: 3,
     connectionTimeoutMillis: 20000,
+    ssl: { rejectUnauthorized: false },
   });
 
   const client = await pool.connect();
@@ -326,9 +334,91 @@ async function runRestore() {
   }
 }
 
+async function runVerify(sourceUrlOverride?: string) {
+  const neonUrl = sourceUrlOverride || process.env.NEON_DATABASE_URL;
+  if (!neonUrl) {
+    throw new Error("Please set NEON_DATABASE_URL in .env to run --verify or --sync-from-neon");
+  }
+  const supabaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+  if (!supabaseUrl) throw new Error("No Supabase URL in .env");
+
+  const neonPool = new Pool({ connectionString: neonUrl, max: 2 });
+  const supaPool = new Pool({
+    connectionString: supabaseUrl,
+    max: 2,
+    ssl: { rejectUnauthorized: false },
+  });
+
+  try {
+    const tablesRes = await neonPool.query<{ table_name: string }>(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_type = 'BASE TABLE'
+      ORDER BY table_name ASC;
+    `);
+
+    console.log("\n🔍 Comparing Live NeonDB vs Live Supabase Table Counts:");
+    console.log("─".repeat(65));
+    console.log(
+      `${"Table".padEnd(32)} | ${"NeonDB".padStart(8)} | ${"Supabase".padStart(8)} | Status`
+    );
+    console.log("─".repeat(65));
+
+    let mismatches = 0;
+    for (const { table_name } of tablesRes.rows) {
+      if (table_name === "_prisma_migrations") continue;
+      const [nRes, sRes] = await Promise.all([
+        neonPool.query(`SELECT COUNT(*)::int AS c FROM "${table_name}"`),
+        supaPool
+          .query(`SELECT COUNT(*)::int AS c FROM "${table_name}"`)
+          .catch(() => ({ rows: [{ c: -1 }] })),
+      ]);
+      const nCount = nRes.rows[0].c;
+      const sCount = sRes.rows[0].c;
+      const match = nCount === sCount;
+      if (!match) mismatches++;
+      console.log(
+        `${table_name.padEnd(32)} | ${String(nCount).padStart(8)} | ${String(
+          sCount
+        ).padStart(8)} | ${match ? "✓ OK" : "❌ MISMATCH"}`
+      );
+    }
+    console.log("─".repeat(65));
+    console.log(`Total mismatches: ${mismatches}`);
+
+    const [neonLesson, supaLesson] = await Promise.all([
+      neonPool.query(`SELECT id, "startsAt", "endsAt" FROM "Lesson" ORDER BY id ASC LIMIT 3`),
+      supaPool.query(`SELECT id, "startsAt", "endsAt" FROM "Lesson" ORDER BY id ASC LIMIT 3`),
+    ]);
+    console.log("\nSample Lesson timestamps (NeonDB):", neonLesson.rows);
+    console.log("Sample Lesson timestamps (Supabase):", supaLesson.rows);
+
+    const [neonLedger, supaLedger] = await Promise.all([
+      neonPool.query(`SELECT id, date FROM "DailyLedger" ORDER BY id DESC LIMIT 3`),
+      supaPool.query(`SELECT id, date FROM "DailyLedger" ORDER BY id DESC LIMIT 3`),
+    ]);
+    console.log("\nSample DailyLedger dates (NeonDB):", neonLedger.rows);
+    console.log("Sample DailyLedger dates (Supabase):", supaLedger.rows);
+  } finally {
+    await neonPool.end();
+    await supaPool.end();
+  }
+}
+
 async function main() {
-  const isRestore = process.argv.includes("--restore");
-  if (isRestore) {
+  const neonUrl = process.env.NEON_DATABASE_URL;
+
+  if (process.argv.includes("--sync-from-neon")) {
+    if (!neonUrl) {
+      throw new Error("Please set NEON_DATABASE_URL in .env to run --sync-from-neon");
+    }
+    await runBackup(neonUrl);
+    await runRestore();
+    await runVerify(neonUrl);
+  } else if (process.argv.includes("--verify")) {
+    await runVerify(neonUrl);
+  } else if (process.argv.includes("--restore")) {
     await runRestore();
   } else {
     await runBackup();

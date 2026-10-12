@@ -63,7 +63,7 @@ const prismaClientSingleton = () => {
 
   const adapter = new PrismaPg({
     connectionString,
-    max: 2,
+    max: 5,
     idleTimeoutMillis: 5000,
     connectionTimeoutMillis: 10000,
     ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),
