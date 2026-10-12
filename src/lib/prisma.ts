@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 
 function normalizeDatabaseUrl(): string {
-  const raw = (process.env.DIRECT_URL || process.env.DATABASE_URL || '').trim()
+  const raw = (process.env.DATABASE_URL || process.env.DIRECT_URL || '').trim()
   if (!raw) return raw
 
   // Ensure special characters like '&' in the password portion (before '@') are URL-encoded
@@ -31,9 +31,10 @@ function normalizeDatabaseUrl(): string {
     }
   }
 
-  // For Supabase pooler with @prisma/adapter-pg (node-postgres), use Session Pooler (:5432)
+  // For Supabase pooler in serverless runtime, ALWAYS use Transaction Pooler (:6543)
+  // because Session Pooler (:5432) is capped at 15 connections and throws EMAXCONNSESSION on Vercel
   if (sanitized.includes('.pooler.supabase.com')) {
-    sanitized = sanitized.replace(':6543/', ':5432/')
+    sanitized = sanitized.replace(':5432/', ':6543/')
   }
 
   // Strip sslmode and pgbouncer query params so pg-connection-string does not force verify-full
@@ -62,8 +63,8 @@ const prismaClientSingleton = () => {
 
   const adapter = new PrismaPg({
     connectionString,
-    max: 5,
-    idleTimeoutMillis: 15000,
+    max: 2,
+    idleTimeoutMillis: 5000,
     connectionTimeoutMillis: 10000,
     ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),
   })
