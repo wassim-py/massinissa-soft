@@ -39,5 +39,6 @@ next-env.d.ts
 # local agents & scratch
 .agents/
 scratch/
+backups/
 ORIGINAL_REQUEST.md
 CLAUDE.md
