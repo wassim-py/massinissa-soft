@@ -1,9 +1,13 @@
 "use client";
 
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import { RevenueSummary } from "@/lib/revenue";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { BookOpen, ExternalLink } from "lucide-react";
+import BooksFinanceModal from "@/components/finance/BooksFinanceModal";
 
 interface RevenueSummaryCardsProps {
   summary: RevenueSummary;
@@ -12,6 +16,15 @@ interface RevenueSummaryCardsProps {
 export default function RevenueSummaryCards({ summary }: RevenueSummaryCardsProps) {
   const t = useTranslations("finance");
   const locale = useLocale();
+  const searchParams = useSearchParams();
+
+  const [isBooksModalOpen, setIsBooksModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (searchParams?.get("view") === "books") {
+      setIsBooksModalOpen(true);
+    }
+  }, [searchParams]);
 
   const formatDZD = (num: number) =>
     locale === "ar"
@@ -137,14 +150,38 @@ export default function RevenueSummaryCards({ summary }: RevenueSummaryCardsProp
           <p className="text-form-helper text-muted mt-0.5">{t("inscriptionHelper")}</p>
         </Card>
 
-        {/* Books */}
-        <Card className="border-border/80 shadow-xs p-4 bg-surface">
+        {/* Books (Clickable with detailed overview) */}
+        <Card
+          onClick={() => setIsBooksModalOpen(true)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setIsBooksModalOpen(true);
+            }
+          }}
+          className="border-border/80 shadow-xs p-4 bg-surface hover:border-primary/60 hover:shadow-md cursor-pointer transition-all duration-200 group relative overflow-hidden focus:outline-hidden focus:ring-2 focus:ring-primary/40"
+        >
           <div className="flex items-center justify-between text-xs text-muted font-medium">
-            <span>{t("bookFee")}</span>
-            <span className="w-2 h-2 rounded-full bg-accent"></span>
+            <div className="flex items-center gap-1.5 group-hover:text-primary transition-colors">
+              <BookOpen className="w-4 h-4 text-accent group-hover:scale-110 transition-transform" />
+              <span className="font-semibold text-sm">{t("bookFee")}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-primary opacity-0 group-hover:opacity-100 transition-opacity bg-primary/10 px-2 py-0.5 rounded-md">
+                {locale === "ar" ? "اضغط للتفاصيل" : "Cliquer pour détails"}
+              </span>
+              <span className="w-2.5 h-2.5 rounded-full bg-accent"></span>
+            </div>
           </div>
-          <p className="text-card-title font-bold text-gray-900 mt-2 font-mono">{formatDZD(summary.book)}</p>
-          <p className="text-form-helper text-muted mt-0.5">{t("bookHelper")}</p>
+          <p className="text-card-title font-bold text-gray-900 mt-2 font-mono group-hover:text-primary transition-colors">
+            {formatDZD(summary.book)}
+          </p>
+          <div className="flex items-center justify-between mt-0.5">
+            <p className="text-form-helper text-muted">{t("bookHelper")}</p>
+            <ExternalLink className="w-3.5 h-3.5 text-muted group-hover:text-primary transition-colors shrink-0" />
+          </div>
         </Card>
 
         {/* Dawarat / Formations */}
@@ -157,6 +194,15 @@ export default function RevenueSummaryCards({ summary }: RevenueSummaryCardsProp
           <p className="text-form-helper text-muted mt-0.5">{t("dawaratFormationHelper")}</p>
         </Card>
       </div>
+
+      {/* Books Finance Detail Modal */}
+      {isBooksModalOpen && (
+        <BooksFinanceModal
+          isOpen={isBooksModalOpen}
+          onClose={() => setIsBooksModalOpen(false)}
+          locale={locale}
+        />
+      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import BackButton from "@/components/BackButton";
 import prisma from "@/lib/prisma";
 import { getAuthSession, getActiveBranchId } from "@/lib/auth";
 import { getDailyRevenueDashboardData } from "@/lib/revenue";
-import { getOwnerPayrollOverview } from "@/lib/payroll";
+import { getOwnerPayrollOverview, getPayrollRunFinancialReport } from "@/lib/payroll";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -53,6 +53,7 @@ interface PageProps {
     dateTo?: string;
     branchId?: string;
     periodMode?: "daily" | "weekly" | "monthly";
+    runId?: string;
     page?: string;
   }>;
 }
@@ -117,12 +118,13 @@ export default async function FinancePage(props: PageProps) {
   if (currentTab === "overview" || currentTab === "payslips") currentTab = "runs";
   if (currentTab === "photocopy" || currentTab === "advances") currentTab = "deductions";
 
-  // Fetch Common Data: Daily Expenses, Caisse Noire, Staff Members, Staff Payrolls, Branches
+  // Fetch Common Data: Daily Expenses, Caisse Noire, Staff Members, Staff Payrolls, Staff Advances, Branches
   const [
     rawDailyExpenses,
     caisseNoireData,
     rawStaffMembers,
     rawStaffPayrolls,
+    rawStaffAdvances,
     allBranchesData,
   ] = await Promise.all([
     prisma.dailyExpense.findMany({
@@ -146,6 +148,18 @@ export default async function FinancePage(props: PageProps) {
         },
       },
       orderBy: [{ year: "desc" }, { month: "desc" }],
+    }),
+    prisma.staffAdvance.findMany({
+      include: {
+        staffMember: {
+          select: {
+            name: true,
+            roleTitle: true,
+          },
+        },
+      },
+      orderBy: { date: "desc" },
+      take: 100,
     }),
     prisma.branch.findMany({
       select: { id: true, name: true },
@@ -185,16 +199,30 @@ export default async function FinancePage(props: PageProps) {
     month: p.month,
     year: p.year,
     amount: Number(p.amount),
+    advance: Number((p as any).advance || 0),
     bonus: Number((p as any).bonus || 0),
     status: p.status,
     paidAt: p.paidAt,
     notes: p.notes,
   }));
 
+  const formattedStaffAdvances = rawStaffAdvances.map((a) => ({
+    id: a.id,
+    staffMemberId: a.staffMemberId,
+    staffName: a.staffMember.name,
+    roleTitle: a.staffMember.roleTitle,
+    amount: Number(a.amount),
+    date: a.date.toISOString(),
+    month: a.month,
+    year: a.year,
+    notes: a.notes,
+    recordedBy: a.recordedBy,
+  }));
+
   const totalDailyExpensesSum = formattedExpenses.reduce((sum, e) => sum + e.amount, 0);
   const totalStaffPayrollSum = formattedStaffPayrolls
     .filter((p) => p.status === "PAID")
-    .reduce((sum, p) => sum + p.amount + p.bonus, 0);
+    .reduce((sum, p) => sum + Math.max(0, p.amount - (p.advance || 0) + (p.bonus || 0)), 0);
 
   // Top KPIs Revenue data
   const dashboardData = await getDailyRevenueDashboardData({
@@ -220,6 +248,7 @@ export default async function FinancePage(props: PageProps) {
   let photocopyCharges: any[] = [];
   let salaryAdvances: any[] = [];
   let branches: any[] = [];
+  let financialReport: any = null;
   const teacherMap = new Map<string, string>();
 
   if (activeSection === "payroll") {
@@ -231,13 +260,16 @@ export default async function FinancePage(props: PageProps) {
     const endDate = searchParams.dateTo ? new Date(searchParams.dateTo) : lastDay;
 
     if (currentTab === "runs") {
-      const [rawOverview, rawRuns, rawPayslips, teacherList] = await Promise.all([
+      const targetRunId = searchParams.runId ? Number(searchParams.runId) : undefined;
+      const [rawOverview, rawRuns, rawPayslips, teacherList, financialReportData] = await Promise.all([
         getOwnerPayrollOverview(startDate, endDate),
         prisma.payrollRun.findMany({
           orderBy: { periodEnd: "desc" },
           include: {
             Payslip: {
               select: {
+                id: true,
+                personType: true,
                 grossAmount: true,
                 advances: true,
                 photocopyDeductions: true,
@@ -248,6 +280,7 @@ export default async function FinancePage(props: PageProps) {
           take: 30,
         }),
         prisma.payslip.findMany({
+          where: { personType: "TEACHER" },
           orderBy: { id: "desc" },
           include: {
             PayrollRun: { select: { periodStart: true, periodEnd: true, status: true } },
@@ -258,11 +291,13 @@ export default async function FinancePage(props: PageProps) {
           take: 100,
         }),
         prisma.teacher.findMany({ select: { id: true, name: true } }),
+        getPayrollRunFinancialReport(startDate, endDate, targetRunId),
       ]);
 
       overviewData = rawOverview;
       payrollRuns = rawRuns;
       payslips = rawPayslips;
+      financialReport = financialReportData;
       teacherList.forEach((tItem) => teacherMap.set(tItem.id, tItem.name));
     } else if (currentTab === "deductions") {
       const [rawPhotocopy, rawAdvances, teacherList, branchList] = await Promise.all([
@@ -278,7 +313,7 @@ export default async function FinancePage(props: PageProps) {
           orderBy: { date: "desc" },
           take: 100,
         }),
-        prisma.teacher.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+        prisma.teacher.findMany({ select: { id: true, name: true, photocopyRatePerPage: true }, orderBy: { name: "asc" } }),
         prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { id: "asc" } }),
       ]);
 
@@ -630,17 +665,39 @@ export default async function FinancePage(props: PageProps) {
           <PayrollClientTabs
             currentTab={currentTab}
             overviewData={overviewData}
-            payrollRuns={payrollRuns.map((r) => ({
-              id: r.id,
-              periodStart: r.periodStart.toISOString(),
-              periodEnd: r.periodEnd.toISOString(),
-              status: r.status,
-              totalGross: r.Payslip.reduce((s: number, p: any) => s + Number(p.grossAmount), 0),
-              totalAdvances: r.Payslip.reduce((s: number, p: any) => s + Number(p.advances), 0),
-              totalPhotocopy: r.Payslip.reduce((s: number, p: any) => s + Number(p.photocopyDeductions), 0),
-              totalNet: r.Payslip.reduce((s: number, p: any) => s + Number(p.netAmount), 0),
-              payslipsCount: r.Payslip.length,
-            }))}
+            financialReport={
+              financialReport
+                ? {
+                    ...financialReport,
+                    periodStart:
+                      financialReport.periodStart instanceof Date
+                        ? financialReport.periodStart.toISOString()
+                        : String(financialReport.periodStart),
+                    periodEnd:
+                      financialReport.periodEnd instanceof Date
+                        ? financialReport.periodEnd.toISOString()
+                        : String(financialReport.periodEnd),
+                  }
+                : null
+            }
+            payrollRuns={payrollRuns.map((r) => {
+              const teacherSlips = r.Payslip.filter((p: any) => (p.personType || "TEACHER") === "TEACHER");
+              const schoolSlips = r.Payslip.filter((p: any) => p.personType === "SCHOOL_SHARE");
+              const realNetSlip = r.Payslip.find((p: any) => p.personType === "REAL_NET");
+              return {
+                id: r.id,
+                periodStart: r.periodStart.toISOString(),
+                periodEnd: r.periodEnd.toISOString(),
+                status: r.status,
+                totalGross: teacherSlips.reduce((s: number, p: any) => s + Number(p.grossAmount), 0),
+                totalAdvances: teacherSlips.reduce((s: number, p: any) => s + Number(p.advances), 0),
+                totalPhotocopy: teacherSlips.reduce((s: number, p: any) => s + Number(p.photocopyDeductions), 0),
+                totalNet: teacherSlips.reduce((s: number, p: any) => s + Number(p.netAmount), 0),
+                payslipsCount: teacherSlips.length,
+                schoolShareNet: schoolSlips.length > 0 ? schoolSlips.reduce((s: number, p: any) => s + Number(p.netAmount), 0) : null,
+                realNet: realNetSlip ? Number(realNetSlip.netAmount) : null,
+              };
+            })}
             payslips={payslips.map((p) => ({
               id: p.id,
               payrollRunId: p.payrollRunId,
@@ -679,9 +736,10 @@ export default async function FinancePage(props: PageProps) {
               amount: Number(a.amount),
               date: a.date.toISOString(),
             }))}
-            teachers={teachers.map((tItem) => ({
+            teachers={teachers.map((tItem: any) => ({
               id: tItem.id,
               name: tItem.name,
+              photocopyRatePerPage: tItem.photocopyRatePerPage != null ? Number(tItem.photocopyRatePerPage) : 3.5,
               currentRate: tItem.TeacherPayRate && tItem.TeacherPayRate[0]
                 ? {
                     ratePerSession: tItem.TeacherPayRate[0].ratePerSession
@@ -729,6 +787,7 @@ export default async function FinancePage(props: PageProps) {
         <StaffPayrollSection
           staffMembers={formattedStaff}
           payrollLogs={formattedStaffPayrolls}
+          staffAdvances={formattedStaffAdvances}
           branches={allBranchesData}
           locale={locale}
         />

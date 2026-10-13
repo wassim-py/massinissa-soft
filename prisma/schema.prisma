@@ -756,6 +756,7 @@ model StaffMember {
   updatedAt   DateTime       @updatedAt
   branch      Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
   payrollLogs StaffPayroll[]
+  advances    StaffAdvance[]
 
   @@index([branchId])
   @@index([isActive])
@@ -767,6 +768,7 @@ model StaffPayroll {
   month         Int         // 1-12
   year          Int         // e.g. 2026
   amount        Decimal     // base salary
+  advance       Decimal     @default(0) // avances sur salaire
   bonus         Decimal     @default(0) // prime / bonus cash
   status        String      @default("PAID") // "PAID" | "PENDING"
   paidAt        DateTime?   @default(now())
@@ -777,6 +779,23 @@ model StaffPayroll {
 
   @@unique([staffMemberId, month, year])
   @@index([year, month])
+}
+
+model StaffAdvance {
+  id            Int         @id @default(autoincrement())
+  staffMemberId Int
+  amount        Decimal
+  date          DateTime    @default(now())
+  month         Int?        // target payroll month (1-12)
+  year          Int?        // target payroll year (e.g. 2026)
+  notes         String?
+  recordedBy    String
+  createdAt     DateTime    @default(now())
+  staffMember   StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+
+  @@index([staffMemberId, date])
+  @@index([staffMemberId, year, month])
+  @@index([date])
 }
 
 model BiometricDevice {

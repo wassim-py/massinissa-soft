@@ -177,7 +177,25 @@ const TakeAttendancePage = async (
   const catchUpVisitors = await prisma.catchUpAttendance.findMany({
     where: { catchUpLessonId: lessonId },
     include: {
-      student: true,
+      student: {
+        include: {
+          family: true,
+          vouchers: {
+            where: { isVoided: false, paymentType: "TUITION_4SESSION" },
+            include: { refunds: true },
+          },
+          attendances: {
+            where: { lesson: { isFree: false } },
+            include: { lesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } } },
+          },
+          enrollments: {
+            include: { transfersFrom: true, transfersTo: true },
+          },
+          catchUpAttendances: {
+            include: { missedLesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } } },
+          },
+        },
+      },
       missedLesson: {
         include: {
           class: true,
@@ -188,17 +206,55 @@ const TakeAttendancePage = async (
     orderBy: { recordedAt: "asc" },
   });
 
-  const formattedCatchUpVisitors = catchUpVisitors.map((v) => ({
-    id: v.id,
-    studentId: v.studentId,
-    studentName: v.student.name,
-    globalNumber: v.student.globalNumber,
-    missedLessonId: v.missedLessonId,
-    missedClassName: v.missedLesson.class.name,
-    missedTeacherName: v.missedLesson.teacher.name,
-    missedStartsAt: v.missedLesson.startsAt,
-    recordedAt: v.recordedAt,
-  }));
+  const formattedCatchUpVisitors = catchUpVisitors.map((v) => {
+    const s = v.student;
+    const missedClassId = v.missedLesson.classId;
+    const vEnr = s.enrollments?.find((e: any) => e.classId === missedClassId);
+    const isSiblingDiscount = Boolean(s.family?.payerStudentId && s.family.payerStudentId !== s.id);
+    const siblingDiscountPct = isSiblingDiscount ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
+    const isSiblingWaived100 = siblingDiscountPct >= 100;
+    const vPayerStatus = vEnr?.payerStatus || s.payerStatus || "NORMAL";
+
+    const vTuitionVouchers = (s.vouchers || []).filter(
+      (voucher: any) => voucher.paymentType === "TUITION_4SESSION" && !voucher.isVoided && !voucher.isRefund && (voucher.classId === missedClassId || !voucher.classId)
+    );
+
+    const vAttendances = (s.attendances || []).filter(
+      (a: any) => a.lesson && a.lesson.classId === missedClassId
+    );
+
+    const vCatchUps = (s.catchUpAttendances || []).filter(
+      (cu: any) => cu.missedLesson && cu.missedLesson.classId === missedClassId
+    );
+
+    const vCredit = computeStudentCreditAndSessions({
+      pricePerCycle: Number(v.missedLesson.class.pricePerCycle || 0),
+      isFormation: Boolean(v.missedLesson.class.isFormation),
+      payerStatus: vPayerStatus,
+      siblingDiscountPercentage: siblingDiscountPct,
+      isSiblingWaived: isSiblingWaived100,
+      tuitionVouchers: vTuitionVouchers,
+      transfersIn: (vEnr?.transfersTo || []),
+      transfersOut: (vEnr?.transfersFrom || []),
+      creditResetOffset: Number(vEnr?.creditResetOffset || 0),
+      attendances: vAttendances,
+      catchUps: vCatchUps,
+    });
+
+    return {
+      id: v.id,
+      studentId: v.studentId,
+      studentName: v.student.name,
+      globalNumber: v.student.globalNumber,
+      missedLessonId: v.missedLessonId,
+      missedClassName: v.missedLesson.class.name,
+      missedTeacherName: v.missedLesson.teacher.name,
+      missedStartsAt: v.missedLesson.startsAt,
+      recordedAt: v.recordedAt,
+      remainingCredits: vCredit.netSessions,
+      payerStatus: vCredit.status,
+    };
+  });
 
   // Fetch enrolled students of THIS lesson who already caught up in another group (§2.12)
   const caughtUpStudents = await prisma.catchUpAttendance.findMany({
@@ -310,6 +366,23 @@ const TakeAttendancePage = async (
               },
             },
           },
+          catchUpAttendances: {
+            where: {
+              missedLesson: {
+                classId: l.classId,
+              },
+            },
+            include: {
+              missedLesson: {
+                select: {
+                  id: true,
+                  startsAt: true,
+                  isFree: true,
+                  isTeacherAbsent: true,
+                },
+              },
+            },
+          },
         },
       });
     }
@@ -379,6 +452,16 @@ const TakeAttendancePage = async (
             where: { classId: l.classId },
             include: { transfersFrom: true, transfersTo: true },
           },
+          catchUpAttendances: {
+            where: {
+              missedLesson: { classId: l.classId },
+            },
+            include: {
+              missedLesson: {
+                select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+              },
+            },
+          },
         },
       });
     } catch (e) {
@@ -411,6 +494,7 @@ const TakeAttendancePage = async (
       transfersOut: (s.enrollments || []).flatMap((e: any) => e.transfersFrom || []),
       creditResetOffset: (s.enrollments || []).reduce((sum: number, e: any) => sum + Number(e.creditResetOffset || 0), 0),
       attendances: s.attendances || [],
+      catchUps: s.catchUpAttendances || [],
     });
 
     payerRemainingMap.set(s.id, creditMetrics.netSessions);
@@ -501,6 +585,7 @@ const TakeAttendancePage = async (
       payerSessionsRemaining,
       vouchers: details?.vouchers || [],
       attendances: details?.attendances || [],
+      catchUps: details?.catchUpAttendances || [],
       transfersFrom: details?.enrollments?.[0]?.transfersFrom || [],
       transfersTo: details?.enrollments?.[0]?.transfersTo || [],
       creditResetOffset: details?.enrollments?.[0]?.creditResetOffset || 0,

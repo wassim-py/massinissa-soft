@@ -60,7 +60,7 @@ export default function LanguageSwitcher() {
     languages.find((lang) => lang.code === locale) || languages[0];
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
       if (
         dropdownRef.current &&
         !dropdownRef.current.contains(e.target as Node)
@@ -69,7 +69,11 @@ export default function LanguageSwitcher() {
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
   }, []);
 
   const switchLocale = (newLocale: "fr" | "ar") => {
@@ -91,14 +95,17 @@ export default function LanguageSwitcher() {
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         disabled={isPending}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-xs font-medium text-gray-700 shadow-xs transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+        className="w-9 h-9 sm:w-auto sm:px-3 sm:py-1.5 rounded-full sm:rounded-md flex items-center justify-center sm:justify-start gap-2 border border-gray-200 sm:border-gray-300 bg-white hover:bg-gray-50 active:bg-gray-100 text-xs font-medium text-gray-700 shadow-xs transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 shrink-0"
         aria-expanded={isOpen}
         aria-haspopup="true"
+        title={currentLang.name}
       >
-        {currentLang.flag}
-        <span className="font-semibold text-gray-800">{currentLang.name}</span>
+        <div className="flex items-center justify-center shrink-0">
+          {currentLang.flag}
+        </div>
+        <span className="hidden sm:inline font-semibold text-gray-800">{currentLang.name}</span>
         <svg
-          className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${
+          className={`hidden sm:block w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${
             isOpen ? "rotate-180" : ""
           }`}
           fill="none"
@@ -115,7 +122,13 @@ export default function LanguageSwitcher() {
       </button>
 
       {isOpen && (
-        <div className="absolute end-0 mt-1.5 w-36 rounded-md bg-white shadow-lg ring-1 ring-black/5 z-50 py-1 divide-y divide-gray-100">
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/20 sm:hidden backdrop-blur-xs"
+            onClick={() => setIsOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="absolute end-0 mt-1.5 w-36 rounded-xl bg-white shadow-xl ring-1 ring-black/5 z-50 py-1 divide-y divide-gray-100">
           {languages.map((lang) => {
             const isSelected = lang.code === locale;
             return (
@@ -152,6 +165,7 @@ export default function LanguageSwitcher() {
             );
           })}
         </div>
+      </>
       )}
     </div>
   );

@@ -4,9 +4,9 @@ import React, { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
-import { confirmSurplusMoneyAction, rejectSurplusMoneyAction, resetSurplusMoneyAction } from "@/lib/actions";
+import { confirmSurplusMoneyAction, rejectSurplusMoneyAction, resetSurplusMoneyAction, deleteSurplusMoneyAction } from "@/lib/actions";
 import { toast } from "react-toastify";
-import { Check, X, RotateCcw } from "lucide-react";
+import { Check, X, RotateCcw, Trash2 } from "lucide-react";
 
 interface SurplusMoneyActionsProps {
   id: number;
@@ -54,6 +54,23 @@ export default function SurplusMoneyActions({ id, status }: SurplusMoneyActionsP
     startTransition(async () => {
       try {
         const res = await resetSurplusMoneyAction(id);
+        if (res.success) {
+          toast.success(res.message);
+          router.refresh();
+        } else {
+          toast.error(res.message);
+        }
+      } catch (err: any) {
+        toast.error(err?.message || "Erreur inattendue");
+      }
+    });
+  };
+
+  const handleDelete = () => {
+    if (!window.confirm("Êtes-vous sûr de vouloir supprimer cet enregistrement ?")) return;
+    startTransition(async () => {
+      try {
+        const res = await deleteSurplusMoneyAction(id);
         if (res.success) {
           toast.success(res.message);
           router.refresh();
@@ -115,6 +132,20 @@ export default function SurplusMoneyActions({ id, status }: SurplusMoneyActionsP
           {t("undoConfirmation")}
         </Button>
       )}
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={handleDelete}
+        disabled={isPending}
+        isLoading={isPending}
+        leftIcon={<Trash2 className="w-3.5 h-3.5 text-danger" />}
+        className="!py-1 !px-2 text-xs hover:bg-danger/10 text-danger"
+        title="Supprimer"
+      >
+        <span className="sr-only">Supprimer</span>
+      </Button>
     </div>
   );
 }

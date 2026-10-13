@@ -83,6 +83,13 @@ const ClassPaymentHistoryPage = async (
                   refunds: true,
                 },
               },
+              catchUpAttendances: {
+                include: {
+                  missedLesson: {
+                    select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                  },
+                },
+              },
             },
           },
           transfersFrom: {

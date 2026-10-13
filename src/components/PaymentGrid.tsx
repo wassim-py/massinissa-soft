@@ -336,6 +336,12 @@ export default function PaymentGrid({
     const isFormation = Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId);
     const enrPayerStatus = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
 
+    const classCatchUps = ((student as any).catchUpAttendances || []).filter(
+      (cu: any) =>
+        (cu.missedLesson && cu.missedLesson.classId === classData.id) ||
+        classData.lessons.some((l: any) => l.id === cu.missedLessonId)
+    );
+
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: Number(classData.pricePerCycle || 0),
       isFormation,
@@ -347,6 +353,7 @@ export default function PaymentGrid({
       transfersOut: enrollment.transfersFrom,
       creditResetOffset: (enrollment as any).creditResetOffset,
       attendances: studentAtts,
+      catchUps: classCatchUps,
       lessons: classData.lessons as any,
     });
 

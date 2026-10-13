@@ -59,6 +59,8 @@ export interface CatchUpVisitor {
   missedTeacherName: string;
   missedStartsAt: string | Date;
   recordedAt: string | Date;
+  remainingCredits?: number | null;
+  payerStatus?: string | null;
 }
 
 export interface CaughtUpAbsentee {
@@ -72,6 +74,7 @@ export interface CaughtUpAbsentee {
 type FullStudent = Student & {
   vouchers: Voucher[];
   attendances: Attendance[];
+  catchUps?: any[];
   payerStatus?: string;
   enrollmentStatus?: string;
   payerSessionsRemaining?: number;
@@ -778,6 +781,7 @@ const AttendanceRoster = ({
               transfersOut: student.transfersFrom || [],
               creditResetOffset: student.creditResetOffset,
               attendances: liveStudentAttendances,
+              catchUps: student.catchUps || [],
             });
 
             const sessionsRemaining = creditMetrics.netSessions;
@@ -1323,8 +1327,25 @@ const AttendanceRoster = ({
                         <span>•</span>
                         <span className="text-gray-600">{t("originalDateFormatted", { date: missedDate })}</span>
                       </div>
-                      <div className="text-[11px] text-emerald-700 font-medium">
-                        {t("noDeductionNotice")}
+                      <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                        {visitor.remainingCredits !== undefined && visitor.remainingCredits !== null ? (
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              visitor.remainingCredits < 0
+                                ? "bg-rose-100 text-rose-800 border border-rose-300"
+                                : visitor.remainingCredits === 0
+                                ? "bg-amber-100 text-amber-900 border border-amber-300"
+                                : "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                            }`}
+                          >
+                            {locale === "ar"
+                              ? `${visitor.remainingCredits} حصص متبقية في فوجه`
+                              : `${visitor.remainingCredits} séance(s) restante(s)`}
+                          </span>
+                        ) : null}
+                        <span className="text-[11px] text-amber-800 font-medium">
+                          {t("noDeductionNotice")}
+                        </span>
                       </div>
                     </div>
                   </div>

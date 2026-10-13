@@ -2,7 +2,9 @@ import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
 import { PayslipTicket, PayslipPrintData } from "@/components/printable/PayslipTicket";
+import { SchoolShareTicket, SchoolSharePrintData } from "@/components/printable/SchoolShareTicket";
 import PrintPayslipButton from "@/components/PrintPayslipButton";
+import PrintSchoolShareButton from "@/components/PrintSchoolShareButton";
 import Link from "next/link";
 import { calculateTeacherPayroll } from "@/lib/payroll";
 
@@ -12,6 +14,7 @@ import { getLocale } from "next-intl/server";
 
 interface PageProps {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
 
 export default async function PayslipDetailPage(props: PageProps) {
@@ -36,6 +39,7 @@ export default async function PayslipDetailPage(props: PageProps) {
   }
 
   const params = await props.params;
+  const searchParams = props.searchParams ? await props.searchParams : {};
   const payslipId = Number(params.id);
 
   if (isNaN(payslipId)) {
@@ -55,6 +59,9 @@ export default async function PayslipDetailPage(props: PageProps) {
   if (!payslip) {
     return notFound();
   }
+
+  const isSchoolSharePayslip = payslip.personType === "SCHOOL_SHARE";
+  const activeView = searchParams?.view === "school" || isSchoolSharePayslip ? "school" : "teacher";
 
   // Fetch teacher
   const teacher = await prisma.teacher.findUnique({
@@ -93,7 +100,7 @@ export default async function PayslipDetailPage(props: PageProps) {
     payslip.PayrollRun.periodEnd
   );
 
-  let sessionItems: NonNullable<PayslipPrintData["sessions"]> = [];
+  let sessionItems: Array<NonNullable<PayslipPrintData["sessions"]>[number] & { schoolCut?: number; lessonTuition?: number }> = [];
   if (payrollCalc?.sessionDetails && payrollCalc.sessionDetails.length > 0) {
     sessionItems = payrollCalc.sessionDetails.map((s) => ({
       lessonId: s.lessonId,
@@ -104,7 +111,9 @@ export default async function PayslipDetailPage(props: PageProps) {
       payingCount: s.payingCount,
       sessionPrice: s.sessionPrice,
       teacherCut: s.teacherCut,
+      schoolCut: s.schoolCut,
       lessonAmount: s.lessonAmount,
+      lessonTuition: (s as any).lessonTuition,
       isFree: s.isFree,
       isExtra: s.isExtra,
       isCatchUp: s.isCatchUp,
@@ -183,20 +192,70 @@ export default async function PayslipDetailPage(props: PageProps) {
     })),
   };
 
+  const schoolSharePrintData: SchoolSharePrintData = {
+    id: payslip.id,
+    payrollRunId: payslip.payrollRunId,
+    periodStart: payslip.PayrollRun.periodStart,
+    periodEnd: payslip.PayrollRun.periodEnd,
+    status: payslip.PayrollRun.status,
+    teacher: {
+      id: payslip.personId,
+      name: teacher?.name || payslip.personId,
+      phone: (teacher as any)?.phone || null,
+    },
+    sessionsCount: payslip.sessionsCount || payrollCalc?.totalSessions || sessionItems.filter((s) => !s.isTeacherAbsent).length,
+    totalTuitionGross: payrollCalc?.totalTuitionGross || 0,
+    teacherGross: payrollCalc?.grossAmount || (isSchoolSharePayslip ? 0 : Number(payslip.grossAmount)),
+    schoolGross: isSchoolSharePayslip
+      ? Number(payslip.grossAmount)
+      : (payrollCalc?.schoolGrossAmount ?? Math.max(0, (payrollCalc?.totalTuitionGross || 0) - (payrollCalc?.grossAmount || 0))),
+    photocopyRecovered: Number(payslip.photocopyDeductions),
+    schoolNet: isSchoolSharePayslip
+      ? Number(payslip.netAmount)
+      : (payrollCalc?.schoolNetAmount ?? 0),
+    branchLines: (payrollCalc?.branchSchoolBreakdown || []).map((b) => ({
+      branchId: b.branchId,
+      branchName: b.branchName,
+      sessionsCount: b.sessionsCount,
+      tuitionAmount: b.tuitionAmount,
+      teacherAmount: b.teacherAmount,
+      schoolAmount: b.schoolAmount,
+    })),
+    sessions: sessionItems.map((s) => ({
+      lessonId: s.lessonId,
+      startsAt: s.startsAt,
+      className: s.className,
+      branchName: s.branchName,
+      presentCount: s.presentCount,
+      payingCount: s.payingCount,
+      sessionPrice: s.sessionPrice,
+      teacherCut: s.teacherCut,
+      schoolCut: s.schoolCut || 0,
+      lessonAmount: s.lessonAmount,
+      lessonTuition: s.lessonTuition || 0,
+      isFree: s.isFree,
+      isExtra: s.isExtra,
+      isCatchUp: s.isCatchUp,
+      isTeacherAbsent: s.isTeacherAbsent,
+    })),
+  };
+
   return (
     <div className="flex flex-col gap-6">
       {/* Top Header Actions */}
       <Card className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 p-4 border-border/80 shadow-xs">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <Link
-            href="/list/finance?section=payroll&tab=payslips"
+            href="/list/finance?section=payroll&tab=runs"
             className="flex items-center gap-1.5 text-xs font-bold text-gray-700 hover:text-primary bg-surface-subtle border border-border px-3 py-2 rounded-lg transition-colors"
           >
             {locale === "ar" ? "← العودة لقائمة الرواتب والمالية" : "← Retour aux finances & paie"}
           </Link>
           <div className="flex items-center gap-2">
             <span className="text-section-title font-bold text-gray-900">
-              {locale === "ar" ? `معاينة قسيمة الراتب #${payslip.id}` : `Aperçu de la fiche de paie #${payslip.id}`}
+              {activeView === "school"
+                ? (locale === "ar" ? `حصة المؤسسة #${payslip.id}` : `Part École sur l'enseignant #${payslip.id}`)
+                : (locale === "ar" ? `معاينة قسيمة الراتب #${payslip.id}` : `Aperçu de la fiche de paie #${payslip.id}`)}
             </span>
             {teacher?.name && (
               <Badge variant="neutral" size="sm">
@@ -206,15 +265,52 @@ export default async function PayslipDetailPage(props: PageProps) {
           </div>
         </div>
 
-        <PrintPayslipButton
-          data={printData}
-          label={locale === "ar" ? "طباعة قسيمة الراتب الموحدة" : "Imprimer la fiche de paie consolidée"}
-        />
+        {/* View Switcher & Action Buttons */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center p-1 bg-surface-subtle border border-border rounded-xl">
+            <Link
+              href={`/list/finance/payslips/${payslip.id}?view=teacher`}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                activeView === "teacher"
+                  ? "bg-white text-gray-900 shadow-xs border border-border"
+                  : "text-muted hover:text-gray-900"
+              }`}
+            >
+              {locale === "ar" ? "قسيمة الأستاذ" : "Fiche Enseignant"}
+            </Link>
+            <Link
+              href={`/list/finance/payslips/${payslip.id}?view=school`}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                activeView === "school"
+                  ? "bg-white text-emerald-800 shadow-xs border border-border"
+                  : "text-muted hover:text-emerald-800"
+              }`}
+            >
+              {locale === "ar" ? "حصة المؤسسة" : "Part de l'École"}
+            </Link>
+          </div>
+
+          {activeView === "school" ? (
+            <PrintSchoolShareButton
+              data={schoolSharePrintData}
+              label={locale === "ar" ? "طباعة حصة المؤسسة" : "Imprimer la part école"}
+            />
+          ) : (
+            <PrintPayslipButton
+              data={printData}
+              label={locale === "ar" ? "طباعة قسيمة الراتب" : "Imprimer la fiche de paie"}
+            />
+          )}
+        </div>
       </Card>
 
-      {/* Payslip Document Preview */}
+      {/* Document Preview */}
       <Card className="p-6 sm:p-10 max-w-4xl mx-auto w-full shadow-lg border-border/80">
-        <PayslipTicket data={printData} />
+        {activeView === "school" ? (
+          <SchoolShareTicket data={schoolSharePrintData} locale={locale} />
+        ) : (
+          <PayslipTicket data={printData} />
+        )}
       </Card>
     </div>
   );

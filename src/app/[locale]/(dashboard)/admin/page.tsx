@@ -74,6 +74,9 @@ const AdminPage = async () => {
               student: {
                 include: {
                   family: true,
+                  catchUpAttendances: {
+                    select: { missedLessonId: true },
+                  },
                 },
               },
               transfersFrom: true,
@@ -218,6 +221,10 @@ const AdminPage = async () => {
       const enrPayerStatus = (enr as any).payerStatus || (student as any).payerStatus || "NORMAL";
       const isFormation = Boolean((cls as any).isFormation || (cls as any).FormationLevel || (cls as any).formationLevelId);
 
+      const classCatchUps = ((student as any).catchUpAttendances || []).filter(
+        (cu: any) => cls.lessons.some((l) => l.id === cu.missedLessonId)
+      );
+
       const creditMetrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(cls.pricePerCycle || 0),
         isFormation,
@@ -229,6 +236,7 @@ const AdminPage = async () => {
         transfersOut: enr.transfersFrom,
         creditResetOffset: (enr as any).creditResetOffset,
         attendances: studentAtts,
+        catchUps: classCatchUps,
         lessons: cls.lessons as any,
       });
 

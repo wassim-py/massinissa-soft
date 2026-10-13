@@ -10,6 +10,7 @@ export interface StaffPayslipPrintData {
   month: number;
   year: number;
   amount: number; // base salary
+  advance?: number; // avances sur salaire
   bonus: number; // prime / bonus cash
   totalNet: number;
   status: string;
@@ -119,12 +120,28 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
             <tr className="border border-gray-200">
               <td className="p-2.5 border border-gray-200 font-semibold text-gray-900">Salaire de base</td>
               <td className="p-2.5 border border-gray-200 text-gray-600">
-                Rémunération contractuelle mensuelle ({periodLabel})
+                Rémunération contractuelle convenue ({periodLabel})
               </td>
               <td className="p-2.5 border border-gray-200 font-mono font-bold text-right text-gray-900">
                 {formatDZD(data.amount)}
               </td>
             </tr>
+
+            {/* Avances sur salaire Line */}
+            {(data.advance || 0) > 0 && (
+              <tr className="border border-gray-200 bg-amber-50/40">
+                <td className="p-2.5 border border-gray-200 font-bold text-amber-950 flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 rounded-full bg-amber-500"></span>
+                  <span>Avances sur salaire</span>
+                </td>
+                <td className="p-2.5 border border-gray-200 text-amber-900">
+                  Déduction des acomptes / avances perçus par l'employé(e)
+                </td>
+                <td className="p-2.5 border border-gray-200 font-mono font-bold text-right text-amber-950">
+                  - {formatDZD(data.advance || 0)}
+                </td>
+              </tr>
+            )}
 
             {/* Bonus / Prime Line */}
             <tr className="border border-gray-200 bg-orange-50/40">
@@ -147,7 +164,7 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
           <tfoot>
             <tr className="bg-gray-50 font-bold border border-gray-300">
               <td colSpan={2} className="p-2.5 border border-gray-300 text-gray-900 font-bold text-sm">
-                Total Net Versé
+                Total Net Versé (Le Reste)
               </td>
               <td className="p-2.5 border border-gray-300 font-mono text-blue-900 text-right text-base font-black">
                 {formatDZD(data.totalNet)}
@@ -168,8 +185,15 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
             <span className="font-mono font-bold">{formatDZD(data.amount)}</span>
           </div>
 
+          {(data.advance || 0) > 0 && (
+            <div className="flex justify-between items-center text-amber-900">
+              <span className="font-semibold">2. Avances sur salaire déduites :</span>
+              <span className="font-mono font-bold">- {formatDZD(data.advance || 0)}</span>
+            </div>
+          )}
+
           <div className="flex justify-between items-center text-orange-900">
-            <span className="font-semibold">2. Prime / Bonus en espèces :</span>
+            <span className="font-semibold">3. Prime / Bonus en espèces :</span>
             <span className="font-mono font-bold">
               {data.bonus > 0 ? `+ ${formatDZD(data.bonus)}` : "0 DZD"}
             </span>
@@ -183,7 +207,7 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
           )}
 
           <div className="border-t-2 border-dashed border-gray-900 pt-2 mt-2 flex justify-between items-center text-lg font-black text-gray-900 bg-white p-3 rounded border">
-            <span>Net total perçu :</span>
+            <span>Reste net perçu :</span>
             <span className="font-mono text-blue-900 text-xl font-black">
               {formatDZD(data.totalNet)}
             </span>

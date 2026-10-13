@@ -14,6 +14,7 @@ interface MissedLesson {
   teacherName: string;
   startsAt: string | Date;
   isUpcoming?: boolean;
+  remainingCredits?: number | null;
 }
 
 interface CandidateStudent {
@@ -22,6 +23,7 @@ interface CandidateStudent {
   globalNumber: number;
   phone: string | null;
   branchName?: string | null;
+  remainingCredits?: number | null;
   missedLessons: MissedLesson[];
 }
 
@@ -416,6 +418,17 @@ export default function CatchUpVisitorModal({
                                 {cand.branchName}
                               </span>
                             )}
+                            {cand.remainingCredits !== undefined && cand.remainingCredits !== null && (
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border ${
+                                cand.remainingCredits < 0
+                                  ? "bg-rose-50 text-rose-700 border-rose-200"
+                                  : cand.remainingCredits === 0
+                                  ? "bg-amber-50 text-amber-700 border-amber-200"
+                                  : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              }`}>
+                                {locale === "ar" ? `${cand.remainingCredits} حصص` : `${cand.remainingCredits} séance(s)`}
+                              </span>
+                            )}
                           </div>
                           {cand.phone && (
                             <div className="text-[10px] text-gray-400 font-mono" dir="ltr">
@@ -512,17 +525,32 @@ export default function CatchUpVisitorModal({
                             <span>{t("groupClassLabel", { name: ml.className })}</span>
                             <span className="text-gray-500 font-normal">{lessonDate}</span>
                           </div>
-                          <div className="text-gray-600 text-[11px] flex items-center justify-between gap-2">
+                          <div className="text-gray-600 text-[11px] flex items-center justify-between gap-2 flex-wrap">
                             <span>{t("teacherNameFormatted", { name: ml.teacherName })}</span>
-                            {ml.isUpcoming ? (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200 shrink-0">
-                                {locale === "ar" ? "استدراك مسبق (حصة قادمة)" : "Rattrapage anticipé (à venir)"}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 font-semibold border border-red-200 shrink-0">
-                                {locale === "ar" ? "غياب مسجل" : "Absence enregistrée"}
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {ml.remainingCredits !== undefined && ml.remainingCredits !== null && (
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border ${
+                                  ml.remainingCredits < 0
+                                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                                    : ml.remainingCredits === 0
+                                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                                    : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                }`}>
+                                  {locale === "ar"
+                                    ? `الرصيد: ${ml.remainingCredits} حصص`
+                                    : `Crédit : ${ml.remainingCredits} séance(s)`}
+                                </span>
+                              )}
+                              {ml.isUpcoming ? (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200 shrink-0">
+                                  {locale === "ar" ? "استدراك مسبق (حصة قادمة)" : "Rattrapage anticipé (à venir)"}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 font-semibold border border-red-200 shrink-0">
+                                  {locale === "ar" ? "غياب مسجل" : "Absence enregistrée"}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </label>

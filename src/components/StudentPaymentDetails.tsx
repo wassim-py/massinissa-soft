@@ -403,6 +403,9 @@ export default function StudentPaymentDetails({
     const levelRemainingBalance = isFormation ? Math.max(0, formationLevelPrice - totalPaidFormation) : 0;
 
     const enrPayerStatus = (enr as any).payerStatus || student.payerStatus || "NORMAL";
+    const classCatchUps = ((student as any).catchUpAttendances || []).filter(
+      (cu: any) => cu.missedLesson?.classId === c.id
+    );
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
       isFormation,
@@ -416,6 +419,7 @@ export default function StudentPaymentDetails({
       attendances: (student.attendances || []).filter(
         (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
       ),
+      catchUps: classCatchUps,
     });
 
     const purchasedSessions = creditMetrics.purchasedSessions;

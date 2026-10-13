@@ -363,7 +363,7 @@ export const createTeacher = async (
         name: fullName,
         phone,
         gender,
-        photocopyRatePerPage: new Prisma.Decimal(5),
+        photocopyRatePerPage: new Prisma.Decimal(3.5),
         TeacherBranch: {
           create: { branchId: 1 }
         }
@@ -2395,6 +2395,7 @@ export async function searchCatchUpCandidatesAction(
         name: true,
         globalNumber: true,
         phone: true,
+        payerStatus: true,
         registeredBranch: {
           select: { name: true },
         },
@@ -2426,9 +2427,22 @@ export async function searchCatchUpCandidatesAction(
           },
           take: 30,
         },
+        family: true,
+        vouchers: {
+          where: {
+            isVoided: false,
+            paymentType: "TUITION_4SESSION",
+          },
+          include: {
+            refunds: true,
+          },
+        },
         catchUpAttendances: {
           select: {
             missedLessonId: true,
+            missedLesson: {
+              select: { classId: true },
+            },
           },
         },
         enrollments: {
@@ -2438,10 +2452,16 @@ export async function searchCatchUpCandidatesAction(
             },
           },
           select: {
+            payerStatus: true,
+            creditResetOffset: true,
+            transfersFrom: true,
+            transfersTo: true,
             class: {
               select: {
                 id: true,
                 name: true,
+                pricePerCycle: true,
+                isFormation: true,
                 teacher: {
                   select: { id: true, name: true },
                 },
@@ -2471,13 +2491,46 @@ export async function searchCatchUpCandidatesAction(
       const studentAttendanceMap = new Map(s.attendances.map((a) => [a.lessonId, a]));
       const seenLessonIds = new Set<number>();
 
+      const isSiblingDiscount = Boolean(s.family?.payerStudentId && s.family.payerStudentId !== s.id);
+      const siblingDiscountPct = isSiblingDiscount ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
+      const isSiblingWaived100 = siblingDiscountPct >= 100;
+
+      // Precalculate credit per enrolled class
+      const classCreditsMap = new Map<number, number>();
+      (s.enrollments || []).forEach((enr: any) => {
+        const cls = enr.class;
+        const vTuition = (s.vouchers || []).filter(
+          (v: any) => v.classId === cls.id || !v.classId
+        );
+        const vAtts = (s.attendances || []).filter((a: any) => a.lesson.class.id === cls.id);
+        const vCatchUps = (s.catchUpAttendances || []).filter(
+          (cu: any) => cu.missedLesson?.classId === cls.id
+        );
+        const metrics = computeStudentCreditAndSessions({
+          pricePerCycle: Number(cls.pricePerCycle || 0),
+          isFormation: Boolean(cls.isFormation),
+          payerStatus: enr.payerStatus || s.payerStatus || "NORMAL",
+          siblingDiscountPercentage: siblingDiscountPct,
+          isSiblingWaived: isSiblingWaived100,
+          tuitionVouchers: vTuition,
+          transfersIn: enr.transfersTo || [],
+          transfersOut: enr.transfersFrom || [],
+          creditResetOffset: Number(enr.creditResetOffset || 0),
+          attendances: vAtts,
+          catchUps: vCatchUps,
+        });
+        classCreditsMap.set(cls.id, metrics.netSessions);
+      });
+
       const eligiblePastLessons: Array<{
         attendanceId: number | null;
         lessonId: number;
+        classId: number;
         className: string;
         teacherName: string;
         startsAt: Date | string;
         isUpcoming: boolean;
+        remainingCredits: number | null;
       }> = [];
 
       // 1. Existing marked absences
@@ -2489,13 +2542,16 @@ export async function searchCatchUpCandidatesAction(
           !seenLessonIds.has(a.lessonId)
         ) {
           seenLessonIds.add(a.lessonId);
+          const clsId = a.lesson.class.id;
           eligiblePastLessons.push({
             attendanceId: a.id,
             lessonId: a.lesson.id,
+            classId: clsId,
             className: a.lesson.class.name,
             teacherName: a.lesson.teacher?.name || "",
             startsAt: a.lesson.startsAt,
             isUpcoming: false,
+            remainingCredits: classCreditsMap.get(clsId) ?? null,
           });
         }
       });
@@ -2504,10 +2560,12 @@ export async function searchCatchUpCandidatesAction(
       const eligibleUpcomingLessons: Array<{
         attendanceId: number | null;
         lessonId: number;
+        classId: number;
         className: string;
         teacherName: string;
         startsAt: Date | string;
         isUpcoming: boolean;
+        remainingCredits: number | null;
       }> = [];
 
       (s.enrollments || []).forEach((enr) => {
@@ -2526,10 +2584,12 @@ export async function searchCatchUpCandidatesAction(
             eligibleUpcomingLessons.push({
               attendanceId: att?.id || null,
               lessonId: l.id,
+              classId: cls.id,
               className: cls.name,
               teacherName: cls.teacher?.name || "",
               startsAt: l.startsAt,
               isUpcoming: true,
+              remainingCredits: classCreditsMap.get(cls.id) ?? null,
             });
           }
         });
@@ -2548,6 +2608,7 @@ export async function searchCatchUpCandidatesAction(
         globalNumber: s.globalNumber,
         phone: s.phone,
         branchName: s.registeredBranch?.name || null,
+        remainingCredits: classCreditsMap.size > 0 ? Array.from(classCreditsMap.values())[0] : null,
         missedLessons: combinedLessons,
       };
     });
@@ -2720,6 +2781,8 @@ export async function recordCatchUpAttendanceAction(data: {
     safeRevalidatePath(`/list/attendance/take/${missedLessonId}`);
     safeRevalidatePath(`/list/attendance/class/${missedLesson.classId}`);
     safeRevalidatePath(`/list/attendance/class/${catchUpLesson.classId}`);
+    safeRevalidatePath(`/list/payments/class/${missedLesson.classId}`);
+    safeRevalidatePath(`/list/students/${studentId}`);
 
     return {
       success: true,
@@ -2791,7 +2854,9 @@ export async function removeCatchUpAttendanceAction(
     safeRevalidatePath(`/list/attendance/take/${missedLessonId}`);
     if (missedLesson) {
       safeRevalidatePath(`/list/attendance/class/${missedLesson.classId}`);
+      safeRevalidatePath(`/list/payments/class/${missedLesson.classId}`);
     }
+    safeRevalidatePath(`/list/students/${studentId}`);
 
     return {
       success: true,
@@ -6181,6 +6246,9 @@ export const exportToExcel = async (
                         },
                         include: { refunds: true },
                       },
+                      catchUpAttendances: {
+                        select: { missedLessonId: true },
+                      },
                     },
                   },
                   transfersFrom: true,
@@ -6290,6 +6358,10 @@ export const exportToExcel = async (
 
             const isFormation = Boolean((classTarget as any).isFormation || (classTarget as any).FormationLevel || (classTarget as any).formationLevelId);
 
+            const classCatchUps = ((student as any).catchUpAttendances || []).filter(
+              (cu: any) => classTarget.lessons.some((l) => l.id === cu.missedLessonId)
+            );
+
             const creditMetrics = computeStudentCreditAndSessions({
               pricePerCycle: Number(classTarget.pricePerCycle || 0),
               isFormation,
@@ -6301,6 +6373,7 @@ export const exportToExcel = async (
               transfersOut: enrollment.transfersFrom,
               creditResetOffset: (enrollment as any).creditResetOffset,
               attendances: studentAtts,
+              catchUps: classCatchUps,
               lessons: classTarget.lessons as any,
             });
 
@@ -7120,6 +7193,73 @@ export async function recordPhotocopyChargeAction(formData: {
   }
 }
 
+export async function updatePhotocopyChargeAction(
+  id: number,
+  formData: {
+    teacherId?: string;
+    branchId?: number;
+    pages?: number;
+    costAmount?: number;
+    date?: string | Date;
+  }
+) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwnerOrAdmin) {
+      return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
+    }
+
+    const charge = await prisma.photocopyCharge.update({
+      where: { id },
+      data: {
+        ...(formData.teacherId ? { teacherId: formData.teacherId } : {}),
+        ...(formData.branchId ? { branchId: Number(formData.branchId) } : {}),
+        ...(formData.pages !== undefined ? { pages: Number(formData.pages) } : {}),
+        ...(formData.costAmount !== undefined ? { costAmount: new Prisma.Decimal(formData.costAmount) } : {}),
+        ...(formData.date ? { date: new Date(formData.date) } : {}),
+      },
+    });
+
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+    if (formData.teacherId) safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
+    return {
+      success: true,
+      error: false,
+      message: "تم تحديث تكلفة النسخ بنجاح",
+      data: charge,
+    };
+  } catch (error: any) {
+    console.error("Error in updatePhotocopyChargeAction:", error);
+    return { success: false, error: true, message: error.message || "فشل تحديث تكلفة النسخ" };
+  }
+}
+
+export async function deletePhotocopyChargeAction(id: number) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwnerOrAdmin) {
+      return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
+    }
+
+    const charge = await prisma.photocopyCharge.delete({
+      where: { id },
+    });
+
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+    if (charge.teacherId) safeRevalidatePath(`/list/teachers/${charge.teacherId}`);
+    return {
+      success: true,
+      error: false,
+      message: "تم حذف تكلفة النسخ بنجاح",
+    };
+  } catch (error: any) {
+    console.error("Error in deletePhotocopyChargeAction:", error);
+    return { success: false, error: true, message: error.message || "فشل حذف تكلفة النسخ" };
+  }
+}
+
 /**
  * Record a Salary Advance for a teacher.
  * Auto-deducted from next payslip's net amount.
@@ -7156,6 +7296,67 @@ export async function recordSalaryAdvanceAction(formData: {
   } catch (error: any) {
     console.error("Error in recordSalaryAdvanceAction:", error);
     return { success: false, error: true, message: error.message || "فشل تسجيل التسبيق" };
+  }
+}
+
+export async function updateSalaryAdvanceAction(
+  id: number,
+  formData: {
+    personId?: string;
+    amount?: number;
+    date?: string | Date;
+  }
+) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwnerOrAdmin) {
+      return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
+    }
+
+    const advance = await prisma.salaryAdvance.update({
+      where: { id },
+      data: {
+        ...(formData.personId ? { personId: formData.personId } : {}),
+        ...(formData.amount !== undefined ? { amount: new Prisma.Decimal(formData.amount) } : {}),
+        ...(formData.date ? { date: new Date(formData.date) } : {}),
+      },
+    });
+
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+    return {
+      success: true,
+      error: false,
+      message: "تم تحديث التسبيق المالي بنجاح",
+      data: advance,
+    };
+  } catch (error: any) {
+    console.error("Error in updateSalaryAdvanceAction:", error);
+    return { success: false, error: true, message: error.message || "فشل تحديث التسبيق" };
+  }
+}
+
+export async function deleteSalaryAdvanceAction(id: number) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwnerOrAdmin) {
+      return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
+    }
+
+    await prisma.salaryAdvance.delete({
+      where: { id },
+    });
+
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+    return {
+      success: true,
+      error: false,
+      message: "تم حذف التسبيق المالي بنجاح",
+    };
+  } catch (error: any) {
+    console.error("Error in deleteSalaryAdvanceAction:", error);
+    return { success: false, error: true, message: error.message || "فشل حذف التسبيق" };
   }
 }
 
@@ -8205,6 +8406,80 @@ export async function resetSurplusMoneyAction(id: number): Promise<{
   }
 }
 
+export async function deleteMissingMoneyAction(id: number): Promise<{
+  success: boolean;
+  error: boolean;
+  message: string;
+}> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Seul le propriétaire peut supprimer un manque de caisse / هذا الإجراء متاح لمالك المؤسسة فقط",
+      };
+    }
+
+    await prisma.missingMoney.delete({
+      where: { id },
+    });
+
+    safeRevalidatePath("/list/daily-ledger");
+    safeRevalidatePath("/list/finance");
+
+    return {
+      success: true,
+      error: false,
+      message: "Déclaration de manque supprimée avec succès / تم حذف تصريح العجز بنجاح",
+    };
+  } catch (err: any) {
+    console.error("deleteMissingMoneyAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err.message || "Erreur lors de la suppression / حدث خطأ أثناء الحذف",
+    };
+  }
+}
+
+export async function deleteSurplusMoneyAction(id: number): Promise<{
+  success: boolean;
+  error: boolean;
+  message: string;
+}> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Seul le propriétaire peut supprimer un surplus de caisse / هذا الإجراء متاح لمالك المؤسسة فقط",
+      };
+    }
+
+    await prisma.surplusMoney.delete({
+      where: { id },
+    });
+
+    safeRevalidatePath("/list/daily-ledger");
+    safeRevalidatePath("/list/finance");
+
+    return {
+      success: true,
+      error: false,
+      message: "Déclaration de surplus supprimée avec succès / تم حذف تصريح الفائض بنجاح",
+    };
+  } catch (err: any) {
+    console.error("deleteSurplusMoneyAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err.message || "Erreur lors de la suppression / حدث خطأ أثناء الحذف",
+    };
+  }
+}
+
 /**
  * Update student payer status flag (§7.18)
  * States: NORMAL (default) | NON_PAYER | SCHOOL_FEES_ONLY
@@ -8621,9 +8896,10 @@ export async function toggleEnrollmentSuspensionAction(
       const currentOffset = enrollment.creditResetOffset || 0;
       const rawCredit = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + currentOffset;
 
-      // To strictly set lesson credit to 0:
-      // (purchased + in - out) - attended + newOffset = 0 => newOffset = currentOffset - rawCredit
-      const newCreditResetOffset = currentOffset - rawCredit;
+      // To strictly set lesson credit to 0 if the student has past debts:
+      // If student has negative credit (debts), offset it to 0 so debts are cleared.
+      // If student has positive credit (prepaid sessions), preserve their purchased credit.
+      const newCreditResetOffset = rawCredit < 0 ? currentOffset - rawCredit : currentOffset;
 
       await prisma.enrollment.update({
         where: { id: enrollmentId },
@@ -8645,8 +8921,8 @@ export async function toggleEnrollmentSuspensionAction(
             userId: session.userId || session.rawRole || "system",
             userName: session.userId || session.rawRole || "Admin",
             oldValue: `status:${oldStatus},rawCredit:${rawCredit}`,
-            newValue: `status:ACTIVE,payerStatus:NORMAL,credit:0,creditResetOffset:${newCreditResetOffset}`,
-            details: `Élève réinscrit en statut normal dans "${c.name}". Toutes les dettes précédentes (${rawCredit < 0 ? Math.abs(rawCredit) + " séances" : "0"}) ont été effacées et le crédit réinitialisé à 0.`,
+            newValue: `status:ACTIVE,payerStatus:NORMAL,credit:${rawCredit < 0 ? 0 : rawCredit},creditResetOffset:${newCreditResetOffset}`,
+            details: `Élève réinscrit en statut normal dans "${c.name}". ${rawCredit < 0 ? `Toutes les dettes précédentes (${Math.abs(rawCredit)} séances) ont été effacées et le crédit réinitialisé à 0.` : `Crédit restant conservé (${rawCredit} séances).`}`,
           },
         });
       } catch (auditErr) {

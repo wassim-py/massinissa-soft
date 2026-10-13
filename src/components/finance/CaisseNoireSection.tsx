@@ -1,9 +1,13 @@
 "use client";
 
 import React, { useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Wallet, Plus, Minus, Loader2 } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Wallet, Plus, Minus, Loader2, Edit2, Trash2, AlertTriangle } from "lucide-react";
 import { Card } from "@/components/ui/Card";
-import { createCaisseNoireTransactionAction } from "@/lib/financeActions";
+import {
+  createCaisseNoireTransactionAction,
+  updateCaisseNoireTransactionAction,
+  deleteCaisseNoireTransactionAction,
+} from "@/lib/financeActions";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
@@ -38,18 +42,30 @@ export default function CaisseNoireSection({
   const locale = propLocale || hookLocale || "fr";
 
   const [modalType, setModalType] = useState<"DEPOSIT" | "WITHDRAWAL" | null>(null);
+  const [editingTx, setEditingTx] = useState<CaisseNoireTxItem | null>(null);
+  const [txToDelete, setTxToDelete] = useState<CaisseNoireTxItem | null>(null);
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const numLocale = locale === "ar" ? "ar-DZ" : "fr-DZ";
 
   const handleOpen = (type: "DEPOSIT" | "WITHDRAWAL") => {
+    setEditingTx(null);
     setModalType(type);
     setAmount("");
     setDescription("");
     setDate(new Date().toISOString().split("T")[0]);
+  };
+
+  const handleOpenEdit = (tx: CaisseNoireTxItem) => {
+    setEditingTx(tx);
+    setModalType(tx.type === "WITHDRAWAL" ? "WITHDRAWAL" : "DEPOSIT");
+    setAmount(String(tx.amount));
+    setDescription(tx.description);
+    setDate(new Date(tx.date).toISOString().split("T")[0]);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -61,24 +77,61 @@ export default function CaisseNoireSection({
 
     setIsLoading(true);
     try {
-      const res = await createCaisseNoireTransactionAction({
-        type: modalType,
-        amount: Number(amount),
-        description,
-        date,
-      });
+      if (editingTx) {
+        const res = await updateCaisseNoireTransactionAction(editingTx.id, {
+          type: modalType,
+          amount: Number(amount),
+          description,
+          date,
+        });
 
-      if (res.success) {
-        toast.success(res.message);
-        setModalType(null);
-        router.refresh();
+        if (res.success) {
+          toast.success(res.message);
+          setModalType(null);
+          setEditingTx(null);
+          router.refresh();
+        } else {
+          toast.error(res.message);
+        }
       } else {
-        toast.error(res.message);
+        const res = await createCaisseNoireTransactionAction({
+          type: modalType,
+          amount: Number(amount),
+          description,
+          date,
+        });
+
+        if (res.success) {
+          toast.success(res.message);
+          setModalType(null);
+          router.refresh();
+        } else {
+          toast.error(res.message);
+        }
       }
     } catch {
       toast.error(locale === "ar" ? "حدث خطأ غير متوقع." : "Une erreur est survenue.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!txToDelete) return;
+    setIsDeleting(true);
+    try {
+      const res = await deleteCaisseNoireTransactionAction(txToDelete.id);
+      if (res.success) {
+        toast.success(res.message);
+        setTxToDelete(null);
+        router.refresh();
+      } else {
+        toast.error(res.message);
+      }
+    } catch {
+      toast.error(locale === "ar" ? "حدث خطأ أثناء الحذف." : "Erreur lors de la suppression.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -186,6 +239,7 @@ export default function CaisseNoireSection({
                   <th className="py-3 px-4">{t("type")}</th>
                   <th className="py-3 px-4">{t("description")}</th>
                   <th className="py-3 px-4 text-right">{t("amount")}</th>
+                  <th className="py-3 px-4 text-center">{locale === "ar" ? "إجراءات" : "Actions"}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -220,6 +274,26 @@ export default function CaisseNoireSection({
                     >
                       {tx.type === "DEPOSIT" ? "+" : "-"} {tx.amount.toLocaleString(numLocale)} {t("currency")}
                     </td>
+                    <td className="py-3 px-4 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(tx)}
+                          title={locale === "ar" ? "تعديل المعاملة" : "Modifier l'opération"}
+                          className="p-1.5 text-muted hover:text-primary rounded-md hover:bg-surface-muted transition-colors cursor-pointer"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTxToDelete(tx)}
+                          title={locale === "ar" ? "حذف المعاملة" : "Supprimer l'opération"}
+                          className="p-1.5 text-muted hover:text-danger rounded-md hover:bg-danger-light transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -228,18 +302,53 @@ export default function CaisseNoireSection({
         )}
       </Card>
 
-      {/* Modal Transaction */}
+      {/* Modal Transaction (Create / Edit) */}
       {modalType && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 animate-in zoom-in-95 duration-150">
             <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
               <Wallet className="w-5 h-5 text-slate-800" />
               <span>
-                {modalType === "DEPOSIT" ? t("addDeposit") : t("addWithdrawal")}
+                {editingTx
+                  ? (locale === "ar" ? "تعديل معاملة الصندوق الأسود" : "Modifier l'opération de Caisse Noire")
+                  : (modalType === "DEPOSIT" ? t("addDeposit") : t("addWithdrawal"))}
               </span>
             </h3>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              {/* Type Switcher when editing */}
+              {editingTx && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    {t("type")} *
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setModalType("DEPOSIT")}
+                      className={`py-2 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                        modalType === "DEPOSIT"
+                          ? "bg-emerald-50 border-emerald-500 text-emerald-700 shadow-xs"
+                          : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {t("deposit")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setModalType("WITHDRAWAL")}
+                      className={`py-2 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                        modalType === "WITHDRAWAL"
+                          ? "bg-rose-50 border-rose-500 text-rose-700 shadow-xs"
+                          : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {t("withdrawal")}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
                   {t("amount")} ({t("currency")}) *
@@ -288,7 +397,10 @@ export default function CaisseNoireSection({
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-gray-100">
                 <button
                   type="button"
-                  onClick={() => setModalType(null)}
+                  onClick={() => {
+                    setModalType(null);
+                    setEditingTx(null);
+                  }}
                   className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg font-medium cursor-pointer"
                 >
                   {t("cancelBtn")}
@@ -301,10 +413,51 @@ export default function CaisseNoireSection({
                   }`}
                 >
                   {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  <span>{modalType === "DEPOSIT" ? t("confirmDeposit") : t("confirmWithdrawal")}</span>
+                  <span>
+                    {editingTx
+                      ? (locale === "ar" ? "حفظ التعديلات" : "Enregistrer les modifications")
+                      : (modalType === "DEPOSIT" ? t("confirmDeposit") : t("confirmWithdrawal"))}
+                  </span>
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {txToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-gray-100 animate-in zoom-in-95 duration-150 text-center">
+            <div className="w-12 h-12 rounded-full bg-danger-light text-danger flex items-center justify-center mx-auto mb-3">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-gray-900 mb-1">
+              {locale === "ar" ? "تأكيد حذف المعاملة" : "Confirmer la suppression"}
+            </h3>
+            <p className="text-xs text-muted mb-4 leading-relaxed">
+              {locale === "ar"
+                ? `هل أنت متأكد من حذف هذه المعاملة بقيمة ${txToDelete.amount.toLocaleString(numLocale)} دج (${txToDelete.description})؟`
+                : `Voulez-vous vraiment supprimer cette opération de ${txToDelete.amount.toLocaleString(numLocale)} ${t("currency")} (${txToDelete.description}) ?`}
+            </p>
+            <div className="flex items-center justify-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setTxToDelete(null)}
+                className="flex-1 px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 rounded-lg border border-border cursor-pointer"
+              >
+                {t("cancelBtn")}
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{locale === "ar" ? "تأكيد الحذف" : "Supprimer"}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

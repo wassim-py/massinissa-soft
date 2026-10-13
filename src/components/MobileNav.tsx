@@ -59,13 +59,13 @@ export default function MobileNav({ children }: MobileNavProps) {
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="relative lg:hidden p-2 rounded-lg text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors focus:outline-none shrink-0"
+        className="relative lg:hidden w-9 h-9 rounded-full flex items-center justify-center border border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100 text-gray-700 shadow-xs transition-colors focus:outline-hidden focus:ring-2 focus:ring-primary/20 shrink-0"
         aria-label={t("openMenu")}
         title={t("openMenu")}
       >
-        <MenuIcon className="w-6 h-6" />
+        <MenuIcon className="w-5 h-5" />
         {unreadCount > 0 && (
-          <span className="absolute top-1.5 right-1.5 rtl:right-auto rtl:left-1.5 flex h-2.5 w-2.5">
+          <span className="absolute -top-0.5 -right-0.5 rtl:-left-0.5 rtl:right-auto flex h-2.5 w-2.5">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-80" />
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-600 border border-white shadow-xs" />
           </span>
@@ -113,10 +113,10 @@ export default function MobileNav({ children }: MobileNavProps) {
                 <button
                   type="button"
                   onClick={() => setIsOpen(false)}
-                  className="p-1.5 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-colors cursor-pointer"
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-colors cursor-pointer"
                   aria-label={t("closeMenu")}
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 

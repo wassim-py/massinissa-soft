@@ -239,7 +239,7 @@ const SingleTeacherPage = async (
   const initialPercentage = activePayRate?.percentageOfSessionFee
     ? Number(activePayRate.percentageOfSessionFee)
     : 40; // Default 40% per architecture spec if not explicitly set
-  const photocopyRate = t.photocopyRatePerPage ? Number(t.photocopyRatePerPage) : 5;
+  const photocopyRate = t.photocopyRatePerPage ? Number(t.photocopyRatePerPage) : 3.5;
 
   const teacherGroupRatesMap = new Map<number, number>();
   t.teacherClassRates?.forEach((tcr) => {

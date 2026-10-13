@@ -89,15 +89,15 @@ export default function BranchSwitcherDropdown({
   if (!isOwner) {
     return (
       <div
-        className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200/80 shadow-xs max-w-[130px] sm:max-w-none shrink-0"
+        className="w-9 h-9 sm:w-auto sm:px-3 sm:py-1.5 rounded-full sm:rounded-lg flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 bg-blue-50 border border-blue-200/80 shadow-xs shrink-0"
         title={`${t("currentBranch")}: ${currentBranch.name}`}
       >
         <BranchIcon name={currentBranch.name} className="w-4 h-4 text-blue-700 shrink-0" />
-        <div className="flex flex-col min-w-0">
-          <span className="hidden sm:block text-[10px] text-blue-600 font-semibold uppercase tracking-wider">
+        <div className="hidden sm:flex flex-col min-w-0">
+          <span className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider">
             {t("currentBranch")}
           </span>
-          <span className="text-xs font-bold text-gray-800 truncate max-w-[70px] xs:max-w-[100px] sm:max-w-none">
+          <span className="text-xs font-bold text-gray-800 truncate max-w-[100px] md:max-w-none">
             {currentBranch.name}
           </span>
         </div>
@@ -111,27 +111,32 @@ export default function BranchSwitcherDropdown({
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         disabled={isPending}
-        className="flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-white hover:bg-gray-50 active:bg-gray-100 border border-gray-200 hover:border-blue-400 shadow-xs transition-all duration-150 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 max-w-[150px] xs:max-w-[180px] sm:max-w-none shrink-0"
-        title={t("switchBranch")}
+        className="w-9 h-9 sm:w-auto sm:px-3 sm:py-1.5 rounded-full sm:rounded-lg flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2.5 bg-white hover:bg-gray-50 active:bg-gray-100 border border-gray-200 hover:border-blue-400 shadow-xs transition-all duration-150 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 shrink-0"
+        title={`${t("switchBranch")}: ${currentBranch.name}`}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
       >
-        <BranchIcon name={currentBranch.name} className="w-4 h-4 text-primary shrink-0" />
-        <div className="flex flex-col text-start min-w-0">
-          <span className="hidden sm:block text-[10px] text-gray-400 font-semibold tracking-wider uppercase">
+        <div className="relative flex items-center justify-center">
+          <BranchIcon name={currentBranch.name} className="w-4 h-4 text-primary shrink-0" />
+          {isPending && (
+            <span className="sm:hidden absolute -top-1 -right-1 w-2 h-2 rounded-full bg-blue-600 animate-ping" />
+          )}
+        </div>
+        <div className="hidden sm:flex flex-col text-start min-w-0">
+          <span className="text-[10px] text-gray-400 font-semibold tracking-wider uppercase">
             {t("currentBranch")}
           </span>
           <span className="text-xs font-bold text-gray-800 flex items-center gap-1 sm:gap-1.5 truncate">
-            <span className="truncate max-w-[65px] xs:max-w-[100px] sm:max-w-none">
+            <span className="truncate max-w-[100px] md:max-w-none">
               {currentBranch.name}
             </span>
             {isPending && (
-              <span className="inline-block w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-blue-600 animate-ping shrink-0" />
+              <span className="inline-block w-2 h-2 rounded-full bg-blue-600 animate-ping shrink-0" />
             )}
           </span>
         </div>
         <svg
-          className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-200 ms-0.5 sm:ms-1 shrink-0 ${
+          className={`hidden sm:block w-3.5 h-3.5 text-gray-500 transition-transform duration-200 ms-0.5 sm:ms-1 shrink-0 ${
             isOpen ? "rotate-180" : ""
           }`}
           fill="none"

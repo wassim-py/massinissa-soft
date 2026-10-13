@@ -39,17 +39,17 @@ const Navbar = async ({
 
   return (
     <header
-      className="flex items-center justify-between px-3 sm:px-4 md:px-6 py-3 border-b border-gray-200 bg-white sticky top-0 z-30 shadow-xs"
+      className="flex items-center justify-between px-2.5 sm:px-4 md:px-6 py-2 sm:py-3 border-b border-gray-200 bg-white sticky top-0 z-30 shadow-xs"
       style={{ backgroundColor: "#ffffff" }}
     >
       {/* START: HAMBURGER TRIGGER (on <lg) + BRANCH SWITCHER */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+      <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
         {mobileNav}
         <BranchSwitcher />
       </div>
 
       {/* END: BIOMETRIC MONITOR, NOTIFICATION BELL, LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
-      <div className="flex items-center gap-2 sm:gap-3 md:gap-4 justify-end shrink-0">
+      <div className="flex items-center gap-1.5 sm:gap-2.5 md:gap-4 justify-end shrink-0">
         {isAdminOrOwner && <NavbarBiometricControl />}
         <NavbarAnnouncementBadge />
         <LanguageSwitcher />
@@ -63,7 +63,18 @@ const Navbar = async ({
           </span>
         </div>
 
-        <UserButton />
+        <div className="flex items-center justify-center shrink-0">
+          <UserButton
+            appearance={{
+              elements: {
+                userButtonAvatarBox:
+                  "w-8 h-8 sm:w-9 sm:h-9 rounded-full ring-2 ring-gray-200 hover:ring-primary/40 transition-all",
+                userButtonTrigger:
+                  "rounded-full focus:outline-hidden focus:ring-2 focus:ring-primary/20",
+              },
+            }}
+          />
+        </div>
       </div>
     </header>
   );

@@ -304,6 +304,21 @@ export function classifyStudentAttendanceHistory({
       continue;
     }
 
+    if (hasCatchUp) {
+      history.push({
+        lessonId: lesson.id,
+        startsAt,
+        status: "PRESENT",
+        isCatchUp: true,
+        classification: "PRESENT",
+        isConsumedCredit: true,
+        isTeacherPayable: true,
+        isRefundable: false,
+        isHeld: false,
+      });
+      continue;
+    }
+
     if (rawStatus === "NOT_DEFINED") {
       history.push({
         lessonId: lesson.id,
@@ -319,12 +334,12 @@ export function classifyStudentAttendanceHistory({
       continue;
     }
 
-    if (rawStatus === "PRESENT" || hasCatchUp) {
+    if (rawStatus === "PRESENT") {
       history.push({
         lessonId: lesson.id,
         startsAt,
         status: "PRESENT",
-        isCatchUp: hasCatchUp,
+        isCatchUp: false,
         classification: "PRESENT",
         isConsumedCredit: true,
         isTeacherPayable: true,
@@ -419,14 +434,22 @@ export function computeStudentConsumedSessions({
   catchUps?: Array<{ missedLessonId: number; recordedAt?: Date | string }>;
 }): number {
   if (!lessons || lessons.length === 0 || !attendances || attendances.length === 0) {
-    return 0;
+    return (catchUps || []).length;
   }
   const history = classifyStudentAttendanceHistory({
     lessons,
     attendances,
     catchUps,
   });
-  return history.filter((h) => h.isConsumedCredit).length;
+  const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
+  let extraCatchUp = 0;
+  (catchUps || []).forEach((c) => {
+    if (!accountedCatchUps.has(c.missedLessonId)) {
+      accountedCatchUps.add(c.missedLessonId);
+      extraCatchUp += 1;
+    }
+  });
+  return history.filter((h) => h.isConsumedCredit).length + extraCatchUp;
 }
 
 /**
@@ -656,25 +679,31 @@ export function computeStudentCreditAndSessions({
       : (transfersOut || []).reduce((sum, t) => sum + Number(t.transferredSessions || 0), 0);
   const offset = Number(creditResetOffset || 0);
 
-  // Relevant non-free lessons where this student has an attendance record
+  // Relevant non-free lessons where this student has an attendance record or a catch-up
   const relevantLessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }> = [];
   const relevantAttendances: Array<{ lessonId: number; status: string }> = [];
 
   const attendanceMap = new Map<number, string>();
   attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
 
+  const catchUpSet = new Set<number>();
+  (catchUps || []).forEach((c) => catchUpSet.add(c.missedLessonId));
+
   if (lessons && lessons.length > 0) {
     lessons.forEach((l) => {
       if (l.isFree) return;
       const st = attendanceMap.get(l.id);
-      if (st) {
+      const hasCatchUp = catchUpSet.has(l.id);
+      if (st || hasCatchUp) {
         relevantLessons.push(l);
-        relevantAttendances.push({ lessonId: l.id, status: st });
+        relevantAttendances.push({ lessonId: l.id, status: st || "ABSENT" });
       }
     });
   } else {
+    const seenLessonIds = new Set<number>();
     attendances.forEach((a) => {
       if (a.lesson && !a.lesson.isFree) {
+        seenLessonIds.add(a.lesson.id);
         relevantLessons.push({
           id: a.lesson.id,
           startsAt: a.lesson.startsAt || new Date(0),
@@ -682,6 +711,21 @@ export function computeStudentCreditAndSessions({
           isTeacherAbsent: a.lesson.isTeacherAbsent,
         });
         relevantAttendances.push({ lessonId: a.lessonId, status: a.status });
+      }
+    });
+    // Also include any catch-ups whose missed lesson wasn't present in attendances
+    (catchUps || []).forEach((c: any) => {
+      const ml = c.missedLesson;
+      const mlId = c.missedLessonId;
+      if (mlId && !seenLessonIds.has(mlId)) {
+        seenLessonIds.add(mlId);
+        relevantLessons.push({
+          id: mlId,
+          startsAt: ml?.startsAt || c.recordedAt || new Date(0),
+          isFree: ml?.isFree || false,
+          isTeacherAbsent: ml?.isTeacherAbsent || false,
+        });
+        relevantAttendances.push({ lessonId: mlId, status: "ABSENT" });
       }
     });
   }
@@ -695,13 +739,23 @@ export function computeStudentCreditAndSessions({
         })
       : [];
 
-  const attendedSessions = history.filter((h) => h.isConsumedCredit).length;
-  const settledConsumedSessions = history.filter(
-    (h) =>
-      h.classification === "PRESENT" ||
-      h.classification === "INTERLEAVED_ABSENCE" ||
-      h.classification === "FORFEITED_DROPOUT"
-  ).length;
+  const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
+  let extraCatchUpConsumed = 0;
+  (catchUps || []).forEach((c) => {
+    if (!accountedCatchUps.has(c.missedLessonId)) {
+      accountedCatchUps.add(c.missedLessonId);
+      extraCatchUpConsumed += 1;
+    }
+  });
+
+  const attendedSessions = history.filter((h) => h.isConsumedCredit).length + extraCatchUpConsumed;
+  const settledConsumedSessions =
+    history.filter(
+      (h) =>
+        h.classification === "PRESENT" ||
+        h.classification === "INTERLEAVED_ABSENCE" ||
+        h.classification === "FORFEITED_DROPOUT"
+    ).length + extraCatchUpConsumed;
 
   const netSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - attendedSessions + offset;
   const netRefundableSessions = isForm

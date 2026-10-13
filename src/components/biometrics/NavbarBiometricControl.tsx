@@ -61,11 +61,11 @@ export default function NavbarBiometricControl() {
       dir={isAr ? "rtl" : "ltr"}
       className="flex items-center gap-1.5 sm:gap-2"
     >
-      {/* 1. ON / OFF Background Monitor Toggle (Matches LanguageSwitcher style) */}
+      {/* 1. ON / OFF Background Monitor Toggle */}
       <button
         type="button"
         onClick={() => setIsEnabled(!isEnabled)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-xs font-medium text-gray-700 shadow-xs transition-colors cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+        className="w-9 h-9 sm:w-auto sm:px-3 sm:py-1.5 rounded-full sm:rounded-md flex items-center justify-center sm:justify-start gap-2 border border-gray-200 sm:border-gray-300 bg-white hover:bg-gray-50 active:bg-gray-100 text-xs font-medium text-gray-700 shadow-xs transition-colors cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-blue-500 shrink-0 relative"
         title={
           isEnabled
             ? isAr
@@ -76,7 +76,20 @@ export default function NavbarBiometricControl() {
             : "Lecteur d'empreinte désactivé (cliquer pour activer)"
         }
       >
-        <span className="relative flex h-2.5 w-2.5 shrink-0">
+        {/* Mobile status indicator */}
+        <span className="sm:hidden absolute top-1 right-1 rtl:right-auto rtl:left-1 flex h-2 w-2">
+          {isEnabled && (
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+          )}
+          <span
+            className={`relative inline-flex rounded-full h-2 w-2 ${
+              isEnabled ? "bg-emerald-500" : "bg-gray-400"
+            }`}
+          />
+        </span>
+
+        {/* Desktop status indicator */}
+        <span className="hidden sm:flex relative h-2.5 w-2.5 shrink-0">
           {isEnabled && (
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
           )}
@@ -86,12 +99,13 @@ export default function NavbarBiometricControl() {
             }`}
           />
         </span>
-        <Fingerprint className="w-3.5 h-3.5 text-gray-600 shrink-0 hidden sm:inline" />
+
+        <Fingerprint className="w-4 h-4 text-gray-700 sm:text-gray-600 shrink-0" />
         <span className="hidden md:inline font-semibold text-gray-800">
           {isAr ? "البصمة" : "Empreinte"}
         </span>
         <span
-          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase border ${
+          className={`hidden sm:inline px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase border ${
             isEnabled
               ? "bg-emerald-50 text-emerald-700 border-emerald-200"
               : "bg-gray-100 text-gray-600 border-gray-200"
@@ -105,21 +119,26 @@ export default function NavbarBiometricControl() {
       <button
         type="button"
         onClick={() => setIsDrawerOpen(true)}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-xs font-medium text-gray-700 shadow-xs transition-colors cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+        className="w-9 h-9 sm:w-auto sm:px-3 sm:py-1.5 rounded-full sm:rounded-md flex items-center justify-center sm:justify-start gap-1.5 border border-gray-200 sm:border-gray-300 bg-white hover:bg-gray-50 active:bg-gray-100 text-xs font-medium text-gray-700 shadow-xs transition-colors cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-blue-500 shrink-0 relative"
         title={
           isAr
             ? "فتح سجل الحضور بالبصمة المباشر"
             : "Ouvrir le journal biométrique en direct"
         }
       >
-        <ClipboardList className="w-3.5 h-3.5 text-gray-600 shrink-0" />
+        <ClipboardList className="w-4 h-4 text-gray-700 sm:text-gray-600 shrink-0" />
         <span className="hidden lg:inline font-semibold text-gray-800">
           {isAr ? "السجل" : "Journal"}
         </span>
         {recentScans.length > 0 && (
-          <span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-semibold text-[10px] leading-none">
-            {recentScans.length}
-          </span>
+          <>
+            <span className="sm:hidden absolute -top-1 -right-1 rtl:-left-1 rtl:right-auto px-1 min-w-[16px] h-4 rounded-full bg-blue-600 text-white font-bold text-[9px] flex items-center justify-center border border-white shadow-xs">
+              {recentScans.length > 99 ? "99+" : recentScans.length}
+            </span>
+            <span className="hidden sm:inline-flex px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-semibold text-[10px] leading-none">
+              {recentScans.length}
+            </span>
+          </>
         )}
       </button>
 
@@ -133,13 +152,23 @@ export default function NavbarBiometricControl() {
           <button
             type="button"
             onClick={() => setIsDrawerOpen(true)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-red-200 bg-red-50 hover:bg-red-100 text-xs font-semibold text-red-700 shadow-xs cursor-pointer transition-colors"
+            className="w-9 h-9 sm:w-auto sm:px-3 sm:py-1.5 rounded-full sm:rounded-md flex items-center justify-center sm:justify-start gap-2 border border-red-200 bg-red-50 hover:bg-red-100 active:bg-red-200 text-xs font-semibold text-red-700 shadow-xs cursor-pointer transition-colors shrink-0 relative"
+            title={
+              unpaidAlerts.length > 0
+                ? isAr
+                  ? `${unpaidAlerts.length} غير مدفوع`
+                  : `${unpaidAlerts.length} Impayé(s)`
+                : isAr
+                ? `${allPendingAlerts.length} تنبيه`
+                : `${allPendingAlerts.length} Alerte(s)`
+            }
           >
-            <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 sm:hidden" />
+            <span className="hidden sm:flex relative h-2.5 w-2.5 shrink-0">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-600" />
             </span>
-            <span>
+            <span className="hidden sm:inline">
               {unpaidAlerts.length > 0
                 ? isAr
                   ? `${unpaidAlerts.length} غير مدفوع`
@@ -148,13 +177,19 @@ export default function NavbarBiometricControl() {
                 ? `${allPendingAlerts.length} تنبيه`
                 : `${allPendingAlerts.length} Alerte(s)`}
             </span>
+            <span className="sm:hidden absolute -top-1 -right-1 rtl:-left-1 rtl:right-auto flex items-center justify-center">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex items-center justify-center px-1 min-w-[16px] h-4 text-[9px] font-bold text-white bg-red-600 rounded-full border border-white shadow-xs">
+                {allPendingAlerts.length > 99 ? "99+" : allPendingAlerts.length}
+              </span>
+            </span>
           </button>
 
           {/* HOVER POPOVER: Shows Student Names & Group Names Immediately on Hover */}
           {isHoverOpen && (
             <div
               dir={isAr ? "rtl" : "ltr"}
-              className={`absolute top-full mt-2 w-80 sm:w-96 rounded-xl bg-white border border-gray-200 shadow-xl z-50 p-3 text-xs ${
+              className={`absolute top-full mt-2 w-80 sm:w-96 max-w-[calc(100vw-1.5rem)] rounded-xl bg-white border border-gray-200 shadow-xl z-50 p-3 text-xs ${
                 isAr ? "left-0" : "right-0"
               }`}
             >

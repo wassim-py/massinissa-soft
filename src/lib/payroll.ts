@@ -20,6 +20,9 @@ export interface TeacherPayrollCalculation {
   salaryAdvances: number;
   photocopyDeductions: number;
   netAmount: number;
+  totalTuitionGross?: number;
+  schoolGrossAmount?: number;
+  schoolNetAmount?: number;
   branchBreakdown: Array<{
     branchId: number;
     branchName: string;
@@ -27,6 +30,16 @@ export interface TeacherPayrollCalculation {
     freeSessionsCount: number;
     effectiveRate: number;
     amount: number;
+    tuitionAmount?: number;
+    schoolAmount?: number;
+  }>;
+  branchSchoolBreakdown?: Array<{
+    branchId: number;
+    branchName: string;
+    sessionsCount: number;
+    tuitionAmount: number;
+    teacherAmount: number;
+    schoolAmount: number;
   }>;
   sessionDetails?: Array<{
     lessonId: number;
@@ -38,6 +51,7 @@ export interface TeacherPayrollCalculation {
     pricePerCycle: number;
     sessionPrice: number;
     teacherCut: number;
+    schoolCut?: number;
     appliedPercentage?: number;
     lessonAmount: number;
     isFree: boolean;
@@ -273,6 +287,8 @@ export async function calculateTeacherPayroll(
       totalSessions: number;
       freeSessions: number;
       amount: number;
+      totalTuition: number;
+      schoolAmount: number;
       totalPresentAttendances: number;
     }
   >();
@@ -284,6 +300,8 @@ export async function calculateTeacherPayroll(
       totalSessions: 0,
       freeSessions: 0,
       amount: 0,
+      totalTuition: 0,
+      schoolAmount: 0,
       totalPresentAttendances: 0,
     });
   });
@@ -339,6 +357,8 @@ export async function calculateTeacherPayroll(
   let teacherAbsencesCount = 0;
   let totalPresentAttendances = 0;
   let calculatedGross = 0;
+  let totalTuitionGross = 0;
+  let schoolGrossAmount = 0;
   const sessionDetails: NonNullable<TeacherPayrollCalculation["sessionDetails"]> = [];
   const absentSessions: NonNullable<TeacherPayrollCalculation["absentSessions"]> = [];
 
@@ -363,6 +383,7 @@ export async function calculateTeacherPayroll(
         pricePerCycle: lesson.class?.pricePerCycle ? Number(lesson.class.pricePerCycle) : 0,
         sessionPrice: 0,
         teacherCut: 0,
+        schoolCut: 0,
         lessonAmount: 0,
         isFree: lesson.isFree,
         isExtra: lesson.isExtra,
@@ -377,6 +398,8 @@ export async function calculateTeacherPayroll(
       totalSessions: 0,
       freeSessions: 0,
       amount: 0,
+      totalTuition: 0,
+      schoolAmount: 0,
       totalPresentAttendances: 0,
     };
     existing.totalSessions += 1;
@@ -468,6 +491,17 @@ export async function calculateTeacherPayroll(
       }
     }
 
+    let lessonTuition = 0;
+    let lessonSchoolCut = 0;
+    if (!lesson.isFree) {
+      lessonTuition = Math.round(payingWeight * sessionPrice * 100) / 100;
+      lessonSchoolCut = Math.max(0, lessonTuition - lessonAmount);
+    }
+    totalTuitionGross += lessonTuition;
+    schoolGrossAmount += lessonSchoolCut;
+
+    existing.totalTuition = (existing.totalTuition || 0) + lessonTuition;
+    existing.schoolAmount = (existing.schoolAmount || 0) + lessonSchoolCut;
     existing.amount += lessonAmount;
     calculatedGross += lessonAmount;
     branchSessionsMap.set(lesson.branchId, existing);
@@ -482,6 +516,7 @@ export async function calculateTeacherPayroll(
       pricePerCycle,
       sessionPrice,
       teacherCut: effectiveRateForSession,
+      schoolCut: lessonSchoolCut,
       appliedPercentage: appliedGroupPercentage !== null ? appliedGroupPercentage : undefined,
       lessonAmount,
       isFree: lesson.isFree,
@@ -513,6 +548,8 @@ export async function calculateTeacherPayroll(
         totalSessions: 0,
         freeSessions: 0,
         amount: 0,
+        totalTuition: 0,
+        schoolAmount: 0,
         totalPresentAttendances: 0,
       };
       bEntry.amount += netBookAmount;
@@ -584,15 +621,23 @@ export async function calculateTeacherPayroll(
                     : defaultSessionRate;
 
                 if (teacherCut > 0) {
+                  const retroTuition = sessionPrice;
+                  const retroSchoolCut = Math.max(0, retroTuition - teacherCut);
+                  totalTuitionGross += retroTuition;
+                  schoolGrossAmount += retroSchoolCut;
                   calculatedGross += teacherCut;
                   const bEntry = branchSessionsMap.get(lessonRecord.branchId) || {
                     branchName: lessonRecord.branch.name,
                     totalSessions: 0,
                     freeSessions: 0,
                     amount: 0,
+                    totalTuition: 0,
+                    schoolAmount: 0,
                     totalPresentAttendances: 0,
                   };
                   bEntry.amount += teacherCut;
+                  bEntry.totalTuition = (bEntry.totalTuition || 0) + retroTuition;
+                  bEntry.schoolAmount = (bEntry.schoolAmount || 0) + retroSchoolCut;
                   branchSessionsMap.set(lessonRecord.branchId, bEntry);
 
                   sessionDetails.push({
@@ -605,6 +650,7 @@ export async function calculateTeacherPayroll(
                     pricePerCycle,
                     sessionPrice,
                     teacherCut,
+                    schoolCut: retroSchoolCut,
                     appliedPercentage: retroGroupPercentage !== null ? retroGroupPercentage : undefined,
                     lessonAmount: teacherCut,
                     isFree: false,
@@ -641,6 +687,8 @@ export async function calculateTeacherPayroll(
       freeSessionsCount: data.freeSessions,
       effectiveRate: Math.round(effectiveRate * 100) / 100,
       amount: Math.round(data.amount * 100) / 100,
+      tuitionAmount: Math.round((data.totalTuition || 0) * 100) / 100,
+      schoolAmount: Math.round((data.schoolAmount || 0) * 100) / 100,
     });
   }
 
@@ -648,18 +696,23 @@ export async function calculateTeacherPayroll(
   let grossAmount = Math.round(calculatedGross * 100) / 100;
   if (fixedMonthly > 0) {
     grossAmount = fixedMonthly;
+    schoolGrossAmount = Math.max(0, totalTuitionGross - fixedMonthly);
     // Distribute informational branch breakdown proportionally if lessons occurred
     if (totalSessions > 0) {
       branchBreakdown.forEach((b) => {
         b.amount = Math.round((b.sessionsCount / totalSessions) * fixedMonthly * 100) / 100;
+        b.schoolAmount = Math.max(0, (b.tuitionAmount || 0) - b.amount);
       });
     } else if (branchBreakdown.length > 0) {
       // Split evenly across assigned branches if no sessions
       const splitAmount = Math.round((fixedMonthly / branchBreakdown.length) * 100) / 100;
       branchBreakdown.forEach((b) => {
         b.amount = splitAmount;
+        b.schoolAmount = Math.max(0, (b.tuitionAmount || 0) - splitAmount);
       });
     }
+  } else {
+    schoolGrossAmount = Math.max(0, totalTuitionGross - grossAmount);
   }
 
   // Fetch Salary Advances within or up to this period
@@ -700,6 +753,16 @@ export async function calculateTeacherPayroll(
   );
 
   const netAmount = Math.max(0, grossAmount - totalAdvances - totalPhotocopyDeductions);
+  const schoolNetAmount = Math.round((schoolGrossAmount + totalPhotocopyDeductions) * 100) / 100;
+
+  const branchSchoolBreakdown: NonNullable<TeacherPayrollCalculation["branchSchoolBreakdown"]> = branchBreakdown.map((b) => ({
+    branchId: b.branchId,
+    branchName: b.branchName,
+    sessionsCount: b.sessionsCount,
+    tuitionAmount: b.tuitionAmount ?? 0,
+    teacherAmount: b.amount,
+    schoolAmount: b.schoolAmount ?? Math.max(0, (b.tuitionAmount ?? 0) - b.amount),
+  }));
 
   return {
     teacherId: teacher.id,
@@ -714,7 +777,11 @@ export async function calculateTeacherPayroll(
     salaryAdvances: totalAdvances,
     photocopyDeductions: totalPhotocopyDeductions,
     netAmount,
+    totalTuitionGross: Math.round(totalTuitionGross * 100) / 100,
+    schoolGrossAmount: Math.round(schoolGrossAmount * 100) / 100,
+    schoolNetAmount,
     branchBreakdown,
+    branchSchoolBreakdown,
     salaryAdvanceDetails: salaryAdvancesList.map((a) => ({
       id: a.id,
       amount: Number(a.amount),
@@ -768,7 +835,49 @@ export async function generatePayrollRun(
     }
   }
 
-  // Atomically create the PayrollRun and all consolidated Payslips + PayslipBranchLines
+  // Pre-calculate Real Net elements for the period [startDate, endDate]
+  // 1. Revenue
+  const revenueEntries = await prisma.dailyLedger.findMany({
+    where: {
+      date: { gte: startDate, lte: endDate },
+      type: { not: "PAYROLL_OUT" },
+    },
+    include: { Branch: true },
+  });
+  const totalRevenue = revenueEntries.reduce((sum, e) => sum + Number(e.amount), 0);
+
+  // 2. Outcomes / Daily Expenses
+  const dailyExpenses = await prisma.dailyExpense.findMany({
+    where: {
+      date: { gte: startDate, lte: endDate },
+    },
+    include: { branch: true },
+  });
+  const totalDailyExpenses = dailyExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
+
+  // 3. Teachers Payroll Total Gross
+  const totalTeacherGrossPayroll = teacherCalculations.reduce((sum, c) => sum + c.grossAmount, 0);
+
+  // 4. Staffs Payroll
+  const staffPayrolls = await prisma.staffPayroll.findMany({
+    where: {
+      paidAt: { gte: startDate, lte: endDate },
+      status: "PAID",
+    },
+    include: { staffMember: { include: { branch: true } } },
+  });
+  const totalStaffPayroll = staffPayrolls.reduce(
+    (sum, s) => sum + Number(s.amount) + Number((s as any).bonus || 0),
+    0
+  );
+
+  // 5. Real Net = Revenue - Outcomes - Teachers Payroll - Staffs Payrolls
+  const realNet = totalRevenue - totalDailyExpenses - totalTeacherGrossPayroll - totalStaffPayroll;
+
+  // Atomically create the PayrollRun and all 3 generated payroll parts:
+  // Part 1: Teachers Payroll (personType: "TEACHER")
+  // Part 2: School Part with Teachers Payroll (personType: "SCHOOL_SHARE")
+  // Part 3: Real Net Payroll (personType: "REAL_NET")
   return await prisma.$transaction(async (tx) => {
     const payrollRun = await tx.payrollRun.create({
       data: {
@@ -778,6 +887,7 @@ export async function generatePayrollRun(
       },
     });
 
+    // --- PART 1: TEACHERS PAYROLL ---
     for (const calc of teacherCalculations) {
       const payslip = await tx.payslip.create({
         data: {
@@ -805,6 +915,83 @@ export async function generatePayrollRun(
           });
         }
       }
+    }
+
+    // --- PART 2: SCHOOL PART WITH TEACHERS PAYROLL ---
+    for (const calc of teacherCalculations) {
+      const schoolGross = calc.schoolGrossAmount ?? Math.max(0, (calc.totalTuitionGross ?? 0) - calc.grossAmount);
+      const schoolNet = calc.schoolNetAmount ?? (schoolGross + calc.photocopyDeductions);
+
+      const schoolPayslip = await tx.payslip.create({
+        data: {
+          payrollRunId: payrollRun.id,
+          personId: calc.teacherId,
+          personType: "SCHOOL_SHARE",
+          sessionsCount: calc.totalSessions,
+          grossAmount: new Prisma.Decimal(schoolGross),
+          advances: new Prisma.Decimal(0),
+          photocopyDeductions: new Prisma.Decimal(calc.photocopyDeductions),
+          netAmount: new Prisma.Decimal(schoolNet),
+        },
+      });
+
+      const schoolBranchLines = calc.branchSchoolBreakdown || calc.branchBreakdown.map((b) => ({
+        branchId: b.branchId,
+        sessionsCount: b.sessionsCount,
+        schoolAmount: b.schoolAmount ?? Math.max(0, (b.tuitionAmount ?? 0) - b.amount),
+      }));
+
+      for (const bLine of schoolBranchLines) {
+        if (bLine.sessionsCount > 0 || (bLine.schoolAmount && bLine.schoolAmount > 0)) {
+          await tx.payslipBranchLine.create({
+            data: {
+              payslipId: schoolPayslip.id,
+              branchId: bLine.branchId,
+              sessionsCount: bLine.sessionsCount,
+              amount: new Prisma.Decimal(bLine.schoolAmount || 0),
+            },
+          });
+        }
+      }
+    }
+
+    // --- PART 3: REAL NET PAYROLL ---
+    const realNetSlip = await tx.payslip.create({
+      data: {
+        payrollRunId: payrollRun.id,
+        personId: "REAL_NET",
+        personType: "REAL_NET",
+        sessionsCount: teacherCalculations.reduce((s, c) => s + c.totalSessions, 0),
+        grossAmount: new Prisma.Decimal(totalRevenue),
+        advances: new Prisma.Decimal(totalDailyExpenses),
+        photocopyDeductions: new Prisma.Decimal(totalStaffPayroll),
+        netAmount: new Prisma.Decimal(realNet),
+      },
+    });
+
+    const branches = await prisma.branch.findMany({ select: { id: true } });
+    for (const b of branches) {
+      const bRev = revenueEntries.filter((e) => e.branchId === b.id).reduce((s, e) => s + Number(e.amount), 0);
+      const bOut = dailyExpenses.filter((e) => e.branchId === b.id).reduce((s, e) => s + Number(e.amount), 0);
+      let bTeacher = 0;
+      teacherCalculations.forEach((calc) => {
+        const line = calc.branchBreakdown.find((bl) => bl.branchId === b.id);
+        if (line) bTeacher += line.amount;
+      });
+      const bStaff = staffPayrolls
+        .filter((s) => s.staffMember.branchId === b.id)
+        .reduce((sum, s) => sum + Number(s.amount) + Number((s as any).bonus || 0), 0);
+
+      const bMargin = bRev - bOut - bTeacher - bStaff;
+
+      await tx.payslipBranchLine.create({
+        data: {
+          payslipId: realNetSlip.id,
+          branchId: b.id,
+          sessionsCount: 0,
+          amount: new Prisma.Decimal(bMargin),
+        },
+      });
     }
 
     return payrollRun;
@@ -841,14 +1028,17 @@ export async function updatePayrollRunStatus(
     });
 
     // If marked as PAID, post ledger expense per branch from PayslipBranchLine
+    // ONLY for TEACHER payslips (expenses paid out)
     if (newStatus === "PAID") {
       const branchTotals = new Map<number, number>();
 
       run.Payslip.forEach((slip) => {
-        slip.PayslipBranchLine.forEach((line) => {
-          const prev = branchTotals.get(line.branchId) || 0;
-          branchTotals.set(line.branchId, prev + Number(line.amount));
-        });
+        if (slip.personType === "TEACHER") {
+          slip.PayslipBranchLine.forEach((line) => {
+            const prev = branchTotals.get(line.branchId) || 0;
+            branchTotals.set(line.branchId, prev + Number(line.amount));
+          });
+        }
       });
 
       for (const [branchId, totalBranchPayroll] of branchTotals.entries()) {
@@ -945,6 +1135,7 @@ export async function getOwnerPayrollOverview(startDate: Date, endDate: Date) {
         periodStart: { gte: startDate },
         periodEnd: { lte: endDate },
       },
+      personType: "TEACHER",
     },
     include: {
       PayrollRun: true,
@@ -980,7 +1171,10 @@ export async function getOwnerPayrollOverview(startDate: Date, endDate: Date) {
       status: "PAID",
     },
   });
-  const totalStaffPayroll = staffPayrolls.reduce((sum, s) => sum + Number(s.amount), 0);
+  const totalStaffPayroll = staffPayrolls.reduce(
+    (sum, s) => sum + Math.max(0, Number(s.amount) - Number(s.advance || 0) + Number(s.bonus || 0)),
+    0
+  );
 
   // Net operating margin for the school = Revenue - Teacher Payroll - Staff Payroll - Daily Expenses
   const totalExpenses = totalGrossPayroll + totalStaffPayroll + totalDailyExpenses;
@@ -995,11 +1189,13 @@ export async function getOwnerPayrollOverview(startDate: Date, endDate: Date) {
 
     let branchPayroll = 0;
     payslips.forEach((slip) => {
-      slip.PayslipBranchLine.forEach((line) => {
-        if (line.branchId === branch.id) {
-          branchPayroll += Number(line.amount);
-        }
-      });
+      if (slip.personType === "TEACHER") {
+        slip.PayslipBranchLine.forEach((line) => {
+          if (line.branchId === branch.id) {
+            branchPayroll += Number(line.amount);
+          }
+        });
+      }
     });
 
     const branchExpenses = dailyExpenses
@@ -1029,3 +1225,358 @@ export async function getOwnerPayrollOverview(startDate: Date, endDate: Date) {
     branchBreakdown,
   };
 }
+
+export interface PayrollRunFinancialReport {
+  periodStart: Date;
+  periodEnd: Date;
+  payrollRunId?: number;
+  teachersPayroll: {
+    totalSessions: number;
+    totalGross: number;
+    totalAdvances: number;
+    totalPhotocopyDeductions: number;
+    totalNet: number;
+    items: Array<{
+      payslipId?: number;
+      teacherId: string;
+      teacherName: string;
+      phone?: string | null;
+      sessionsCount: number;
+      grossAmount: number;
+      advances: number;
+      photocopyDeductions: number;
+      netAmount: number;
+      branchLines: Array<{
+        branchId: number;
+        branchName: string;
+        sessionsCount: number;
+        amount: number;
+      }>;
+    }>;
+  };
+  schoolSharePayroll: {
+    totalSessions: number;
+    totalTuitionGross: number;
+    totalTeacherGross: number;
+    totalSchoolGross: number;
+    totalPhotocopyRecovered: number;
+    totalSchoolNet: number;
+    items: Array<{
+      payslipId?: number;
+      teacherId: string;
+      teacherName: string;
+      phone?: string | null;
+      sessionsCount: number;
+      totalTuitionGross: number;
+      teacherCut: number;
+      schoolCut: number;
+      photocopyRecovered: number;
+      netSchoolCut: number;
+      branchLines: Array<{
+        branchId: number;
+        branchName: string;
+        sessionsCount: number;
+        tuitionAmount: number;
+        teacherAmount: number;
+        schoolAmount: number;
+      }>;
+    }>;
+  };
+  realNetPayroll: {
+    totalRevenue: number;
+    totalOutcomes: number;
+    totalTeacherPayroll: number;
+    totalStaffPayroll: number;
+    realNet: number;
+    revenueBreakdown: Array<{
+      branchId: number;
+      branchName: string;
+      amount: number;
+    }>;
+    outcomesByCategory: Array<{
+      category: string;
+      amount: number;
+      count: number;
+    }>;
+    outcomesBreakdown: Array<{
+      id: number;
+      branchId: number | null;
+      branchName: string;
+      amount: number;
+      category: string;
+      description: string;
+      date: string;
+    }>;
+    staffPayrollBreakdown: Array<{
+      id: number;
+      staffName: string;
+      roleTitle: string;
+      branchName: string;
+      amount: number;
+      bonus: number;
+      total: number;
+    }>;
+    branchBreakdown: Array<{
+      branchId: number;
+      branchName: string;
+      revenue: number;
+      outcomes: number;
+      teacherPayroll: number;
+      staffPayroll: number;
+      realNet: number;
+    }>;
+  };
+}
+
+/**
+ * Builds the complete 3-in-1 financial report for any payroll run or period:
+ * 1. Teachers Payroll (Masse salariale et fiches enseignants)
+ * 2. School Share with Teachers (Part de l'école sur les cours et enseignants)
+ * 3. Real Net Statement (Recettes - Dépenses - Paie Profs - Paie Staff)
+ */
+export async function getPayrollRunFinancialReport(
+  startDate: Date,
+  endDate: Date,
+  payrollRunId?: number
+): Promise<PayrollRunFinancialReport> {
+  const normStart = normalizeDateToStartOfDay(startDate);
+  const normEnd = normalizeDateToEndOfDay(endDate);
+
+  const [teachers, branches, revenueEntries, dailyExpenses, staffPayrolls] = await Promise.all([
+    prisma.teacher.findMany({ select: { id: true, name: true, phone: true } }),
+    prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { id: "asc" } }),
+    prisma.dailyLedger.findMany({
+      where: {
+        date: { gte: normStart, lte: normEnd },
+        type: { not: "PAYROLL_OUT" },
+      },
+      include: { Branch: true },
+    }),
+    prisma.dailyExpense.findMany({
+      where: {
+        date: { gte: normStart, lte: normEnd },
+      },
+      include: { branch: true },
+      orderBy: { date: "desc" },
+    }),
+    prisma.staffPayroll.findMany({
+      where: {
+        paidAt: { gte: normStart, lte: normEnd },
+        status: "PAID",
+      },
+      include: {
+        staffMember: { include: { branch: true } },
+      },
+      orderBy: { paidAt: "desc" },
+    }),
+  ]);
+
+  // If a specific payrollRunId is provided, also load saved payslips
+  let savedPayslips: any[] = [];
+  if (payrollRunId) {
+    savedPayslips = await prisma.payslip.findMany({
+      where: { payrollRunId },
+      include: {
+        PayslipBranchLine: {
+          include: { Branch: true },
+        },
+      },
+    });
+  }
+
+  const teacherCalcs: TeacherPayrollCalculation[] = [];
+  for (const t of teachers) {
+    const calc = await calculateTeacherPayroll(t.id, normStart, normEnd);
+    if (
+      calc &&
+      (calc.totalSessions > 0 ||
+        (calc.teacherAbsencesCount && calc.teacherAbsencesCount > 0) ||
+        calc.grossAmount > 0 ||
+        calc.salaryAdvances > 0 ||
+        calc.photocopyDeductions > 0)
+    ) {
+      teacherCalcs.push(calc);
+    }
+  }
+
+  // Part 1: Teachers Payroll
+  const teacherSlipMap = new Map(savedPayslips.filter((p) => p.personType === "TEACHER").map((p) => [p.personId, p]));
+  const teachersPayrollItems = teacherCalcs.map((calc) => {
+    const saved = teacherSlipMap.get(calc.teacherId);
+    const teacherRecord = teachers.find((t) => t.id === calc.teacherId);
+    return {
+      payslipId: saved?.id,
+      teacherId: calc.teacherId,
+      teacherName: calc.teacherName,
+      phone: teacherRecord?.phone || null,
+      sessionsCount: calc.totalSessions,
+      grossAmount: saved ? Number(saved.grossAmount) : calc.grossAmount,
+      advances: saved ? Number(saved.advances) : calc.salaryAdvances,
+      photocopyDeductions: saved ? Number(saved.photocopyDeductions) : calc.photocopyDeductions,
+      netAmount: saved ? Number(saved.netAmount) : calc.netAmount,
+      branchLines: calc.branchBreakdown.map((b) => ({
+        branchId: b.branchId,
+        branchName: b.branchName,
+        sessionsCount: b.sessionsCount,
+        amount: b.amount,
+      })),
+    };
+  });
+
+  const totalTeachersSessions = teachersPayrollItems.reduce((s, i) => s + i.sessionsCount, 0);
+  const totalTeachersGross = teachersPayrollItems.reduce((s, i) => s + i.grossAmount, 0);
+  const totalTeachersAdvances = teachersPayrollItems.reduce((s, i) => s + i.advances, 0);
+  const totalTeachersPhotocopy = teachersPayrollItems.reduce((s, i) => s + i.photocopyDeductions, 0);
+  const totalTeachersNet = teachersPayrollItems.reduce((s, i) => s + i.netAmount, 0);
+
+  // Part 2: School Share Payroll
+  const schoolSlipMap = new Map(savedPayslips.filter((p) => p.personType === "SCHOOL_SHARE").map((p) => [p.personId, p]));
+  const schoolShareItems = teacherCalcs.map((calc) => {
+    const saved = schoolSlipMap.get(calc.teacherId);
+    const teacherRecord = teachers.find((t) => t.id === calc.teacherId);
+    const tuition = calc.totalTuitionGross ?? 0;
+    const teacherCut = calc.grossAmount;
+    const schoolCut = calc.schoolGrossAmount ?? Math.max(0, tuition - teacherCut);
+    const photoRecov = calc.photocopyDeductions;
+    const netSchoolCut = calc.schoolNetAmount ?? (schoolCut + photoRecov);
+
+    return {
+      payslipId: saved?.id,
+      teacherId: calc.teacherId,
+      teacherName: calc.teacherName,
+      phone: teacherRecord?.phone || null,
+      sessionsCount: calc.totalSessions,
+      totalTuitionGross: tuition,
+      teacherCut,
+      schoolCut: saved ? Number(saved.grossAmount) : schoolCut,
+      photocopyRecovered: photoRecov,
+      netSchoolCut: saved ? Number(saved.netAmount) : netSchoolCut,
+      branchLines: (calc.branchSchoolBreakdown || []).map((b) => ({
+        branchId: b.branchId,
+        branchName: b.branchName,
+        sessionsCount: b.sessionsCount,
+        tuitionAmount: b.tuitionAmount,
+        teacherAmount: b.teacherAmount,
+        schoolAmount: b.schoolAmount,
+      })),
+    };
+  });
+
+  const totalSchoolSessions = totalTeachersSessions;
+  const totalSchoolTuitionGross = schoolShareItems.reduce((s, i) => s + i.totalTuitionGross, 0);
+  const totalSchoolTeacherGross = schoolShareItems.reduce((s, i) => s + i.teacherCut, 0);
+  const totalSchoolGross = schoolShareItems.reduce((s, i) => s + i.schoolCut, 0);
+  const totalSchoolPhotocopyRecovered = schoolShareItems.reduce((s, i) => s + i.photocopyRecovered, 0);
+  const totalSchoolNet = schoolShareItems.reduce((s, i) => s + i.netSchoolCut, 0);
+
+  // Part 3: Real Net Statement
+  const totalRevenue = revenueEntries.reduce((sum, e) => sum + Number(e.amount), 0);
+  const totalOutcomes = dailyExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
+  const totalTeacherPayroll = totalTeachersGross;
+  const totalStaffPayroll = staffPayrolls.reduce(
+    (sum, s) => sum + Number(s.amount) + Number((s as any).bonus || 0),
+    0
+  );
+  const realNet = totalRevenue - totalOutcomes - totalTeacherPayroll - totalStaffPayroll;
+
+  // Revenue breakdown by branch
+  const revenueBreakdown = branches.map((b) => ({
+    branchId: b.id,
+    branchName: b.name,
+    amount: revenueEntries.filter((e) => e.branchId === b.id).reduce((s, e) => s + Number(e.amount), 0),
+  }));
+
+  // Outcomes by category
+  const catMap = new Map<string, { amount: number; count: number }>();
+  dailyExpenses.forEach((e) => {
+    const cat = e.category || "Autre";
+    const cur = catMap.get(cat) || { amount: 0, count: 0 };
+    cur.amount += Number(e.amount);
+    cur.count += 1;
+    catMap.set(cat, cur);
+  });
+  const outcomesByCategory = Array.from(catMap.entries()).map(([category, val]) => ({
+    category,
+    amount: val.amount,
+    count: val.count,
+  }));
+
+  const outcomesBreakdown = dailyExpenses.map((e) => ({
+    id: e.id,
+    branchId: e.branchId,
+    branchName: e.branch?.name || "Siège",
+    amount: Number(e.amount),
+    category: e.category,
+    description: e.description,
+    date: e.date.toISOString(),
+  }));
+
+  const staffPayrollBreakdown = staffPayrolls.map((s) => ({
+    id: s.id,
+    staffName: s.staffMember.name,
+    roleTitle: s.staffMember.roleTitle,
+    branchName: s.staffMember.branch?.name || "Siège",
+    amount: Number(s.amount),
+    bonus: Number((s as any).bonus || 0),
+    total: Number(s.amount) + Number((s as any).bonus || 0),
+  }));
+
+  const realNetBranchBreakdown = branches.map((branch) => {
+    const bRev = revenueEntries.filter((e) => e.branchId === branch.id).reduce((s, e) => s + Number(e.amount), 0);
+    const bOut = dailyExpenses.filter((e) => e.branchId === branch.id).reduce((s, e) => s + Number(e.amount), 0);
+    let bTeacher = 0;
+    teacherCalcs.forEach((c) => {
+      const bl = c.branchBreakdown.find((l) => l.branchId === branch.id);
+      if (bl) bTeacher += bl.amount;
+    });
+    const bStaff = staffPayrolls
+      .filter((s) => s.staffMember.branchId === branch.id)
+      .reduce((s, sp) => s + Number(sp.amount) + Number((sp as any).bonus || 0), 0);
+
+    return {
+      branchId: branch.id,
+      branchName: branch.name,
+      revenue: bRev,
+      outcomes: bOut,
+      teacherPayroll: bTeacher,
+      staffPayroll: bStaff,
+      realNet: bRev - bOut - bTeacher - bStaff,
+    };
+  });
+
+  return {
+    periodStart: normStart,
+    periodEnd: normEnd,
+    payrollRunId,
+    teachersPayroll: {
+      totalSessions: totalTeachersSessions,
+      totalGross: totalTeachersGross,
+      totalAdvances: totalTeachersAdvances,
+      totalPhotocopyDeductions: totalTeachersPhotocopy,
+      totalNet: totalTeachersNet,
+      items: teachersPayrollItems,
+    },
+    schoolSharePayroll: {
+      totalSessions: totalSchoolSessions,
+      totalTuitionGross: totalSchoolTuitionGross,
+      totalTeacherGross: totalSchoolTeacherGross,
+      totalSchoolGross: totalSchoolGross,
+      totalPhotocopyRecovered: totalSchoolPhotocopyRecovered,
+      totalSchoolNet: totalSchoolNet,
+      items: schoolShareItems,
+    },
+    realNetPayroll: {
+      totalRevenue,
+      totalOutcomes,
+      totalTeacherPayroll,
+      totalStaffPayroll,
+      realNet,
+      revenueBreakdown,
+      outcomesByCategory,
+      outcomesBreakdown,
+      staffPayrollBreakdown,
+      branchBreakdown: realNetBranchBreakdown,
+    },
+  };
+}
+

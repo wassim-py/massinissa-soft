@@ -506,6 +506,29 @@ def get_student_full_profile(conn, student_id):
             else:
                 excused_count += cnt
 
+        # Catch-up attendances where missed lesson was in this class
+        catchup_rows = conn.run(
+            """SELECT COUNT(*)
+               FROM "CatchUpAttendance" ca
+               JOIN "Lesson" ml ON ml.id = ca."missedLessonId"
+               WHERE ca."studentId" = :sid AND ml."classId" = :cid""",
+            sid=student_id, cid=cid
+        )
+        catchup_count = int(catchup_rows[0][0]) if catchup_rows and catchup_rows[0] else 0
+
+        # Check if any catch-ups were for excused/unrecorded absences so they still consume credit
+        excused_catchups = conn.run(
+            """SELECT COUNT(*)
+               FROM "CatchUpAttendance" ca
+               JOIN "Lesson" ml ON ml.id = ca."missedLessonId"
+               LEFT JOIN "Attendance" a ON a."lessonId" = ml.id AND a."studentId" = ca."studentId"
+               WHERE ca."studentId" = :sid AND ml."classId" = :cid
+                 AND (a.id IS NULL OR a.status NOT IN ('PRESENT', 'LATE', 'ABSENT'))""",
+            sid=student_id, cid=cid
+        )
+        extra_catchup_consumed = int(excused_catchups[0][0]) if excused_catchups and excused_catchups[0] else 0
+        billable_consumed += extra_catchup_consumed
+
         consumed_sessions = billable_consumed
 
         # Credit calculation (matches src/lib/actions.ts: purchased + transferredIn - transferredOut - consumed + creditResetOffset)
@@ -542,6 +565,7 @@ def get_student_full_profile(conn, student_id):
             "free_present_count": free_present_count,
             "absent_count": absent_count,
             "excused_count": excused_count,
+            "catchup_count": catchup_count,
             "consumed_sessions": consumed_sessions,
             "net_credit_sessions": round(net_credit_sessions, 1),
             "insc_paid": insc_paid,

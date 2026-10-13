@@ -168,6 +168,13 @@ const SingleStudentPage = async (
               },
             },
           },
+          catchUpAttendances: {
+            include: {
+              missedLesson: {
+                select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+              },
+            },
+          },
         },
       }),
       prisma.class.findMany({
@@ -235,6 +242,9 @@ const SingleStudentPage = async (
       const levelRemainingBalance = Math.max(0, formationLevelPrice - totalPaidFormation);
 
       const enrStatus = enr.payerStatus || "NORMAL";
+      const classCatchUps = (studentPaymentData?.catchUpAttendances || []).filter(
+        (cu: any) => cu.missedLesson?.classId === c.id
+      );
       const creditMetrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(c?.pricePerCycle || 0),
         isFormation,
@@ -248,6 +258,7 @@ const SingleStudentPage = async (
         attendances: (studentPaymentData?.attendances || []).filter(
           (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
         ),
+        catchUps: classCatchUps,
       });
 
       const purchasedSessions = creditMetrics.purchasedSessions;
