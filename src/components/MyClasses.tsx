@@ -20,7 +20,14 @@ const MyClasses = async () => {
     },
     include: {
       _count: {
-        select: { enrollments: true },
+        select: {
+          enrollments: {
+            where: {
+              status: "ACTIVE",
+              transfersFrom: { none: {} },
+            },
+          },
+        },
       },
     },
     orderBy: {

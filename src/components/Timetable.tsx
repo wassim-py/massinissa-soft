@@ -223,7 +223,12 @@ const Timetable = ({
       return `/list/workshops/${lesson.workshopId}?session=${wsId}`;
     }
     const lessonDay = getLessonDay(lesson);
-    const dateStr = lesson.instanceDate || getDayDateStr(lessonDay) || getAlgiersDateString(lesson.startsAt);
+    const dateStr =
+      lesson.instanceDate ||
+      getDayDateStr(lessonDay) ||
+      (isLessonToday(lesson)
+        ? getAlgiersDateString(new Date())
+        : getAlgiersDateString(lesson.startsAt));
     return dateStr
       ? `/list/attendance/take/${lesson.id}?date=${encodeURIComponent(dateStr)}`
       : `/list/attendance/take/${lesson.id}`;

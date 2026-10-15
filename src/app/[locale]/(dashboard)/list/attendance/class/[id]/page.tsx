@@ -20,6 +20,9 @@ export type LessonInstance = {
     lessonId: number;
     lessonName: string;
     date: string;
+    isFree?: boolean;
+    isExtra?: boolean;
+    isCatchUp?: boolean;
 };
 
 export type AttendanceCellDetail = {
@@ -55,11 +58,16 @@ const ClassAttendancePage = async (
                 branch: { select: { id: true, name: true } },
             },
         }),
-        prisma.lesson.findMany({
-            where: { classId },
-            orderBy: { startsAt: "desc" },
-            select: { id: true, startsAt: true, isExtra: true, isCatchUp: true, isFree: true },
-        }),
+        prisma.$queryRaw<Array<{ id: number; startsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean }>>`
+            SELECT l.id, l."startsAt", l."isExtra", l."isCatchUp", l."isFree"
+            FROM "Lesson" l
+            WHERE l."classId" = ${classId}
+               OR EXISTS (
+                   SELECT 1 FROM "LessonGroup" lg
+                   WHERE lg."lessonId" = l.id AND lg."classId" = ${classId}
+               )
+            ORDER BY l."startsAt" DESC
+        `,
     ]);
     const latestLesson = allClassLessons[0] || null;
     const todayInfo = getAlgiersDateInfo(new Date());
@@ -74,10 +82,7 @@ const ClassAttendancePage = async (
         ) ||
         latestLesson;
     const takeAttendanceDateStr = todayMatchingLesson
-        ? !todayMatchingLesson.isExtra &&
-          !todayMatchingLesson.isCatchUp &&
-          !todayMatchingLesson.isFree &&
-          getAlgiersDateInfo(todayMatchingLesson.startsAt).weekday === todayInfo.weekday
+        ? (!todayMatchingLesson.isExtra && !todayMatchingLesson.isCatchUp && !todayMatchingLesson.isFree)
             ? todayInfo.dateStr
             : getAlgiersDateInfo(todayMatchingLesson.startsAt).dateStr
         : todayInfo.dateStr;
@@ -143,11 +148,23 @@ const ClassAttendancePage = async (
                         l.id as "lessonId",
                         l."startsAt" as date,
                         l."isTeacherAbsent",
+                        l."isFree",
+                        l."isExtra",
+                        l."isCatchUp",
                         c.name as "className"
                     FROM "Attendance" a
                     JOIN "Lesson" l ON l.id = a."lessonId"
-                    JOIN "Class" c ON c.id = l."classId"
-                    WHERE l."classId" = ${classId}
+                    JOIN "Class" c ON c.id = ${classId}
+                    WHERE (
+                        l."classId" = ${classId}
+                        OR EXISTS (
+                            SELECT 1 FROM "LessonGroup" lg
+                            WHERE lg."lessonId" = l.id AND lg."classId" = ${classId}
+                        )
+                    )
+                    AND a."studentId" IN (
+                        SELECT "studentId" FROM "Enrollment" WHERE "classId" = ${classId}
+                    )
                     ORDER BY l."startsAt" ASC
                 `;
 
@@ -162,7 +179,13 @@ const ClassAttendancePage = async (
                             justification: att.justification || null,
                             present: att.status === "PRESENT",
                             isTeacherAbsent: Boolean(att.isTeacherAbsent),
+                            isFree: Boolean(att.isFree),
+                            isExtra: Boolean(att.isExtra),
+                            isCatchUp: Boolean(att.isCatchUp),
                             lesson: {
+                                isFree: Boolean(att.isFree),
+                                isExtra: Boolean(att.isExtra),
+                                isCatchUp: Boolean(att.isCatchUp),
                                 subject: {
                                     name: att.className || "درس",
                                 },
@@ -176,10 +199,11 @@ const ClassAttendancePage = async (
 
             let catchUpAttendances: any[] = [];
             try {
+                const classLessonIds = allClassLessons.map((l) => l.id);
                 catchUpAttendances = await prisma.catchUpAttendance.findMany({
                     where: {
-                        missedLesson: {
-                            classId: classId,
+                        missedLessonId: {
+                            in: classLessonIds.length > 0 ? classLessonIds : [-1],
                         },
                     },
                     include: {
@@ -223,9 +247,18 @@ const ClassAttendancePage = async (
     // --- REFINED DATA PROCESSING LOGIC ---
 
     const allRecords = classData.students.flatMap((s: any) => s.attendances);
+    const allClassLessonsMap = new Map(allClassLessons.map((l) => [l.id, l]));
 
     // 1. Get a list of all unique lesson instances first to avoid counting per-student records
-    const uniqueLessonInstancesTemp: { key: string; lessonId: number; subjectName: string; date: string }[] = [];
+    const uniqueLessonInstancesTemp: {
+        key: string;
+        lessonId: number;
+        subjectName: string;
+        date: string;
+        isFree?: boolean;
+        isExtra?: boolean;
+        isCatchUp?: boolean;
+    }[] = [];
     const seenInstancesTemp = new Set<string>();
 
     allRecords.forEach((record: any) => {
@@ -233,11 +266,15 @@ const ClassAttendancePage = async (
         const instanceKey = `${record.lessonId}-${dateKey}`;
         if (!seenInstancesTemp.has(instanceKey)) {
             seenInstancesTemp.add(instanceKey);
+            const lessonMeta = allClassLessonsMap.get(record.lessonId);
             uniqueLessonInstancesTemp.push({
                 key: instanceKey,
                 lessonId: record.lessonId,
                 subjectName: record.lesson.subject.name,
                 date: dateKey,
+                isFree: Boolean(lessonMeta?.isFree ?? record.isFree),
+                isExtra: Boolean(lessonMeta?.isExtra ?? record.isExtra),
+                isCatchUp: Boolean(lessonMeta?.isCatchUp ?? record.isCatchUp),
             });
         }
     });
@@ -249,11 +286,15 @@ const ClassAttendancePage = async (
             const instanceKey = `${cu.missedLesson.id}-${dateKey}`;
             if (!seenInstancesTemp.has(instanceKey)) {
                 seenInstancesTemp.add(instanceKey);
+                const lessonMeta = allClassLessonsMap.get(cu.missedLesson.id);
                 uniqueLessonInstancesTemp.push({
                     key: instanceKey,
                     lessonId: cu.missedLesson.id,
                     subjectName: cu.missedLesson.class?.name || classHeader.name || "درس",
                     date: dateKey,
+                    isFree: Boolean(lessonMeta?.isFree ?? cu.missedLesson.isFree),
+                    isExtra: Boolean(lessonMeta?.isExtra ?? cu.missedLesson.isExtra),
+                    isCatchUp: Boolean(lessonMeta?.isCatchUp ?? cu.missedLesson.isCatchUp),
                 });
             }
         }
@@ -293,6 +334,9 @@ const ClassAttendancePage = async (
             lessonId: instance.lessonId,
             lessonName: lessonName,
             date: instance.date,
+            isFree: instance.isFree,
+            isExtra: instance.isExtra,
+            isCatchUp: instance.isCatchUp,
         });
     });
 
@@ -323,7 +367,7 @@ const ClassAttendancePage = async (
         const studentLessons = (student.attendances || []).map((a: any) => ({
             id: a.lessonId,
             startsAt: a.date,
-            isFree: false,
+            isFree: Boolean(a.isFree),
             isTeacherAbsent: Boolean(a.isTeacherAbsent),
         }));
 
@@ -435,7 +479,7 @@ const ClassAttendancePage = async (
                     activeTab="attendance"
                     isFormation={classData.isFormation}
                 />
-                {role === 'admin' && (
+                {(session.isOwner || session.isBranchAdmin || role === 'admin') && (
                     <ExportButton
                         type="attendance"
                         options={{ 

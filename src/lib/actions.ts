@@ -42,7 +42,7 @@ import { canUserAccessBranch } from "./settings";
 import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from "./ledger";
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions } from "./studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "./studentBilling";
 import { getFixedInscriptionFeeAction } from "./configurationActions";
 import { splitFullName, getLessonDateTime } from "./utils";
 import {
@@ -1082,7 +1082,7 @@ export const checkForConflicts = async ({
   startsAt: explicitStartsAt,
   endsAt: explicitEndsAt,
 }: {
-  classId: number;
+  classId: number | number[];
   teacherId: string;
   classroomId?: number | null;
   day: string;
@@ -1126,12 +1126,26 @@ export const checkForConflicts = async ({
       }
     }
 
-    // 2. Class (group) conflict check
-    if (classId) {
+    // 2. Class (group) conflict check for single or multiple groups
+    const classIds = Array.isArray(classId)
+      ? classId.map(Number).filter((id) => !isNaN(id) && id > 0)
+      : classId
+      ? [Number(classId)]
+      : [];
+
+    if (classIds.length > 0) {
       const classConflict = await prisma.$queryRaw<any[]>`
-        SELECT id FROM "Lesson"
-        WHERE "classId" = ${Number(classId)}
-          AND id NOT IN (${Prisma.join(excludedIds)})
+        SELECT l.id, c.name as "className"
+        FROM "Lesson" l
+        LEFT JOIN "Class" c ON c.id = l."classId"
+        WHERE (
+          l."classId" IN (${Prisma.join(classIds)})
+          OR EXISTS (
+            SELECT 1 FROM "LessonGroup" lg
+            WHERE lg."lessonId" = l.id AND lg."classId" IN (${Prisma.join(classIds)})
+          )
+        )
+          AND l.id NOT IN (${Prisma.join(excludedIds)})
           AND (
             ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
             OR
@@ -1145,7 +1159,8 @@ export const checkForConflicts = async ({
         LIMIT 1
       `;
       if (classConflict.length > 0) {
-        return "Conflit d'emploi du temps : ce groupe a déjà une séance à cet horaire / تعارض في الجدول: هذا القسم لديه حصة مجدولة بالفعل في هذا الوقت.";
+        const cName = classConflict[0]?.className || "أحد الأفواج";
+        return `Conflit d'emploi du temps : le groupe "${cName}" a déjà une séance à cet horaire / تعارض في الجدول: الفوج "${cName}" لديه حصة مجدولة بالفعل في هذا الوقت.`;
       }
     }
 
@@ -1204,7 +1219,7 @@ export const createLesson = async (
 
     // 2. Fetch class and auto-fetch head teacher (docs/architecture.md §7.5)
     const classRows = await prisma.$queryRaw<any[]>`
-      SELECT id, name, "teacherId", "branchId" FROM "Class" WHERE id = ${classId} LIMIT 1
+      SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId" FROM "Class" WHERE id = ${classId} LIMIT 1
     `;
     if (classRows.length === 0) {
       return { success: false, error: true, message: "Classe introuvable / الفوج المحدد غير موجود." };
@@ -1277,10 +1292,47 @@ export const createLesson = async (
     const isExtra = Boolean(data.isExtra);
     const isCatchUp = Boolean(data.isCatchUp);
     const isFree = Boolean(data.isFree);
+    const isSpecialLesson = Boolean(isExtra || isCatchUp || isFree);
+
+    let validAdditionalClassIds: number[] = [];
+    if (isSpecialLesson && Array.isArray(data.additionalClassIds)) {
+      const parsedIds = data.additionalClassIds
+        .map(Number)
+        .filter((id) => !isNaN(id) && id > 0 && id !== classId);
+      if (parsedIds.length > 0) {
+        const additionalRows = await prisma.$queryRaw<any[]>`
+          SELECT id, name, "teacherId", "levelId", "formationLevelId"
+          FROM "Class"
+          WHERE id IN (${Prisma.join(parsedIds)})
+        `;
+        for (const ar of additionalRows) {
+          if (ar.teacherId !== teacherId) {
+            return {
+              success: false,
+              error: true,
+              message: `Le groupe "${ar.name}" n'a pas le même enseignant / الفوج "${ar.name}" ليس لديه نفس الأستاذ.`,
+            };
+          }
+          const sameLevel =
+            (classRecord.levelId && ar.levelId === classRecord.levelId) ||
+            (classRecord.formationLevelId && ar.formationLevelId === classRecord.formationLevelId);
+          if (!sameLevel) {
+            return {
+              success: false,
+              error: true,
+              message: `Le groupe "${ar.name}" n'est pas dans le même niveau / الفوج "${ar.name}" ليس في نفس المستوى.`,
+            };
+          }
+        }
+        validAdditionalClassIds = additionalRows.map((r) => r.id);
+      }
+    }
+
+    const allAssociatedClassIds = [classId, ...validAdditionalClassIds];
 
     // 4. Time-conflict check with full start-end range comparison
     const conflict = await checkForConflicts({
-      classId,
+      classId: allAssociatedClassIds,
       teacherId,
       classroomId,
       day: data.day,
@@ -1305,11 +1357,15 @@ export const createLesson = async (
         isCatchUp,
         isFree,
         extraFee: null,
+        lessonGroups: {
+          create: allAssociatedClassIds.map((cid) => ({ classId: cid })),
+        },
       },
       include: {
         branch: { select: { id: true, name: true } },
         classroom: { select: { id: true, name: true } },
         class: { select: { id: true, name: true } },
+        lessonGroups: { include: { class: { select: { id: true, name: true } } } },
       },
     });
 
@@ -1339,7 +1395,13 @@ export const createLesson = async (
 
         const bName = (newLesson as any).branch?.name || "";
         const crName = (newLesson as any).classroom?.name ? `- قاعة ${(newLesson as any).classroom.name}` : "";
-        const cName = (newLesson as any).class?.name || classRecord.name;
+        const allGroupNames = [
+          (newLesson as any).class?.name || classRecord.name,
+          ...((newLesson as any).lessonGroups || [])
+            .map((lg: any) => lg.class?.name)
+            .filter((n: string) => n && n !== classRecord.name),
+        ].join(" + ");
+        const cName = allGroupNames || (newLesson as any).class?.name || classRecord.name;
         const desc = `${typePrefix} لفوج ${cName} في ${bName} ${crName} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`.trim();
 
         await prisma.announcement.create({
@@ -1366,6 +1428,12 @@ export const createLesson = async (
     }
 
     safeRevalidatePath("/list/lessons");
+    for (const cid of allAssociatedClassIds) {
+      safeRevalidatePath(`/list/attendance/class/${cid}`);
+    }
+    if (newLesson?.id) {
+      safeRevalidatePath(`/list/attendance/take/${newLesson.id}`);
+    }
     return { success: true, error: false, message: "Séance programmée avec succès / تم برمجة الحصة بنجاح." };
   } catch (err) {
     console.error("createLesson error:", err);
@@ -1416,7 +1484,7 @@ export const updateLesson = async (
 
     // 3. Fetch class and auto-fetch head teacher
     const classRows = await prisma.$queryRaw<any[]>`
-      SELECT id, name, "teacherId", "branchId" FROM "Class" WHERE id = ${classId} LIMIT 1
+      SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId" FROM "Class" WHERE id = ${classId} LIMIT 1
     `;
     if (classRows.length === 0) {
       return { success: false, error: true, message: "Classe introuvable / الفوج المحدد غير موجود." };
@@ -1476,10 +1544,47 @@ export const updateLesson = async (
     const isExtra = Boolean(data.isExtra);
     const isCatchUp = Boolean(data.isCatchUp);
     const isFree = Boolean(data.isFree);
+    const isSpecialLesson = Boolean(isExtra || isCatchUp || isFree);
+
+    let validAdditionalClassIds: number[] = [];
+    if (isSpecialLesson && Array.isArray(data.additionalClassIds)) {
+      const parsedIds = data.additionalClassIds
+        .map(Number)
+        .filter((id) => !isNaN(id) && id > 0 && id !== classId);
+      if (parsedIds.length > 0) {
+        const additionalRows = await prisma.$queryRaw<any[]>`
+          SELECT id, name, "teacherId", "levelId", "formationLevelId"
+          FROM "Class"
+          WHERE id IN (${Prisma.join(parsedIds)})
+        `;
+        for (const ar of additionalRows) {
+          if (ar.teacherId !== teacherId) {
+            return {
+              success: false,
+              error: true,
+              message: `Le groupe "${ar.name}" n'a pas le même enseignant / الفوج "${ar.name}" ليس لديه نفس الأستاذ.`,
+            };
+          }
+          const sameLevel =
+            (classRecord.levelId && ar.levelId === classRecord.levelId) ||
+            (classRecord.formationLevelId && ar.formationLevelId === classRecord.formationLevelId);
+          if (!sameLevel) {
+            return {
+              success: false,
+              error: true,
+              message: `Le groupe "${ar.name}" n'est pas dans le même niveau / الفوج "${ar.name}" ليس في نفس المستوى.`,
+            };
+          }
+        }
+        validAdditionalClassIds = additionalRows.map((r) => r.id);
+      }
+    }
+
+    const allAssociatedClassIds = [classId, ...validAdditionalClassIds];
 
     // 5. Conflict check with excludeId = lessonId
     const conflict = await checkForConflicts({
-      classId,
+      classId: allAssociatedClassIds,
       teacherId,
       classroomId,
       day: data.day,
@@ -1518,6 +1623,14 @@ export const updateLesson = async (
         class: { select: { id: true, name: true } },
       },
     });
+
+    // Synchronize LessonGroup entries
+    await prisma.lessonGroup.deleteMany({ where: { lessonId } });
+    if (allAssociatedClassIds.length > 0) {
+      await prisma.lessonGroup.createMany({
+        data: allAssociatedClassIds.map((cid) => ({ lessonId, classId: cid })),
+      });
+    }
 
     if (!isExtra && !isCatchUp && !isFree && siblingIds.length > 1) {
       await syncSiblingRecurringLessons({
@@ -1558,7 +1671,15 @@ export const updateLesson = async (
 
       const bName = (updatedLesson as any).branch?.name || "";
       const crName = (updatedLesson as any).classroom?.name ? `- قاعة ${(updatedLesson as any).classroom.name}` : "";
-      const cName = (updatedLesson as any).class?.name || classRecord.name;
+      const otherGroupRows = await prisma.lessonGroup.findMany({
+        where: { lessonId },
+        include: { class: { select: { name: true } } },
+      });
+      const allGroupNames = [
+        (updatedLesson as any).class?.name || classRecord.name,
+        ...otherGroupRows.map((lg) => lg.class?.name).filter((n) => n && n !== classRecord.name),
+      ].join(" + ");
+      const cName = allGroupNames || (updatedLesson as any).class?.name || classRecord.name;
       const desc = `${typePrefix} لفوج ${cName} في ${bName} ${crName} بتاريخ ${startsDateStr} من ${startTimeStr} إلى ${endTimeStr}`.trim();
 
       const existingAnnouncement = await prisma.announcement.findFirst({
@@ -1601,6 +1722,10 @@ export const updateLesson = async (
     }
 
     safeRevalidatePath("/list/lessons");
+    for (const cid of allAssociatedClassIds) {
+      safeRevalidatePath(`/list/attendance/class/${cid}`);
+    }
+    safeRevalidatePath(`/list/attendance/take/${lessonId}`);
     return { success: true, error: false, message: "Séance mise à jour avec succès / تم تحديث الحصة بنجاح." };
   } catch (err) {
     console.error("updateLesson error:", err);
@@ -1827,7 +1952,10 @@ export const saveAttendance = async (
 
     const lessonInfo = await prisma.lesson.findUnique({
       where: { id: lessonId },
-      select: { classId: true },
+      select: {
+        classId: true,
+        lessonGroups: { select: { classId: true } },
+      },
     });
 
     await prisma.$transaction(
@@ -2053,10 +2181,19 @@ export const saveAttendance = async (
   safeRevalidatePath("/admin");
   safeRevalidatePath("/list/attendance");
   safeRevalidatePath(`/list/attendance/take/${lessonId}`);
-  if (lessonInfo?.classId) {
-    safeRevalidatePath(`/list/attendance/class/${lessonInfo.classId}`);
-    safeRevalidatePath(`/list/payments/class/${lessonInfo.classId}`);
-    safeRevalidatePath(`/list/formations/${lessonInfo.classId}`);
+  const affectedClassIds = new Set<number>();
+  if (lessonInfo?.classId) affectedClassIds.add(lessonInfo.classId);
+  if (lessonInfo?.lessonGroups) {
+    for (const lg of lessonInfo.lessonGroups) {
+      affectedClassIds.add(lg.classId);
+    }
+  }
+  for (const cId of affectedClassIds) {
+    safeRevalidatePath(`/list/attendance/class/${cId}`);
+    safeRevalidatePath(`/list/payments/class/${cId}`);
+    safeRevalidatePath(`/list/formations/${cId}`);
+  }
+  if (affectedClassIds.size > 0) {
     safeRevalidatePath("/list/formations");
   }
   safeRevalidatePath("/list/students");
@@ -2137,7 +2274,10 @@ export const markSingleAttendanceAction = async (input: {
 
     const lessonInfo = await prisma.lesson.findUnique({
       where: { id: input.lessonId },
-      select: { classId: true },
+      select: {
+        classId: true,
+        lessonGroups: { select: { classId: true } },
+      },
     });
 
     if (lessonInfo?.classId) {
@@ -2239,10 +2379,21 @@ export const markSingleAttendanceAction = async (input: {
 
       safeRevalidatePath("/admin");
       safeRevalidatePath("/list/attendance");
-      safeRevalidatePath(`/list/attendance/class/${lessonInfo.classId}`);
-      safeRevalidatePath(`/list/payments/class/${lessonInfo.classId}`);
-      safeRevalidatePath(`/list/formations/${lessonInfo.classId}`);
-      safeRevalidatePath("/list/formations");
+      const affectedClassIds = new Set<number>();
+      if (lessonInfo?.classId) affectedClassIds.add(lessonInfo.classId);
+      if (lessonInfo?.lessonGroups) {
+        for (const lg of lessonInfo.lessonGroups) {
+          affectedClassIds.add(lg.classId);
+        }
+      }
+      for (const cId of affectedClassIds) {
+        safeRevalidatePath(`/list/attendance/class/${cId}`);
+        safeRevalidatePath(`/list/payments/class/${cId}`);
+        safeRevalidatePath(`/list/formations/${cId}`);
+      }
+      if (affectedClassIds.size > 0) {
+        safeRevalidatePath("/list/formations");
+      }
       safeRevalidatePath(`/list/students/${input.studentId}`);
     }
 
@@ -2376,18 +2527,11 @@ export async function searchCatchUpCandidatesAction(
       searchConditions.push({ phone: { contains: trimmedQuery } });
     }
 
-    // Search students matching query who are NOT enrolled in currentLesson.classId
+    // Search students matching query (both enrolled students with missed lessons and cross-group visitors)
     const students = await prisma.student.findMany({
       where: {
         AND: [
           { OR: searchConditions },
-          {
-            enrollments: {
-              none: {
-                classId: currentLesson.classId,
-              },
-            },
-          },
         ],
       },
       select: {
@@ -2609,6 +2753,7 @@ export async function searchCatchUpCandidatesAction(
         phone: s.phone,
         branchName: s.registeredBranch?.name || null,
         remainingCredits: classCreditsMap.size > 0 ? Array.from(classCreditsMap.values())[0] : null,
+        isEnrolledInCurrentClass: (s.enrollments || []).some((e: any) => e.class?.id === currentLesson.classId),
         missedLessons: combinedLessons,
       };
     });
@@ -2689,11 +2834,11 @@ export async function recordCatchUpAttendanceAction(data: {
       return { success: false, error: true, message: "الحصة المطلوب استدراكها غير موجودة." };
     }
 
-    if (missedLesson.classId === catchUpLesson.classId) {
+    if (missedLessonId === catchUpLessonId) {
       return {
         success: false,
         error: true,
-        message: "لا يمكن استدراك حصة في نفس الفوج كزائر استدراك.",
+        message: "لا يمكن استدراك الحصة بنفس الحصة / Impossible de rattraper une séance par elle-même.",
       };
     }
 
@@ -2763,7 +2908,29 @@ export async function recordCatchUpAttendanceAction(data: {
         });
       }
 
-      // 2. Create the CatchUpAttendance record
+      // 2. If catching up in the same group, ensure attendance for catchUpLessonId is marked PRESENT
+      if (missedLesson.classId === catchUpLesson.classId) {
+        const catchUpAtt = await tx.attendance.findFirst({
+          where: { lessonId: catchUpLessonId, studentId },
+        });
+        if (!catchUpAtt) {
+          await tx.attendance.create({
+            data: {
+              studentId,
+              lessonId: catchUpLessonId,
+              status: "PRESENT",
+              justification: null,
+            },
+          });
+        } else if (catchUpAtt.status !== "PRESENT") {
+          await tx.attendance.update({
+            where: { id: catchUpAtt.id },
+            data: { status: "PRESENT", justification: null },
+          });
+        }
+      }
+
+      // 3. Create the CatchUpAttendance record
       await tx.catchUpAttendance.create({
         data: {
           studentId,
@@ -2784,10 +2951,13 @@ export async function recordCatchUpAttendanceAction(data: {
     safeRevalidatePath(`/list/payments/class/${missedLesson.classId}`);
     safeRevalidatePath(`/list/students/${studentId}`);
 
+    const isSameGroup = missedLesson.classId === catchUpLesson.classId;
     return {
       success: true,
       error: false,
-      message: "تم تسجيل حضور التلميذ كزائر استدراك بنجاح.",
+      message: isSameGroup
+        ? "تم تسجيل الاستدراك الداخلي بنجاح وخصم حصة واحدة فقط."
+        : "تم تسجيل حضور التلميذ كزائر استدراك بنجاح.",
     };
   } catch (error: any) {
     console.error("Error in recordCatchUpAttendanceAction:", error);
@@ -4548,14 +4718,11 @@ export const transferEnrollmentCredit = async (
         0,
         purchasedSessionsFrom + transferredInFrom - transferredOutFrom + offsetFrom - attendedSessionsFrom
       );
-      isFullTransfer = Number(transferredSessions) >= availableSessionsFrom;
-
-      if (isFullTransfer) {
-        await tx.enrollment.update({
-          where: { id: fromEnrollment.id },
-          data: { status: "TRANSFERRED" },
-        });
-      }
+      // Student has transferred to the new group: mark fromEnrollment as TRANSFERRED
+      await tx.enrollment.update({
+        where: { id: fromEnrollment.id },
+        data: { status: "TRANSFERRED" },
+      });
     });
 
     try {
@@ -4576,9 +4743,7 @@ export const transferEnrollmentCredit = async (
         ? ` (تم تحويل مبلغ ${transferredAmount.toLocaleString("ar-DZ")} دج من فرع ${fromEnrollment.class.branch.name} إلى فرع ${toClass.branch.name})`
         : "";
 
-    const unenrollNote = isFullTransfer
-      ? ` (تم إلغاء تسجيل التلميذ من ${fromEnrollment.class.name} لتحويل كامل الرصيد المتاح)`
-      : "";
+    const unenrollNote = ` (تم تحويل التلميذ من ${fromEnrollment.class.name} إلى ${toClass.name})`;
 
     return {
       success: true,
@@ -6182,6 +6347,23 @@ export const exportToExcel = async (
   "use server";
 
   try {
+    const session = await getAuthSession();
+    // Branch admins can ONLY export attendance records. All other exports are owner-only.
+    if (!session.isOwner) {
+      if (type !== "attendance") {
+        return { success: false, error: true, message: "غير مصرح لك بتصدير هذا الملف. هذه الخاصية متاحة للمالك فقط." };
+      }
+      if (options?.classId) {
+        const targetClass = await prisma.class.findUnique({
+          where: { id: options.classId },
+          select: { branchId: true },
+        });
+        if (targetClass && !canUserAccessBranch(session.rawRole, session.branchIds, targetClass.branchId)) {
+          return { success: false, error: true, message: "لا تملك صلاحية الوصول إلى بيانات هذا الفرع." };
+        }
+      }
+    }
+
     const workbook = new ExcelJS.Workbook();
     let filename = `${type}_export_${new Date().toISOString().split('T')[0]}.xlsx`;
 
@@ -6236,7 +6418,38 @@ export const exportToExcel = async (
                   student: {
                     include: {
                       registeredBranch: true,
-                      family: true,
+                      family: {
+                        include: {
+                          payerStudent: {
+                            include: {
+                              enrollments: {
+                                include: {
+                                  class: { select: { id: true, pricePerCycle: true, isFormation: true } },
+                                  transfersFrom: true,
+                                  transfersTo: true,
+                                },
+                              },
+                              vouchers: {
+                                where: { isVoided: false, isRefund: false },
+                                include: { refunds: true },
+                              },
+                              attendances: {
+                                where: { lesson: { isFree: false } },
+                                include: {
+                                  lesson: { select: { id: true, startsAt: true, isFree: true, classId: true } },
+                                },
+                              },
+                              catchUpAttendances: {
+                                include: {
+                                  missedLesson: {
+                                    select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+                                  },
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
                       enrollments: { include: { class: { include: { branch: true } } } },
                       vouchers: {
                         where: {
@@ -6362,12 +6575,22 @@ export const exportToExcel = async (
               (cu: any) => classTarget.lessons.some((l) => l.id === cu.missedLessonId)
             );
 
+            const payerCredit = isWaivedSibling && family?.payerStudent
+              ? resolvePayerCredit({
+                  payerStudent: family.payerStudent,
+                  classId: classTarget.id,
+                  classPricePerCycle: Number(classTarget.pricePerCycle || 0),
+                  isFormation,
+                })
+              : null;
+
             const creditMetrics = computeStudentCreditAndSessions({
               pricePerCycle: Number(classTarget.pricePerCycle || 0),
               isFormation,
               payerStatus: enrPayerStatus,
               siblingDiscountPercentage: siblingDiscountPct,
               isSiblingWaived: isWaivedSibling && siblingDiscountPct >= 100,
+              payerRemainingCredit: isWaivedSibling ? payerCredit?.netSessions : undefined,
               tuitionVouchers,
               transfersIn: enrollment.transfersTo,
               transfersOut: enrollment.transfersFrom,
@@ -6378,20 +6601,26 @@ export const exportToExcel = async (
             });
 
             const consumed = creditMetrics.attendedSessions;
-            const remaining = creditMetrics.netSessions;
+            const remaining = isWaivedSibling && payerCredit ? payerCredit.netSessions : creditMetrics.netSessions;
 
             // Status label
             let statusText = "غير دافع";
             if (creditMetrics.isNonPayer) {
               statusText = "معفى من الرسوم";
-            } else if (siblingDiscountPct >= 100) {
-              statusText = "معفى (خصم الإخوة)";
-            } else if (remaining >= 2) {
-              statusText = isWaivedSibling ? `دافع (خصم إخوة ${siblingDiscountPct}%)` : "دافع";
-            } else if (remaining === 1) {
-              statusText = isWaivedSibling ? `قريب الانتهاء (خصم إخوة ${siblingDiscountPct}%)` : "قريب الانتهاء";
             } else if (isWaivedSibling) {
-              statusText = `غير دافع (خصم إخوة ${siblingDiscountPct}%)`;
+              if (remaining >= 2) {
+                statusText = siblingDiscountPct >= 100
+                  ? "معفى (أخ دافع)"
+                  : `دافع (خصم إخوة ${siblingDiscountPct}%)`;
+              } else if (remaining === 1) {
+                statusText = `قريب الانتهاء (خصم إخوة ${siblingDiscountPct}%)`;
+              } else {
+                statusText = `غير دافع (خصم إخوة ${siblingDiscountPct}%)`;
+              }
+            } else if (remaining >= 2) {
+              statusText = "دافع";
+            } else if (remaining === 1) {
+              statusText = "قريب الانتهاء";
             }
 
             // Other branches enrolled
@@ -6404,8 +6633,10 @@ export const exportToExcel = async (
             ).join(", ") || "لا يوجد";
 
             // Cycles representation
-            const purchasedSessions = creditMetrics.purchasedSessions;
-            const isExempt = creditMetrics.isNonPayer || siblingDiscountPct >= 100;
+            const purchasedSessions = isWaivedSibling && payerCredit
+              ? Math.max(0, payerCredit.netSessions + consumed)
+              : creditMetrics.purchasedSessions;
+            const isExempt = creditMetrics.isNonPayer;
             const c1 = isExempt ? "معفى" : (purchasedSessions >= 4 ? "مدفوع" : "غير مدفوع");
             const c2 = isExempt ? "معفى" : (purchasedSessions >= 8 ? "مدفوع" : "غير مدفوع");
             const c3 = isExempt ? "معفى" : (purchasedSessions >= 12 ? "مدفوع" : "غير مدفوع");
@@ -6423,7 +6654,7 @@ export const exportToExcel = async (
               cycle3: c3,
               cycle4: c4,
               consumedSessions: consumed,
-              remainingSessions: isExempt ? "معفى" : remaining,
+              remainingSessions: creditMetrics.isNonPayer ? "معفى" : remaining,
               status: statusText,
             });
         });
@@ -6433,7 +6664,7 @@ export const exportToExcel = async (
         paymentSheet.getRow(1).fill = { type: 'pattern', pattern:'solid', fgColor:{argb:'FF2F85FC'} };
         break;
 
-      case "attendance":
+      case "attendance": {
         // 1. Safely get the filter options from the request
         const { classId, dateFrom, dateTo } = options || {};
 
@@ -6441,16 +6672,60 @@ export const exportToExcel = async (
             return { success: false, error: true, message: "مطلوب معرف القسم (Class ID) لتصدير سجلات الحضور." };
         }
 
-
-
-
         const classData = await prisma.class.findUnique({
             where: { id: classId },
             include: {
+                branch: true,
+                teacher: true,
+                level: true,
+                FormationLevel: { include: { Language: true } },
+                vouchers: {
+                    where: { isVoided: false },
+                    include: { refunds: true },
+                },
                 enrollments: {
                     include: {
                         student: {
                             include: {
+                                family: {
+                                    include: {
+                                        payerStudent: {
+                                            include: {
+                                                enrollments: {
+                                                    include: {
+                                                        class: { select: { id: true, pricePerCycle: true, isFormation: true } },
+                                                        transfersFrom: true,
+                                                        transfersTo: true,
+                                                    },
+                                                },
+                                                vouchers: {
+                                                    where: { isVoided: false, isRefund: false },
+                                                    include: { refunds: true },
+                                                },
+                                                attendances: {
+                                                    where: { lesson: { isFree: false } },
+                                                    include: {
+                                                        lesson: { select: { id: true, startsAt: true, isFree: true, classId: true } },
+                                                    },
+                                                },
+                                                catchUpAttendances: {
+                                                    include: {
+                                                        missedLesson: {
+                                                            select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+                                                        },
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                                vouchers: {
+                                    where: { isVoided: false },
+                                    include: { refunds: true },
+                                },
+                                catchUpAttendances: {
+                                    select: { missedLessonId: true },
+                                },
                                 attendances: {
                                     where: {
                                         lesson: {
@@ -6464,12 +6739,17 @@ export const exportToExcel = async (
                                         }
                                     },
                                     include: {
-                                        lesson: true
+                                        lesson: true,
                                     }
                                 }
                             }
-                        }
-                    }
+                        },
+                        transfersFrom: true,
+                        transfersTo: true,
+                    },
+                    orderBy: [
+                        { student: { name: 'asc' } },
+                    ],
                 },
                 lessons: {
                     where: {
@@ -6480,6 +6760,9 @@ export const exportToExcel = async (
                             }
                         } : {})
                     },
+                    include: {
+                        attendances: true,
+                    },
                     orderBy: { startsAt: 'asc' }
                 }
             }
@@ -6489,58 +6772,395 @@ export const exportToExcel = async (
             return { success: false, error: true, message: "لم يتم العثور على القسم." };
         }
 
-        const attendanceSheet = workbook.addWorksheet("Attendance Grid");
-        filename = `Attendance_${classData.name.replace(/ /g, "_")}_${new Date().toISOString().split('T')[0]}.xlsx`;
+        const attendanceSheet = workbook.addWorksheet(classData.name.substring(0, 31));
+        filename = `Registre_Presence_${classData.name.replace(/ /g, "_")}_${new Date().toISOString().split('T')[0]}.xlsx`;
 
-        // Create column headers from lessons
-        attendanceSheet.columns = [
-            { header: "التلميذ", key: "studentName", width: 25 },
-            ...classData.lessons.map(lesson => ({
-                header: `حصة ${lesson.id}\n${new Date(lesson.startsAt).toLocaleDateString('fr-DZ')}`,
-                key: `lesson_${lesson.id}`,
-                width: 18,
-            }))
-        ];
+        // RTL orientation for Arabic ledger
+        attendanceSheet.views = [{ rightToLeft: true }];
 
-        const studentRows = classData.enrollments.map(en => {
-            const student = en.student;
-            const row: { [key: string]: any } = {
-                studentName: student.name,
-            };
-            classData.lessons.forEach(l => {
-                const att = student.attendances.find(a => a.lessonId === l.id);
-                row[`lesson_${l.id}`] = att ? (att.status === 'PRESENT' ? 'Present' : 'Absent') : '-';
-            });
-            return row;
-        });
+        const hasBooks = Boolean(classData.hasBooks);
 
-        attendanceSheet.addRows(studentRows);
-
-        // Styling
-        const headerRow = attendanceSheet.getRow(1);
-        headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-        headerRow.fill = { type: 'pattern', pattern:'solid', fgColor:{argb:'FF2F85FC'} };
-        headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-        
-        attendanceSheet.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
-
-        attendanceSheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-            if (rowNumber > 1) {
-                row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-                    if (colNumber > 1) {
-                        cell.alignment = { vertical: 'middle', horizontal: 'center' };
-                        if (cell.value === 'Present') {
-                            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
-                            cell.font = { color: { argb: 'FF006100' } };
-                        } else if (cell.value === 'Absent') {
-                            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
-                            cell.font = { color: { argb: 'FF9C0006' } };
+        // Fetch book distributions/receipts if class has books
+        const studentClaimedBooks = new Map<string, Set<number>>();
+        if (hasBooks && classData.teacherId && classData.levelId) {
+            try {
+                const books = await prisma.book.findMany({
+                    where: { teacherId: classData.teacherId, levelId: classData.levelId },
+                    include: {
+                        trimester: true,
+                        receipts: true,
+                        drops: { include: { distributions: true } }
+                    },
+                });
+                for (const b of books) {
+                    const tri = (b.trimester?.name?.includes("1") || b.trimester?.label?.includes("1") || b.title.includes("1")) ? 1 : (b.trimester?.name?.includes("2") || b.trimester?.label?.includes("2") || b.title.includes("2")) ? 2 : 3;
+                    for (const r of b.receipts) {
+                        if (!studentClaimedBooks.has(r.studentId)) studentClaimedBooks.set(r.studentId, new Set());
+                        studentClaimedBooks.get(r.studentId)!.add(tri);
+                    }
+                    for (const d of b.drops) {
+                        for (const dist of d.distributions) {
+                            if (!studentClaimedBooks.has(dist.studentId)) studentClaimedBooks.set(dist.studentId, new Set());
+                            studentClaimedBooks.get(dist.studentId)!.add(tri);
                         }
                     }
+                }
+            } catch (err) {
+                console.error("Error fetching book distributions:", err);
+            }
+        }
+
+        // Colors palette (ARGB)
+        const C_HEADER_FILL = 'FF2F5597'; // Royal Navy Header
+        const C_FREE_LESSON_COL = 'FFF9CB9C'; // Soft Light Orange for free lesson cells
+        const C_FREE_LESSON_HDR = 'FFE69138'; // Darker Orange for free lesson header
+        const C_PAID_YELLOW = 'FFFFFF77'; // Soft Yellow for paid sessions
+        const C_ORANGE_ROW = 'FFFCE5CD'; // Light Orange for siblings & non-payers
+        const C_BLUE_ROW = 'FFD9E1F2'; // Light Blue for school-part payers
+        const C_PINK_CELL = 'FFF4CCCC'; // Light Pink for suspended/transferred/refunded
+        const C_WHITE = 'FFFFFFFF';
+        const C_BORDER_GRAY = 'FFD3D3D3';
+        const C_BORDER_DARK = 'FF888888';
+
+        const thinBorder: Partial<ExcelJS.Borders> = {
+            top: { style: 'thin', color: { argb: C_BORDER_GRAY } },
+            bottom: { style: 'thin', color: { argb: C_BORDER_GRAY } },
+            left: { style: 'thin', color: { argb: C_BORDER_GRAY } },
+            right: { style: 'thin', color: { argb: C_BORDER_GRAY } },
+        };
+
+        const totalCols = 2 + (hasBooks ? 3 : 0) + classData.lessons.length;
+
+        // Row 1: Title Banner
+        attendanceSheet.mergeCells(1, 1, 1, Math.max(totalCols, 6));
+        const r1 = attendanceSheet.getCell(1, 1);
+        r1.value = `مدرسة ماسينيسا - سجل الحضور والمتابعة (MASSINISSA SCHOOL)`;
+        r1.font = { name: 'Calibri', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+        r1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_HEADER_FILL } };
+        r1.alignment = { vertical: 'middle', horizontal: 'center' };
+        attendanceSheet.getRow(1).height = 28;
+
+        // Row 2: Metadata Bar
+        const levelText = classData.level?.name || classData.FormationLevel?.Language?.name || '-';
+        const teacherText = classData.teacher?.name || '-';
+        const branchText = classData.branch?.name || '-';
+
+        let scheduleText = '-';
+        if (classData.lessons.length > 0) {
+            const firstL = classData.lessons[0];
+            const startStr = new Date(firstL.startsAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+            const endStr = new Date(firstL.endsAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+            scheduleText = `${startStr} - ${endStr}`;
+        }
+
+        attendanceSheet.mergeCells(2, 1, 2, Math.max(totalCols, 6));
+        const r2 = attendanceSheet.getCell(2, 1);
+        r2.value = `الفوج: ${classData.name}   |   المستوى: ${levelText}   |   الأستاذ: ${teacherText}   |   التوقيت: ${scheduleText}   |   الفرع: ${branchText}`;
+        r2.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF333333' } };
+        r2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+        r2.alignment = { vertical: 'middle', horizontal: 'center' };
+        attendanceSheet.getRow(2).height = 22;
+
+        // Row 3: Blank spacer
+        attendanceSheet.getRow(3).height = 8;
+
+        // Row 4: Single Date Table Header (DD/MM)
+        const headerRowIndex = 4;
+        const headerRow = attendanceSheet.getRow(headerRowIndex);
+        headerRow.height = 26;
+
+        let colIdx = 1;
+        // Col 1: Numbering
+        const cNum = attendanceSheet.getCell(headerRowIndex, colIdx++);
+        cNum.value = 'الرقم';
+        cNum.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cNum.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF44546A' } };
+        cNum.alignment = { vertical: 'middle', horizontal: 'center' };
+        cNum.border = thinBorder;
+        attendanceSheet.getColumn(1).width = 7;
+
+        // Col 2: Student Name and ID
+        const cName = attendanceSheet.getCell(headerRowIndex, colIdx++);
+        cName.value = 'اسم التلميذ (معرّف ID)';
+        cName.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cName.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF44546A' } };
+        cName.alignment = { vertical: 'middle', horizontal: 'right' };
+        cName.border = thinBorder;
+        attendanceSheet.getColumn(2).width = 30;
+
+        // Optional Books Columns: T1, T2, T3
+        if (hasBooks) {
+            ['T1', 'T2', 'T3'].forEach((tLabel) => {
+                const cT = attendanceSheet.getCell(headerRowIndex, colIdx);
+                cT.value = tLabel;
+                cT.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+                cT.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF5B6B82' } };
+                cT.alignment = { vertical: 'middle', horizontal: 'center' };
+                cT.border = thinBorder;
+                attendanceSheet.getColumn(colIdx).width = 7;
+                colIdx++;
+            });
+        }
+
+        // Lesson Columns: single row formatted as DD/MM
+        const lessonColMap = new Map<number, number>();
+        classData.lessons.forEach((lesson) => {
+            const lessonDate = new Date(lesson.startsAt);
+            const dd = String(lessonDate.getDate()).padStart(2, '0');
+            const mm = String(lessonDate.getMonth() + 1).padStart(2, '0');
+            const dateStr = `${dd}/${mm}`;
+
+            const cLesson = attendanceSheet.getCell(headerRowIndex, colIdx);
+            cLesson.value = lesson.isFree ? `${dateStr}\n(مجانية)` : dateStr;
+            cLesson.font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+            cLesson.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: lesson.isFree ? C_FREE_LESSON_HDR : 'FF44546A' },
+            };
+            cLesson.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+            cLesson.border = thinBorder;
+            attendanceSheet.getColumn(colIdx).width = 10;
+
+            lessonColMap.set(lesson.id, colIdx);
+            colIdx++;
+        });
+
+        // Rows 5..N: Students rows
+        let currentRowIdx = 5;
+
+        classData.enrollments.forEach((enrollment, studentIdx) => {
+            const student = enrollment.student;
+            const studentRow = attendanceSheet.getRow(currentRowIdx);
+            studentRow.height = 20;
+
+            const enrPayerStatus = enrollment.payerStatus || (student as any).payerStatus || "NORMAL";
+            const family = student.family;
+            const isWaivedSibling = Boolean(family && family.payerStudentId && family.payerStudentId !== student.id);
+            const siblingDiscountPct = isWaivedSibling ? Number(family?.discountPercentage ?? 50) : 0;
+            const isSiblingWaived100 = isWaivedSibling && siblingDiscountPct >= 100;
+            const isNonPayer = enrPayerStatus === "NON_PAYER" || enrPayerStatus === "FREE_ALL" || enrPayerStatus === "FREE_TUITION";
+            const isSchoolOnly = enrPayerStatus === "SCHOOL_FEES_ONLY";
+
+            const payerCredit = isWaivedSibling && family?.payerStudent
+                ? resolvePayerCredit({
+                    payerStudent: family.payerStudent,
+                    classId: classData.id,
+                    classPricePerCycle: Number(classData.pricePerCycle || 0),
+                    isFormation: Boolean(classData.isFormation),
+                })
+                : null;
+
+            // Determine row identity fill color
+            let rowIdentityFill = C_WHITE;
+            if (isNonPayer || isWaivedSibling) {
+                rowIdentityFill = C_ORANGE_ROW; // Orange row for siblings & non-payers
+            } else if (isSchoolOnly) {
+                rowIdentityFill = C_BLUE_ROW; // Blue row for school-part payers
+            }
+
+            // Student vouchers and calculations
+            const studentVouchers = (student.vouchers || []).filter((v: any) => v.classId === classData.id && !v.isRefund && !v.isVoided);
+            const tuitionVouchers = studentVouchers.filter((v: any) => v.paymentType === "TUITION_4SESSION" || v.paymentType === "FORMATION");
+
+            const studentAtts: Array<{ lessonId: number; status: string }> = [];
+            classData.lessons.forEach((l) => {
+                const att = l.attendances.find((a: any) => a.studentId === student.id);
+                if (att) {
+                    studentAtts.push({ lessonId: l.id, status: att.status });
+                }
+            });
+
+            const classCatchUps = ((student as any).catchUpAttendances || []).filter(
+                (cu: any) => classData.lessons.some((l) => l.id === cu.missedLessonId)
+            );
+
+            const creditMetrics = computeStudentCreditAndSessions({
+                pricePerCycle: Number(classData.pricePerCycle || 0),
+                isFormation: Boolean(classData.isFormation),
+                payerStatus: enrPayerStatus,
+                siblingDiscountPercentage: siblingDiscountPct,
+                isSiblingWaived: isSiblingWaived100,
+                payerRemainingCredit: isWaivedSibling ? payerCredit?.netSessions : undefined,
+                tuitionVouchers,
+                transfersIn: enrollment.transfersTo,
+                transfersOut: enrollment.transfersFrom,
+                creditResetOffset: enrollment.creditResetOffset,
+                attendances: studentAtts,
+                lessons: classData.lessons as any,
+                catchUps: classCatchUps,
+            });
+
+            const paidSessionsCount = isNonPayer
+                ? 9999
+                : isWaivedSibling && payerCredit
+                ? Math.max(0, payerCredit.netSessions + creditMetrics.attendedSessions)
+                : Math.max(0, creditMetrics.purchasedSessions + creditMetrics.transferredIn - creditMetrics.transferredOut);
+
+            // Suspension check
+            const consecutiveAbs = computeStudentConsecutiveAbsences({
+                lessons: classData.lessons as any,
+                attendances: studentAtts,
+                catchUps: classCatchUps,
+            });
+            const isSuspended = enrollment.status === "SUSPENDED" || consecutiveAbs >= 3;
+            const isTransferred = enrollment.status === "TRANSFERRED" || (enrollment.transfersFrom && enrollment.transfersFrom.length > 0 && enrollment.status !== "ACTIVE");
+            const isRefunded = enrollment.status === "REFUNDED" || studentVouchers.some((v: any) => v.refunds && v.refunds.length > 0);
+
+            let curCol = 1;
+
+            // 1. Index
+            const cellIdx = attendanceSheet.getCell(currentRowIdx, curCol++);
+            cellIdx.value = studentIdx + 1;
+            cellIdx.font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: 'FF333333' } };
+            cellIdx.alignment = { vertical: 'middle', horizontal: 'center' };
+            cellIdx.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowIdentityFill } };
+            cellIdx.border = thinBorder;
+
+            // 2. Student Name + ID
+            const cellName = attendanceSheet.getCell(currentRowIdx, curCol++);
+            cellName.value = `${student.name} (#${student.globalNumber || student.id})`;
+            cellName.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF111111' } };
+            cellName.alignment = { vertical: 'middle', horizontal: 'right' };
+            cellName.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowIdentityFill } };
+            cellName.border = thinBorder;
+
+            // 3. Books: T1, T2, T3
+            if (hasBooks) {
+                const bookVouchers = studentVouchers.filter((v: any) => v.paymentType === "BOOK");
+                const hasBookVoucher = bookVouchers.length > 0;
+                const claimedSet = studentClaimedBooks.get(student.id) || new Set<number>();
+
+                [1, 2, 3].forEach((tri) => {
+                    const cellT = attendanceSheet.getCell(currentRowIdx, curCol++);
+                    const isBookPaidAndClaimed = (hasBookVoucher && claimedSet.has(tri)) || claimedSet.has(tri) || (hasBookVoucher && tri === 1);
+                    cellT.value = isBookPaidAndClaimed ? 'X' : '-';
+                    cellT.font = { name: 'Calibri', size: 10, bold: isBookPaidAndClaimed, color: { argb: isBookPaidAndClaimed ? 'FF006100' : 'FF888888' } };
+                    cellT.alignment = { vertical: 'middle', horizontal: 'center' };
+                    cellT.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowIdentityFill } };
+                    cellT.border = thinBorder;
                 });
             }
+
+            // 4. Session Attendance Cells
+            let nonFreeIndex = 0;
+            classData.lessons.forEach((lesson) => {
+                const cellLesson = attendanceSheet.getCell(currentRowIdx, curCol++);
+                const att = lesson.attendances.find((a: any) => a.studentId === student.id);
+                const hasCatchUp = classCatchUps.some((cu: any) => cu.missedLessonId === lesson.id);
+
+                let mark = '-';
+                if (att) {
+                    if (att.status === 'PRESENT' || hasCatchUp) {
+                        mark = 'X';
+                    } else if (att.status === 'ABSENT') {
+                        mark = 'A';
+                    }
+                }
+
+                if (lesson.isFree) {
+                    // Free lesson column is orange
+                    cellLesson.value = mark;
+                    cellLesson.font = { name: 'Calibri', size: 10, bold: mark === 'X', color: { argb: mark === 'X' ? 'FF111111' : mark === 'A' ? 'FFCC0000' : 'FF777777' } };
+                    cellLesson.alignment = { vertical: 'middle', horizontal: 'center' };
+                    cellLesson.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_FREE_LESSON_COL } };
+                    cellLesson.border = thinBorder;
+                } else {
+                    const isLessonPaid = nonFreeIndex < paidSessionsCount;
+
+                    if (isLessonPaid) {
+                        // Paid lesson is yellow
+                        cellLesson.value = mark;
+                        cellLesson.font = { name: 'Calibri', size: 10, bold: mark === 'X', color: { argb: mark === 'X' ? 'FF000000' : mark === 'A' ? 'FFCC0000' : 'FF555555' } };
+                        cellLesson.alignment = { vertical: 'middle', horizontal: 'center' };
+                        cellLesson.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_PAID_YELLOW } };
+                        cellLesson.border = thinBorder;
+                    } else {
+                        // Non-yellow cell: if suspended/transferred/refunded -> pink highlight with mention
+                        if (isTransferred || isRefunded || isSuspended) {
+                            const statusMention = isTransferred ? "تم التحويل" : isRefunded ? "مسترجع" : "معلق";
+                            cellLesson.value = statusMention;
+                            cellLesson.font = { name: 'Calibri', size: 8, bold: true, color: { argb: 'FF9C0006' } };
+                            cellLesson.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+                            cellLesson.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_PINK_CELL } };
+                            cellLesson.border = thinBorder;
+                        } else {
+                            // Normal unpaid cell
+                            cellLesson.value = mark !== '-' ? mark : '';
+                            cellLesson.font = { name: 'Calibri', size: 10, bold: mark === 'X', color: { argb: mark === 'A' ? 'FFCC0000' : 'FF555555' } };
+                            cellLesson.alignment = { vertical: 'middle', horizontal: 'center' };
+                            cellLesson.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_WHITE } };
+                            cellLesson.border = thinBorder;
+                        }
+                    }
+                    nonFreeIndex++;
+                }
+            });
+
+            currentRowIdx++;
         });
+
+        // Summary Tally Row
+        const summaryRowIdx = currentRowIdx;
+        const summaryRow = attendanceSheet.getRow(summaryRowIdx);
+        summaryRow.height = 22;
+
+        const sumLabelCell = attendanceSheet.getCell(summaryRowIdx, 2);
+        sumLabelCell.value = 'مجموع الحضور (Présents)';
+        sumLabelCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        sumLabelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF44546A' } };
+        sumLabelCell.alignment = { vertical: 'middle', horizontal: 'center' };
+        sumLabelCell.border = thinBorder;
+
+        // Fill index cell
+        const sumIdxCell = attendanceSheet.getCell(summaryRowIdx, 1);
+        sumIdxCell.value = 'Σ';
+        sumIdxCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        sumIdxCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF44546A' } };
+        sumIdxCell.alignment = { vertical: 'middle', horizontal: 'center' };
+        sumIdxCell.border = thinBorder;
+
+        // Fill book cols if any
+        if (hasBooks) {
+            [3, 4, 5].forEach((bCol) => {
+                const cB = attendanceSheet.getCell(summaryRowIdx, bCol);
+                cB.value = '';
+                cB.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF44546A' } };
+                cB.border = thinBorder;
+            });
+        }
+
+        // Calculate and place count of present students for each lesson
+        classData.lessons.forEach((lesson) => {
+            const colNumber = lessonColMap.get(lesson.id);
+            if (!colNumber) return;
+
+            let presentCount = 0;
+            for (let r = 5; r < summaryRowIdx; r++) {
+                const cellVal = attendanceSheet.getCell(r, colNumber).value;
+                if (cellVal === 'X') presentCount++;
+            }
+
+            const sumCell = attendanceSheet.getCell(summaryRowIdx, colNumber);
+            sumCell.value = presentCount;
+            sumCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+            sumCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: lesson.isFree ? C_FREE_LESSON_HDR : 'FF44546A' } };
+            sumCell.alignment = { vertical: 'middle', horizontal: 'center' };
+            sumCell.border = thinBorder;
+        });
+
+        // Freeze headers: first 2 identity columns and top 4 rows
+        attendanceSheet.views = [
+            {
+                state: 'frozen',
+                xSplit: hasBooks ? 5 : 2,
+                ySplit: 4,
+                rightToLeft: true,
+            }
+        ];
+
         break;
+      }
 
     case "workshop_details":
         if (!options?.workshopId) {

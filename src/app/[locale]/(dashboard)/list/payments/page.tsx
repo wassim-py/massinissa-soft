@@ -245,7 +245,14 @@ const PaymentsListPage = async (props: {
         branch: { select: { id: true, name: true } },
         level: { select: { id: true, name: true } },
         _count: {
-          select: { enrollments: true },
+          select: {
+            enrollments: {
+              where: {
+                status: "ACTIVE",
+                transfersFrom: { none: {} },
+              },
+            },
+          },
         },
       },
       orderBy: [

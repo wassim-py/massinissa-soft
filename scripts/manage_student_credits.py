@@ -451,6 +451,36 @@ def get_student_full_profile(conn, student_id):
             "targetBranchId": r[15],
         })
 
+    # Direct Refund records for this student
+    ref_rows = conn.run(
+        """SELECT r.id, r.amount, r.reason, r."refundedBy", r."refundedAt", r."voucherId",
+                  v.number as voucher_number, v."classId", c.name as class_name,
+                  v."issuingBranchId", ib.name as issuing_branch
+           FROM "Refund" r
+           JOIN "Voucher" v ON v.id = r."voucherId"
+           LEFT JOIN "Class" c ON c.id = v."classId"
+           LEFT JOIN "Branch" ib ON ib.id = v."issuingBranchId"
+           WHERE v."studentId" = :sid
+           ORDER BY r."refundedAt" DESC, r.id DESC""",
+        sid=student_id
+    )
+    student["refunds"] = [
+        {
+            "id": rr[0],
+            "amount": float(rr[1] or 0),
+            "reason": rr[2] or "No reason",
+            "refundedBy": rr[3] or "termux",
+            "refundedAt": rr[4],
+            "voucherId": rr[5],
+            "voucher_number": rr[6],
+            "classId": rr[7],
+            "class_name": rr[8] or "General",
+            "issuingBranchId": rr[9],
+            "issuing_branch": rr[10] or "—",
+        }
+        for rr in ref_rows
+    ]
+
     # 3-Group Inscription Waiver Rule (matches src/lib/studentBilling.ts):
     # If student has paid INSCRIPTION in 3+ distinct classes, 4th+ classes are automatically waived.
     paid_insc_by_class = {}
@@ -581,11 +611,11 @@ def get_all_branches(conn):
     return [{"id": r[0], "name": r[1]} for r in rows]
 
 
-def get_or_create_voucher_series(conn, branch_id):
+def get_or_create_voucher_series(conn, branch_id, scope="LOCAL_BRANCH"):
     """Find or create an active voucher series for this branch and return (series_id, next_number)."""
     rows = conn.run(
-        'SELECT id, "currentNumber" FROM "VoucherSeries" WHERE "issuingBranchId" = :bid ORDER BY id ASC LIMIT 1',
-        bid=branch_id
+        'SELECT id, "currentNumber" FROM "VoucherSeries" WHERE "issuingBranchId" = :bid AND scope = :sc ORDER BY id ASC LIMIT 1',
+        bid=branch_id, sc=scope
     )
     if rows:
         series_id, current_num = rows[0]
@@ -599,8 +629,8 @@ def get_or_create_voucher_series(conn, branch_id):
         # Create new series
         created = conn.run(
             """INSERT INTO "VoucherSeries" ("issuingBranchId", scope, "currentNumber")
-               VALUES (:bid, 'LOCAL_BRANCH', 1) RETURNING id""",
-            bid=branch_id
+               VALUES (:bid, :sc, 1) RETURNING id""",
+            bid=branch_id, sc=scope
         )
         return created[0][0], 1
 
@@ -1098,6 +1128,383 @@ def handle_delete_voucher(conn, student):
             print("Cancelled.")
 
 
+def handle_push_refund(conn, student, pre_class_id=None, pre_amount=None, pre_date=None, pre_reason=None, pre_mark_refunded=False):
+    """
+    Push a refund for a specific student on a specific group (class) on a specific date.
+    Allows specifying:
+      - Group (Class)
+      - Specific Voucher (or standalone group refund)
+      - Custom Refund Amount (DZD)
+      - Custom Refund Date (YYYY-MM-DD, past or present)
+      - Reason (for audit log & parent records)
+      - Class Enrollment status (optional mark as REFUNDED)
+      - Credit offset adjustment (optional session deduction)
+    Atomically updates Voucher, creates Refund, creates Refund Voucher (scope=REFUND),
+    updates DailyLedger on the refund date, and logs the action.
+    """
+    print("\n" + "═" * 55)
+    print("  💸 PUSH / CREATE REFUND (Group & Custom Date)")
+    print("═" * 55)
+
+    # 1. Select Group (Class)
+    selected_enr = None
+    selected_class_id = pre_class_id
+    selected_class_name = "General / No specific class"
+
+    if selected_class_id is not None:
+        selected_enr = next((e for e in student["enrollments"] if e["classId"] == selected_class_id), None)
+        if selected_enr:
+            selected_class_name = selected_enr["class_name"]
+    else:
+        print("\nSelect Group (Class) for Refund:")
+        print("  [0] General / Other (Not tied to a current class)")
+        for i, enr in enumerate(student["enrollments"], 1):
+            cid = enr["classId"]
+            stats = student["class_stats"].get(cid, {})
+            paid_val = stats.get("tuition_paid", 0)
+            ref_val = stats.get("tuition_refunded", 0)
+            type_str = "FORMATION" if enr.get("isFormation") else "REGULAR"
+            print(f"  [{i}] {enr['class_name']} [{type_str}] (Teacher: {enr['teacher_name']})")
+            print(f"      Net Paid: {format_money(paid_val)} | Refunded: {format_money(ref_val)} | Status: {enr.get('status', 'ACTIVE')}")
+
+        c_choice = input(f"Choose group (0-{len(student['enrollments'])}): ").strip()
+        if c_choice and c_choice != "0":
+            try:
+                c_idx = int(c_choice) - 1
+                if 0 <= c_idx < len(student["enrollments"]):
+                    selected_enr = student["enrollments"][c_idx]
+                    selected_class_id = selected_enr["classId"]
+                    selected_class_name = selected_enr["class_name"]
+                else:
+                    print("❌ Invalid group choice.")
+                    return
+            except ValueError:
+                print("❌ Invalid input.")
+                return
+
+    # 2. Find eligible vouchers for this class/group
+    eligible_vouchers = [
+        v for v in student["vouchers"]
+        if not v["isVoided"] and not v["isRefund"] and (
+            (selected_class_id is not None and v["classId"] == selected_class_id) or
+            (selected_class_id is None)
+        )
+    ]
+
+    chosen_voucher = None
+    if eligible_vouchers:
+        print(f"\nEligible Paid Vouchers for '{selected_class_name}':")
+        for i, v in enumerate(eligible_vouchers, 1):
+            rem = v["remainingBalance"] if v["remainingBalance"] is not None else v["net_amount"]
+            v_date = format_date(v["issuedAt"])
+            print(f"  [{i}] Voucher #{v['number']} | {v['paymentType']} | {format_money(v['amount'])} gross | Rem: {format_money(rem)} | Date: {v_date}")
+        print("  [0] Direct Group Refund (Create standalone refund voucher without linking to above)")
+
+        v_pick = input(f"Choose voucher to refund [default 1]: ").strip() or "1"
+        if v_pick != "0":
+            try:
+                v_idx = int(v_pick) - 1
+                if 0 <= v_idx < len(eligible_vouchers):
+                    chosen_voucher = eligible_vouchers[v_idx]
+            except Exception:
+                chosen_voucher = eligible_vouchers[0]
+    else:
+        print(f"\nℹ️  No active paid vouchers found specifically for '{selected_class_name}'.")
+        print("   A standalone Refund Voucher will be issued for this group.")
+
+    # 3. Determine default & maximum refundable amount
+    if chosen_voucher:
+        avail = chosen_voucher["remainingBalance"] if chosen_voucher["remainingBalance"] is not None else chosen_voucher["net_amount"]
+        default_amt = str(int(avail)) if avail > 0 else str(int(chosen_voucher["amount"]))
+        target_voucher_id = chosen_voucher["id"]
+        payment_type = chosen_voucher["paymentType"]
+        issuing_bid = chosen_voucher.get("issuingBranchId") or student.get("registeredBranchId") or 1
+        target_bid = chosen_voucher.get("targetBranchId") or issuing_bid
+    else:
+        default_amt = "1000"
+        if selected_enr and selected_enr.get("pricePerCycle", 0) > 0:
+            default_amt = str(int(selected_enr["pricePerCycle"]))
+        target_voucher_id = None
+        payment_type = "FORMATION" if (selected_enr and selected_enr.get("isFormation")) else "TUITION_4SESSION"
+        issuing_bid = student.get("registeredBranchId") or 1
+        target_bid = issuing_bid
+
+    # 4. Refund Amount input
+    if pre_amount is not None:
+        refund_amount = float(pre_amount)
+    else:
+        amt_input = input(f"\nEnter Refund Amount in DZD [default {default_amt}]: ").strip()
+        try:
+            refund_amount = float(amt_input if amt_input else default_amt)
+            if refund_amount <= 0:
+                print("❌ Refund amount must be greater than 0.")
+                return
+        except ValueError:
+            print("❌ Invalid amount.")
+            return
+
+    # 5. Refund Date input (Specific Date!)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if pre_date:
+        refund_date_str = pre_date.strip()
+    else:
+        date_input = input(f"Enter Refund Date (YYYY-MM-DD) [default {today_str}]: ").strip()
+        refund_date_str = date_input if date_input else today_str
+
+    try:
+        refund_date_dt = datetime.strptime(refund_date_str, "%Y-%m-%d")
+    except ValueError:
+        print("❌ Invalid date format. Use YYYY-MM-DD (e.g. 2026-10-15).")
+        return
+
+    # 6. Refund Reason input
+    default_reason = "Student withdrawal / استرداد انسحاب الطالب"
+    if pre_reason:
+        reason = pre_reason.strip()
+    else:
+        reason_input = input(f"Enter Refund Reason [default '{default_reason}']: ").strip()
+        reason = reason_input if reason_input else default_reason
+
+    # 7. Class Enrollment status & credit offset updates
+    mark_enrollment_refunded = pre_mark_refunded
+    offset_deduct = 0
+    if selected_enr and not pre_mark_refunded:
+        cur_status = selected_enr.get("status", "ACTIVE")
+        if cur_status != "REFUNDED":
+            enr_status_ans = input(f"\nMark class enrollment '{selected_class_name}' as REFUNDED? [y/N]: ").strip().lower()
+            if enr_status_ans in ("y", "yes"):
+                mark_enrollment_refunded = True
+
+        off_ans = input("Deduct session credits via creditResetOffset? (e.g. -4, or Enter to leave unchanged): ").strip()
+        if off_ans:
+            try:
+                offset_deduct = int(off_ans)
+            except ValueError:
+                offset_deduct = 0
+
+    # 8. Confirmation summary
+    branches = get_all_branches(conn)
+    branch_name = next((b["name"] for b in branches if b["id"] == issuing_bid), str(issuing_bid))
+
+    print("\n" + "═" * 55)
+    print("📋 CONFIRM REFUND TRANSACTION:")
+    print(f"  • Student:      #{student['globalNumber']} - {student['name']}")
+    print(f"  • Group:        {selected_class_name}")
+    print(f"  • Refund Amt:   {format_money(refund_amount)}")
+    print(f"  • Refund Date:  {refund_date_str} (Specific Calendar Date)")
+    print(f"  • Cash Box:     Branch {branch_name} (Daily Ledger will reconcile on {refund_date_str})")
+    print(f"  • Linked To:    Voucher #{chosen_voucher['number']}" if chosen_voucher else "  • Linked To:    Standalone Group Refund Voucher")
+    print(f"  • Reason:       {reason}")
+    if mark_enrollment_refunded:
+        print(f"  • Enrollment:   Will be marked as REFUNDED")
+    if offset_deduct != 0:
+        print(f"  • Credit Offset: {offset_deduct:+d} sessions")
+    print("═" * 55)
+
+    confirm = input("Execute this refund now? [y/N]: ").strip().lower()
+    if confirm not in ("y", "yes"):
+        print("Cancelled.")
+        return
+
+    # 9. Execute transaction atomically
+    conn.run("BEGIN")
+    try:
+        # A. Get or create refund series
+        ref_series_id, ref_num = get_or_create_voucher_series(conn, issuing_bid, scope="REFUND")
+
+        # B. Create Refund Voucher
+        v_res = conn.run(
+            """INSERT INTO "Voucher" ("seriesId", number, "studentId", "classId", "issuingBranchId",
+                                      "targetBranchId", "paymentType", amount, "issuedBy", "issuedAt",
+                                      "isVoided", status, "isRefund", "refundForVoucherId")
+               VALUES (:sid, :num, :stid, :cid, :ibid, :tbid, :ptype, :amt, 'termux_admin', :iat,
+                       false, 'REFUND', true, :rfvid)
+               RETURNING id""",
+            sid=ref_series_id,
+            num=ref_num,
+            stid=student["id"],
+            cid=selected_class_id,
+            ibid=issuing_bid,
+            tbid=target_bid,
+            ptype=payment_type,
+            amt=refund_amount,
+            iat=refund_date_dt,
+            rfvid=target_voucher_id
+        )
+        new_refund_vid = v_res[0][0]
+
+        # C. Insert Refund record
+        parent_vid_for_refund = target_voucher_id if target_voucher_id else new_refund_vid
+        conn.run(
+            """INSERT INTO "Refund" ("voucherId", amount, reason, "refundedBy", "refundedAt")
+               VALUES (:vid, :amt, :rsn, 'termux_admin', :rat)""",
+            vid=parent_vid_for_refund,
+            amt=refund_amount,
+            rsn=reason,
+            rat=refund_date_dt
+        )
+
+        # D. Update Original Voucher if linked
+        if chosen_voucher:
+            orig_rem = chosen_voucher["remainingBalance"] if chosen_voucher["remainingBalance"] is not None else chosen_voucher["net_amount"]
+            new_rem = max(0.0, orig_rem - refund_amount)
+            is_full = (new_rem <= 0)
+            new_status = "REFUNDED" if is_full else "PARTIALLY_REFUNDED"
+            is_void_val = True if is_full else chosen_voucher["isVoided"]
+
+            conn.run(
+                """UPDATE "Voucher"
+                   SET "remainingBalance" = :rem,
+                       status = :st,
+                       "isVoided" = :vd,
+                       "lastEditedAt" = NOW(),
+                       "lastEditedBy" = 'termux_admin'
+                   WHERE id = :id""",
+                rem=new_rem,
+                st=new_status,
+                vd=is_void_val,
+                id=target_voucher_id
+            )
+
+            # Insert VoucherEdit audit record
+            conn.run(
+                """INSERT INTO "VoucherEdit" ("voucherId", "editedBy", "editedAt", "fieldName", "oldValue", "newValue", reason)
+                   VALUES (:vid, 'termux_admin', NOW(), :fname, :oldv, :newv, :rsn)""",
+                vid=target_voucher_id,
+                fname="refund_full" if is_full else "refund_partial",
+                oldv=f"Remaining: {orig_rem} DZD",
+                newv=f"Remaining: {new_rem} DZD (Refunded {refund_amount} DZD via Refund Voucher #{ref_num})",
+                rsn=reason
+            )
+
+        # E. Update Enrollment if requested
+        if selected_enr:
+            if mark_enrollment_refunded:
+                conn.run(
+                    'UPDATE "Enrollment" SET status = \'REFUNDED\' WHERE id = :eid',
+                    eid=selected_enr["id"]
+                )
+            if offset_deduct != 0:
+                conn.run(
+                    'UPDATE "Enrollment" SET "creditResetOffset" = "creditResetOffset" + :off WHERE id = :eid',
+                    off=offset_deduct,
+                    eid=selected_enr["id"]
+                )
+
+        # F. Insert AuditLog
+        conn.run(
+            """INSERT INTO "AuditLog" ("entityType", "entityId", action, "branchId", "userId", "userName", details, timestamp)
+               VALUES ('Refund', :eid, 'CREATE_REFUND_TERMUX', :bid, 'termux_admin', 'Termux Admin', :dtl, NOW())""",
+            eid=str(new_refund_vid),
+            bid=issuing_bid,
+            dtl=f"Refund of {format_money(refund_amount)} for student #{student['globalNumber']} on class '{selected_class_name}' on date {refund_date_str}. Reason: {reason}"
+        )
+
+        # G. Reconcile DailyLedger immediately for the refund date!
+        reconcile_daily_ledger_for_branch_date(conn, issuing_bid, refund_date_dt)
+
+        conn.run("COMMIT")
+        print(f"\n✅ Refund of {format_money(refund_amount)} successfully pushed!")
+        print(f"   • Issued Refund Voucher #{ref_num} on date {refund_date_str}")
+        print(f"   • Daily Ledger for Branch '{branch_name}' on {refund_date_str} successfully reconciled.")
+        if mark_enrollment_refunded:
+            print(f"   • Enrollment '{selected_class_name}' marked as REFUNDED.")
+
+    except Exception as e:
+        conn.run("ROLLBACK")
+        print(f"\n❌ Error processing refund: {e}")
+
+
+def handle_view_and_cancel_refunds(conn, student):
+    """View recorded refunds for this student with option to reverse / cancel a refund."""
+    if not student.get("refunds"):
+        print("\nℹ️  No recorded refunds found for this student.")
+        return
+
+    print("\n" + "═" * 55)
+    print(f"  ↩️ RECORDED REFUNDS FOR #{student['globalNumber']} {student['name']}")
+    print("═" * 55)
+
+    for i, r in enumerate(student["refunds"], 1):
+        r_date = format_date(r["refundedAt"])
+        print(f"  [{i}] #{r['id']} | Amount: {format_money(r['amount'])} | Date: {r_date}")
+        print(f"      Group:   {r['class_name']} | Voucher: #{r['voucher_number']} | Branch: {r['issuing_branch']}")
+        print(f"      Reason:  {r['reason']} (by {r['refundedBy']})")
+        print("-" * 50)
+
+    pick = input(f"\nEnter refund number to CANCEL / REVERSE (1-{len(student['refunds'])}) or [0] to exit: ").strip()
+    if not pick or pick == "0":
+        return
+
+    try:
+        ref_idx = int(pick) - 1
+        ref = student["refunds"][ref_idx]
+    except Exception:
+        print("Invalid choice.")
+        return
+
+    print(f"\n⚠️  Are you sure you want to REVERSE refund #{ref['id']} ({format_money(ref['amount'])})?")
+    print("This will:")
+    print("  1. Delete the Refund record")
+    print("  2. Restore the original voucher balance")
+    print("  3. Delete the corresponding refund voucher (if present)")
+    print("  4. Reconcile the Daily Ledger on the refund date")
+
+    confirm = input("Confirm reversal? (yes/no): ").strip().lower()
+    if confirm not in ("yes", "y"):
+        print("Cancelled.")
+        return
+
+    conn.run("BEGIN")
+    try:
+        # A. Find and delete any linked refund voucher
+        ref_voucher_rows = conn.run(
+            'SELECT id FROM "Voucher" WHERE "refundForVoucherId" = :vid AND "isRefund" = true AND amount = :amt LIMIT 1',
+            vid=ref["voucherId"], amt=ref["amount"]
+        )
+        if ref_voucher_rows:
+            conn.run('DELETE FROM "Voucher" WHERE id = :id', id=ref_voucher_rows[0][0])
+
+        # B. Delete the Refund row
+        conn.run('DELETE FROM "Refund" WHERE id = :id', id=ref["id"])
+
+        # C. Restore the original voucher's balance and status
+        orig_v_rows = conn.run(
+            'SELECT amount, "remainingBalance", "isVoided" FROM "Voucher" WHERE id = :vid',
+            vid=ref["voucherId"]
+        )
+        if orig_v_rows:
+            orig_amt, cur_rem, was_void = orig_v_rows[0]
+            restored_rem = float(cur_rem or 0) + float(ref["amount"])
+            conn.run(
+                """UPDATE "Voucher"
+                   SET "remainingBalance" = :rem,
+                       status = 'ACTIVE',
+                       "isVoided" = false,
+                       "lastEditedAt" = NOW(),
+                       "lastEditedBy" = 'termux_admin'
+                   WHERE id = :vid""",
+                rem=restored_rem, vid=ref["voucherId"]
+            )
+
+        # D. Reconcile DailyLedger on the refund date
+        reconcile_daily_ledger_for_branch_date(conn, ref["issuingBranchId"], ref["refundedAt"])
+
+        # E. AuditLog
+        conn.run(
+            """INSERT INTO "AuditLog" ("entityType", "entityId", action, "branchId", "userId", "userName", details, timestamp)
+               VALUES ('Refund', :id, 'CANCEL_REFUND_TERMUX', :bid, 'termux_admin', 'Termux Admin', :dtl, NOW())""",
+            id=str(ref["id"]), bid=ref["issuingBranchId"],
+            dtl=f"Cancelled refund #{ref['id']} of {format_money(ref['amount'])} for student #{student['globalNumber']}"
+        )
+
+        conn.run("COMMIT")
+        print(f"✅ Refund #{ref['id']} successfully reversed and Daily Ledger reconciled!")
+    except Exception as e:
+        conn.run("ROLLBACK")
+        print(f"❌ Error reversing refund: {e}")
+
+
 def handle_fix_attendances(conn, student):
     """View and modify lesson attendance records to fix credit calculations."""
     print("\n" + "═" * 50)
@@ -1358,6 +1765,13 @@ def display_dashboard(student):
         print(f"   (Total Refunded: {format_money(total_refunded)})")
     if voided_vouchers:
         print(f"   (plus {len(voided_vouchers)} voided vouchers)")
+
+    # Recorded refunds summary
+    if student.get("refunds"):
+        print(f"\n↩️  RECORDED REFUNDS ({len(student['refunds'])} total):")
+        for r in student["refunds"]:
+            r_date = format_date(r["refundedAt"])
+            print(f"    • {r_date} | {format_money(r['amount'])} | {r['class_name']} | Voucher: #{r['voucher_number']} | Reason: {r['reason']}")
     print("-" * 64)
 
 
@@ -1408,13 +1822,15 @@ def student_action_loop(conn, student_id):
         print("  [2] Create New Voucher (Custom Date / Branch / Amount)")
         print("  [3] Edit a Voucher (Amount, Date, Class, Branch, Void)")
         print("  [4] Delete or Void a Voucher")
-        print("  [5] View & Fix Lesson Attendances (Presence / Absence / Excused)")
-        print("  [6] Toggle Inscription Fee, Payer Status & Credit Offset")
-        print("  [7] Reconcile / Sync Daily Ledger (Fix any discrepancies)")
-        print("  [8] Switch Student")
+        print("  [5] Push / Create Refund for a Group (Custom Date & Amount)")
+        print("  [6] View / Reverse Recorded Refunds")
+        print("  [7] View & Fix Lesson Attendances (Presence / Absence / Excused)")
+        print("  [8] Toggle Inscription Fee, Payer Status & Credit Offset")
+        print("  [9] Reconcile / Sync Daily Ledger (Fix any discrepancies)")
+        print("  [10] Switch Student")
         print("  [0] Exit")
 
-        cmd = input("\nSelect action (0-8): ").strip()
+        cmd = input("\nSelect action (0-10): ").strip()
 
         if cmd == "1":
             list_all_vouchers(student)
@@ -1429,12 +1845,18 @@ def student_action_loop(conn, student_id):
             handle_delete_voucher(conn, student)
             input("\nPress Enter to return to menu...")
         elif cmd == "5":
-            handle_fix_attendances(conn, student)
+            handle_push_refund(conn, student)
             input("\nPress Enter to return to menu...")
         elif cmd == "6":
-            handle_toggle_inscription_and_payer(conn, student)
+            handle_view_and_cancel_refunds(conn, student)
             input("\nPress Enter to return to menu...")
         elif cmd == "7":
+            handle_fix_attendances(conn, student)
+            input("\nPress Enter to return to menu...")
+        elif cmd == "8":
+            handle_toggle_inscription_and_payer(conn, student)
+            input("\nPress Enter to return to menu...")
+        elif cmd == "9":
             print("\nSynchronizing DailyLedger from all vouchers and refunds...")
             ok, res, el = sync_all_daily_ledger(conn)
             if ok:
@@ -1442,7 +1864,7 @@ def student_action_loop(conn, student_id):
             else:
                 print(f"❌ Error syncing DailyLedger: {res}")
             input("\nPress Enter to return to menu...")
-        elif cmd == "8":
+        elif cmd in ("10", "s", "switch"):
             return "SWITCH"
         elif cmd in ("0", "q", "exit"):
             return "EXIT"
@@ -1453,6 +1875,12 @@ def main():
     parser.add_argument("identifier", nargs="?", help="Student Global Number or Name")
     parser.add_argument("--db", help="PostgreSQL connection string")
     parser.add_argument("--sync-ledger", action="store_true", help="Sync DailyLedger table from all vouchers and exit")
+    parser.add_argument("--refund", action="store_true", help="Push a refund for a student on a specific group & date")
+    parser.add_argument("--class-id", type=int, help="Class ID for refund")
+    parser.add_argument("--amount", type=float, help="Refund amount in DZD")
+    parser.add_argument("--date", help="Refund date in YYYY-MM-DD")
+    parser.add_argument("--reason", help="Reason for refund")
+    parser.add_argument("--mark-refunded", action="store_true", help="Mark enrollment as REFUNDED")
     args = parser.parse_args()
 
     db_url = args.db or load_env_database_url()
@@ -1477,6 +1905,30 @@ def main():
         return
 
     initial_query = args.identifier
+
+    # Handle direct CLI refund invocation
+    if args.refund:
+        if not initial_query:
+            initial_query = input("Enter Student Global # or Name for refund: ").strip()
+        matches = search_students(conn, initial_query)
+        if not matches:
+            print(f"❌ No student found matching '{initial_query}'.")
+            sys.exit(1)
+        selected_student_id = matches[0]["id"]
+        student = get_student_full_profile(conn, selected_student_id)
+        if not student:
+            print("❌ Student not found.")
+            sys.exit(1)
+        handle_push_refund(
+            conn,
+            student,
+            pre_class_id=args.class_id,
+            pre_amount=args.amount,
+            pre_date=args.date,
+            pre_reason=args.reason,
+            pre_mark_refunded=args.mark_refunded
+        )
+        return
 
     while True:
         if not initial_query:

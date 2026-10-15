@@ -11,7 +11,7 @@ import TodayAttendanceChart, {
   TodayLessonAttendanceData,
 } from "@/components/dashboard/TodayAttendanceChart";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
-import { computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import {
   serializeForClient,
   getAlgiersDateInfo,
@@ -73,7 +73,38 @@ const AdminPage = async () => {
             include: {
               student: {
                 include: {
-                  family: true,
+                  family: {
+                    include: {
+                      payerStudent: {
+                        include: {
+                          enrollments: {
+                            include: {
+                              class: { select: { id: true, pricePerCycle: true, isFormation: true } },
+                              transfersFrom: true,
+                              transfersTo: true,
+                            },
+                          },
+                          vouchers: {
+                            where: { isVoided: false, isRefund: false },
+                            include: { refunds: true },
+                          },
+                          attendances: {
+                            where: { lesson: { isFree: false } },
+                            include: {
+                              lesson: { select: { id: true, startsAt: true, isFree: true, classId: true } },
+                            },
+                          },
+                          catchUpAttendances: {
+                            include: {
+                              missedLesson: {
+                                select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
                   catchUpAttendances: {
                     select: { missedLessonId: true },
                   },
@@ -225,12 +256,22 @@ const AdminPage = async () => {
         (cu: any) => cls.lessons.some((l) => l.id === cu.missedLessonId)
       );
 
+      const payerCredit = isSiblingDiscount && (student.family as any)?.payerStudent
+        ? resolvePayerCredit({
+            payerStudent: (student.family as any).payerStudent,
+            classId: cls.id,
+            classPricePerCycle: Number(cls.pricePerCycle || 0),
+            isFormation,
+          })
+        : null;
+
       const creditMetrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(cls.pricePerCycle || 0),
         isFormation,
         payerStatus: enrPayerStatus,
         siblingDiscountPercentage: siblingDiscountPct,
         isSiblingWaived: isSiblingWaived100,
+        payerRemainingCredit: isSiblingDiscount ? payerCredit?.netSessions : undefined,
         tuitionVouchers,
         transfersIn: enr.transfersTo,
         transfersOut: enr.transfersFrom,
@@ -240,11 +281,11 @@ const AdminPage = async () => {
         lessons: cls.lessons as any,
       });
 
-      if (creditMetrics.isNonPayer || creditMetrics.status === "SIBLING_WAIVED") {
+      if (creditMetrics.isNonPayer || (creditMetrics.status as string) === "SIBLING_WAIVED") {
         continue;
       }
 
-      const remainingSessions = creditMetrics.netSessions;
+      const remainingSessions = isSiblingDiscount && payerCredit ? payerCredit.netSessions : creditMetrics.netSessions;
       const status: "PAID" | "EXPIRING" | "UNPAID" =
         creditMetrics.status === "UNPAID"
           ? "UNPAID"

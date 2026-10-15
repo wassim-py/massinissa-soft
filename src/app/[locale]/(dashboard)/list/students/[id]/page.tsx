@@ -15,8 +15,7 @@ import { DataTable, Column } from "@/components/ui/DataTable";
 import { StudentAvatar } from "@/components/ui/UserAvatar";
 import { serializeForClient } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
-import { canUserAccessBranch } from "@/lib/settings";
-import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import StudentPayerStatusControl from "@/components/students/StudentPayerStatusControl";
 import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 import {
@@ -84,7 +83,35 @@ const SingleStudentPage = async (
           parentPhoneNumbers: true,
           family: {
             include: {
-              payerStudent: true,
+              payerStudent: {
+                include: {
+                  enrollments: {
+                    include: {
+                      transfersFrom: true,
+                      transfersTo: true,
+                      class: true,
+                    },
+                  },
+                  vouchers: {
+                    where: { isVoided: false, isRefund: false },
+                    include: { refunds: true },
+                  },
+                  attendances: {
+                    include: {
+                      lesson: {
+                        select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true },
+                      },
+                    },
+                  },
+                  catchUpAttendances: {
+                    include: {
+                      missedLesson: {
+                        select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                      },
+                    },
+                  },
+                },
+              },
               students: true,
             },
           },
@@ -245,12 +272,30 @@ const SingleStudentPage = async (
       const classCatchUps = (studentPaymentData?.catchUpAttendances || []).filter(
         (cu: any) => cu.missedLesson?.classId === c.id
       );
+
+      let payerRemainingCredit: number | undefined = undefined;
+      const hasPayerSibling = Boolean(
+        studentPaymentData?.family?.payerStudentId &&
+        studentPaymentData.family.payerStudentId !== id
+      );
+
+      if (hasPayerSibling && studentPaymentData?.family?.payerStudent) {
+        const payerRes = resolvePayerCredit({
+          payerStudent: studentPaymentData.family.payerStudent,
+          classId: c.id,
+          classPricePerCycle: Number(c?.pricePerCycle || 0),
+          isFormation,
+        });
+        payerRemainingCredit = payerRes.netSessions;
+      }
+
       const creditMetrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(c?.pricePerCycle || 0),
         isFormation,
         payerStatus: enrStatus,
         siblingDiscountPercentage: siblingDiscountPct,
         isSiblingWaived: isSiblingWaived100,
+        payerRemainingCredit,
         tuitionVouchers,
         transfersIn: enr.transfersTo,
         transfersOut: enr.transfersFrom,
@@ -302,6 +347,7 @@ const SingleStudentPage = async (
         teacherName: c.teacher?.name || null,
         netSessions,
         isSiblingWaived: isSiblingWaived100,
+        hasPayerSibling,
         isNonPayer: enrStatus === "NON_PAYER",
         payerStatus: enrStatus,
         status: (enr as any).status || "ACTIVE",
@@ -719,10 +765,6 @@ const SingleStudentPage = async (
                               <Badge variant="success" size="sm" withDot>
                                 {t("badgeNonPayer")}
                               </Badge>
-                            ) : g.isSiblingWaived ? (
-                              <Badge variant="neutral" size="sm" withDot>
-                                {t("statusSiblingWaived")}
-                              </Badge>
                             ) : isOne ? (
                               <Badge variant="warning" size="sm" withDot className="font-bold shadow-xs">
                                 {t("statusOneSessionLeft")}
@@ -736,6 +778,11 @@ const SingleStudentPage = async (
                                 {t("statusUnpaid", { count: g.netSessions })}
                               </Badge>
                             ) : null}
+                            {g.hasPayerSibling && (
+                              <Badge variant="neutral" size="sm">
+                                {t("statusSiblingWaived")}
+                              </Badge>
+                            )}
                           </div>
                         </div>
                       );

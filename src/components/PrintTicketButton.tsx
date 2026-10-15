@@ -38,12 +38,19 @@ const PrintTicketButton = ({ voucher, sessionsForThisPayment, amountOwedByStuden
             <title>${isAr ? 'طباعة الوصل' : 'Imprimer le reçu'} #${voucher.number}</title>
             <script src="https://cdn.tailwindcss.com"></script>
             <style>
-              @media print {
-                body { margin: 0; padding: 0; }
+              @page {
+                size: 80mm auto;
+                margin: 0;
+              }
+              body {
+                margin: 0;
+                padding: 0;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
               }
             </style>
           </head>
-          <body class="flex justify-center p-4">
+          <body class="flex justify-center p-1 m-0">
             ${printContent}
           </body>
         </html>

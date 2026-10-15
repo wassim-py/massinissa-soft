@@ -72,7 +72,9 @@ const LessonDetailModal = ({
   const [isTeacherAbsent, setIsTeacherAbsent] = useState<boolean>(Boolean(lesson.isTeacherAbsent));
   const [isUpdating, setIsUpdating] = useState<boolean>(false);
 
-  const lessonDateStr = lesson.instanceDate || getAlgiersDateStr(lesson.startsAt);
+  const lessonDateStr =
+    lesson.instanceDate ||
+    (isToday ? getAlgiersDateStr(new Date()) : getAlgiersDateStr(lesson.startsAt));
 
   const handleToggleAbsence = async () => {
     if (isUpdating || lesson.isWorkshop || currentLessonId <= 0) return;

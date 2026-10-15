@@ -24,6 +24,7 @@ interface CandidateStudent {
   phone: string | null;
   branchName?: string | null;
   remainingCredits?: number | null;
+  isEnrolledInCurrentClass?: boolean;
   missedLessons: MissedLesson[];
 }
 
@@ -413,11 +414,15 @@ export default function CatchUpVisitorModal({
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-mono">
                               #{cand.globalNumber}
                             </span>
-                            {cand.branchName && (
+                            {cand.isEnrolledInCurrentClass ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 font-bold">
+                                {locale === "ar" ? "مسجل في هذا الفوج" : "Inscrit dans ce groupe"}
+                              </span>
+                            ) : cand.branchName ? (
                               <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-100">
                                 {cand.branchName}
                               </span>
-                            )}
+                            ) : null}
                             {cand.remainingCredits !== undefined && cand.remainingCredits !== null && (
                               <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border ${
                                 cand.remainingCredits < 0

@@ -331,10 +331,12 @@ const StudentListPage = async (props: {
           createAction={{ table: "student", type: "create" }}
         />
 
-        {/* ACTION BAR - Same actions for both roles */}
-        <div className="mb-4">
-          <ExportButton type="students" />
-        </div>
+        {/* ACTION BAR - Only owner can export students */}
+        {session.isOwner && (
+          <div className="mb-4">
+            <ExportButton type="students" />
+          </div>
+        )}
 
         {/* DATA TABLE */}
         <DataTable

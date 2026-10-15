@@ -601,7 +601,16 @@ export async function recordLevelTest(data: {
               include: { classroom: true, teacher: true },
               orderBy: { startsAt: "asc" },
             },
-            _count: { select: { enrollments: true } },
+            _count: {
+              select: {
+                enrollments: {
+                  where: {
+                    status: "ACTIVE",
+                    transfersFrom: { none: {} },
+                  },
+                },
+              },
+            },
           },
         });
       }
@@ -643,7 +652,16 @@ export async function getNextLevelFormationGroups(nextLevelId: number): Promise<
           include: { classroom: true, teacher: true },
           orderBy: { startsAt: "asc" },
         },
-        _count: { select: { enrollments: true } },
+        _count: {
+          select: {
+            enrollments: {
+              where: {
+                status: "ACTIVE",
+                transfersFrom: { none: {} },
+              },
+            },
+          },
+        },
       },
       orderBy: { name: "asc" },
     });
@@ -1379,7 +1397,16 @@ export async function getFormationClosurePreview(classId: number): Promise<Actio
       include: {
         Class: {
           include: {
-            _count: { select: { enrollments: true } },
+            _count: {
+              select: {
+                enrollments: {
+                  where: {
+                    status: "ACTIVE",
+                    transfersFrom: { none: {} },
+                  },
+                },
+              },
+            },
             teacher: { select: { id: true, name: true } },
           },
           orderBy: { id: "desc" },

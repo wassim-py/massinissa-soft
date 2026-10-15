@@ -193,6 +193,7 @@ export function computeStudentOwedForSessions({
 export type AttendanceClassification =
   | "PRESENT"
   | "NOT_DEFINED"
+  | "CAUGHT_UP_ABSENCE"
   | "PRE_START_ABSENCE"
   | "INTERLEAVED_ABSENCE"
   | "TRAILING_ABSENCE_HELD"
@@ -215,11 +216,12 @@ export interface StudentAttendanceHistoryItem {
  * Classifies a student's full attendance history in a class according to Massinissa School rules:
  * 1. PRESENT: Consumed credit, teacher paid.
  * 2. NOT_DEFINED: Justified absence (0 credit deducted, 0 teacher pay).
- * 3. PRE_START_ABSENCE: Absences in brand new group before student's first presence (0 credit, 0 teacher pay).
- * 4. INTERLEAVED_ABSENCE: Absence followed by subsequent presence (consumed credit, teacher paid, non-refundable).
- * 5. TRAILING_ABSENCE_HELD: Absence at the end with <60 calendar days elapsed (held pending, 0 teacher pay this month, refundable if student leaves).
- * 6. FORFEITED_DROPOUT: Student missed >=60 calendar days (2 months) without attending (money retained 100% by school, 0 teacher pay, non-refundable).
- * 7. TEACHER_ABSENT: Teacher marked absent for lesson (0 credit deducted, student credit untouched, 0 teacher pay).
+ * 3. CAUGHT_UP_ABSENCE: Missed session that was caught up in the same group (0 credit deducted from missed slot, 0 teacher pay).
+ * 4. PRE_START_ABSENCE: Absences in brand new group before student's first presence (0 credit, 0 teacher pay).
+ * 5. INTERLEAVED_ABSENCE: Absence followed by subsequent presence (consumed credit, teacher paid, non-refundable).
+ * 6. TRAILING_ABSENCE_HELD: Absence at the end with <60 calendar days elapsed (held pending, 0 teacher pay this month, refundable if student leaves).
+ * 7. FORFEITED_DROPOUT: Student missed >=60 calendar days (2 months) without attending (money retained 100% by school, 0 teacher pay, non-refundable).
+ * 8. TEACHER_ABSENT: Teacher marked absent for lesson (0 credit deducted, student credit untouched, 0 teacher pay).
  */
 export function classifyStudentAttendanceHistory({
   lessons,
@@ -229,7 +231,7 @@ export function classifyStudentAttendanceHistory({
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
-  catchUps?: Array<{ missedLessonId: number; recordedAt?: Date | string }>;
+  catchUps?: Array<{ missedLessonId: number; catchUpLessonId?: number; recordedAt?: Date | string }>;
   referenceDate?: Date;
 }): StudentAttendanceHistoryItem[] {
   // Sort lessons chronologically
@@ -241,7 +243,19 @@ export function classifyStudentAttendanceHistory({
   attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
 
   const catchUpSet = new Set<number>();
-  catchUps.forEach((c) => catchUpSet.add(c.missedLessonId));
+  const missedToCatchUpMap = new Map<number, number>();
+  const catchUpToMissedMap = new Map<number, number>();
+  (catchUps || []).forEach((c) => {
+    if (c.missedLessonId) {
+      catchUpSet.add(c.missedLessonId);
+      if (c.catchUpLessonId) {
+        missedToCatchUpMap.set(c.missedLessonId, c.catchUpLessonId);
+        catchUpToMissedMap.set(c.catchUpLessonId, c.missedLessonId);
+      }
+    }
+  });
+
+  const lessonIdSet = new Set(sortedLessons.map((l) => l.id));
 
   // Determine presence at each lesson (teacher absent lessons are never treated as student presence or normal sessions)
   const presenceArray: boolean[] = sortedLessons.map((l) => {
@@ -304,7 +318,49 @@ export function classifyStudentAttendanceHistory({
       continue;
     }
 
+    // Visiting student attending a catch-up in this host class from a different group (§2.12):
+    // Does NOT consume credit in this host class (0 credit deducted, teacher paid for visitor).
+    const missedLessonForVisitor = catchUpToMissedMap.get(lesson.id);
+    if (missedLessonForVisitor && !lessonIdSet.has(missedLessonForVisitor)) {
+      history.push({
+        lessonId: lesson.id,
+        startsAt,
+        status: rawStatus === "PRESENT" ? "PRESENT" : "ABSENT",
+        isCatchUp: true,
+        classification: "PRESENT",
+        isConsumedCredit: false,
+        isTeacherPayable: true,
+        isRefundable: false,
+        isHeld: false,
+      });
+      continue;
+    }
+
     if (hasCatchUp) {
+      const cLessonId = missedToCatchUpMap.get(lesson.id);
+      const isCatchUpInThisList = Boolean(cLessonId && lessonIdSet.has(cLessonId));
+      const catchUpAttStatus = isCatchUpInThisList && cLessonId ? attendanceMap.get(cLessonId) : null;
+      const isCatchUpAttendedInThisList = isCatchUpInThisList && catchUpAttStatus === "PRESENT";
+
+      if (isCatchUpAttendedInThisList) {
+        // In-group catch-up attended: the catch-up lesson will consume 1 credit when its iteration runs.
+        // This missed lesson is neutralized (0 credit deducted, teacher not paid twice).
+        history.push({
+          lessonId: lesson.id,
+          startsAt,
+          status: "ABSENT",
+          isCatchUp: true,
+          classification: "CAUGHT_UP_ABSENCE",
+          isConsumedCredit: false,
+          isTeacherPayable: false,
+          isRefundable: false,
+          isHeld: false,
+        });
+        continue;
+      }
+
+      // Cross-group catch-up (attended in another group where student was a free visitor):
+      // The student consumes 1 session credit in this home class.
       history.push({
         lessonId: lesson.id,
         startsAt,
@@ -431,7 +487,7 @@ export function computeStudentConsumedSessions({
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
-  catchUps?: Array<{ missedLessonId: number; recordedAt?: Date | string }>;
+  catchUps?: Array<{ missedLessonId: number; catchUpLessonId?: number; recordedAt?: Date | string }>;
 }): number {
   if (!lessons || lessons.length === 0 || !attendances || attendances.length === 0) {
     return (catchUps || []).length;
@@ -442,9 +498,13 @@ export function computeStudentConsumedSessions({
     catchUps,
   });
   const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
+  const lessonIds = new Set(lessons.map((l) => l.id));
   let extraCatchUp = 0;
   (catchUps || []).forEach((c) => {
-    if (!accountedCatchUps.has(c.missedLessonId)) {
+    const missedAccounted = accountedCatchUps.has(c.missedLessonId);
+    const catchUpAccounted = c.catchUpLessonId ? accountedCatchUps.has(c.catchUpLessonId) : false;
+    const catchUpInLessons = c.catchUpLessonId ? lessonIds.has(c.catchUpLessonId) : false;
+    if (!missedAccounted && !catchUpAccounted && !catchUpInLessons) {
       accountedCatchUps.add(c.missedLessonId);
       extraCatchUp += 1;
     }
@@ -582,6 +642,7 @@ export interface ComputeStudentCreditParams {
   }>;
   lessons?: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   catchUps?: Array<{ missedLessonId: number; recordedAt?: Date | string }>;
+  payerRemainingCredit?: number | null;
 }
 
 export interface StudentCreditResult {
@@ -602,6 +663,142 @@ export interface StudentCreditResult {
 }
 
 /**
+ * Resolves remaining credit for a student whose tuition is paid by a designated payer sibling.
+ * Follows the payer sibling's remaining credit in the matching class, or across payer's active classes.
+ */
+export function resolvePayerCredit({
+  payerStudent,
+  classId,
+  classPricePerCycle,
+  isFormation,
+}: {
+  payerStudent: any;
+  classId?: number | null;
+  classPricePerCycle?: number | null;
+  isFormation?: boolean | null;
+}): {
+  netSessions: number;
+  status: "PAID" | "EXPIRING" | "UNPAID";
+  hasMatchingClass: boolean;
+} {
+  if (!payerStudent) {
+    return { netSessions: 0, status: "UNPAID", hasMatchingClass: false };
+  }
+
+  // 1. Check if payer is enrolled in this class or has vouchers for this class
+  if (classId) {
+    const payerEnrollment = (payerStudent.enrollments || []).find(
+      (e: any) => e.classId === classId && (e.status === "ACTIVE" || !e.status)
+    );
+    const payerVouchers = (payerStudent.vouchers || []).filter(
+      (v: any) =>
+        (v.classId === classId || v.class?.id === classId) &&
+        v.paymentType === "TUITION_4SESSION" &&
+        !v.isVoided &&
+        !v.isRefund
+    );
+
+    if (payerEnrollment || payerVouchers.length > 0) {
+      const payerAtts = (payerStudent.attendances || []).filter(
+        (a: any) => a.lesson && a.lesson.classId === classId && !a.lesson.isFree
+      );
+      const payerCatchUps = (payerStudent.catchUpAttendances || []).filter(
+        (cu: any) => cu.missedLesson && cu.missedLesson.classId === classId
+      );
+
+      const metrics = computeStudentCreditAndSessions({
+        pricePerCycle: classPricePerCycle ?? Number(payerEnrollment?.class?.pricePerCycle || 0),
+        isFormation: isFormation ?? Boolean(payerEnrollment?.class?.isFormation),
+        payerStatus: payerEnrollment?.payerStatus || payerStudent.payerStatus || "NORMAL",
+        tuitionVouchers: payerVouchers,
+        transfersIn: payerEnrollment?.transfersTo || [],
+        transfersOut: payerEnrollment?.transfersFrom || [],
+        creditResetOffset: payerEnrollment?.creditResetOffset || 0,
+        attendances: payerAtts,
+        catchUps: payerCatchUps,
+      });
+
+      return {
+        netSessions: metrics.netSessions,
+        status: metrics.netSessions >= 2 ? "PAID" : metrics.netSessions === 1 ? "EXPIRING" : "UNPAID",
+        hasMatchingClass: true,
+      };
+    }
+  }
+
+  // 2. If payer is not enrolled in this specific class, check active enrollments across other classes
+  const activeEnrs = (payerStudent.enrollments || []).filter(
+    (e: any) => e.status === "ACTIVE" || !e.status
+  );
+
+  if (activeEnrs.length > 0) {
+    let minSessions = Infinity;
+    for (const enr of activeEnrs) {
+      const cId = enr.classId;
+      const vouchers = (payerStudent.vouchers || []).filter(
+        (v: any) =>
+          (v.classId === cId || v.class?.id === cId) &&
+          v.paymentType === "TUITION_4SESSION" &&
+          !v.isVoided &&
+          !v.isRefund
+      );
+      const atts = (payerStudent.attendances || []).filter(
+        (a: any) => a.lesson && a.lesson.classId === cId && !a.lesson.isFree
+      );
+      const cus = (payerStudent.catchUpAttendances || []).filter(
+        (cu: any) => cu.missedLesson && cu.missedLesson.classId === cId
+      );
+
+      const metrics = computeStudentCreditAndSessions({
+        pricePerCycle: Number(enr.class?.pricePerCycle || 0),
+        isFormation: Boolean(enr.class?.isFormation),
+        payerStatus: enr.payerStatus || payerStudent.payerStatus || "NORMAL",
+        tuitionVouchers: vouchers,
+        transfersIn: enr.transfersTo || [],
+        transfersOut: enr.transfersFrom || [],
+        creditResetOffset: enr.creditResetOffset || 0,
+        attendances: atts,
+        catchUps: cus,
+      });
+
+      if (metrics.netSessions < minSessions) {
+        minSessions = metrics.netSessions;
+      }
+    }
+    const finalSessions = minSessions === Infinity ? 0 : minSessions;
+    return {
+      netSessions: finalSessions,
+      status: finalSessions >= 2 ? "PAID" : finalSessions === 1 ? "EXPIRING" : "UNPAID",
+      hasMatchingClass: false,
+    };
+  }
+
+  // 3. Fallback: if no active enrollments, check if payer has any tuition vouchers at all
+  const allTuitionVouchers = (payerStudent.vouchers || []).filter(
+    (v: any) => v.paymentType === "TUITION_4SESSION" && !v.isVoided && !v.isRefund
+  );
+  if (allTuitionVouchers.length > 0) {
+    const allAtts = (payerStudent.attendances || []).filter(
+      (a: any) => a.lesson && !a.lesson.isFree
+    );
+    const metrics = computeStudentCreditAndSessions({
+      pricePerCycle: classPricePerCycle ?? 0,
+      payerStatus: payerStudent.payerStatus || "NORMAL",
+      tuitionVouchers: allTuitionVouchers,
+      attendances: allAtts,
+    });
+    return {
+      netSessions: metrics.netSessions,
+      status: metrics.netSessions >= 2 ? "PAID" : metrics.netSessions === 1 ? "EXPIRING" : "UNPAID",
+      hasMatchingClass: false,
+    };
+  }
+
+  return { netSessions: 0, status: "UNPAID", hasMatchingClass: false };
+}
+
+
+/**
  * Canonical calculation of student credit and lesson metrics.
  * Ensures strict, identical calculation across all pages:
  * Student Profile, Group Payments Page, Attendance Taking Page, and Dashboard.
@@ -620,6 +817,7 @@ export function computeStudentCreditAndSessions({
   attendances = [],
   lessons,
   catchUps = [],
+  payerRemainingCredit,
 }: ComputeStudentCreditParams): StudentCreditResult {
   const isForm = Boolean(isFormation);
   const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
@@ -740,9 +938,13 @@ export function computeStudentCreditAndSessions({
       : [];
 
   const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
+  const relevantLessonIds = new Set(relevantLessons.map((l) => l.id));
   let extraCatchUpConsumed = 0;
-  (catchUps || []).forEach((c) => {
-    if (!accountedCatchUps.has(c.missedLessonId)) {
+  (catchUps || []).forEach((c: any) => {
+    const missedAccounted = accountedCatchUps.has(c.missedLessonId);
+    const catchUpAccounted = c.catchUpLessonId ? accountedCatchUps.has(c.catchUpLessonId) : false;
+    const catchUpInLessons = c.catchUpLessonId ? relevantLessonIds.has(c.catchUpLessonId) : false;
+    if (!missedAccounted && !catchUpAccounted && !catchUpInLessons) {
       accountedCatchUps.add(c.missedLessonId);
       extraCatchUpConsumed += 1;
     }
@@ -752,12 +954,17 @@ export function computeStudentCreditAndSessions({
   const settledConsumedSessions =
     history.filter(
       (h) =>
-        h.classification === "PRESENT" ||
-        h.classification === "INTERLEAVED_ABSENCE" ||
-        h.classification === "FORFEITED_DROPOUT"
+        h.isConsumedCredit &&
+        (h.classification === "PRESENT" ||
+          h.classification === "INTERLEAVED_ABSENCE" ||
+          h.classification === "FORFEITED_DROPOUT")
     ).length + extraCatchUpConsumed;
 
-  const netSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - attendedSessions + offset;
+  let calculatedNetSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - attendedSessions + offset;
+  if (payerRemainingCredit !== undefined && payerRemainingCredit !== null) {
+    calculatedNetSessions = payerRemainingCredit;
+  }
+  const netSessions = calculatedNetSessions;
   const netRefundableSessions = isForm
     ? 0
     : (purchasedSessions + tIn - tOut) - settledConsumedSessions + offset;
@@ -787,6 +994,14 @@ export function computeStudentCreditAndSessions({
     status = "PAID";
   } else if (isNonPayer) {
     status = "NON_PAYER";
+  } else if (payerRemainingCredit !== undefined && payerRemainingCredit !== null) {
+    if (netSessions >= 2) {
+      status = "PAID";
+    } else if (netSessions === 1) {
+      status = "EXPIRING";
+    } else {
+      status = "UNPAID";
+    }
   } else if (isSiblingWaived100) {
     status = isPayerSiblingPaid ? "SIBLING_WAIVED" : "UNPAID";
   } else if (netSessions >= 2) {

@@ -43,14 +43,9 @@ export async function resolveOrCreateLessonForDate(
   let targetDateStr: string;
   if (requestedDateStr && /^\d{4}-\d{2}-\d{2}$/.test(requestedDateStr.trim())) {
     targetDateStr = requestedDateStr.trim();
-  } else if (
-    baseInfo.weekday === todayInfo.weekday &&
-    baseInfo.dateStr !== todayInfo.dateStr
-  ) {
-    // Fallback when opened without ?date= on the lesson's recurring weekday (e.g. from a direct link today)
-    targetDateStr = todayInfo.dateStr;
   } else {
-    targetDateStr = baseInfo.dateStr;
+    // When no explicit date is requested, always default to TODAY in Africa/Algiers
+    targetDateStr = todayInfo.dateStr;
   }
 
   // If the base lesson already belongs to targetDateStr, return it directly
@@ -105,9 +100,13 @@ export async function resolveOrCreateLessonForDate(
     return candidatesOnDate[0].id;
   }
 
-  // 2. If baseLesson itself is completely unused (no attendance, no catch-ups, teacher not marked absent),
-  // move baseLesson to targetStartsAt/targetEndsAt so we don't leave empty placeholder rows behind.
+  // 2. If baseLesson itself belongs to the same target date (or a future placeholder >= targetDateStr)
+  // and is completely unused (no attendance, no catch-ups, teacher not marked absent),
+  // move baseLesson to targetStartsAt/targetEndsAt.
+  // CRITICAL: Past lesson rows (< targetDateStr) must NEVER be mutated or shifted forward!
+  const isBasePast = baseInfo.dateStr < targetDateStr;
   const isBaseUnused =
+    !isBasePast &&
     baseLesson._count.attendances === 0 &&
     baseLesson._count.missedByCatchUps === 0 &&
     baseLesson._count.catchUpVisitsHosted === 0 &&
@@ -125,6 +124,7 @@ export async function resolveOrCreateLessonForDate(
   }
 
   // 3. Check if there is any other unused recurring Lesson row for this exact slot (classId, weekday, timeStr)
+  // only if that sibling is on or after targetDateStr (never steal an older date's record).
   const allClassRecurring = await prisma.lesson.findMany({
     where: {
       classId: baseLesson.classId,
@@ -151,6 +151,7 @@ export async function resolveOrCreateLessonForDate(
       cInfo.weekday === baseInfo.weekday &&
       cInfo.timeStr === baseInfo.timeStr &&
       cEndInfo.timeStr === baseEndInfo.timeStr &&
+      cInfo.dateStr >= targetDateStr &&
       c._count.attendances === 0 &&
       c._count.missedByCatchUps === 0 &&
       c._count.catchUpVisitsHosted === 0 &&

@@ -58,12 +58,45 @@ const ClassPaymentHistoryPage = async (
       enrollments: {
         where: {
           status: "ACTIVE",
+          transfersFrom: { none: {} },
         },
         include: {
           student: {
             include: {
+              family: {
+                include: {
+                  payerStudent: {
+                    include: {
+                      enrollments: {
+                        include: {
+                          transfersFrom: true,
+                          transfersTo: true,
+                          class: true,
+                        },
+                      },
+                      vouchers: {
+                        where: { isVoided: false, isRefund: false },
+                        include: { refunds: true },
+                      },
+                      attendances: {
+                        include: {
+                          lesson: {
+                            select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true },
+                          },
+                        },
+                      },
+                      catchUpAttendances: {
+                        include: {
+                          missedLesson: {
+                            select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
               registeredBranch: true,
-              family: true,
               enrollments: {
                 include: {
                   class: {
@@ -247,10 +280,12 @@ const ClassPaymentHistoryPage = async (
           </div>
 
           <div className="flex items-center gap-2">
-            <ExportButton
-              type="payments"
-              options={{ classId: classData.id }}
-            />
+            {session.isOwner && (
+              <ExportButton
+                type="payments"
+                options={{ classId: classData.id }}
+              />
+            )}
             <BackButton />
           </div>
         </div>

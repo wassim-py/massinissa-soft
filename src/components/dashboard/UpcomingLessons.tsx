@@ -307,7 +307,7 @@ export default function UpcomingLessons({
                             year: "numeric",
                             month: "2-digit",
                             day: "2-digit",
-                          }).format(new Date(lesson.startsAt))
+                          }).format(new Date())
                       )}`}
                     >
                       <Button

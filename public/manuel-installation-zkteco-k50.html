@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZKTeco K50 Pro — Manuel d'Installation et d'Utilisation (v3 Anti-Veille)</title>
+  <style>
+    :root {
+      --primary: #1e3a8a;
+      --primary-light: #eff6ff;
+      --emerald: #059669;
+      --emerald-light: #ecfdf5;
+      --amber: #d97706;
+      --amber-light: #fffbeb;
+      --slate-900: #0f172a;
+      --slate-700: #334155;
+      --slate-500: #64748b;
+      --slate-200: #e2e8f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--slate-900);
+      background: #f8fafc;
+      margin: 0;
+      padding: 32px 16px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 920px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid var(--slate-200);
+      border-radius: 16px;
+      padding: 40px;
+      box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.06);
+    }
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid var(--slate-200);
+      padding-bottom: 24px;
+      margin-bottom: 28px;
+      gap: 16px;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 26px;
+      color: var(--primary);
+    }
+    .badge {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      background: #dbeafe;
+      color: #1e40af;
+      padding: 3px 10px;
+      border-radius: 9999px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--slate-500);
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .print-btn {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .print-btn:hover { opacity: 0.92; }
+    h2 {
+      font-size: 19px;
+      color: var(--primary);
+      margin-top: 32px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--slate-200);
+    }
+    h3 {
+      font-size: 15px;
+      color: var(--slate-900);
+      margin-top: 18px;
+      margin-bottom: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--slate-200);
+      padding: 10px 14px;
+      text-align: left;
+    }
+    th {
+      background: #f1f5f9;
+      font-weight: 600;
+      color: var(--slate-700);
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #f1f5f9;
+      border-radius: 6px;
+    }
+    code {
+      padding: 2px 6px;
+      font-size: 13px;
+      color: #0f172a;
+    }
+    pre {
+      padding: 12px 16px;
+      overflow-x: auto;
+      border: 1px solid var(--slate-200);
+      font-size: 13px;
+    }
+    .callout {
+      padding: 14px 18px;
+      border-radius: 10px;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    .callout-warn {
+      background: var(--amber-light);
+      border-left: 4px solid var(--amber);
+    }
+    .callout-success {
+      background: var(--emerald-light);
+      border-left: 4px solid var(--emerald);
+    }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .container { border: none; box-shadow: none; padding: 0; }
+      .print-btn { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-bar">
+      <div>
+        <h1>ZKTeco K50 Pro — Manuel d'Installation & Utilisation <span class="badge">v3 Auto-Cicatrisant</span></h1>
+        <p class="subtitle">Massinissa School Software (Déploiement Cloud) • Sièges : ECOLE, ANNEX, AMPHI</p>
+      </div>
+      <button class="print-btn" onclick="window.print()">Imprimer / Enregistrer en PDF</button>
+    </div>
+
+    <h2>1. Vue d'Ensemble & Fonctionnement</h2>
+    <p>L'application Massinissa School Software étant hébergée <strong>en ligne dans le cloud</strong>, le lecteur biométrique ZKTeco K50 Pro (relié par câble réseau direct au PC de l'école) dialogue avec votre navigateur grâce au pont local (<strong><code>zk-bridge</code></strong>) :</p>
+    <ul>
+      <li><strong>Liaison Directe RJ45 :</strong> Connexion matérielle ultra-rapide sur <code>192.168.50.201:4370</code>.</li>
+      <li><strong>Liaison Navigateur Instantanée (SSE) :</strong> Les scans sont transmis à votre écran en <strong>&lt; 2 ms</strong> via Server-Sent Events locaux (<code>http://127.0.0.1:4375/events</code>).</li>
+      <li><strong>Zéro Consommation de Quota :</strong> Élimine le polling continu en base de données, réduisant la consommation NeonDB de <strong>plus de 75 %</strong>.</li>
+      <li><strong>Moteur Anti-Veille (v3) :</strong> Battement de cœur actif toutes les 8 secondes empêchant la session de s'endormir après une longue inactivité, et reconnexion automatique en 2–3 secondes si l'appareil est débranché ou redémarré.</li>
+    </ul>
+
+    <h2>2. Prérequis sur le PC de l'école</h2>
+    <ol>
+      <li><strong>Connexion Internet par Wi-Fi :</strong> Le PC doit être connecté à Internet par le <strong>Wi-Fi</strong> afin de laisser la carte Ethernet exclusivement dédiée au lecteur.</li>
+      <li><strong>Node.js Installé :</strong> Téléchargez et installez <strong>Node.js LTS</strong> depuis <a href="https://nodejs.org" target="_blank">https://nodejs.org</a>.</li>
+      <li><strong>Copier le dossier <code>zk-bridge</code> :</strong> Copiez le dossier <code>zk-bridge</code> sur le PC de l'école.</li>
+    </ol>
+
+    <h2>3. Étape 1 — Configuration sur l'Écran du Lecteur K50 Pro</h2>
+    <p>Maintenez la touche <strong><code>M/OK</code></strong> pendant 2 secondes &rarr; allez dans <strong><code>Comm.</code> &rarr; <code>Ethernet</code></strong> :</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Paramètre K50 Pro</th>
+          <th>Valeur à Saisir</th>
+          <th>Rôle</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Adresse IP</strong></td><td><code>192.168.50.201</code></td><td>Adresse fixe du lecteur</td></tr>
+        <tr><td><strong>Masque de sous-réseau</strong></td><td><code>255.255.255.0</code></td><td>Masque de classe C standard</td></tr>
+        <tr><td><strong>Passerelle</strong></td><td><code>0.0.0.0</code> (ou <code>192.168.50.1</code>)</td><td>Passerelle locale sur câble</td></tr>
+        <tr><td><strong>Port TCP</strong></td><td><code>4370</code></td><td>Port de communication ZKTeco</td></tr>
+        <tr><td><strong>DHCP</strong></td><td><code>OFF</code> (Désactivé)</td><td>Évite tout changement d'adresse IP</td></tr>
+        <tr><td><strong>Clé comm (Mot de passe)</strong></td><td><code>0</code></td><td>Mot de passe par défaut (0)</td></tr>
+      </tbody>
+    </table>
+
+    <h2>4. Étape 2 — Configuration du Port Ethernet sous Windows (IP Fixe <code>192.168.50.1</code>)</h2>
+    <ol>
+      <li>Appuyez sur <strong><code>Win + R</code></strong>, tapez <strong><code>ncpa.cpl</code></strong> et validez par <strong>Entrée</strong>.</li>
+      <li>Clic droit sur <strong>Ethernet</strong> (la carte filaire reliée au lecteur) &rarr; <strong>Propriétés</strong>.</li>
+      <li>Double-cliquez sur <strong>Protocole Internet version 4 (TCP/IPv4)</strong>.</li>
+      <li>Sélectionnez <strong>Utiliser l'adresse IP suivante</strong> et renseignez :
+        <ul>
+          <li><strong>Adresse IP :</strong> <code>192.168.50.1</code></li>
+          <li><strong>Masque de sous-réseau :</strong> <code>255.255.255.0</code></li>
+          <li><strong>Passerelle par défaut :</strong> <strong>LAISSER TOTALEMENT VIDE !</strong></li>
+        </ul>
+      </li>
+      <li>Cliquez sur <strong>OK</strong>, puis <strong>OK</strong>.</li>
+    </ol>
+
+    <div class="callout callout-warn">
+      <strong>Important :</strong> Ne mettez jamais de passerelle par défaut sur la carte Ethernet. Cela garantit que Windows continue d'utiliser le Wi-Fi pour Internet tout en communiquant avec le K50 Pro par le câble.
+    </div>
+
+    <p>Pour vérifier la liaison matérielle, ouvrez <strong>PowerShell</strong> et lancez :</p>
+    <pre>Test-NetConnection 192.168.50.201 -Port 4370</pre>
+    <p>Vérifiez que la réponse affiche <code>TcpTestSucceeded : True</code>.</p>
+
+    <h2>5. Étape 3 — Lancement de l'Installateur 1 Clic (<code>zk-bridge</code>)</h2>
+    <ol>
+      <li>Ouvrez le dossier <strong><code>zk-bridge</code></strong>.</li>
+      <li><strong>Clic droit &rarr; Exécuter en tant qu'administrateur</strong> sur <strong><code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code></strong>.</li>
+      <li>Appuyez sur <strong><code>[Entrée]</code></strong> pour valider <code>192.168.50.201</code> (ou saisissez <code>192.168.50.201,192.168.50.202</code> si 2 lecteurs sont branchés sur ce PC).</li>
+    </ol>
+
+    <div class="callout callout-success">
+      <strong>Actions Automatiques de l'Installateur v3 :</strong>
+      <ul style="margin: 6px 0 0 0;">
+        <li>Installe le service dans <code>%USERPROFILE%\MassinissaK50Bridge\</code></li>
+        <li><strong>Désactive la mise en veille Ethernet :</strong> Coupe <code>PowerSavingMode</code>, <code>Green Ethernet</code> et <code>EEE</code> pour empêcher Windows d'éteindre la carte réseau après inactivité</li>
+        <li>Ouvre les ports TCP <code>4370</code> et <code>4375</code> dans le Pare-feu Windows</li>
+        <li>Configure un démarrage automatique invisible au démarrage de Windows (<code>shell:startup</code>)</li>
+        <li>Active immédiatement le service sur <code>http://127.0.0.1:4375</code></li>
+      </ul>
+    </div>
+
+    <h2>6. Étape 4 — Ouverture de l'Application en Ligne</h2>
+    <ol>
+      <li>Ouvrez <strong>Chrome</strong> ou <strong>Edge</strong> et connectez-vous à votre logiciel en ligne.</li>
+      <li>Sélectionnez le siège correspondant au PC dans la barre du haut (<strong>ECOLE</strong>, <strong>ANNEX</strong> ou <strong>AMPHI</strong>).</li>
+      <li>Vérifiez que le bouton <strong>Empreinte</strong> est sur <strong>ON</strong> (autorisez l'accès au réseau local si Chrome le demande).</li>
+      <li>Le voyant devient instantanément <strong>Vert (Connecté)</strong> !</li>
+    </ol>
+
+    <h2>7. Utilisation Quotidienne & Fonctionnalités Avancées</h2>
+    <ul>
+      <li><strong>Pointage Instantané (&lt; 200 ms) :</strong> Le scan est poussé en 0 ms au navigateur via SSE, mettant à jour la liste des élèves et les crédits restants immédiatement.</li>
+      <li><strong>Isolation Stricte par Siège :</strong> Scanner à AMPHI vérifie uniquement les séances d'AMPHI. Un élève d'ECOLE venu faire un rattrapage à AMPHI déclenche la carte Rattrapage pour être pointé en 2 clics sans fausser son groupe d'origine.</li>
+      <li><strong>Zéro Doublon :</strong> Les scans répétés pour une même séance ne décomptent jamais de crédit supplémentaire.</li>
+      <li><strong>Maintien Actif Anti-Veille (v3) :</strong> Battement de cœur toutes les 8 secondes évitant toute déconnexion après de longues heures d'inactivité.</li>
+      <li><strong>Reconnexion Manuelle Immédiate :</strong> En cas de redémarrage ou débranchement du lecteur, basculez simplement le bouton <strong>Empreinte</strong> en haut sur <strong>OFF puis ON</strong> pour forcer une ré-authentification immédiate en &lt; 50 ms.</li>
+    </ul>
+
+    <h2>8. Tableau de Dépannage Rapide</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Symptôme</th>
+          <th>Cause Probable</th>
+          <th>Solution Immédiate</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Internet se coupe au branchement du câble RJ45</strong></td>
+          <td>Une passerelle a été saisie sur la carte Ethernet</td>
+          <td>Ouvrez <code>ncpa.cpl</code> &rarr; Ethernet &rarr; IPv4 et videz la case <em>Passerelle par défaut</em>.</td>
+        </tr>
+        <tr>
+          <td><strong>Le bouton Empreinte reste Rouge / Déconnecté</strong></td>
+          <td>Le pont local n'est pas lancé ou Chrome a bloqué l'accès</td>
+          <td>Lancez <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code> en administrateur et autorisez l'accès local dans Chrome.</td>
+        </tr>
+        <tr>
+          <td><strong>`TcpTestSucceeded : False` sur `192.168.50.201`</strong></td>
+          <td>Câble débranché ou IP de la carte Ethernet perdue</td>
+          <td>Vérifiez le câble et tapez <code>ipconfig</code> dans PowerShell pour vérifier que Ethernet a bien <code>192.168.50.1</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Le lecteur a été redémarré ou est resté inactif longtemps</strong></td>
+          <td>Session matérielle fermée ou câble rebranché</td>
+          <td>Le pont v3 se reconnecte automatiquement en 2 à 3 secondes. Vous pouvez aussi basculer le bouton <strong>Empreinte</strong> sur <strong>OFF puis ON</strong> pour forcer la reconnexion immédiate.</td>
+        </tr>
+        <tr>
+          <td><strong>La carte Ethernet se coupe après inactivité</strong></td>
+          <td>Économie d'énergie Realtek activée dans Windows</td>
+          <td>Exécutez <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code>, ou dans le Gestionnaire de périphériques (<code>devmgmt.msc</code>) &rarr; carte Realtek &rarr; Avancé &rarr; passez <code>Energy-Efficient Ethernet</code>, <code>Green Ethernet</code> et <code>Power Saving Mode</code> sur <strong>Désactivé</strong>.</td>
+        </tr>
+        <tr>
+          <td><strong>Comment arrêter le pont en arrière-plan</strong></td>
+          <td>Besoin d'arrêter le service Node.js local</td>
+          <td>Double-cliquez sur <code>ARRETER_PONT_K50.bat</code> dans le dossier <code>zk-bridge</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

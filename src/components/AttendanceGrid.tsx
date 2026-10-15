@@ -127,6 +127,10 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         <span className="w-3 h-3 rounded-full bg-rose-500 inline-block shadow-2xs"></span>
                         <span>{locale === "ar" ? "أستاذ غائب (محفوظ)" : "Prof absent (préservé)"}</span>
                     </div>
+                    <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-sm bg-amber-500 inline-block shadow-2xs"></span>
+                        <span>{locale === "ar" ? "حصة مجانية (عمود مميز)" : "Séance gratuite"}</span>
+                    </div>
                 </div>
             </div>
 
@@ -151,29 +155,58 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                             </th>
 
                             {/* Lesson Instances Headers: Sticky top */}
-                            {[...lessonInstances].reverse().map((instance) => (
-                                <th
-                                    key={instance.key}
-                                    className="p-2.5 sm:p-3 text-table-header font-semibold text-center text-muted border-b-2 border-border min-w-[85px] sm:min-w-[120px] sticky top-0 z-20 bg-surface-muted shadow-[0_2px_4px_-2px_rgba(0,0,0,0.06)]"
-                                >
-                                    <Link
-                                        href={`/list/attendance/take/${instance.lessonId}?date=${encodeURIComponent(instance.date)}`}
-                                        className="flex flex-col items-center group/col hover:text-primary transition-colors"
-                                        title={
-                                            locale === "ar"
-                                                ? `تعديل حضور حصة ${formatDateHeader(instance.date)}`
-                                                : `Modifier la présence du ${formatDateHeader(instance.date)}`
-                                        }
+                            {[...lessonInstances].reverse().map((instance) => {
+                                const isFree = Boolean(instance.isFree);
+                                const isExtra = Boolean(instance.isExtra);
+                                const isCatchUp = Boolean(instance.isCatchUp);
+
+                                return (
+                                    <th
+                                        key={instance.key}
+                                        className={`p-2.5 sm:p-3 text-table-header font-semibold text-center min-w-[85px] sm:min-w-[120px] sticky top-0 z-20 shadow-[0_2px_4px_-2px_rgba(0,0,0,0.06)] border-b-2 ${
+                                            isFree
+                                                ? "bg-amber-100/90 text-amber-950 border-amber-400"
+                                                : "bg-surface-muted text-muted border-border"
+                                        }`}
                                     >
-                                        <span className="font-bold text-gray-800 group-hover/col:text-primary group-hover/col:underline">
-                                            {instance.lessonName}
-                                        </span>
-                                        <span className="font-normal text-form-helper text-muted group-hover/col:text-primary/80">
-                                            {formatDateHeader(instance.date)}
-                                        </span>
-                                    </Link>
-                                </th>
-                            ))}
+                                        <Link
+                                            href={`/list/attendance/take/${instance.lessonId}?date=${encodeURIComponent(instance.date)}`}
+                                            className="flex flex-col items-center group/col hover:text-primary transition-colors gap-1"
+                                            title={
+                                                locale === "ar"
+                                                    ? `تعديل حضور حصة ${formatDateHeader(instance.date)}`
+                                                    : `Modifier la présence du ${formatDateHeader(instance.date)}`
+                                            }
+                                        >
+                                            <span className={`font-bold group-hover/col:text-primary group-hover/col:underline ${isFree ? "text-amber-950" : "text-gray-800"}`}>
+                                                {instance.lessonName}
+                                            </span>
+                                            <span className={`font-normal text-form-helper group-hover/col:text-primary/80 ${isFree ? "text-amber-900/80" : "text-muted"}`}>
+                                                {formatDateHeader(instance.date)}
+                                            </span>
+
+                                            {/* Lesson Type Badge under date */}
+                                            {isFree ? (
+                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500 text-white shadow-2xs">
+                                                    {locale === "ar" ? "مجانية" : "Gratuit"}
+                                                </span>
+                                            ) : isExtra ? (
+                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-600 text-white shadow-2xs">
+                                                    {locale === "ar" ? "إضافية" : "Extra"}
+                                                </span>
+                                            ) : isCatchUp ? (
+                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-600 text-white shadow-2xs">
+                                                    {locale === "ar" ? "استدراكية" : "Rattrapage"}
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200 text-slate-700 shadow-2xs">
+                                                    {locale === "ar" ? "عادية" : "Normale"}
+                                                </span>
+                                            )}
+                                        </Link>
+                                    </th>
+                                );
+                            })}
                         </tr>
                     </thead>
 
@@ -245,6 +278,8 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
 
                                         {/* Lesson Attendance Cells */}
                                         {[...lessonInstances].reverse().map((instance) => {
+                                            const isFree = Boolean(instance.isFree);
+                                            const cellBg = isFree ? "bg-amber-50/70" : "";
                                             const studentRecords = attendanceMap.get(student.id);
                                             const rawRecord = studentRecords
                                                 ? studentRecords.get(instance.key)
@@ -255,9 +290,9 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
-                                                        className="p-3 text-center border-b border-border"
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
-                                                        <div className="w-5 h-5 mx-auto rounded-full bg-surface-subtle border border-border" />
+                                                        <div className={`w-5 h-5 mx-auto rounded-full bg-surface-subtle border ${isFree ? "border-amber-300" : "border-border"}`} />
                                                     </td>
                                                 );
                                             }
@@ -272,7 +307,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
-                                                        className="p-3 text-center border-b border-border"
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
                                                         <div
                                                             className="w-5 h-5 mx-auto rounded-full bg-rose-500 ring-2 ring-rose-200 shadow-2xs"
@@ -292,7 +327,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
-                                                        className="p-3 text-center border-b border-border"
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
                                                         <div className="relative group/catchup inline-flex items-center justify-center">
                                                             <div
@@ -324,7 +359,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
-                                                        className="p-3 text-center border-b border-border"
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
                                                         <div
                                                             className="w-5 h-5 mx-auto rounded-full bg-success shadow-2xs"
@@ -339,7 +374,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
-                                                        className="p-3 text-center border-b border-border"
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
                                                         <button
                                                             type="button"
@@ -367,7 +402,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
-                                                        className="p-3 text-center border-b border-border"
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
                                                         <div
                                                             className="w-5 h-5 mx-auto rounded-full bg-slate-200 border-2 border-slate-400/80 shadow-2xs"
@@ -381,7 +416,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                             return (
                                                 <td
                                                     key={`${student.id}-${instance.key}-${studentIndex}`}
-                                                    className="p-3 text-center border-b border-border"
+                                                    className={`p-3 text-center border-b border-border ${cellBg}`}
                                                 >
                                                     <div
                                                         className="w-5 h-5 mx-auto rounded-full bg-danger shadow-2xs"

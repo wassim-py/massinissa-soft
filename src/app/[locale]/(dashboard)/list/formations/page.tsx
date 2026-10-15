@@ -74,7 +74,12 @@ const FormationsListPage = async (
                 teacher: { select: { id: true, name: true } },
                 _count: {
                   select: {
-                    enrollments: true,
+                    enrollments: {
+                      where: {
+                        status: "ACTIVE",
+                        transfersFrom: { none: {} },
+                      },
+                    },
                     lessons: true,
                   },
                 },

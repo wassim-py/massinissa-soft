@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { notFound } from "next/navigation";
 import { getAuthRole, getAuthSession, getActiveBranchId } from "@/lib/auth";
 import { serializeForClient } from "@/lib/utils";
@@ -8,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
 import { getActiveTrimester, getFixedInscriptionFeeAction } from "@/lib/configurationActions";
-import { computeStudentConsumedSessions, computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
 
 // This is the Server Component that fetches all the necessary data for taking attendance.
@@ -88,12 +89,84 @@ const TakeAttendancePage = async (
     );
   }
 
+  // Fetch all associated groups (primary + additional from LessonGroup)
+  const lessonGroups = await prisma.lessonGroup.findMany({
+    where: { lessonId: lessonId },
+    include: {
+      class: {
+        select: {
+          id: true,
+          name: true,
+          pricePerCycle: true,
+          inscriptionFee: true,
+          bookFee: true,
+          hasBooks: true,
+          isFormation: true,
+          formationLevelId: true,
+          levelId: true,
+          branchId: true,
+        },
+      },
+    },
+  });
+
+  const allClassIds = Array.from(
+    new Set([l.classId, ...lessonGroups.map((g) => g.classId)].filter(Boolean))
+  );
+
+  const classesMap = new Map<number, any>();
+  classesMap.set(l.classId, {
+    id: l.classId,
+    name: l.className || (locale === "ar" ? "قسم" : "Groupe"),
+    price: Number(l.classPrice || 0),
+    pricePerCycle: Number(l.pricePerCycle || l.classPrice || 0),
+    inscriptionFee:
+      fixedInscriptionFee > 0
+        ? fixedInscriptionFee
+        : l.inscriptionFee != null
+        ? Number(l.inscriptionFee)
+        : 1000,
+    bookFee: l.bookFee != null ? Number(l.bookFee) : 0,
+    hasBooks: Boolean(l.hasBooks),
+    isFormation: Boolean(l.isFormation),
+    formationLevelId: l.formationLevelId != null ? Number(l.formationLevelId) : null,
+    levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
+    branchId: l.branchId != null ? Number(l.branchId) : null,
+  });
+
+  for (const lg of lessonGroups) {
+    if (lg.class && !classesMap.has(lg.class.id)) {
+      classesMap.set(lg.class.id, {
+        id: lg.class.id,
+        name: lg.class.name,
+        price: Number(lg.class.pricePerCycle || 0),
+        pricePerCycle: Number(lg.class.pricePerCycle || 0),
+        inscriptionFee:
+          fixedInscriptionFee > 0
+            ? fixedInscriptionFee
+            : lg.class.inscriptionFee != null
+            ? Number(lg.class.inscriptionFee)
+            : 1000,
+        bookFee: lg.class.bookFee != null ? Number(lg.class.bookFee) : 0,
+        hasBooks: Boolean(lg.class.hasBooks),
+        isFormation: Boolean(lg.class.isFormation),
+        formationLevelId: lg.class.formationLevelId != null ? Number(lg.class.formationLevelId) : null,
+        levelId: lg.class.levelId != null ? Number(lg.class.levelId) : null,
+        branchId: lg.class.branchId != null ? Number(lg.class.branchId) : null,
+      });
+    }
+  }
+
+  const combinedGroupNames = Array.from(classesMap.values())
+    .map((c) => c.name)
+    .join(" + ");
+
   const lesson = {
     id: l.id,
-    name: l.className || (locale === "ar" ? "درس" : "Séance"),
+    name: combinedGroupNames || l.className || (locale === "ar" ? "درس" : "Séance"),
     class: {
       id: l.classId,
-      name: l.className || (locale === "ar" ? "قسم" : "Groupe"),
+      name: combinedGroupNames || l.className || (locale === "ar" ? "قسم" : "Groupe"),
       price: Number(l.classPrice || 0),
       pricePerCycle: Number(l.pricePerCycle || l.classPrice || 0),
       inscriptionFee:
@@ -109,7 +182,7 @@ const TakeAttendancePage = async (
       levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
       branchId: l.branchId != null ? Number(l.branchId) : null,
     },
-    subject: { id: l.classId, name: l.className || (locale === "ar" ? "مادة" : "Matière") },
+    subject: { id: l.classId, name: combinedGroupNames || l.className || (locale === "ar" ? "مادة" : "Matière") },
     teacher: { id: l.teacherId, name: l.teacherName || (locale === "ar" ? "أستاذ" : "Enseignant"), surname: "" },
     startTime: l.startsAt,
     endTime: l.endsAt,
@@ -206,7 +279,29 @@ const TakeAttendancePage = async (
     orderBy: { recordedAt: "asc" },
   });
 
-  const formattedCatchUpVisitors = catchUpVisitors.map((v) => {
+  const externalCatchUpVisitors = catchUpVisitors.filter(
+    (v) => !allClassIds.includes(v.missedLesson.classId)
+  );
+
+  const inGroupCatchUpAttendees = catchUpVisitors.filter(
+    (v) => allClassIds.includes(v.missedLesson.classId)
+  );
+
+  const formattedInGroupCatchUps = inGroupCatchUpAttendees.map((v) => {
+    const missedDate = new Date(v.missedLesson.startsAt).toLocaleDateString(
+      locale === "ar" ? "ar-DZ" : "fr-DZ",
+      { weekday: "short", day: "numeric", month: "numeric" }
+    );
+    return {
+      studentId: v.studentId,
+      missedLessonId: v.missedLessonId,
+      missedStartsAt: v.missedLesson.startsAt,
+      missedClassName: v.missedLesson.class?.name || "",
+      missedDateFormatted: missedDate,
+    };
+  });
+
+  const formattedCatchUpVisitors = externalCatchUpVisitors.map((v) => {
     const s = v.student;
     const missedClassId = v.missedLesson.classId;
     const vEnr = s.enrollments?.find((e: any) => e.classId === missedClassId);
@@ -280,14 +375,14 @@ const TakeAttendancePage = async (
   let rawStudents: any[] = [];
   try {
     rawStudents = await prisma.$queryRaw<any[]>`
-      SELECT DISTINCT s.id, s.name, s."globalNumber", s.phone
+      SELECT DISTINCT s.id, s.name, s."globalNumber", s.phone, e."classId" as "enrolledClassId"
       FROM "Student" s
       JOIN "Enrollment" e ON e."studentId" = s.id
-      WHERE e."classId" = ${l.classId}
+      WHERE e."classId" IN (${Prisma.join(allClassIds)})
         AND (e.status IS NULL OR e.status = 'ACTIVE')
         AND s.id NOT IN (
           SELECT "studentId" FROM "Enrollment"
-          WHERE "classId" = ${l.classId}
+          WHERE "classId" IN (${Prisma.join(allClassIds)})
             AND status IN ('SUSPENDED', 'REFUNDED', 'UNENROLLED', 'TRANSFERRED', 'INACTIVE')
         )
       ORDER BY s."globalNumber" ASC, s.name ASC
@@ -295,7 +390,12 @@ const TakeAttendancePage = async (
     // Deduplicate defensively
     const sMap = new Map<string, any>();
     for (const s of rawStudents) {
-      if (!sMap.has(s.id)) sMap.set(s.id, s);
+      if (!sMap.has(s.id)) {
+        sMap.set(s.id, {
+          ...s,
+          className: classesMap.get(s.enrolledClassId)?.name || "",
+        });
+      }
     }
     rawStudents = Array.from(sMap.values());
   } catch (err) {
@@ -315,7 +415,7 @@ const TakeAttendancePage = async (
     existingAttendance = [];
   }
 
-  // Fetch full student credit info (vouchers and past non-free attendances in this class)
+  // Fetch full student credit info (vouchers and past non-free attendances in these classes)
   const studentIds = rawStudents.map((s) => s.id);
   let studentsWithDetails: any[] = [];
   try {
@@ -327,7 +427,7 @@ const TakeAttendancePage = async (
           vouchers: {
             where: {
               OR: [
-                { classId: l.classId },
+                { classId: { in: allClassIds } },
                 { paymentType: "INSCRIPTION" },
               ],
             },
@@ -337,16 +437,17 @@ const TakeAttendancePage = async (
             orderBy: { issuedAt: "desc" },
           },
           enrollments: {
-            where: { classId: l.classId },
+            where: { classId: { in: allClassIds } },
             include: {
               transfersFrom: true,
               transfersTo: true,
+              class: { select: { id: true, pricePerCycle: true, isFormation: true } },
             },
           },
           attendances: {
             where: {
               lesson: {
-                classId: l.classId,
+                classId: { in: allClassIds },
                 isFree: false,
               },
             },
@@ -357,6 +458,7 @@ const TakeAttendancePage = async (
                   startsAt: true,
                   isFree: true,
                   isTeacherAbsent: true,
+                  classId: true,
                 },
               },
             },
@@ -369,7 +471,7 @@ const TakeAttendancePage = async (
           catchUpAttendances: {
             where: {
               missedLesson: {
-                classId: l.classId,
+                classId: { in: allClassIds },
               },
             },
             include: {
@@ -379,6 +481,7 @@ const TakeAttendancePage = async (
                   startsAt: true,
                   isFree: true,
                   isTeacherAbsent: true,
+                  classId: true,
                 },
               },
             },
@@ -435,30 +538,29 @@ const TakeAttendancePage = async (
           vouchers: {
             where: {
               isVoided: false,
-              classId: l.classId,
-              paymentType: "TUITION_4SESSION",
+              paymentType: { in: ["TUITION_4SESSION", "FORMATION"] },
             },
             include: { refunds: true },
           },
           attendances: {
             where: {
-              lesson: { classId: l.classId, isFree: false },
+              lesson: { isFree: false },
             },
             include: {
-              lesson: { select: { id: true, startsAt: true, isFree: true } },
+              lesson: { select: { id: true, startsAt: true, isFree: true, classId: true } },
             },
           },
           enrollments: {
-            where: { classId: l.classId },
-            include: { transfersFrom: true, transfersTo: true },
+            include: {
+              transfersFrom: true,
+              transfersTo: true,
+              class: { select: { id: true, pricePerCycle: true, isFormation: true } },
+            },
           },
           catchUpAttendances: {
-            where: {
-              missedLesson: { classId: l.classId },
-            },
             include: {
               missedLesson: {
-                select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
               },
             },
           },
@@ -470,34 +572,24 @@ const TakeAttendancePage = async (
   }
 
   const allRelevantStudents = [...studentsWithDetails, ...payerSiblingsWithDetails];
+  const allRelevantStudentsMap = new Map(allRelevantStudents.map((s) => [s.id, s]));
   const payerRemainingMap = new Map<string, number>();
 
   for (const s of allRelevantStudents) {
     const sEnrollment = s.enrollments?.[0];
-    const isSiblingDiscount = Boolean(s.family?.payerStudentId && s.family.payerStudentId !== s.id);
-    const siblingDiscountPct = isSiblingDiscount ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
-    const isSiblingWaived100 = siblingDiscountPct >= 100;
-    const enrPayerStatus = sEnrollment?.payerStatus || s.payerStatus || "NORMAL";
+    const studentClassId = sEnrollment?.classId || l.classId;
+    const studentClass = classesMap.get(studentClassId) || classesMap.get(l.classId);
 
-    const tuitionVouchers = (s.vouchers || []).filter(
-      (v: any) => v.paymentType === "TUITION_4SESSION" && !v.isVoided && !v.isRefund && (v.classId === l.classId || !v.classId)
-    );
-
-    const creditMetrics = computeStudentCreditAndSessions({
-      pricePerCycle: Number(rawLesson[0]?.pricePerCycle || rawLesson[0]?.classPrice || 0),
-      isFormation: Boolean(l.isFormation),
-      payerStatus: enrPayerStatus,
-      siblingDiscountPercentage: siblingDiscountPct,
-      isSiblingWaived: isSiblingWaived100,
-      tuitionVouchers,
-      transfersIn: (s.enrollments || []).flatMap((e: any) => e.transfersTo || []),
-      transfersOut: (s.enrollments || []).flatMap((e: any) => e.transfersFrom || []),
-      creditResetOffset: (s.enrollments || []).reduce((sum: number, e: any) => sum + Number(e.creditResetOffset || 0), 0),
-      attendances: s.attendances || [],
-      catchUps: s.catchUpAttendances || [],
+    const payerRes = resolvePayerCredit({
+      payerStudent: s,
+      classId: studentClassId,
+      classPricePerCycle: Number(studentClass?.pricePerCycle || 0),
+      isFormation: Boolean(studentClass?.isFormation),
     });
 
-    payerRemainingMap.set(s.id, creditMetrics.netSessions);
+    if (payerRes) {
+      payerRemainingMap.set(s.id, payerRes.netSessions);
+    }
   }
 
   const studentsWithHistory = rawStudents.map((s) => {
@@ -513,7 +605,9 @@ const TakeAttendancePage = async (
       received: receivedSet.has(b.id),
     }));
 
-    const enrollment = details?.enrollments?.[0];
+    const studentClassId = s.enrolledClassId || details?.enrollments?.[0]?.classId || l.classId;
+    const studentClass = classesMap.get(studentClassId) || classesMap.get(l.classId);
+    const enrollment = details?.enrollments?.find((e: any) => e.classId === studentClassId) || details?.enrollments?.[0];
     const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
 
     const paidInscByClass = new Map<number, number>();
@@ -531,7 +625,7 @@ const TakeAttendancePage = async (
       }
     }
 
-    const totalInscPaidThisClass = paidInscByClass.get(l.classId) || 0;
+    const totalInscPaidThisClass = paidInscByClass.get(studentClassId) || 0;
     const isInscriptionPaid = totalInscPaidThisClass > 0;
     const hasPaidThreeInscriptions = paidInscByClass.size >= 3;
     const isOwnerWaived = Boolean(enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged);
@@ -547,7 +641,25 @@ const TakeAttendancePage = async (
       : "UNPAID";
     const enrollmentStatus = enrollment?.status || "ACTIVE";
     const payerStudentId = details?.family?.payerStudentId;
-    const payerSessionsRemaining = payerStudentId ? payerRemainingMap.get(payerStudentId) : undefined;
+    const hasPayerSibling = Boolean(payerStudentId && payerStudentId !== s.id);
+    let payerSessionsRemaining: number | undefined = undefined;
+    if (hasPayerSibling && payerStudentId) {
+      const payerObj = allRelevantStudentsMap.get(payerStudentId);
+      if (payerObj) {
+        const resolved = resolvePayerCredit({
+          payerStudent: payerObj,
+          classId: studentClassId,
+          classPricePerCycle: Number(studentClass?.pricePerCycle || 0),
+          isFormation: Boolean(studentClass?.isFormation),
+        });
+        if (resolved) {
+          payerSessionsRemaining = resolved.netSessions;
+        }
+      }
+      if (payerSessionsRemaining === undefined) {
+        payerSessionsRemaining = payerRemainingMap.get(payerStudentId);
+      }
+    }
 
     const isSuspendedOrInactive =
       enrollmentStatus === "SUSPENDED" ||
@@ -556,7 +668,7 @@ const TakeAttendancePage = async (
       enrollmentStatus === "TRANSFERRED";
 
     const classVouchers = (details?.vouchers || []).filter(
-      (v: any) => v.classId === l.classId || (!v.classId && (v.paymentType === "TUITION_4SESSION" || v.paymentType === "FORMATION"))
+      (v: any) => v.classId === studentClassId || (!v.classId && (v.paymentType === "TUITION_4SESSION" || v.paymentType === "FORMATION"))
     );
     const hasRefundRecord = classVouchers.some(
       (v: any) => v.status === "REFUNDED" || v.isRefund || (v.refunds && v.refunds.length > 0)
@@ -564,7 +676,7 @@ const TakeAttendancePage = async (
     const hasActiveTuitionVoucher = (details?.vouchers || []).some(
       (v: any) =>
         (v.paymentType === "TUITION_4SESSION" || v.paymentType === "FORMATION") &&
-        (v.classId === l.classId || !v.classId) &&
+        (v.classId === studentClassId || !v.classId) &&
         !v.isVoided &&
         !v.isRefund &&
         v.status !== "REFUNDED" &&
@@ -572,23 +684,32 @@ const TakeAttendancePage = async (
     );
     const isRefunded = enrollmentStatus === "REFUNDED" || (hasRefundRecord && !hasActiveTuitionVoucher);
 
+    const sAttendances = (details?.attendances || []).filter(
+      (a: any) => !a.lesson || a.lesson.classId === studentClassId
+    );
+    const sCatchUps = (details?.catchUpAttendances || []).filter(
+      (cu: any) => !cu.missedLesson || cu.missedLesson.classId === studentClassId
+    );
+
     return {
       id: s.id,
       globalNumber: s.globalNumber ?? details?.globalNumber,
       name: s.name,
       phone: s.phone ?? details?.phone ?? null,
       surname: "",
+      className: studentClass?.name || s.className || "",
+      enrolledClassId: studentClassId,
       payerStatus: effectivePayerStatus,
       enrollmentStatus,
       isSuspended: isSuspendedOrInactive,
       isRefunded,
       payerSessionsRemaining,
       vouchers: details?.vouchers || [],
-      attendances: details?.attendances || [],
-      catchUps: details?.catchUpAttendances || [],
-      transfersFrom: details?.enrollments?.[0]?.transfersFrom || [],
-      transfersTo: details?.enrollments?.[0]?.transfersTo || [],
-      creditResetOffset: details?.enrollments?.[0]?.creditResetOffset || 0,
+      attendances: sAttendances,
+      catchUps: sCatchUps,
+      transfersFrom: enrollment?.transfersFrom || [],
+      transfersTo: enrollment?.transfersTo || [],
+      creditResetOffset: enrollment?.creditResetOffset || 0,
       family: details?.family || null,
       isBookEligible: hasPaidBook,
       hasPaidBook,
@@ -624,7 +745,7 @@ const TakeAttendancePage = async (
           orderBy: { id: "asc" },
         }),
         prisma.class.findMany({
-          where: session.isOwner ? {} : { OR: [{ branchId: l.branchId }, { id: l.classId }] },
+          where: session.isOwner ? {} : { OR: [{ branchId: l.branchId }, { id: { in: allClassIds } }] },
           select: { id: true, name: true, levelId: true },
           orderBy: { name: "asc" },
         }),
@@ -650,6 +771,7 @@ const TakeAttendancePage = async (
           groupBooks={serializeForClient(groupBooks) as any}
           catchUpVisitors={serializeForClient(formattedCatchUpVisitors) as any}
           caughtUpAbsentees={serializeForClient(formattedCaughtUpAbsentees) as any}
+          inGroupCatchUps={serializeForClient(formattedInGroupCatchUps) as any}
           initialSearch={searchQuery}
           studentRelatedData={serializeForClient(studentRelatedData) as any}
           canCreateStudent={canCreateStudent}

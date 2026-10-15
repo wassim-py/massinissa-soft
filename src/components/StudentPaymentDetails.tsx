@@ -13,7 +13,7 @@ import {
   formatPaymentDateTime,
 } from "@/lib/voucherUtils";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
-import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -406,12 +406,30 @@ export default function StudentPaymentDetails({
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(
       (cu: any) => cu.missedLesson?.classId === c.id
     );
+
+    let payerRemainingCredit: number | undefined = undefined;
+    const hasPayerSibling = Boolean(
+      student.family?.payerStudentId &&
+      student.family.payerStudentId !== student.id
+    );
+
+    if (hasPayerSibling && (student.family as any)?.payerStudent) {
+      const payerRes = resolvePayerCredit({
+        payerStudent: (student.family as any).payerStudent,
+        classId: c.id,
+        classPricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
+        isFormation,
+      });
+      payerRemainingCredit = payerRes.netSessions;
+    }
+
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
       isFormation,
       payerStatus: enrPayerStatus,
       siblingDiscountPercentage: siblingDiscountPct,
       isSiblingWaived: isSiblingWaived100,
+      payerRemainingCredit,
       tuitionVouchers,
       transfersIn: enr.transfersTo,
       transfersOut: enr.transfersFrom,
@@ -516,6 +534,7 @@ export default function StudentPaymentDetails({
       mostRecentActiveCycle,
       status,
       feeCalc,
+      hasPayerSibling,
     };
   });
 
@@ -1128,6 +1147,11 @@ export default function StudentPaymentDetails({
                               {t("siblingBadge")}
                             </Badge>
                           ) : null}
+                          {cm.hasPayerSibling && !isSibling && (
+                            <Badge variant="neutral" size="sm" withDot>
+                              {t("siblingBadge")}
+                            </Badge>
+                          )}
                         </div>
                       </div>
 

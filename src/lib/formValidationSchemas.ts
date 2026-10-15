@@ -123,6 +123,7 @@ export const lessonSchema = z
     isCatchUp: z.boolean().optional(),
     isFree: z.boolean().optional(),
     date: z.string().optional().nullable(),
+    additionalClassIds: z.array(z.coerce.number()).optional(),
   })
   .refine((data) => data.endTime > data.startTime, {
     message: "وقت الانتهاء يجب أن يكون بعد وقت البدء",

@@ -8,7 +8,7 @@ import { Class, Student, Voucher, Enrollment, EnrollmentTransfer, VoucherEdit, R
 import PaymentForm from "./forms/PaymentForm";
 import PrintTicketButton from "./PrintTicketButton";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
-import { computeStudentConsumedSessions, computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { useTranslations, useLocale } from "next-intl";
@@ -237,9 +237,17 @@ export default function PaymentGrid({
   const [transferNotes, setTransferNotes] = useState<string>("");
   const [isPending, startTransition] = useTransition();
 
-  // Deduplicate enrollments by studentId defensively
+  // Deduplicate enrollments by studentId defensively and exclude transferred-out students
   const uniqueEnrollmentsMap = new Map<string, typeof classData.enrollments[0]>();
   for (const enr of classData.enrollments) {
+    // Exclude students who transferred out of this group so they are only shown in their new group
+    if (
+      enr.status === "TRANSFERRED" ||
+      enr.status === "UNENROLLED" ||
+      (enr.transfersFrom && enr.transfersFrom.length > 0)
+    ) {
+      continue;
+    }
     if (!uniqueEnrollmentsMap.has(enr.studentId)) {
       uniqueEnrollmentsMap.set(enr.studentId, enr);
     } else {
@@ -321,6 +329,44 @@ export default function PaymentGrid({
       : 0;
     const isSiblingWaived100 = siblingDiscountPct >= 100;
 
+    let payerRemainingCredit: number | undefined = undefined;
+    if (isSiblingDiscount) {
+      const payerId = student.family!.payerStudentId!;
+      // First check if payer is in the same class
+      const payerEnrollmentInClass = classData.enrollments.find(
+        (e) => e.student.id === payerId
+      );
+
+      let targetPayerStudent: any = null;
+      if (payerEnrollmentInClass) {
+        targetPayerStudent = {
+          ...payerEnrollmentInClass.student,
+          enrollments: [payerEnrollmentInClass],
+          vouchers: classData.vouchers.filter(v => v.studentId === payerId && !v.isVoided && !v.isRefund),
+          attendances: classData.lessons.flatMap(l => 
+            l.attendances.filter(a => a.studentId === payerId).map(a => ({
+              lessonId: l.id,
+              status: a.status,
+              lesson: { id: l.id, classId: classData.id, startsAt: (l as any).startsAt || new Date(0), isFree: l.isFree, isTeacherAbsent: Boolean((l as any).isTeacherAbsent) }
+            }))
+          ),
+          catchUpAttendances: (payerEnrollmentInClass.student as any).catchUpAttendances || [],
+        };
+      } else if ((student.family as any)?.payerStudent) {
+        targetPayerStudent = (student.family as any).payerStudent;
+      }
+
+      if (targetPayerStudent) {
+        const payerRes = resolvePayerCredit({
+          payerStudent: targetPayerStudent,
+          classId: classData.id,
+          classPricePerCycle: Number(classData.pricePerCycle || 0),
+          isFormation: Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId),
+        });
+        payerRemainingCredit = payerRes.netSessions;
+      }
+    }
+
     // Tuition cycles & sessions
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
 
@@ -348,6 +394,7 @@ export default function PaymentGrid({
       payerStatus: enrPayerStatus,
       siblingDiscountPercentage: siblingDiscountPct,
       isSiblingWaived: isSiblingWaived100,
+      payerRemainingCredit,
       tuitionVouchers,
       transfersIn: enrollment.transfersTo,
       transfersOut: enrollment.transfersFrom,
@@ -415,11 +462,13 @@ export default function PaymentGrid({
       isAutoWaived,
       bookVoucher,
       isWaivedSibling: isSiblingWaived100,
+      hasPayerSibling: isSiblingDiscount,
       tuitionVouchers,
       purchasedSessions,
       transferredIn,
       transferredOut,
       attendedSessions,
+      consumedLessons: attendedSessions,
       netSessions,
       refundableSessions,
       refundableAmount,
@@ -747,8 +796,8 @@ export default function PaymentGrid({
       className: "min-w-[170px]",
     },
     {
-      header: t("homeBranch"),
-      accessor: "homeBranch",
+      header: t("consumedLessons"),
+      accessor: "consumedLessons",
       align: "center",
       className: "min-w-[110px] text-center",
     },
@@ -851,10 +900,10 @@ export default function PaymentGrid({
           </div>
         </td>
 
-        {/* 3. Home Branch */}
+        {/* 3. Consumed Lessons */}
         <td className="py-3 px-3 text-center">
           <Badge variant="neutral" size="sm">
-            {s.registeredBranch?.name || classData.branch.name}
+            {t("sessionsCount", { count: item.attendedSessions })}
           </Badge>
         </td>
 
@@ -894,20 +943,27 @@ export default function PaymentGrid({
               {locale === "ar" ? "معفى" : "Exonéré"}
             </Badge>
           ) : (
-            <Badge
-              variant={
-                item.netSessions >= 2
-                  ? "success"
-                  : item.netSessions === 1
-                  ? "warning"
-                  : "danger"
-              }
-              size="sm"
-            >
-              {t("sessionsCount", {
-                count: item.netSessions,
-              })}
-            </Badge>
+            <div className="flex flex-col items-center gap-0.5">
+              <Badge
+                variant={
+                  item.netSessions >= 2
+                    ? "success"
+                    : item.netSessions === 1
+                    ? "warning"
+                    : "danger"
+                }
+                size="sm"
+              >
+                {t("sessionsCount", {
+                  count: item.netSessions,
+                })}
+              </Badge>
+              {item.hasPayerSibling && (
+                <span className="text-[10px] text-muted font-medium">
+                  {locale === "ar" ? "إعفاء إخوة" : "Remise fratrie"}
+                </span>
+              )}
+            </div>
           )}
           {item.transferredIn > 0 && (
             <span
@@ -1183,18 +1239,25 @@ export default function PaymentGrid({
                           {locale === "ar" ? "معفى" : "Exonéré"}
                         </Badge>
                       ) : (
-                        <Badge
-                          variant={
-                            item.netSessions >= 2
-                              ? "success"
-                              : item.netSessions === 1
-                              ? "warning"
-                              : "danger"
-                          }
-                          size="sm"
-                        >
-                          {t("sessionsCount", { count: item.netSessions })}
-                        </Badge>
+                        <div className="flex flex-col items-center gap-0.5">
+                          <Badge
+                            variant={
+                              item.netSessions >= 2
+                                ? "success"
+                                : item.netSessions === 1
+                                ? "warning"
+                                : "danger"
+                            }
+                            size="sm"
+                          >
+                            {t("sessionsCount", { count: item.netSessions })}
+                          </Badge>
+                          {item.hasPayerSibling && (
+                            <span className="text-[10px] text-muted font-medium">
+                              {locale === "ar" ? "إعفاء إخوة" : "Remise fratrie"}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                     <div>
@@ -1215,10 +1278,10 @@ export default function PaymentGrid({
                     </div>
                   </div>
 
-                  {/* Branch & Book Badges */}
+                  {/* Consumed Lessons & Book Badges */}
                   <div className="flex flex-wrap items-center gap-1.5 text-xs">
                     <Badge variant="neutral" size="sm">
-                      {s.registeredBranch?.name || classData.branch.name}
+                      {t("consumedLessons")}: {t("sessionsCount", { count: item.attendedSessions })}
                     </Badge>
                     {(classData.hasBooks || classBooks.length > 0) && (
                       <BookStatusBadge

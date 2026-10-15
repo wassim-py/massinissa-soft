@@ -71,7 +71,17 @@ export interface CaughtUpAbsentee {
   catchUpStartsAt: string | Date;
 }
 
+export interface InGroupCatchUp {
+  studentId: string;
+  missedLessonId: number;
+  missedStartsAt: string | Date;
+  missedClassName: string;
+  missedDateFormatted?: string;
+}
+
 type FullStudent = Student & {
+  className?: string;
+  enrolledClassId?: number;
   vouchers: Voucher[];
   attendances: Attendance[];
   catchUps?: any[];
@@ -114,6 +124,7 @@ const AttendanceRoster = ({
   groupBooks = [],
   catchUpVisitors = [],
   caughtUpAbsentees = [],
+  inGroupCatchUps = [],
   initialSearch = "",
   studentRelatedData = { grades: [], classes: [] },
   canCreateStudent = true,
@@ -125,6 +136,7 @@ const AttendanceRoster = ({
   groupBooks?: Array<{ id: number; title: string }>;
   catchUpVisitors?: CatchUpVisitor[];
   caughtUpAbsentees?: CaughtUpAbsentee[];
+  inGroupCatchUps?: InGroupCatchUp[];
   initialSearch?: string;
   studentRelatedData?: {
     grades: Array<{ id: number; level?: string; name?: string }>;
@@ -191,7 +203,11 @@ const AttendanceRoster = ({
         cleanSearch && student.phone
           ? student.phone.toLowerCase().includes(cleanSearch)
           : false;
-      return matchName || matchId || matchPhone;
+      const matchClass =
+        cleanSearch && student.className
+          ? student.className.toLowerCase().includes(cleanSearch)
+          : false;
+      return matchName || matchId || matchPhone || matchClass;
     });
   }, [activeStudents, cleanSearch, cleanNumeric]);
 
@@ -210,6 +226,11 @@ const AttendanceRoster = ({
   const caughtUpMap = useMemo(
     () => new Map((caughtUpAbsentees || []).map((c) => [c.studentId, c])),
     [caughtUpAbsentees]
+  );
+
+  const inGroupCatchUpMap = useMemo(
+    () => new Map((inGroupCatchUps || []).map((c) => [c.studentId, c])),
+    [inGroupCatchUps]
   );
 
   // Quick book handout state: Map of studentId -> array of received book IDs
@@ -283,7 +304,7 @@ const AttendanceRoster = ({
     const initialState: Record<string, AttendanceStatus> = {};
     activeStudents.forEach((student) => {
       const record = existingRecords.find((r) => r.studentId === student.id);
-      if (record?.status === "PRESENT") {
+      if (record?.status === "PRESENT" || (!record && inGroupCatchUpMap.has(student.id))) {
         initialState[student.id] = "PRESENT";
       } else if (record?.status === "NOT_DEFINED") {
         initialState[student.id] = "NOT_DEFINED";
@@ -776,6 +797,7 @@ const AttendanceRoster = ({
               siblingDiscountPercentage: siblingDiscountPct,
               isSiblingWaived: isSiblingWaived100,
               isPayerSiblingPaid,
+              payerRemainingCredit: isSiblingDiscount ? student.payerSessionsRemaining : undefined,
               tuitionVouchers,
               transfersIn: student.transfersTo || [],
               transfersOut: student.transfersFrom || [],
@@ -784,7 +806,10 @@ const AttendanceRoster = ({
               catchUps: student.catchUps || [],
             });
 
-            const sessionsRemaining = creditMetrics.netSessions;
+            const sessionsRemaining =
+              isSiblingDiscount && student.payerSessionsRemaining !== undefined
+                ? student.payerSessionsRemaining
+                : creditMetrics.netSessions;
             const sessionsConsumed = creditMetrics.attendedSessions;
 
             const studentLessons = liveStudentAttendances
@@ -826,22 +851,35 @@ const AttendanceRoster = ({
                 statusBubble = { text: t("unpaidDue"), color: "bg-red-500" };
               }
             } else {
-              if (isSiblingWaived100) {
-                if (!isPayerSiblingPaid) {
-                  statusBubble = { text: locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)", color: "bg-red-500" };
+              if (isSiblingDiscount) {
+                if (sessionsRemaining >= 2) {
+                  statusBubble = {
+                    text: isSiblingWaived100
+                      ? (locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)")
+                      : (locale === "ar" ? `مدفوع (-${siblingDiscountPct}%)` : `Payé (-${siblingDiscountPct}%)`),
+                    color: "bg-green-500",
+                  };
+                } else if (sessionsRemaining === 1) {
+                  statusBubble = {
+                    text: locale === "ar" ? "جلسة واحدة متبقية للأخ" : "1 séance restante (Fratrie)",
+                    color: "bg-yellow-500",
+                  };
                 } else {
-                  statusBubble = { text: t("waivedSibling"), color: "bg-amber-600" };
+                  statusBubble = {
+                    text: locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)",
+                    color: "bg-red-500",
+                  };
                 }
               } else if (isNonPayer) {
                 statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
               } else if (isSchoolFeesOnly) {
                 statusBubble = { text: locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls", color: "bg-sky-500" };
               } else if (sessionsRemaining >= 2) {
-                statusBubble = { text: isSiblingDiscount ? (locale === "ar" ? `مدفوع (-${siblingDiscountPct}%)` : `Payé (-${siblingDiscountPct}%)`) : t("paidGood"), color: "bg-green-500" };
+                statusBubble = { text: t("paidGood"), color: "bg-green-500" };
               } else if (sessionsRemaining >= 1) {
                 statusBubble = { text: t("expiringSoon"), color: "bg-yellow-500" };
-              } else if (isSiblingDiscount) {
-                statusBubble = { text: locale === "ar" ? `غير مدفوع (خصم ${siblingDiscountPct}%)` : `Dû (-${siblingDiscountPct}%)`, color: "bg-amber-600" };
+              } else {
+                statusBubble = { text: t("unpaidDue"), color: "bg-red-500" };
               }
             }
 
@@ -947,6 +985,12 @@ const AttendanceRoster = ({
                           </Link>
                         )}
 
+                        {student.className && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs">
+                            {student.className}
+                          </span>
+                        )}
+
                         {/* Status Badges for Not-Normal Students */}
                         {isSiblingWaived100 ? (
                           <Badge variant="warning" size="sm" withDot className="bg-amber-100/90 text-amber-900 border-amber-300 font-semibold shadow-2xs">
@@ -971,6 +1015,14 @@ const AttendanceRoster = ({
                             {locale === "ar"
                               ? `استدراك مسبق (${caughtUpMap.get(student.id)?.catchUpClassName})`
                               : `Rattrapé (${caughtUpMap.get(student.id)?.catchUpClassName})`}
+                          </Badge>
+                        )}
+
+                        {inGroupCatchUpMap.has(student.id) && (
+                          <Badge variant="success" size="sm" withDot className="bg-emerald-100 text-emerald-900 border-emerald-300 font-semibold shadow-2xs">
+                            {locale === "ar"
+                              ? `استدراك لحصة سابقة (${inGroupCatchUpMap.get(student.id)?.missedDateFormatted || ""})`
+                              : `Rattrapage d'une séance (${inGroupCatchUpMap.get(student.id)?.missedDateFormatted || ""})`}
                           </Badge>
                         )}
 
@@ -1013,15 +1065,15 @@ const AttendanceRoster = ({
                         {!isFormation && (
                           <>
                             <span>•</span>
-                            <span className={sessionsRemaining < 0 && !isNonPayer && !isSiblingWaived100 ? "font-semibold text-rose-600" : ""}>
-                              {isSiblingWaived100
-                                ? (!isPayerSiblingPaid
-                                    ? (locale === "ar" ? "الأخ الدافع غير مسدد" : "Frère payeur non soldé")
-                                    : t("tuitionWaivedSibling"))
-                                : isNonPayer
+                            <span className={sessionsRemaining <= 0 && !isNonPayer ? "font-semibold text-rose-600" : ""}>
+                              {isNonPayer
                                 ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
                                 : isSchoolFeesOnly
                                 ? (locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls")
+                                : isSiblingDiscount
+                                ? (locale === "ar"
+                                    ? `${sessionsRemaining} حصة متبقية (أخ دافع)`
+                                    : `${sessionsRemaining} séance(s) restante(s) (Fratrie)`)
                                 : t("sessionsRemainingCount", { count: sessionsRemaining })}
                             </span>
                           </>

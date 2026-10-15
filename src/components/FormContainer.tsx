@@ -228,21 +228,45 @@ const FormContainer = async ({
           break;
         }
         case "lesson": {
+          const targetLessonId = id || data?.id ? Number(id || data?.id) : null;
+          let existingAdditionalClassIds: number[] = [];
+          if (targetLessonId) {
+            const groups = await prisma.lessonGroup.findMany({
+              where: { lessonId: targetLessonId },
+              select: { classId: true },
+            });
+            existingAdditionalClassIds = groups.map((g) => g.classId);
+          }
           const [classes, classrooms, teachers, branches] = await Promise.all([
-            prisma.$queryRaw<Array<{ id: number; name: string; teacherId: string | null; branchId: number }>>`SELECT id, name, "teacherId", "branchId" FROM "Class" ORDER BY name ASC`,
+            prisma.$queryRaw<Array<{ id: number; name: string; teacherId: string | null; branchId: number; levelId: number | null; formationLevelId: number | null }>>`
+              SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId" FROM "Class" ORDER BY name ASC
+            `,
             prisma.$queryRaw<Array<{ id: number; name: string; branchId: number }>>`SELECT id, name, "branchId" FROM "Classroom" ORDER BY name ASC`,
             prisma.$queryRaw<Array<{ id: string; name: string }>>`SELECT id, name FROM "Teacher" ORDER BY name ASC`,
             prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { id: "asc" } }),
           ]);
           finalRelatedData = {
             subjects: [],
-            classes: classes.map((c) => ({ id: c.id, name: c.name, teacherId: c.teacherId, branchId: c.branchId })),
+            classes: classes.map((c) => ({
+              id: c.id,
+              name: c.name,
+              teacherId: c.teacherId,
+              branchId: c.branchId,
+              levelId: c.levelId,
+              formationLevelId: c.formationLevelId,
+            })),
             classrooms: classrooms.map((r) => ({ id: r.id, name: r.name, branchId: r.branchId })),
             teachers: teachers.map((t) => ({ id: t.id, name: t.name, surname: "", subjects: [] })),
             branches,
             isOwner: session.isOwner,
             userBranchId: session.branchIds[0] ?? (branches[0]?.id || 1),
           };
+          if (data && existingAdditionalClassIds.length > 0) {
+            data = {
+              ...data,
+              additionalClassIds: existingAdditionalClassIds.filter((cid) => cid !== data.classId),
+            };
+          }
           break;
         }
         case "announcement": {
@@ -302,7 +326,16 @@ const FormContainer = async ({
                       id: true,
                       teacherId: true,
                       isCompleted: true,
-                      _count: { select: { enrollments: true } },
+                      _count: {
+                        select: {
+                          enrollments: {
+                            where: {
+                              status: "ACTIVE",
+                              transfersFrom: { none: {} },
+                            },
+                          },
+                        },
+                      },
                     },
                   },
                 },

@@ -2,7 +2,7 @@
 
 import prisma from "@/lib/prisma";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
-import { computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { revalidatePath } from "next/cache";
 
 export type BiometricScanStatus =
@@ -174,6 +174,7 @@ export async function processBiometricScan(input: {
   }
 
   const globalNumber = Number(input.globalNumber);
+  const openLessonIdNum = input.openLessonId && !isNaN(Number(input.openLessonId)) ? Number(input.openLessonId) : null;
   const rangeStart = new Date(scanTime.getTime() - 6 * 60 * 60 * 1000);
   const rangeEnd = new Date(scanTime.getTime() + 36 * 60 * 60 * 1000);
 
@@ -192,9 +193,14 @@ export async function processBiometricScan(input: {
               pricePerCycle: true,
               isFormation: true,
               lessons: {
-                where: {
-                  startsAt: { gte: rangeStart, lte: rangeEnd },
-                },
+                where: openLessonIdNum
+                  ? {
+                      OR: [
+                        { startsAt: { gte: rangeStart, lte: rangeEnd } },
+                        { id: openLessonIdNum },
+                      ],
+                    }
+                  : { startsAt: { gte: rangeStart, lte: rangeEnd } },
                 include: {
                   classroom: {
                     select: {
@@ -204,6 +210,28 @@ export async function processBiometricScan(input: {
                   },
                 },
                 orderBy: { startsAt: "asc" },
+              },
+              lessonGroups: {
+                where: openLessonIdNum
+                  ? {
+                      OR: [
+                        { lesson: { startsAt: { gte: rangeStart, lte: rangeEnd } } },
+                        { lessonId: openLessonIdNum },
+                      ],
+                    }
+                  : { lesson: { startsAt: { gte: rangeStart, lte: rangeEnd } } },
+                include: {
+                  lesson: {
+                    include: {
+                      classroom: {
+                        select: {
+                          id: true,
+                          name: true,
+                        },
+                      },
+                    },
+                  },
+                },
               },
             },
           },
@@ -246,11 +274,12 @@ export async function processBiometricScan(input: {
       )
   );
 
-  // Flatten lessons from active enrollments and attach class metadata
+  // Flatten lessons from active enrollments (both primary and multi-group lessons) and attach class metadata
   const studentLessons = activeEnrollments
-    .flatMap((e) =>
-      (e.class.lessons || []).map((l) => ({
+    .flatMap((e) => {
+      const primaryLessons = (e.class.lessons || []).map((l) => ({
         ...l,
+        studentEnrolledClassId: e.class.id,
         class: {
           id: e.class.id,
           name: e.class.name,
@@ -258,8 +287,21 @@ export async function processBiometricScan(input: {
           pricePerCycle: e.class.pricePerCycle,
           isFormation: e.class.isFormation,
         },
-      }))
-    )
+      }));
+      const additionalLessons = ((e.class as any).lessonGroups || []).map((lg: any) => ({
+        ...lg.lesson,
+        studentEnrolledClassId: e.class.id,
+        class: {
+          id: e.class.id,
+          name: e.class.name,
+          branchId: e.class.branchId,
+          pricePerCycle: e.class.pricePerCycle,
+          isFormation: e.class.isFormation,
+        },
+      }));
+      return [...primaryLessons, ...additionalLessons];
+    })
+    .filter((lesson, index, self) => index === self.findIndex((l) => l.id === lesson.id))
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
   // STRICTLY BRANCH-BASED: Only match lessons taking place at the current scan branch (`branchId`)!
@@ -383,8 +425,9 @@ export async function processBiometricScan(input: {
   }
 
   // ROUND-TRIP 2: Fetch Vouchers, Class Attendances, CatchUps, Current Lesson Attendance, and Payer Sibling in ONE Promise.all
-  const classId = matchedLesson.classId;
-  const enrollment = activeEnrollments.find((e) => e.classId === classId);
+  const enrolledClassId = (matchedLesson as any).studentEnrolledClassId || matchedLesson.classId;
+  const enrollment = activeEnrollments.find((e) => e.classId === enrolledClassId) || activeEnrollments.find((e) => e.classId === matchedLesson.classId);
+  const classId = enrollment ? enrollment.classId : enrolledClassId;
   const effectivePayerStatus =
     (enrollment as any)?.payerStatus || student.payerStatus || "NORMAL";
   const siblingDiscountPct = (enrollment as any)?.siblingDiscountPercentage ?? null;
@@ -395,7 +438,17 @@ export async function processBiometricScan(input: {
       student.family.payerStudentId !== student.id
   );
 
-  const [vouchers, classAttendances, catchUps, existingRows, payerVouchersCount] =
+  const classLessonRows = await prisma.$queryRaw<Array<{ id: number }>>`
+    SELECT l.id FROM "Lesson" l
+    WHERE l."classId" = ${classId}
+       OR EXISTS (
+         SELECT 1 FROM "LessonGroup" lg
+         WHERE lg."lessonId" = l.id AND lg."classId" = ${classId}
+       )
+  `;
+  const classLessonIds = classLessonRows.map((r) => r.id);
+
+  const [vouchers, classAttendances, catchUps, existingRows, payerStudent] =
     await Promise.all([
       prisma.voucher.findMany({
         where: {
@@ -408,8 +461,8 @@ export async function processBiometricScan(input: {
       prisma.attendance.findMany({
         where: {
           studentId: student.id,
+          lessonId: { in: classLessonIds.length > 0 ? classLessonIds : [-1] },
           lesson: {
-            classId,
             isFree: false,
           },
         },
@@ -427,7 +480,7 @@ export async function processBiometricScan(input: {
       prisma.catchUpAttendance.findMany({
         where: {
           studentId: student.id,
-          missedLesson: { classId },
+          missedLessonId: { in: classLessonIds.length > 0 ? classLessonIds : [-1] },
         },
       }),
       prisma.attendance.findMany({
@@ -438,17 +491,52 @@ export async function processBiometricScan(input: {
         orderBy: { id: "asc" },
       }),
       needsPayerSiblingCheck
-        ? prisma.voucher.count({
-            where: {
-              studentId: student.family!.payerStudentId!,
-              isVoided: false,
-              isRefund: false,
+        ? prisma.student.findUnique({
+            where: { id: student.family!.payerStudentId! },
+            include: {
+              enrollments: {
+                include: {
+                  class: { select: { id: true, pricePerCycle: true, isFormation: true } },
+                  transfersFrom: true,
+                  transfersTo: true,
+                },
+              },
+              vouchers: {
+                where: { isVoided: false, isRefund: false },
+                include: { refunds: true },
+              },
+              attendances: {
+                where: { lesson: { isFree: false } },
+                include: {
+                  lesson: { select: { id: true, startsAt: true, isFree: true, classId: true } },
+                },
+              },
+              catchUpAttendances: {
+                include: {
+                  missedLesson: {
+                    select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+                  },
+                },
+              },
             },
           })
-        : Promise.resolve(1),
+        : Promise.resolve(null),
     ]);
 
-  const isPayerSiblingPaid = needsPayerSiblingCheck ? payerVouchersCount > 0 : true;
+  let payerRemainingCredit: number | null = null;
+  if (payerStudent) {
+    const resolvedPayer = resolvePayerCredit({
+      payerStudent,
+      classId,
+      classPricePerCycle: Number(matchedLesson.class.pricePerCycle || 0),
+      isFormation: Boolean(matchedLesson.class.isFormation),
+    });
+    if (resolvedPayer) {
+      payerRemainingCredit = resolvedPayer.netSessions;
+    }
+  }
+
+  const isPayerSiblingPaid = payerRemainingCredit !== null ? payerRemainingCredit > 0 : true;
   const primaryRow = existingRows[0] || null;
 
   const tuitionVouchers = vouchers.filter(
@@ -467,6 +555,7 @@ export async function processBiometricScan(input: {
     siblingDiscountPercentage: siblingDiscountPct,
     isSiblingWaived,
     isPayerSiblingPaid,
+    payerRemainingCredit,
     tuitionVouchers,
     transfersIn: enrollment?.transfersTo || [],
     transfersOut: enrollment?.transfersFrom || [],
@@ -507,7 +596,7 @@ export async function processBiometricScan(input: {
           studentId: student.id,
           studentName: student.name,
           lessonId: matchedLesson.id,
-          classId: matchedLesson.classId,
+          classId: classId,
           className: matchedLesson.class.name,
           classroomName: matchedLesson.classroom?.name || null,
           lessonStartsAt: matchedLesson.startsAt,
@@ -595,7 +684,7 @@ export async function processBiometricScan(input: {
         studentId: student.id,
         studentName: student.name,
         lessonId: matchedLesson.id,
-        classId: matchedLesson.classId,
+        classId: classId,
         className: matchedLesson.class.name,
         classroomName: matchedLesson.classroom?.name || null,
         lessonStartsAt: matchedLesson.startsAt,

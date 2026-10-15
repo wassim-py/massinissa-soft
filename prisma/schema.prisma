@@ -118,6 +118,7 @@ model Class {
   vouchers          Voucher[]
   photocopyCharges  PhotocopyCharge[]
   teacherClassRates TeacherClassRate[]
+  lessonGroups      LessonGroup[]
 
   @@index([branchId])
   @@index([teacherId])
@@ -141,6 +142,7 @@ model Lesson {
   isTeacherAbsent Boolean  @default(false)
   startsAt    DateTime
   attendances Attendance[]
+  lessonGroups LessonGroup[]
   missedByCatchUps    CatchUpAttendance[] @relation("MissedLesson")
   catchUpVisitsHosted CatchUpAttendance[] @relation("CatchUpLessonAttended")
   branch      Branch       @relation(fields: [branchId], references: [id])
@@ -170,6 +172,18 @@ model Attendance {
   @@index([studentId])
   @@index([lessonId])
   @@index([studentId, lessonId])
+}
+
+model LessonGroup {
+  id        Int    @id @default(autoincrement())
+  lessonId  Int
+  classId   Int
+  lesson    Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  class     Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonId, classId])
+  @@index([classId])
+  @@index([lessonId])
 }
 
 model CatchUpAttendance {

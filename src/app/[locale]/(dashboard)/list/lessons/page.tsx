@@ -184,7 +184,9 @@ const LessonListPage = async (props: {
       whereConditions.push(Prisma.sql`l."teacherId" = ${selectedTeacherId}`);
     }
     if (selectedClassId) {
-      whereConditions.push(Prisma.sql`l."classId" = ${selectedClassId}`);
+      whereConditions.push(
+        Prisma.sql`(l."classId" = ${selectedClassId} OR EXISTS (SELECT 1 FROM "LessonGroup" lg WHERE lg."lessonId" = l.id AND lg."classId" = ${selectedClassId}))`
+      );
     }
     if (selectedBranchId) {
       whereConditions.push(Prisma.sql`l."branchId" = ${selectedBranchId}`);
@@ -231,7 +233,18 @@ const LessonListPage = async (props: {
              l."isExtra", l."isCatchUp", l."isFree", l."extraFee", l."isTeacherAbsent",
              c.name as "className", c."isFormation", c."isCompleted", c."completedAt", c."levelId", lvl.name as "levelName",
              t.name as "teacherName", cr.name as "classroomName", b.name as "branchName",
-             fl."languageId" as "formationLanguageId", flLang.name as "formationLanguageName"
+             fl."languageId" as "formationLanguageId", flLang.name as "formationLanguageName",
+             (
+               SELECT string_agg(c_grp.name, ' + ' ORDER BY c_grp.id ASC)
+               FROM "LessonGroup" lg_all
+               JOIN "Class" c_grp ON c_grp.id = lg_all."classId"
+               WHERE lg_all."lessonId" = l.id
+             ) as "allClassNames",
+             (
+               SELECT COALESCE(array_agg(lg_sub."classId"), ARRAY[]::integer[])
+               FROM "LessonGroup" lg_sub
+               WHERE lg_sub."lessonId" = l.id AND lg_sub."classId" != l."classId"
+             ) as "additionalClassIds"
       FROM "Lesson" l
       LEFT JOIN "Class" c ON c.id = l."classId"
       LEFT JOIN "Level" lvl ON lvl.id = c."levelId"
@@ -279,9 +292,11 @@ const LessonListPage = async (props: {
         ? teacherSubs[0]
         : { id: r.classId || 1, name: r.className || t("subject") };
 
+      const groupDisplayName = r.allClassNames || r.className || t("group");
+
       return {
         id: r.id,
-        name: r.className || t("group"),
+        name: groupDisplayName,
         day,
         startTime: r.startsAt,
         endTime: r.endsAt,
@@ -301,12 +316,13 @@ const LessonListPage = async (props: {
         isTeacherAbsent: Boolean(r.isTeacherAbsent),
         extraFee: r.extraFee != null ? Number(r.extraFee) : null,
         subject: resolvedSubject,
-        class: { id: r.classId, name: r.className || t("group") } as any,
+        class: { id: r.classId, name: groupDisplayName } as any,
         teacher: { id: r.teacherId, name: r.teacherName || t("teacher"), surname: "" } as any,
         classroom: r.classroomId
           ? ({ id: r.classroomId, name: r.classroomName || t("room") } as any)
           : null,
         level: r.levelId ? { id: r.levelId, name: r.levelName || "" } : null,
+        additionalClassIds: Array.isArray(r.additionalClassIds) ? r.additionalClassIds : [],
       };
     });
 

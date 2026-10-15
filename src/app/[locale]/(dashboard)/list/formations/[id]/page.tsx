@@ -83,7 +83,12 @@ export default async function FormationDetailsPage(props: {
           teacher: true,
           _count: {
             select: {
-              enrollments: true,
+              enrollments: {
+                where: {
+                  status: "ACTIVE",
+                  transfersFrom: { none: {} },
+                },
+              },
               lessons: true,
             },
           },
@@ -136,7 +141,12 @@ export default async function FormationDetailsPage(props: {
           teacher: true,
           _count: {
             select: {
-              enrollments: true,
+              enrollments: {
+                where: {
+                  status: "ACTIVE",
+                  transfersFrom: { none: {} },
+                },
+              },
               lessons: true,
             },
           },
@@ -273,7 +283,16 @@ export default async function FormationDetailsPage(props: {
           include: { classroom: true, teacher: true },
           orderBy: { startsAt: "asc" },
         },
-        _count: { select: { enrollments: true } },
+        _count: {
+          select: {
+            enrollments: {
+              where: {
+                status: "ACTIVE",
+                transfersFrom: { none: {} },
+              },
+            },
+          },
+        },
       },
       orderBy: { name: "asc" },
     });
@@ -465,10 +484,12 @@ export default async function FormationDetailsPage(props: {
                 role={role}
               />
             )}
-            <ExportButton
-              type="class_attendance"
-              options={{ classId: formationGroup.id }}
-            />
+            {session.isOwner && (
+              <ExportButton
+                type="class_attendance"
+                options={{ classId: formationGroup.id }}
+              />
+            )}
           </div>
         </div>
       </div>

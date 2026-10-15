@@ -184,10 +184,12 @@ export default async function WorkshopAttendancePage(props: {
           </div>
 
           <div className="flex items-center gap-2">
-            <ExportButton
-              type="workshop_attendance"
-              options={{ workshopId: workshop.id }}
-            />
+            {session.isOwner && (
+              <ExportButton
+                type="workshop_attendance"
+                options={{ workshopId: workshop.id }}
+              />
+            )}
           </div>
         </div>
 

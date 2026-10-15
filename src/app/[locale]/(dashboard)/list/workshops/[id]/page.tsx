@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
-import { getAuthRole } from "@/lib/auth";
+import { getAuthRole, getAuthSession } from "@/lib/auth";
 import Image from "next/image";
 import WorkshopRoster from "@/components/WorkshopRoster";
 import FormContainer from "@/components/FormContainer";
@@ -16,6 +16,7 @@ import { getTranslations, getLocale } from "next-intl/server";
 const WorkshopDetailsPage = async (props: { params: Promise<{ id: string }> }) => {
     const params = await props.params;
     const role = await getAuthRole();
+    const session = await getAuthSession();
     const t = await getTranslations("workshops");
     const locale = await getLocale();
 
@@ -162,10 +163,12 @@ const WorkshopDetailsPage = async (props: { params: Promise<{ id: string }> }) =
             <CalendarCheck className="w-4 h-4" />
             <span>{locale === "ar" ? "سجل الحضور والغياب" : "Consulter les présences"}</span>
           </Link>
-          <ExportButton
-            type="workshop_details"
-            options={{ workshopId: workshop.id }}
-          />
+          {session.isOwner && (
+            <ExportButton
+              type="workshop_details"
+              options={{ workshopId: workshop.id }}
+            />
+          )}
         </div>
         </div>
 

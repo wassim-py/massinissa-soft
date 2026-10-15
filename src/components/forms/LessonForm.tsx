@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { FormField, Input, Select } from "@/components/ui/FormField";
 import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
-import { Sparkles, User, CheckCircle2, Calendar } from "lucide-react";
+import { Sparkles, User, CheckCircle2, Calendar, Users } from "lucide-react";
 
 export type Day = "SATURDAY" | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY";
 
@@ -27,6 +27,8 @@ type FormState = {
 type RelatedClass = Class & {
   teacherId?: string | null;
   branchId?: number;
+  levelId?: number | null;
+  formationLevelId?: number | null;
 };
 
 type RelatedClassroom = Classroom & {
@@ -102,10 +104,10 @@ const LessonForm = ({
 
   const isOwner = Boolean(relatedData?.isOwner);
   const userBranchId = relatedData?.userBranchId ?? 1;
-  const classes = relatedData?.classes || [];
-  const teachers = relatedData?.teachers || [];
-  const classrooms = relatedData?.classrooms || [];
-  const branches = relatedData?.branches || [];
+  const classes = useMemo(() => relatedData?.classes || [], [relatedData?.classes]);
+  const teachers = useMemo(() => relatedData?.teachers || [], [relatedData?.teachers]);
+  const classrooms = useMemo(() => relatedData?.classrooms || [], [relatedData?.classrooms]);
+  const branches = useMemo(() => relatedData?.branches || [], [relatedData?.branches]);
 
   // Determine initial single lesson type
   const initialLessonType: LessonType = data?.isFree
@@ -166,43 +168,50 @@ const LessonForm = ({
       : null
     : userBranchId;
 
-  // Filter classrooms by branch
-  const availableClassrooms = useMemo(() => {
-    if (!activeBranchId) return classrooms;
-    return classrooms.filter((cr) => !cr.branchId || cr.branchId === activeBranchId);
-  }, [classrooms, activeBranchId]);
-
   // Find currently selected group and its assigned head teacher
   const selectedClass = useMemo(() => {
     if (!selectedClassId) return null;
     return classes.find((c) => c.id === Number(selectedClassId)) || null;
   }, [classes, selectedClassId]);
 
+  // Filter classrooms by branch
+  const availableClassrooms = useMemo(() => {
+    const targetBranchId = selectedClass?.branchId || (activeBranchId ? Number(activeBranchId) : null);
+    if (!targetBranchId) return classrooms;
+    return classrooms.filter((cr) => !cr.branchId || cr.branchId === targetBranchId);
+  }, [classrooms, activeBranchId, selectedClass]);
+
   const assignedTeacher = useMemo(() => {
     if (!selectedClass || !selectedClass.teacherId) return null;
     return teachers.find((t) => t.id === selectedClass.teacherId) || null;
   }, [teachers, selectedClass]);
 
-  // EFFECT: Auto-derive lesson name and auto-fetch head teacher when group changes
-  useEffect(() => {
-    if (selectedClass) {
-      // 1. Auto-derive name from selected group
-      setValue("name", selectedClass.name);
-      // 2. Auto-fetch teacher from group's head teacher
-      if (selectedClass.teacherId) {
-        setValue("teacherId", selectedClass.teacherId);
-      } else {
-        setValue("teacherId", "");
-      }
-      // If owner has not chosen branch yet, default to group's branch
-      if (isOwner && !selectedBranchId && selectedClass.branchId) {
-        setValue("branchId", selectedClass.branchId);
-      }
-    } else {
-      setValue("name", "");
-      setValue("teacherId", "");
-    }
-  }, [selectedClass, setValue, isOwner, selectedBranchId]);
+  const [additionalClassIds, setAdditionalClassIds] = useState<number[]>(
+    Array.isArray(data?.additionalClassIds) ? data.additionalClassIds.map(Number) : []
+  );
+
+  // Filter sibling groups belonging to the same teacher in the same level
+  const availableSiblingGroups = useMemo(() => {
+    if (!selectedClass || !selectedClass.teacherId) return [];
+    const targetBranchId = selectedClass.branchId || (activeBranchId ? Number(activeBranchId) : null);
+    return classes.filter((c) => {
+      if (c.id === selectedClass.id) return false;
+      if (c.teacherId !== selectedClass.teacherId) return false;
+
+      // Group matching: must share the same regular level or the same formation level
+      const sameRegularLevel = Boolean(selectedClass.levelId && c.levelId === selectedClass.levelId);
+      const sameFormationLevel = Boolean(
+        selectedClass.formationLevelId && c.formationLevelId === selectedClass.formationLevelId
+      );
+      if (!sameRegularLevel && !sameFormationLevel) return false;
+
+      // Sibling group must belong to the same branch as the primary group
+      if (targetBranchId && c.branchId && c.branchId !== targetBranchId) return false;
+      return true;
+    });
+  }, [classes, selectedClass, activeBranchId]);
+
+
 
   const watchedDate = watch("date");
   const selectedDay = watch("day");
@@ -234,6 +243,10 @@ const LessonForm = ({
     setValue("isCatchUp", typeVal === "catchUp");
     setValue("isFree", typeVal === "free");
     setValue("extraFee", undefined);
+    if (typeVal === "normal") {
+      setAdditionalClassIds([]);
+      setValue("additionalClassIds", []);
+    }
   };
 
   const initialState: FormState = { success: false, error: false, message: "" };
@@ -241,8 +254,21 @@ const LessonForm = ({
   const [state, formAction, isPending] = useActionState(actionToRun, initialState);
 
   const onSubmit = handleSubmit((formData) => {
+    const additionalNames = classes
+      .filter((c) => additionalClassIds.includes(c.id))
+      .map((c) => c.name);
+    const combinedName = selectedClass
+      ? [selectedClass.name, ...additionalNames].join(" + ")
+      : formData.name || "";
+
     startTransition(() => {
-      formAction(formData);
+      formAction({
+        ...formData,
+        name: combinedName,
+        teacherId: selectedClass?.teacherId || formData.teacherId || "",
+        branchId: selectedClass?.branchId || formData.branchId,
+        additionalClassIds: lessonType !== "normal" ? additionalClassIds : [],
+      });
     });
   });
 
@@ -307,12 +333,24 @@ const LessonForm = ({
             </div>
             <div className="flex flex-col">
               <span className="text-xs text-muted font-medium">{t("group")}</span>
-              <span className="font-bold text-gray-900">{selectedClass.name}</span>
+              <span className="font-bold text-gray-900">
+                {[
+                  selectedClass.name,
+                  ...classes.filter((c) => additionalClassIds.includes(c.id)).map((c) => c.name),
+                ].join(" + ")}
+              </span>
             </div>
           </div>
-          <Badge variant="primary" size="sm">
-            {t("autoDerivedNameBadge")}
-          </Badge>
+          <div className="flex items-center gap-1.5">
+            {additionalClassIds.length > 0 && (
+              <Badge variant="secondary" size="sm">
+                {additionalClassIds.length + 1} {locale === "ar" ? "أفواج" : "Groupes"}
+              </Badge>
+            )}
+            <Badge variant="primary" size="sm">
+              {t("autoDerivedNameBadge")}
+            </Badge>
+          </div>
         </div>
       )}
 
@@ -353,10 +391,29 @@ const LessonForm = ({
             }))}
             value={selectedClassId ? Number(selectedClassId) : ""}
             onChange={(val) => {
-              setValue("classId", val ? Number(val) : ("" as any), {
+              const classIdNum = val ? Number(val) : ("" as any);
+              setValue("classId", classIdNum, {
                 shouldValidate: true,
                 shouldDirty: true,
               });
+              const pickedClass = classes.find((c) => c.id === Number(val));
+              if (pickedClass) {
+                if (pickedClass.teacherId) {
+                  setValue("teacherId", pickedClass.teacherId, {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                  });
+                }
+                if (pickedClass.branchId) {
+                  setValue("branchId", pickedClass.branchId, {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                  });
+                }
+              } else {
+                setValue("teacherId", "");
+              }
+              setAdditionalClassIds([]);
             }}
             placeholder={t("selectClass")}
             searchPlaceholder={locale === "ar" ? "بحث عن فوج..." : "Rechercher un groupe..."}
@@ -653,6 +710,70 @@ const LessonForm = ({
           <div className="mt-1 p-3 rounded-xl bg-secondary-light/60 text-secondary-hover text-xs border border-secondary/30 flex items-center gap-2">
             <Calendar className="w-4 h-4 shrink-0 text-secondary" />
             <span>{t("specialDateNote")}</span>
+          </div>
+        )}
+
+        {/* Multi-Group Selection for Special Lessons (Extra, Catch-up, Free) */}
+        {lessonType !== "normal" && selectedClass && (
+          <div className="mt-2 flex flex-col gap-2.5 p-3.5 rounded-xl border border-secondary/30 bg-secondary-light/20">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-secondary shrink-0" />
+                <span className="text-sm font-semibold text-gray-900">
+                  {locale === "ar"
+                    ? "أفواج إضافية لنفس الأستاذ في نفس المستوى (دمج الحصة)"
+                    : "Groupes supplémentaires pour cet enseignant dans ce niveau (fusion de séance)"}
+                </span>
+              </div>
+              {additionalClassIds.length > 0 && (
+                <Badge variant="secondary" size="sm">
+                  {additionalClassIds.length + 1} {locale === "ar" ? "أفواج محددة" : "groupes sélectionnés"}
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs text-muted leading-relaxed">
+              {locale === "ar"
+                ? "يمكنك اختيار أفواج إضافية لنفس الأستاذ ونفس المستوى لبرمجة الحصة معاً. سيظهر جميع التلاميذ في صفحة تسجيل الحضور، بينما يظهر سجل الحضور منفصلاً لكل فوج."
+                : "Vous pouvez sélectionner d'autres groupes du même enseignant et niveau pour cette séance. Tous les élèves apparaîtront lors de la prise de présence, et le registre restera distinct par groupe."}
+            </p>
+
+            {availableSiblingGroups.length === 0 ? (
+              <div className="text-xs text-muted italic bg-surface/70 p-2.5 rounded-lg border border-border">
+                {locale === "ar"
+                  ? "لا توجد أفواج أخرى مسندة لهذا الأستاذ في نفس المستوى."
+                  : "Aucun autre groupe n'est assigné à cet enseignant dans ce niveau."}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                {availableSiblingGroups.map((grp) => {
+                  const isChecked = additionalClassIds.includes(grp.id);
+                  return (
+                    <label
+                      key={grp.id}
+                      className={`flex items-center gap-2.5 p-2.5 rounded-lg border cursor-pointer select-none transition-all ${
+                        isChecked
+                          ? "bg-secondary-light/70 border-secondary text-secondary-hover font-semibold shadow-2xs"
+                          : "bg-surface border-border text-gray-700 hover:bg-surface-subtle"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setAdditionalClassIds((prev) => [...prev, grp.id]);
+                          } else {
+                            setAdditionalClassIds((prev) => prev.filter((id) => id !== grp.id));
+                          }
+                        }}
+                        className="w-4 h-4 rounded text-secondary focus:ring-secondary accent-secondary cursor-pointer"
+                      />
+                      <span className="text-xs">{grp.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
