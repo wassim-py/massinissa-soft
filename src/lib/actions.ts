@@ -2417,6 +2417,84 @@ export const markSingleAttendanceAction = async (input: {
   }
 };
 
+export const deleteSingleAttendanceAction = async (input: {
+  lessonId: number;
+  studentId: string;
+}) => {
+  try {
+    const session = await getAuthSession();
+    if (!session.userId && !session.rawRole) {
+      return { success: false, error: true, message: "Non autorisé / غير مصرح" };
+    }
+
+    const adminId = session.userId || session.rawRole || "admin";
+
+    await prisma.$transaction(async (tx) => {
+      await tx.attendance.deleteMany({
+        where: { lessonId: input.lessonId, studentId: input.studentId },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: "ATTENDANCE_DELETED",
+          entityType: "Attendance",
+          entityId: `${input.lessonId}_${input.studentId}`,
+          userId: adminId,
+          userName: adminId,
+          details: JSON.stringify({
+            lessonId: input.lessonId,
+            studentId: input.studentId,
+            adminId,
+            timestamp: new Date().toISOString(),
+          }),
+        },
+      });
+    });
+
+    const lessonInfo = await prisma.lesson.findUnique({
+      where: { id: input.lessonId },
+      select: {
+        classId: true,
+        lessonGroups: { select: { classId: true } },
+      },
+    });
+
+    if (lessonInfo) {
+      safeRevalidatePath("/admin");
+      safeRevalidatePath("/list/attendance");
+      const affectedClassIds = new Set<number>();
+      if (lessonInfo.classId) affectedClassIds.add(lessonInfo.classId);
+      if (lessonInfo.lessonGroups) {
+        for (const lg of lessonInfo.lessonGroups) {
+          affectedClassIds.add(lg.classId);
+        }
+      }
+      for (const cId of affectedClassIds) {
+        safeRevalidatePath(`/list/attendance/class/${cId}`);
+        safeRevalidatePath(`/list/payments/class/${cId}`);
+        safeRevalidatePath(`/list/formations/${cId}`);
+      }
+      if (affectedClassIds.size > 0) {
+        safeRevalidatePath("/list/formations");
+      }
+      safeRevalidatePath(`/list/students/${input.studentId}`);
+    }
+
+    return {
+      success: true,
+      error: false,
+      message: "Présence réinitialisée / تم إلغاء تسجيل الحضور",
+    };
+  } catch (err: any) {
+    console.error("deleteSingleAttendanceAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err.message || "Échec de la réinitialisation / فشل في إلغاء الحضور",
+    };
+  }
+};
+
 /**
  * Search students who are NOT enrolled in the current lesson's class,
  * and fetch their uncaught-up missed lessons (Attendance status = 'ABSENT' in their own classes).
@@ -4707,7 +4785,20 @@ export const transferEnrollmentCredit = async (
           studentId: studentId,
           lesson: { classId: fromEnrollment.classId, isFree: false },
         },
-        select: { lessonId: true, status: true },
+        select: {
+          lessonId: true,
+          status: true,
+          lesson: {
+            select: {
+              id: true,
+              startsAt: true,
+              endsAt: true,
+              teacherId: true,
+              classroomId: true,
+              branchId: true,
+            },
+          },
+        },
       });
       const attendedSessionsFrom = computeStudentConsumedSessions({
         lessons: fromLessons,
@@ -4723,6 +4814,95 @@ export const transferEnrollmentCredit = async (
         where: { id: fromEnrollment.id },
         data: { status: "TRANSFERRED" },
       });
+
+      // Automatically link student's attendances in source group as CatchUpAttendance in target group
+      const fromPresentAttendances = fromAttendances.filter((a) => a.status === "PRESENT");
+      if (fromPresentAttendances.length > 0) {
+        const toLessons = await tx.lesson.findMany({
+          where: { classId: toClassId, isFree: false },
+          include: {
+            attendances: {
+              where: { studentId: studentId },
+            },
+          },
+          orderBy: { startsAt: "asc" },
+        });
+
+        const existingToCatchUps = await tx.catchUpAttendance.findMany({
+          where: {
+            studentId: studentId,
+            missedLesson: { classId: toClassId },
+          },
+          select: { missedLessonId: true },
+        });
+        const existingToCatchUpMissedIds = new Set(existingToCatchUps.map((c) => c.missedLessonId));
+
+        const availableToLessons = toLessons.filter(
+          (l) => !existingToCatchUpMissedIds.has(l.id) && !l.attendances.some((a) => a.status === "PRESENT")
+        );
+
+        let availableIdx = 0;
+        for (const fromAtt of fromPresentAttendances) {
+          let targetLessonId: number | null = null;
+          if (availableIdx < availableToLessons.length) {
+            targetLessonId = availableToLessons[availableIdx].id;
+            availableIdx++;
+          } else {
+            // If target group does not have enough existing lessons, create a catch-up lesson slot in target group
+            let classroomId = fromAtt.lesson.classroomId;
+            if (!classroomId) {
+              const defaultRoom = await tx.classroom.findFirst({
+                where: { branchId: toClass.branchId },
+                select: { id: true },
+              });
+              classroomId = defaultRoom?.id || 1;
+            }
+            let teacherId = toClass.teacherId || fromAtt.lesson.teacherId;
+            if (!teacherId) {
+              const defaultTeacher = await tx.teacher.findFirst({ select: { id: true } });
+              teacherId = defaultTeacher?.id || "unknown";
+            }
+            const newLesson = await tx.lesson.create({
+              data: {
+                classId: toClassId,
+                teacherId: teacherId,
+                classroomId: classroomId,
+                branchId: toClass.branchId,
+                startsAt: fromAtt.lesson.startsAt,
+                endsAt: fromAtt.lesson.endsAt || new Date(new Date(fromAtt.lesson.startsAt).getTime() + 2 * 60 * 60 * 1000),
+                isCatchUp: true,
+                isFree: true, // Free so it has 0 impact on other students' billing
+                isExtra: false,
+                isTeacherAbsent: false,
+              },
+            });
+            targetLessonId = newLesson.id;
+          }
+
+          if (targetLessonId) {
+            await tx.catchUpAttendance.upsert({
+              where: {
+                studentId_missedLessonId: {
+                  studentId: studentId,
+                  missedLessonId: targetLessonId,
+                },
+              },
+              create: {
+                studentId: studentId,
+                missedLessonId: targetLessonId,
+                catchUpLessonId: fromAtt.lessonId,
+                recordedBy: "transfer",
+                recordedAt: new Date(),
+              },
+              update: {
+                catchUpLessonId: fromAtt.lessonId,
+                recordedBy: "transfer",
+                recordedAt: new Date(),
+              },
+            });
+          }
+        }
+      }
     });
 
     try {
@@ -6444,6 +6624,9 @@ export const exportToExcel = async (
                                   missedLesson: {
                                     select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
                                   },
+                                  catchUpLesson: {
+                                    select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+                                  },
                                 },
                               },
                             },
@@ -6572,7 +6755,7 @@ export const exportToExcel = async (
             const isFormation = Boolean((classTarget as any).isFormation || (classTarget as any).FormationLevel || (classTarget as any).formationLevelId);
 
             const classCatchUps = ((student as any).catchUpAttendances || []).filter(
-              (cu: any) => classTarget.lessons.some((l) => l.id === cu.missedLessonId)
+              (cu: any) => classTarget.lessons.some((l) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId)
             );
 
             const payerCredit = isWaivedSibling && family?.payerStudent
@@ -6711,6 +6894,9 @@ export const exportToExcel = async (
                                                 catchUpAttendances: {
                                                     include: {
                                                         missedLesson: {
+                                                            select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+                                                        },
+                                                        catchUpLesson: {
                                                             select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
                                                         },
                                                     },
@@ -6972,7 +7158,7 @@ export const exportToExcel = async (
             });
 
             const classCatchUps = ((student as any).catchUpAttendances || []).filter(
-                (cu: any) => classData.lessons.some((l) => l.id === cu.missedLessonId)
+                (cu: any) => classData.lessons.some((l) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId)
             );
 
             const creditMetrics = computeStudentCreditAndSessions({

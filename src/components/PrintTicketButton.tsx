@@ -35,6 +35,7 @@ const PrintTicketButton = ({ voucher, sessionsForThisPayment, amountOwedByStuden
         <html dir="${isAr ? 'rtl' : 'ltr'}" lang="${locale}">
           <head>
             <meta charset="utf-8">
+            <base href="${window.location.origin}/">
             <title>${isAr ? 'طباعة الوصل' : 'Imprimer le reçu'} #${voucher.number}</title>
             <script src="https://cdn.tailwindcss.com"></script>
             <style>
@@ -45,24 +46,36 @@ const PrintTicketButton = ({ voucher, sessionsForThisPayment, amountOwedByStuden
               body {
                 margin: 0;
                 padding: 0;
-                -webkit-print-color-adjust: exact;
-                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+              img {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                display: inline-block !important;
               }
             </style>
           </head>
           <body class="flex justify-center p-1 m-0">
             ${printContent}
+            <script>
+              function triggerPrint() {
+                setTimeout(function() {
+                  window.focus();
+                  window.print();
+                  setTimeout(function() { window.close(); }, 500);
+                }, 300);
+              }
+              if (document.readyState === 'complete') {
+                triggerPrint();
+              } else {
+                window.addEventListener('load', triggerPrint);
+              }
+            </script>
           </body>
         </html>
       `);
-      
       printWindow.document.close();
-      printWindow.focus();
-      
-      setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-      }, 500);
     }
   };
 

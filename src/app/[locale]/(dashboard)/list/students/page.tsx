@@ -263,7 +263,11 @@ const StudentListPage = async (props: {
     const studentIds = rows.map((r) => r.id);
     const enrollments = studentIds.length > 0
       ? await prisma.enrollment.findMany({
-          where: { studentId: { in: studentIds } },
+          where: {
+            studentId: { in: studentIds },
+            status: { notIn: ["TRANSFERRED", "UNENROLLED", "INACTIVE"] },
+            transfersFrom: { none: {} },
+          },
           include: {
             class: {
               include: {
@@ -271,12 +275,21 @@ const StudentListPage = async (props: {
                 FormationLevel: true,
               },
             },
+            transfersFrom: true,
           },
         })
       : [];
 
     const enrollmentsByStudent = new Map<string, typeof enrollments>();
     for (const enr of enrollments) {
+      if (
+        enr.status === "TRANSFERRED" ||
+        enr.status === "UNENROLLED" ||
+        enr.status === "INACTIVE" ||
+        (enr.transfersFrom && enr.transfersFrom.length > 0)
+      ) {
+        continue;
+      }
       const list = enrollmentsByStudent.get(enr.studentId) || [];
       list.push(enr);
       enrollmentsByStudent.set(enr.studentId, list);

@@ -404,7 +404,10 @@ export default function StudentPaymentDetails({
 
     const enrPayerStatus = (enr as any).payerStatus || student.payerStatus || "NORMAL";
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(
-      (cu: any) => cu.missedLesson?.classId === c.id
+      (cu: any) =>
+        cu.missedLesson?.classId === c.id ||
+        cu.catchUpLesson?.classId === c.id ||
+        Boolean((c as any).lessons && (c as any).lessons.some((l: any) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId))
     );
 
     let payerRemainingCredit: number | undefined = undefined;
@@ -438,6 +441,7 @@ export default function StudentPaymentDetails({
         (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
       ),
       catchUps: classCatchUps,
+      lessons: (c as any).lessons,
     });
 
     const purchasedSessions = creditMetrics.purchasedSessions;
@@ -1812,14 +1816,24 @@ export default function StudentPaymentDetails({
 
               <div>
                 <label className="font-semibold block mb-1">{t("modalTransferCountLabel")}</label>
-                <input
-                  type="number"
-                  min="1"
-                  max={Math.max(1, transferModal.maxSessions)}
-                  value={sessionsToTransfer}
-                  onChange={(e) => setSessionsToTransfer(Number(e.target.value))}
-                  className="w-full border border-border rounded p-2 text-xs font-mono"
-                />
+                <div className="relative flex items-center">
+                  <input
+                    type="number"
+                    min="1"
+                    max={Math.max(1, transferModal.maxSessions)}
+                    value={sessionsToTransfer}
+                    onChange={(e) => setSessionsToTransfer(Number(e.target.value))}
+                    className="w-full border border-border rounded p-2 text-xs font-mono pe-16"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setSessionsToTransfer(Math.max(1, transferModal.maxSessions))}
+                    className="absolute end-1.5 px-2.5 py-1 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs"
+                    title={locale === "ar" ? "تحديد كامل الرصيد المتاح" : "Définir le maximum disponible"}
+                  >
+                    MAX
+                  </button>
+                </div>
               </div>
 
               <div>

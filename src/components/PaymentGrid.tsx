@@ -385,7 +385,8 @@ export default function PaymentGrid({
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(
       (cu: any) =>
         (cu.missedLesson && cu.missedLesson.classId === classData.id) ||
-        classData.lessons.some((l: any) => l.id === cu.missedLessonId)
+        (cu.catchUpLesson && cu.catchUpLesson.classId === classData.id) ||
+        classData.lessons.some((l: any) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId)
     );
 
     const creditMetrics = computeStudentCreditAndSessions({
@@ -1446,15 +1447,25 @@ export default function PaymentGrid({
               </FormField>
 
               <FormField label={t("sessionsToTransferLabel")} required>
-                <Input
-                  type="number"
-                  min="1"
-                  max={Math.max(1, transferModal.maxSessions)}
-                  value={sessionsToTransfer}
-                  onChange={(e) => setSessionsToTransfer(Number(e.target.value))}
-                  required
-                  className="font-mono"
-                />
+                <div className="relative flex items-center">
+                  <Input
+                    type="number"
+                    min="1"
+                    max={Math.max(1, transferModal.maxSessions)}
+                    value={sessionsToTransfer}
+                    onChange={(e) => setSessionsToTransfer(Number(e.target.value))}
+                    required
+                    className="font-mono pe-16"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setSessionsToTransfer(Math.max(1, transferModal.maxSessions))}
+                    className="absolute end-1.5 px-2.5 py-1 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs"
+                    title={locale === "ar" ? "تحديد كامل الرصيد المتاح" : "Définir le maximum disponible"}
+                  >
+                    MAX
+                  </button>
+                </div>
               </FormField>
 
               <FormField label={t("transferNotesLabel")}>

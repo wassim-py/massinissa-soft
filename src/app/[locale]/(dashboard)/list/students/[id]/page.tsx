@@ -108,6 +108,9 @@ const SingleStudentPage = async (
                       missedLesson: {
                         select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
                       },
+                      catchUpLesson: {
+                        select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                      },
                     },
                   },
                 },
@@ -198,6 +201,9 @@ const SingleStudentPage = async (
           catchUpAttendances: {
             include: {
               missedLesson: {
+                select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+              },
+              catchUpLesson: {
                 select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
               },
             },

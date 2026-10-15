@@ -231,7 +231,13 @@ export function classifyStudentAttendanceHistory({
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
-  catchUps?: Array<{ missedLessonId: number; catchUpLessonId?: number; recordedAt?: Date | string }>;
+  catchUps?: Array<{
+    missedLessonId: number;
+    catchUpLessonId?: number;
+    recordedAt?: Date | string;
+    recordedBy?: string;
+    isTransferCatchUp?: boolean;
+  }>;
   referenceDate?: Date;
 }): StudentAttendanceHistoryItem[] {
   // Sort lessons chronologically
@@ -243,11 +249,15 @@ export function classifyStudentAttendanceHistory({
   attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
 
   const catchUpSet = new Set<number>();
+  const transferCatchUpSet = new Set<number>();
   const missedToCatchUpMap = new Map<number, number>();
   const catchUpToMissedMap = new Map<number, number>();
   (catchUps || []).forEach((c) => {
     if (c.missedLessonId) {
       catchUpSet.add(c.missedLessonId);
+      if (c.isTransferCatchUp || c.recordedBy === "transfer") {
+        transferCatchUpSet.add(c.missedLessonId);
+      }
       if (c.catchUpLessonId) {
         missedToCatchUpMap.set(c.missedLessonId, c.catchUpLessonId);
         catchUpToMissedMap.set(c.catchUpLessonId, c.missedLessonId);
@@ -337,6 +347,25 @@ export function classifyStudentAttendanceHistory({
     }
 
     if (hasCatchUp) {
+      if (transferCatchUpSet.has(lesson.id)) {
+        // Transferred from another group: this attendance was completed in the source group.
+        // It is displayed as a catch-up in this new group, but does NOT consume session credit
+        // in this new group (the remaining balance transferred via tIn is preserved),
+        // and the target group teacher is NOT paid for it.
+        history.push({
+          lessonId: lesson.id,
+          startsAt,
+          status: "PRESENT",
+          isCatchUp: true,
+          classification: "PRESENT",
+          isConsumedCredit: false,
+          isTeacherPayable: false,
+          isRefundable: false,
+          isHeld: false,
+        });
+        continue;
+      }
+
       const cLessonId = missedToCatchUpMap.get(lesson.id);
       const isCatchUpInThisList = Boolean(cLessonId && lessonIdSet.has(cLessonId));
       const catchUpAttStatus = isCatchUpInThisList && cLessonId ? attendanceMap.get(cLessonId) : null;
@@ -487,10 +516,19 @@ export function computeStudentConsumedSessions({
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
-  catchUps?: Array<{ missedLessonId: number; catchUpLessonId?: number; recordedAt?: Date | string }>;
+  catchUps?: Array<{
+    missedLessonId: number;
+    catchUpLessonId?: number;
+    recordedAt?: Date | string;
+    recordedBy?: string;
+    isTransferCatchUp?: boolean;
+  }>;
 }): number {
   if (!lessons || lessons.length === 0 || !attendances || attendances.length === 0) {
-    return (catchUps || []).length;
+    const validCatchUps = (catchUps || []).filter(
+      (c: any) => !c.isTransferCatchUp && c.recordedBy !== "transfer"
+    );
+    return validCatchUps.length;
   }
   const history = classifyStudentAttendanceHistory({
     lessons,
@@ -500,7 +538,15 @@ export function computeStudentConsumedSessions({
   const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
   const lessonIds = new Set(lessons.map((l) => l.id));
   let extraCatchUp = 0;
-  (catchUps || []).forEach((c) => {
+  (catchUps || []).forEach((c: any) => {
+    if (c.isTransferCatchUp || c.recordedBy === "transfer") {
+      return;
+    }
+    // Visiting student attending catch-up in this host class from another group:
+    // Does NOT consume credit in this host class.
+    if (c.catchUpLessonId && lessonIds.has(c.catchUpLessonId) && !lessonIds.has(c.missedLessonId)) {
+      return;
+    }
     const missedAccounted = accountedCatchUps.has(c.missedLessonId);
     const catchUpAccounted = c.catchUpLessonId ? accountedCatchUps.has(c.catchUpLessonId) : false;
     const catchUpInLessons = c.catchUpLessonId ? lessonIds.has(c.catchUpLessonId) : false;
@@ -641,7 +687,15 @@ export interface ComputeStudentCreditParams {
     lesson?: { id: number; startsAt?: Date | string; isFree?: boolean; isTeacherAbsent?: boolean } | null;
   }>;
   lessons?: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
-  catchUps?: Array<{ missedLessonId: number; recordedAt?: Date | string }>;
+  catchUps?: Array<{
+    missedLessonId: number;
+    catchUpLessonId?: number;
+    recordedAt?: Date | string;
+    recordedBy?: string;
+    isTransferCatchUp?: boolean;
+    missedLesson?: any;
+    catchUpLesson?: any;
+  }>;
   payerRemainingCredit?: number | null;
 }
 
@@ -885,7 +939,10 @@ export function computeStudentCreditAndSessions({
   attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
 
   const catchUpSet = new Set<number>();
-  (catchUps || []).forEach((c) => catchUpSet.add(c.missedLessonId));
+  (catchUps || []).forEach((c) => {
+    if (c.missedLessonId) catchUpSet.add(c.missedLessonId);
+    if (c.catchUpLessonId) catchUpSet.add(c.catchUpLessonId);
+  });
 
   if (lessons && lessons.length > 0) {
     lessons.forEach((l) => {
@@ -941,6 +998,14 @@ export function computeStudentCreditAndSessions({
   const relevantLessonIds = new Set(relevantLessons.map((l) => l.id));
   let extraCatchUpConsumed = 0;
   (catchUps || []).forEach((c: any) => {
+    if (c.isTransferCatchUp || c.recordedBy === "transfer") {
+      return;
+    }
+    // Visiting student attending catch-up in this host class from another group:
+    // Does NOT consume credit in this host class.
+    if (c.catchUpLessonId && relevantLessonIds.has(c.catchUpLessonId) && !relevantLessonIds.has(c.missedLessonId)) {
+      return;
+    }
     const missedAccounted = accountedCatchUps.has(c.missedLessonId);
     const catchUpAccounted = c.catchUpLessonId ? accountedCatchUps.has(c.catchUpLessonId) : false;
     const catchUpInLessons = c.catchUpLessonId ? relevantLessonIds.has(c.catchUpLessonId) : false;

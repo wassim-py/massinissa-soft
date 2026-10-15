@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ZKTeco K50 Pro — Installation & User Manual (v3 Self-Healing)</title>
+  <title>ZKTeco K50 Pro — Installation & User Manual (Direct Cable & Router Support)</title>
   <style>
     :root {
       --primary: #1e3a8a;
@@ -142,6 +142,24 @@
       background: var(--primary-light);
       border-left: 4px solid var(--primary);
     }
+    .card-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin: 16px 0;
+    }
+    .option-card {
+      border: 1px solid var(--slate-200);
+      border-radius: 12px;
+      padding: 18px;
+      background: #ffffff;
+    }
+    .option-title {
+      font-weight: 700;
+      font-size: 16px;
+      color: var(--primary);
+      margin-bottom: 8px;
+    }
     @media print {
       body { background: #fff; padding: 0; }
       .container { border: none; box-shadow: none; padding: 0; }
@@ -153,162 +171,112 @@
   <div class="container">
     <div class="header-bar">
       <div>
-        <h1>ZKTeco K50 Pro — Installation & User Manual <span class="badge">v3 Self-Healing</span></h1>
+        <h1>ZKTeco K50 Pro — Installation & User Manual <span class="badge">v3.1 Flexible Network</span></h1>
         <p class="subtitle">Massinissa School Software (Online Cloud Deployment) • Branches: ECOLE, ANNEX, AMPHI</p>
       </div>
       <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
     </div>
 
-    <h2>1. Overview & Architecture</h2>
-    <p>Because the Massinissa School Software is deployed <strong>online in the cloud</strong>, the physical ZKTeco K50 Pro reader (connected by a direct RJ45 Ethernet cable to the School PC) cannot be reached across the public internet without a local bridge.</p>
-    <p>To bridge this connection seamlessly, the School PC runs a lightweight background service (<strong><code>zk-bridge</code></strong>):</p>
-    <ul>
-      <li><strong>Physical Link:</strong> Communicates with the K50 Pro over Ethernet (<code>192.168.50.201:4370</code>).</li>
-      <li><strong>Instant Browser Link (SSE):</strong> Streams scans directly to the web app in <strong>&lt; 2ms</strong> via Server-Sent Events (<code>http://127.0.0.1:4375/events</code>).</li>
-      <li><strong>Zero Cloud Polling Quota:</strong> Eliminates continuous database polling, cutting NeonDB query consumption by <strong>over 75%</strong>.</li>
-      <li><strong>Self-Healing Engine (v3):</strong> Sends an active 8-second ZKTeco application heartbeat (<code>CMD_REG_EVENT</code>) that <strong>prevents the K50 Pro session from ever expiring</strong> and keeps the PC's Ethernet card awake 24/7. If the cable is unplugged or the device rebooted, it auto-reconnects within 2–3 seconds.</li>
-    </ul>
+    <div class="callout callout-success">
+      <strong>Can One Branch Use Direct Cable and Another Use the Router?</strong><br>
+      <strong>YES, 100% ABSOLUTELY!</strong> Each branch's PC runs its own local bridge. One branch can have the K50 Pro plugged straight into the PC via Ethernet, while another branch has the K50 Pro plugged into the building router or switch. Both work simultaneously and sync seamlessly with the online cloud application.
+    </div>
 
-    <h2>2. Prerequisites on Each School PC</h2>
+    <div class="card-grid">
+      <div class="option-card">
+        <div class="option-title">Option A: Direct Cable to PC</div>
+        <p style="font-size: 13px; color: var(--slate-500); margin: 0 0 10px 0;">Best when the reader is placed right on the reception desk next to the computer.</p>
+        <ul style="font-size: 13px; padding-left: 18px; margin: 0;">
+          <li>K50 Pro plugged into PC Ethernet port</li>
+          <li>PC connects to Internet via Wi-Fi</li>
+          <li>PC Ethernet IPv4 set to static <code>192.168.50.1</code> (Gateway empty)</li>
+          <li>K50 Pro IP: <code>192.168.50.201</code></li>
+          <li>Installer: Press [Enter] for default</li>
+        </ul>
+      </div>
+      <div class="option-card">
+        <div class="option-title">Option B: Plugged into Router / Switch</div>
+        <p style="font-size: 13px; color: var(--slate-500); margin: 0 0 10px 0;">Best when the reader is mounted on a wall or hallway near the entrance.</p>
+        <ul style="font-size: 13px; padding-left: 18px; margin: 0;">
+          <li>K50 Pro plugged into Router LAN port or wall jack</li>
+          <li>PC connects to same router (Wi-Fi or cable)</li>
+          <li>PC keeps standard automatic IP (DHCP)</li>
+          <li>K50 Pro IP: matching router, e.g. <code>192.168.1.201</code></li>
+          <li>Installer: Enter <code>192.168.1.201</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>1. Option A Setup (Direct RJ45 Cable to PC)</h2>
     <ol>
-      <li><strong>Wi-Fi Internet Connection:</strong> Ensure the School PC connects to the internet via <strong>Wi-Fi</strong> so the Ethernet (RJ45) port remains free exclusively for the ZKTeco K50 Pro.</li>
-      <li><strong>Node.js Installed:</strong> Install <strong>Node.js LTS</strong> from <a href="https://nodejs.org" target="_blank">https://nodejs.org</a> if not already installed.</li>
-      <li><strong>Copy the <code>zk-bridge</code> Folder:</strong> Copy the <code>zk-bridge</code> folder from the project onto the School PC (contains <code>zk-bridge.js</code>, <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code>, and <code>ARRETER_PONT_K50.bat</code>).</li>
+      <li><strong>On K50 Pro:</strong> Hold <code>M/OK</code> &rarr; <code>Comm.</code> &rarr; <code>Ethernet</code>: Set IP to <code>192.168.50.201</code>, Netmask <code>255.255.255.0</code>, Gateway <code>0.0.0.0</code>, Port <code>4370</code>, DHCP <code>OFF</code>.</li>
+      <li><strong>On Windows PC:</strong> Press <code>Win + R</code> &rarr; <code>ncpa.cpl</code> &rarr; Properties of Ethernet &rarr; IPv4 &rarr; Set IP to <code>192.168.50.1</code>, Netmask <code>255.255.255.0</code>, <strong>leave Default Gateway blank</strong>.</li>
+      <li><strong>Run Installer:</strong> Right-click <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code> &rarr; Run as administrator &rarr; Press <code>[Enter]</code>.</li>
     </ol>
 
-    <h2>3. Step 1 — Configure the ZKTeco K50 Pro Hardware</h2>
-    <p>Hold the <strong><code>M/OK</code></strong> key on the K50 Pro for 2 seconds to open the menu, then select <strong><code>Comm.</code> &rarr; <code>Ethernet</code></strong>:</p>
-
-    <h3>A. Single Reader on the PC (Direct Ethernet Cable to PC)</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>K50 Pro Setting</th>
-          <th>Value to Enter</th>
-          <th>Notes</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td><strong>IP Address</strong></td><td><code>192.168.50.201</code></td><td>Default device IP</td></tr>
-        <tr><td><strong>Subnet Mask</strong></td><td><code>255.255.255.0</code></td><td>Standard Class C subnet</td></tr>
-        <tr><td><strong>Gateway</strong></td><td><code>0.0.0.0</code> (or <code>192.168.50.1</code>)</td><td>Gateway on local cable</td></tr>
-        <tr><td><strong>TCP Port</strong></td><td><code>4370</code></td><td>ZKTeco communication port</td></tr>
-        <tr><td><strong>DHCP</strong></td><td><code>OFF</code> (Disabled)</td><td>Prevents unexpected IP changes</td></tr>
-        <tr><td><strong>Comm Key (Password)</strong></td><td><code>0</code></td><td>Communication password (default: 0)</td></tr>
-      </tbody>
-    </table>
-
-    <h3>B. Multiple Readers on the Same PC (via 5-Port Ethernet Switch)</h3>
-    <p>Connect the PC and all K50 Pro readers to an Ethernet switch with RJ45 cables and assign a unique IP to each reader:</p>
-    <ul>
-      <li><strong>Reader #1:</strong> <code>192.168.50.201</code> (Subnet <code>255.255.255.0</code>, Port <code>4370</code>, DHCP <code>OFF</code>)</li>
-      <li><strong>Reader #2:</strong> <code>192.168.50.202</code> (Subnet <code>255.255.255.0</code>, Port <code>4370</code>, DHCP <code>OFF</code>)</li>
-      <li><strong>Reader #3:</strong> <code>192.168.50.203</code> (Subnet <code>255.255.255.0</code>, Port <code>4370</code>, DHCP <code>OFF</code>)</li>
-    </ul>
-
-    <h2>4. Step 2 — Configure the Windows PC Ethernet Adapter (Static IP <code>192.168.50.1</code>)</h2>
+    <h2>2. Option B Setup (K50 Pro Plugged into Router)</h2>
     <ol>
-      <li>Press <strong><code>Win + R</code></strong>, type <strong><code>ncpa.cpl</code></strong>, and press <strong>Enter</strong>.</li>
-      <li>Right-click on <strong>Ethernet</strong> (wired adapter connected to the K50 Pro) &rarr; click <strong>Properties</strong>.</li>
-      <li>Double-click on <strong>Internet Protocol Version 4 (TCP/IPv4)</strong>.</li>
-      <li>Select <strong>Use the following IP address</strong> and enter:
+      <li><strong>Find Router Range:</strong> Open PowerShell on the PC and run <code>Get-NetRoute -DestinationPrefix '0.0.0.0/0'</code> to see your router gateway (usually <code>192.168.1.1</code> or <code>192.168.0.1</code>).</li>
+      <li><strong>On K50 Pro:</strong> Hold <code>M/OK</code> &rarr; <code>Comm.</code> &rarr; <code>Ethernet</code>:
         <ul>
-          <li><strong>IP address:</strong> <code>192.168.50.1</code></li>
-          <li><strong>Subnet mask:</strong> <code>255.255.255.0</code></li>
-          <li><strong>Default gateway:</strong> <strong>LEAVE COMPLETELY BLANK!</strong></li>
+          <li>IP Address: Choose an unused IP, e.g. <strong><code>192.168.1.201</code></strong></li>
+          <li>Subnet Mask: <code>255.255.255.0</code></li>
+          <li>Gateway: Your router IP (e.g. <code>192.168.1.1</code>)</li>
+          <li>Port: <code>4370</code>, DHCP: <code>OFF</code></li>
         </ul>
       </li>
-      <li>Click <strong>OK</strong>, then <strong>OK</strong> again.</li>
+      <li><strong>On Windows PC:</strong> No special IP configuration needed! Both the PC and K50 Pro are connected to the same router.</li>
+      <li><strong>Test Connection:</strong> In PowerShell, run <code>Test-NetConnection 192.168.1.201 -Port 4370</code> &rarr; verify <code>TcpTestSucceeded : True</code>.</li>
+      <li><strong>Run Installer:</strong> Right-click <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code> &rarr; Run as administrator &rarr; Type <code>192.168.1.201</code> and press <code>[Enter]</code>.</li>
     </ol>
 
-    <div class="callout callout-warn">
-      <strong>Crucial:</strong> Always leave the <strong>Default Gateway</strong> blank on the Ethernet adapter. This guarantees Windows uses Wi-Fi for all internet traffic while routing <code>192.168.50.x</code> exclusively over the Ethernet cable.
-    </div>
-
-    <p>To verify the hardware connection, open <strong>PowerShell</strong> and run:</p>
-    <pre>Test-NetConnection 192.168.50.201 -Port 4370</pre>
-    <p>Confirm that the output shows <code>TcpTestSucceeded : True</code>.</p>
-
-    <h2>5. Step 3 — Run the 1-Click Local Bridge Installer (<code>zk-bridge</code>)</h2>
-    <ol>
-      <li>Open the <strong><code>zk-bridge</code></strong> folder on the School PC.</li>
-      <li><strong>Right-click</strong> on <strong><code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code></strong> and click <strong>Run as administrator</strong>.</li>
-      <li>Press <strong><code>[Enter]</code></strong> to keep the default IP <code>192.168.50.201</code> (or enter <code>192.168.50.201,192.168.50.202</code> for multiple readers).</li>
-    </ol>
-
-    <div class="callout callout-success">
-      <strong>What the v3 1-Click Installer Does Automatically:</strong>
-      <ul style="margin: 6px 0 0 0;">
-        <li>Copies <code>zk-bridge.js</code> to <code>%USERPROFILE%\MassinissaK50Bridge\</code></li>
-        <li><strong>Disables Ethernet Power Saving:</strong> Turns off Windows <code>PowerSavingMode</code>, <code>Green Ethernet</code>, and <code>Energy-Efficient Ethernet (EEE)</code> on the Ethernet card so it never enters idle sleep</li>
-        <li>Opens ports <code>4370</code> and <code>4375</code> in Windows Firewall</li>
-        <li>Installs a silent auto-startup launcher in Windows Startup (<code>shell:startup</code>) so it starts invisibly every morning when the PC turns on (no black console window)</li>
-        <li>Starts the v3 self-healing bridge immediately on <code>http://127.0.0.1:4375</code></li>
-      </ul>
-    </div>
-
-    <h2>6. Step 4 — Open the Online Application</h2>
-    <ol>
-      <li>Open your online Massinissa School Software URL in <strong>Chrome</strong> or <strong>Edge</strong>.</li>
-      <li>Select the PC's branch in the top navigation bar (<strong>ECOLE</strong>, <strong>ANNEX</strong>, or <strong>AMPHI</strong>).</li>
-      <li>Ensure the <strong>Fingerprint</strong> button in the top bar is toggled <strong>ON</strong>.</li>
-      <li>If Chrome asks for permission to <em>"Look for and connect to any device on your local network"</em>, click <strong>Allow</strong>.</li>
-      <li>The status dot on the <strong>Fingerprint ON</strong> button will immediately turn <strong>Green (Connected)</strong>!</li>
-    </ol>
-
-    <h2>7. Daily Operation & Advanced Features</h2>
+    <h2>3. Daily Usage & Key Benefits</h2>
     <ul>
-      <li><strong>Sub-200ms Scans:</strong> Finger scans are streamed to the browser via local SSE in 0ms, updating the attendance roster and remaining credits instantly without waiting for cloud polling.</li>
-      <li><strong>Strict Branch Isolation:</strong> Scanning at AMPHI only checks AMPHI lessons. If a student enrolled at ECOLE attends AMPHI, the Catch-Up (Rattrapage) card appears on screen to log their attendance safely.</li>
-      <li><strong>Zero Duplicates:</strong> Repeated scans during the same lesson do not create duplicate attendance records or deduct extra credits.</li>
-      <li><strong>Anti-Inactivity Heartbeat (v3):</strong> The bridge pings the K50 Pro every 8 seconds over Ethernet, keeping the session alive all day even when idle.</li>
-      <li><strong>Manual Instant Reconnect:</strong> If the device was ever unplugged or restarted, toggling the <strong>Fingerprint</strong> button in the top navbar <strong>OFF then ON</strong> forces an instant hardware re-handshake in &lt; 50ms.</li>
+      <li><strong>Sub-200ms Scans:</strong> Scans stream instantly from K50 Pro &rarr; local bridge &rarr; browser in 0ms, updating attendance and remaining credits immediately.</li>
+      <li><strong>Strict Branch Isolation:</strong> Scans at AMPHI only evaluate AMPHI lessons. If an ECOLE student visits AMPHI, the Catch-Up (Rattrapage) card opens so they can be logged into a catch-up group without altering their original group.</li>
+      <li><strong>Anti-Inactivity Keepalive (v3):</strong> An active 8-second protocol heartbeat keeps the K50 Pro session alive 24/7 without timing out or sleeping.</li>
+      <li><strong>Instant Reconnect:</strong> If a router or K50 Pro reboots, toggle the <strong>Fingerprint</strong> button in the top navbar <strong>OFF then ON</strong> for an immediate re-handshake in &lt; 50ms.</li>
     </ul>
 
-    <h2>8. Troubleshooting Checklist</h2>
+    <h2>4. Quick Troubleshooting Comparison</h2>
     <table>
       <thead>
         <tr>
-          <th>Issue</th>
-          <th>Cause</th>
-          <th>Solution</th>
+          <th>Item</th>
+          <th>Option A (Direct Cable)</th>
+          <th>Option B (Router / Switch)</th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <td><strong>Wi-Fi internet disconnects when Ethernet cable is plugged in</strong></td>
-          <td>A Default Gateway was entered in Ethernet IPv4 properties</td>
-          <td>Open <code>ncpa.cpl</code> &rarr; Ethernet &rarr; IPv4 and clear the <em>Default Gateway</em> field.</td>
+          <td><strong>Cable Connection</strong></td>
+          <td>From K50 Pro directly into PC Ethernet port</td>
+          <td>From K50 Pro into Router LAN port</td>
         </tr>
         <tr>
-          <td><strong>Fingerprint button stays Red/Offline in the online app</strong></td>
-          <td>Local Bridge not running or Chrome blocked local network access</td>
-          <td>Run <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code> as administrator and allow <em>Local network access</em> in Chrome site permissions.</td>
+          <td><strong>PC Internet</strong></td>
+          <td>Must use Wi-Fi</td>
+          <td>Can use Wi-Fi or Ethernet to router</td>
         </tr>
         <tr>
-          <td><strong>`TcpTestSucceeded : False` on `192.168.50.201`</strong></td>
-          <td>Cable unplugged or PC Ethernet IP lost</td>
-          <td>Verify cable connection and run <code>ipconfig</code> in PowerShell to verify Ethernet has IPv4 <code>192.168.50.1</code>.</td>
+          <td><strong>PC IPv4 Settings</strong></td>
+          <td>Static <code>192.168.50.1</code> (Gateway empty)</td>
+          <td>Automatic (DHCP, managed by router)</td>
         </tr>
         <tr>
-          <td><strong>Device was unplugged, restarted, or idle overnight</strong></td>
-          <td>Session dropped or cable reconnected</td>
-          <td>The v3 bridge auto-reconnects in 2–3 seconds. You can also toggle the <strong>Fingerprint</strong> button in the top navbar <strong>OFF then ON</strong> to force an immediate reconnect.</td>
+          <td><strong>K50 Pro IP</strong></td>
+          <td><code>192.168.50.201</code></td>
+          <td>Router subnet, e.g. <code>192.168.1.201</code></td>
         </tr>
         <tr>
-          <td><strong>Ethernet port sleeps after long inactivity</strong></td>
-          <td>Realtek Power Saving / Green Ethernet enabled</td>
-          <td>Run <code>INSTALLER_ET_DEMARRER_PONT_K50.bat</code> to disable power saving, or open Device Manager (<code>devmgmt.msc</code>) &rarr; Realtek Controller &rarr; Advanced &rarr; set <code>Energy-Efficient Ethernet</code>, <code>Green Ethernet</code>, and <code>Power Saving Mode</code> to <strong>Disabled</strong>.</td>
+          <td><strong>Installer Prompt</strong></td>
+          <td>Press [Enter] for default</td>
+          <td>Enter your router IP (e.g. <code>192.168.1.201</code>)</td>
         </tr>
         <tr>
-          <td><strong>Student scans finger but sees "Out of Slot / Catch-Up"</strong></td>
-          <td>Wrong branch selected in the top navbar</td>
-          <td>Ensure the branch selected in the top bar matches the physical building (<code>ECOLE</code>, <code>ANNEX</code>, or <code>AMPHI</code>).</td>
-        </tr>
-        <tr>
-          <td><strong>How to stop the background bridge service</strong></td>
-          <td>Need to stop background Node.js bridge</td>
-          <td>Double-click <code>ARRETER_PONT_K50.bat</code> in the <code>zk-bridge</code> folder.</td>
+          <td><strong>Test Command</strong></td>
+          <td><code>Test-NetConnection 192.168.50.201 -Port 4370</code></td>
+          <td><code>Test-NetConnection 192.168.1.201 -Port 4370</code></td>
         </tr>
       </tbody>
     </table>

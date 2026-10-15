@@ -162,7 +162,7 @@ export default function BookStatusBadge({
 
       {/* Details popover on hover if details are provided */}
       {isPopoverOpen && details.length > 0 && (
-        <div className="absolute z-50 bottom-full start-1/2 -translate-x-1/2 mb-2 w-60 p-2.5 bg-gray-900/95 text-white rounded-xl shadow-xl text-xs space-y-1.5 backdrop-blur-xs pointer-events-none animate-in fade-in zoom-in-95">
+        <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 p-2.5 bg-gray-900/95 text-white rounded-xl shadow-xl text-xs space-y-1.5 backdrop-blur-xs pointer-events-none animate-in fade-in zoom-in-95">
           <p className="font-bold text-[11px] text-gray-300 border-b border-gray-700/80 pb-1 flex items-center justify-between">
             <span>{isAr ? "تفاصيل نسخ الكتب" : "Détails des manuels"}</span>
             <span className="font-mono text-[10px]">

@@ -1,13 +1,16 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Student } from "@prisma/client";
 import Image from "next/image";
 import { Link } from "@/i18n/navigation";
+import { useRouter } from "next/navigation";
 import { LessonInstance, AttendanceCellDetail } from "@/app/[locale]/(dashboard)/list/attendance/class/[id]/page";
 import { useTranslations, useLocale } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { Search, X } from "lucide-react";
+import { Search, X, Check, FileText, RotateCcw, Loader2 } from "lucide-react";
+import { markSingleAttendanceAction, deleteSingleAttendanceAction } from "@/lib/actions";
+import { toast } from "react-toastify";
 
 type AttendanceGridProps = {
     students: (Student & { globalNumber?: number; phone?: string | null })[];
@@ -18,10 +21,247 @@ type AttendanceGridProps = {
 const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: AttendanceGridProps) => {
     const t = useTranslations("attendance");
     const locale = useLocale();
+    const router = useRouter();
 
     const searchParams = useSearchParams();
     const initialSearch = searchParams?.get("search") || "";
     const [searchQuery, setSearchQuery] = useState(initialSearch);
+
+    // Optimistic attendance map
+    const [localAttendanceMap, setLocalAttendanceMap] = useState<Map<string, Map<string, AttendanceCellDetail | boolean>>>(attendanceMap);
+
+    useEffect(() => {
+        setLocalAttendanceMap(attendanceMap);
+    }, [attendanceMap]);
+
+    // Quick attendance popup state
+    const [activePopup, setActivePopup] = useState<{
+        studentId: string;
+        studentName: string;
+        lessonId: number;
+        lessonKey: string;
+        lessonName: string;
+        date: string;
+        currentStatus?: "PRESENT" | "ABSENT" | "NOT_DEFINED";
+        currentJustification?: string;
+        position: { top: number; left: number; isAbove: boolean };
+    } | null>(null);
+
+    const [justificationInput, setJustificationInput] = useState<string>("");
+    const [showJustificationField, setShowJustificationField] = useState<boolean>(false);
+    const [isSaving, setIsSaving] = useState<boolean>(false);
+
+    // Close popup on Escape
+    useEffect(() => {
+        if (!activePopup) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                setActivePopup(null);
+                setShowJustificationField(false);
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [activePopup]);
+
+    const handleCircleClick = (
+        e: React.MouseEvent<HTMLElement>,
+        student: Student,
+        instance: LessonInstance,
+        currentDetail?: AttendanceCellDetail
+    ) => {
+        e.stopPropagation();
+        const rect = e.currentTarget.getBoundingClientRect();
+
+        const popupWidth = 180;
+        let left = rect.left + rect.width / 2 - popupWidth / 2;
+        if (left < 10) left = 10;
+        if (left + popupWidth > window.innerWidth - 10) {
+            left = window.innerWidth - popupWidth - 10;
+        }
+
+        const isAbove = rect.top > 120;
+        const top = isAbove ? rect.top - 8 : rect.bottom + 8;
+
+        const currentStatus = currentDetail?.status;
+        const currentJustification = currentDetail?.justification || "";
+
+        setActivePopup({
+            studentId: student.id,
+            studentName: student.name,
+            lessonId: instance.lessonId,
+            lessonKey: instance.key,
+            lessonName: instance.lessonName,
+            date: instance.date,
+            currentStatus,
+            currentJustification,
+            position: { top, left, isAbove },
+        });
+
+        const defaultNote = locale === "ar" ? "غياب مبرر" : "Absence justifiée";
+        setJustificationInput(currentJustification || defaultNote);
+        setShowJustificationField(currentStatus === "NOT_DEFINED");
+    };
+
+    const handleSelectStatus = async (status: "PRESENT" | "ABSENT" | "RESET") => {
+        if (!activePopup) return;
+        const { studentId, lessonKey, lessonId } = activePopup;
+        const prevMap = localAttendanceMap;
+
+        if (status === "RESET") {
+            setLocalAttendanceMap((prev) => {
+                const newMap = new Map(prev);
+                const studentRecs = new Map(newMap.get(studentId) || []);
+                studentRecs.delete(lessonKey);
+                newMap.set(studentId, studentRecs);
+                return newMap;
+            });
+            setActivePopup(null);
+            setShowJustificationField(false);
+
+            try {
+                const res = await deleteSingleAttendanceAction({
+                    lessonId,
+                    studentId,
+                });
+                if (!res.success) {
+                    setLocalAttendanceMap(prevMap);
+                    toast.error(res.message);
+                } else {
+                    toast.success(res.message);
+                    router.refresh();
+                }
+            } catch (err: any) {
+                setLocalAttendanceMap(prevMap);
+                toast.error(err?.message || "Erreur");
+            }
+        } else {
+            setLocalAttendanceMap((prev) => {
+                const newMap = new Map(prev);
+                const studentRecs = new Map(newMap.get(studentId) || []);
+                studentRecs.set(lessonKey, { status });
+                newMap.set(studentId, studentRecs);
+                return newMap;
+            });
+            setActivePopup(null);
+            setShowJustificationField(false);
+
+            try {
+                const res = await markSingleAttendanceAction({
+                    lessonId,
+                    studentId,
+                    status,
+                });
+                if (!res.success) {
+                    setLocalAttendanceMap(prevMap);
+                    toast.error(res.message);
+                } else {
+                    toast.success(res.message);
+                    router.refresh();
+                }
+            } catch (err: any) {
+                setLocalAttendanceMap(prevMap);
+                toast.error(err?.message || "Erreur");
+            }
+        }
+    };
+
+    const handleSelectJustified = async () => {
+        if (!activePopup) return;
+
+        const defaultNote = locale === "ar" ? "غياب مبرر" : "Absence justifiée";
+        const justificationToUse = justificationInput.trim() || defaultNote;
+        setJustificationInput(justificationToUse);
+        setShowJustificationField(true);
+
+        if (activePopup.currentStatus !== "NOT_DEFINED") {
+            const prevMap = localAttendanceMap;
+            setLocalAttendanceMap((prev) => {
+                const newMap = new Map(prev);
+                const studentRecs = new Map(newMap.get(activePopup.studentId) || []);
+                studentRecs.set(activePopup.lessonKey, {
+                    status: "NOT_DEFINED",
+                    justification: justificationToUse,
+                });
+                newMap.set(activePopup.studentId, studentRecs);
+                return newMap;
+            });
+
+            setActivePopup((prev) =>
+                prev
+                    ? {
+                          ...prev,
+                          currentStatus: "NOT_DEFINED",
+                          currentJustification: justificationToUse,
+                      }
+                    : null
+            );
+
+            setIsSaving(true);
+            try {
+                const res = await markSingleAttendanceAction({
+                    lessonId: activePopup.lessonId,
+                    studentId: activePopup.studentId,
+                    status: "NOT_DEFINED",
+                    justification: justificationToUse,
+                });
+                if (!res.success) {
+                    setLocalAttendanceMap(prevMap);
+                    toast.error(res.message);
+                } else {
+                    toast.success(res.message);
+                    router.refresh();
+                }
+            } catch (err: any) {
+                setLocalAttendanceMap(prevMap);
+                toast.error(err?.message || "Erreur");
+            } finally {
+                setIsSaving(false);
+            }
+        }
+    };
+
+    const handleSaveCustomJustification = async () => {
+        if (!activePopup || !justificationInput.trim()) return;
+
+        const prevMap = localAttendanceMap;
+        const newJustification = justificationInput.trim();
+
+        setLocalAttendanceMap((prev) => {
+            const newMap = new Map(prev);
+            const studentRecs = new Map(newMap.get(activePopup.studentId) || []);
+            studentRecs.set(activePopup.lessonKey, {
+                status: "NOT_DEFINED",
+                justification: newJustification,
+            });
+            newMap.set(activePopup.studentId, studentRecs);
+            return newMap;
+        });
+
+        setIsSaving(true);
+        try {
+            const res = await markSingleAttendanceAction({
+                lessonId: activePopup.lessonId,
+                studentId: activePopup.studentId,
+                status: "NOT_DEFINED",
+                justification: newJustification,
+            });
+            if (!res.success) {
+                setLocalAttendanceMap(prevMap);
+                toast.error(res.message);
+            } else {
+                toast.success(res.message);
+                router.refresh();
+                setActivePopup(null);
+                setShowJustificationField(false);
+            }
+        } catch (err: any) {
+            setLocalAttendanceMap(prevMap);
+            toast.error(err?.message || "Erreur");
+        } finally {
+            setIsSaving(false);
+        }
+    };
 
     const [selectedJustification, setSelectedJustification] = useState<{
         studentId: string;
@@ -280,10 +520,14 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                         {[...lessonInstances].reverse().map((instance) => {
                                             const isFree = Boolean(instance.isFree);
                                             const cellBg = isFree ? "bg-amber-50/70" : "";
-                                            const studentRecords = attendanceMap.get(student.id);
+                                            const studentRecords = localAttendanceMap.get(student.id);
                                             const rawRecord = studentRecords
                                                 ? studentRecords.get(instance.key)
                                                 : undefined;
+
+                                            const isActiveCell =
+                                                activePopup?.studentId === student.id &&
+                                                activePopup?.lessonKey === instance.key;
 
                                             if (!rawRecord) {
                                                 // No attendance record recorded for this lesson
@@ -292,7 +536,16 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
                                                         className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
-                                                        <div className={`w-5 h-5 mx-auto rounded-full bg-surface-subtle border ${isFree ? "border-amber-300" : "border-border"}`} />
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => handleCircleClick(e, student, instance)}
+                                                            className={`w-5 h-5 mx-auto rounded-full bg-surface-subtle border ${
+                                                                isFree ? "border-amber-300" : "border-border"
+                                                            } hover:scale-125 hover:border-primary focus:outline-none transition-all cursor-pointer block shadow-2xs ${
+                                                                isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                            }`}
+                                                            title={locale === "ar" ? "تسجيل الحضور" : "Enregistrer la présence"}
+                                                        />
                                                     </td>
                                                 );
                                             }
@@ -309,9 +562,13 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
                                                         className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
-                                                        <div
-                                                            className="w-5 h-5 mx-auto rounded-full bg-rose-500 ring-2 ring-rose-200 shadow-2xs"
-                                                            title={locale === "ar" ? "أستاذ غائب (الرصيد غير مخصوم)" : "Professeur absent (crédit préservé)"}
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                            className={`w-5 h-5 mx-auto rounded-full bg-rose-500 ring-2 ring-rose-200 shadow-2xs hover:scale-125 focus:outline-none transition-all cursor-pointer block ${
+                                                                isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                            }`}
+                                                            title={locale === "ar" ? "أستاذ غائب (الرصيد غير مخصوم) - انقر للتعديل" : "Professeur absent (crédit préservé) - Cliquer pour modifier"}
                                                         />
                                                     </td>
                                                 );
@@ -330,12 +587,16 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
                                                         <div className="relative group/catchup inline-flex items-center justify-center">
-                                                            <div
-                                                                className="w-5 h-5 rounded-full bg-blue-600 hover:bg-blue-700 ring-2 ring-blue-300 ring-offset-1 transition-transform hover:scale-125 cursor-help shadow-xs"
-                                                                title={tooltipText}
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                                className={`w-5 h-5 rounded-full bg-blue-600 hover:bg-blue-700 ring-2 ring-blue-300 ring-offset-1 transition-all hover:scale-125 cursor-pointer shadow-xs focus:outline-none block ${
+                                                                    isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                                }`}
+                                                                title={`${tooltipText} - ${locale === "ar" ? "انقر للتعديل" : "Cliquer pour modifier"}`}
                                                             />
                                                             {/* Interactive Hover Tooltip */}
-                                                            <div className="pointer-events-none absolute bottom-full start-1/2 -translate-x-1/2 mb-2 hidden group-hover/catchup:flex flex-col items-center z-40 min-w-[180px] max-w-xs transition-all">
+                                                            <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/catchup:flex flex-col items-center z-40 min-w-[180px] max-w-xs transition-all">
                                                                 <div className="bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-xl text-center font-normal">
                                                                     <div className="font-bold text-blue-300 mb-0.5 flex items-center justify-center gap-1.5">
                                                                         <svg className="w-3.5 h-3.5 text-blue-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -361,16 +622,20 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
                                                         className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
-                                                        <div
-                                                            className="w-5 h-5 mx-auto rounded-full bg-success shadow-2xs"
-                                                            title={t("legendPresent")}
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                            className={`w-5 h-5 mx-auto rounded-full bg-success shadow-2xs hover:scale-125 hover:ring-2 hover:ring-emerald-300 focus:outline-none transition-all cursor-pointer block ${
+                                                                isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                            }`}
+                                                            title={`${t("legendPresent")} - ${locale === "ar" ? "انقر للتعديل" : "Cliquer pour modifier"}`}
                                                         />
                                                     </td>
                                                 );
                                             }
 
                                             if (record.status === "NOT_DEFINED") {
-                                                // Orange circle: NOT_DEFINED — clicking/tapping shows justification text
+                                                // Orange circle: NOT_DEFINED
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
@@ -378,19 +643,11 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                     >
                                                         <button
                                                             type="button"
-                                                            onClick={() =>
-                                                                setSelectedJustification({
-                                                                    studentId: student.id,
-                                                                    studentName: student.name,
-                                                                    lessonName: instance.lessonName,
-                                                                    date: formatDateHeader(instance.date),
-                                                                    justification:
-                                                                        record.justification ||
-                                                                        t("noJustificationRecorded"),
-                                                                })
-                                                            }
-                                                            className="w-5 h-5 mx-auto rounded-full bg-amber-500 hover:bg-amber-600 focus:outline-none ring-2 ring-amber-300 ring-offset-1 transition-transform hover:scale-125 cursor-pointer shadow-xs"
-                                                            title={t("legendJustified")}
+                                                            onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                            className={`w-5 h-5 mx-auto rounded-full bg-amber-500 hover:bg-amber-600 focus:outline-none ring-2 ring-amber-300 ring-offset-1 transition-all hover:scale-125 cursor-pointer shadow-xs block ${
+                                                                isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                            }`}
+                                                            title={`${t("legendJustified")}: ${record.justification || t("noJustificationRecorded")} - ${locale === "ar" ? "انقر للتعديل" : "Cliquer pour modifier"}`}
                                                         />
                                                     </td>
                                                 );
@@ -404,9 +661,13 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
                                                         className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
-                                                        <div
-                                                            className="w-5 h-5 mx-auto rounded-full bg-slate-200 border-2 border-slate-400/80 shadow-2xs"
-                                                            title={locale === "ar" ? "غياب قبل أول حضور (محايد)" : "Absence avant premier cours (neutre)"}
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                            className={`w-5 h-5 mx-auto rounded-full bg-slate-200 border-2 border-slate-400/80 shadow-2xs hover:scale-125 focus:outline-none transition-all cursor-pointer block ${
+                                                                isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                            }`}
+                                                            title={`${locale === "ar" ? "غياب قبل أول حضور (محايد)" : "Absence avant premier cours (neutre)"} - ${locale === "ar" ? "انقر للتعديل" : "Cliquer pour modifier"}`}
                                                         />
                                                     </td>
                                                 );
@@ -418,9 +679,13 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                     key={`${student.id}-${instance.key}-${studentIndex}`}
                                                     className={`p-3 text-center border-b border-border ${cellBg}`}
                                                 >
-                                                    <div
-                                                        className="w-5 h-5 mx-auto rounded-full bg-danger shadow-2xs"
-                                                        title={t("legendAbsent")}
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                        className={`w-5 h-5 mx-auto rounded-full bg-danger shadow-2xs hover:scale-125 hover:ring-2 hover:ring-rose-300 focus:outline-none transition-all cursor-pointer block ${
+                                                            isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                        }`}
+                                                        title={`${t("legendAbsent")} - ${locale === "ar" ? "انقر للتعديل" : "Cliquer pour modifier"}`}
                                                     />
                                                 </td>
                                             );
@@ -432,6 +697,128 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                     </tbody>
                 </table>
             </div>
+
+            {/* Quick Attendance Popup Container */}
+            {activePopup && (
+                <>
+                    {/* Backdrop to dismiss when clicking outside */}
+                    <div
+                        className="fixed inset-0 z-40 bg-black/5"
+                        onClick={() => {
+                            setActivePopup(null);
+                            setShowJustificationField(false);
+                        }}
+                    />
+
+                    {/* Compact Container showing only attendance circles */}
+                    <div
+                        id="quick-attendance-popup"
+                        style={{
+                            top: `${activePopup.position.top}px`,
+                            left: `${activePopup.position.left}px`,
+                        }}
+                        className={`fixed z-50 bg-white border border-border/90 shadow-2xl rounded-2xl p-2 flex flex-col gap-1.5 min-w-[170px] animate-in fade-in zoom-in-95 duration-100 ${
+                            activePopup.position.isAbove ? "-translate-y-full" : ""
+                        }`}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Attendance Circles Row */}
+                        <div className="flex items-center justify-center gap-2.5 px-1 py-0.5">
+                            {/* Present Circle (Green) */}
+                            <button
+                                type="button"
+                                disabled={isSaving}
+                                onClick={() => handleSelectStatus("PRESENT")}
+                                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-success hover:bg-success/90 flex items-center justify-center text-white shadow-xs transition-transform hover:scale-115 active:scale-95 cursor-pointer disabled:opacity-50 ${
+                                    activePopup.currentStatus === "PRESENT"
+                                        ? "ring-2 ring-success ring-offset-2 ring-offset-white"
+                                        : ""
+                                }`}
+                                title={locale === "ar" ? "حاضر" : "Présent"}
+                            >
+                                <Check className="w-4 h-4 stroke-[2.5]" />
+                            </button>
+
+                            {/* Absent Circle (Red) */}
+                            <button
+                                type="button"
+                                disabled={isSaving}
+                                onClick={() => handleSelectStatus("ABSENT")}
+                                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-danger hover:bg-danger/90 flex items-center justify-center text-white shadow-xs transition-transform hover:scale-115 active:scale-95 cursor-pointer disabled:opacity-50 ${
+                                    activePopup.currentStatus === "ABSENT"
+                                        ? "ring-2 ring-danger ring-offset-2 ring-offset-white"
+                                        : ""
+                                }`}
+                                title={locale === "ar" ? "غائب" : "Absent"}
+                            >
+                                <X className="w-4 h-4 stroke-[2.5]" />
+                            </button>
+
+                            {/* Justified Circle (Amber) */}
+                            <button
+                                type="button"
+                                disabled={isSaving}
+                                onClick={() => handleSelectJustified()}
+                                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-amber-500 hover:bg-amber-600 flex items-center justify-center text-white shadow-xs transition-transform hover:scale-115 active:scale-95 cursor-pointer disabled:opacity-50 ${
+                                    activePopup.currentStatus === "NOT_DEFINED"
+                                        ? "ring-2 ring-amber-500 ring-offset-2 ring-offset-white"
+                                        : ""
+                                }`}
+                                title={locale === "ar" ? "مبرر" : "Justifié"}
+                            >
+                                <FileText className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Clear / Reset Circle (Dashed Empty) */}
+                            <button
+                                type="button"
+                                disabled={isSaving}
+                                onClick={() => handleSelectStatus("RESET")}
+                                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-surface-subtle hover:bg-gray-200 border-2 border-dashed border-gray-400 hover:border-gray-600 flex items-center justify-center text-gray-600 shadow-xs transition-transform hover:scale-115 active:scale-95 cursor-pointer disabled:opacity-50 ${
+                                    !activePopup.currentStatus
+                                        ? "ring-2 ring-gray-400 ring-offset-2 ring-offset-white"
+                                        : ""
+                                }`}
+                                title={locale === "ar" ? "إلغاء التحديد" : "Réinitialiser"}
+                            >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+
+                        {/* Optional Justification Note Field when Amber is active */}
+                        {showJustificationField && (
+                            <form
+                                onSubmit={(e) => {
+                                    e.preventDefault();
+                                    handleSaveCustomJustification();
+                                }}
+                                className="flex items-center gap-1.5 pt-1.5 border-t border-border animate-in fade-in duration-150"
+                            >
+                                <input
+                                    type="text"
+                                    value={justificationInput}
+                                    onChange={(e) => setJustificationInput(e.target.value)}
+                                    placeholder={locale === "ar" ? "سبب التبرير..." : "Motif..."}
+                                    className="text-xs px-2 py-1 bg-surface border border-border rounded-md text-gray-800 placeholder:text-muted focus:outline-none focus:ring-1 focus:ring-amber-500 flex-1 min-w-0"
+                                    autoFocus
+                                />
+                                <button
+                                    type="submit"
+                                    disabled={isSaving || !justificationInput.trim()}
+                                    className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-md text-xs font-bold transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
+                                    title={locale === "ar" ? "حفظ التبرير" : "Enregistrer"}
+                                >
+                                    {isSaving ? (
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                                    )}
+                                </button>
+                            </form>
+                        )}
+                    </div>
+                </>
+            )}
 
             {/* Justification Modal Dialog */}
             {selectedJustification && (
