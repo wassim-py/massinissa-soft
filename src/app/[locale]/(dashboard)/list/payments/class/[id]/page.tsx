@@ -229,7 +229,11 @@ const ClassPaymentHistoryPage = async (
       select: {
         id: true,
         name: true,
-        branch: { select: { name: true } },
+        levelId: true,
+        formationLevelId: true,
+        isFormation: true,
+        pricePerCycle: true,
+        branch: { select: { id: true, name: true } },
       },
       orderBy: [{ branchId: "asc" }, { name: "asc" }],
     }),

@@ -388,16 +388,34 @@ export function classifyStudentAttendanceHistory({
         continue;
       }
 
-      // Cross-group catch-up (attended in another group where student was a free visitor):
-      // The student consumes 1 session credit in this home class.
+      // Cross-group catch-up (attended in another group with same teacher and level):
+      // If student was also marked PRESENT in this home lesson (attended both sessions):
+      if (rawStatus === "PRESENT") {
+        history.push({
+          lessonId: lesson.id,
+          startsAt,
+          status: "PRESENT",
+          isCatchUp: true,
+          classification: "PRESENT",
+          isConsumedCredit: true,
+          isTeacherPayable: true,
+          isRefundable: false,
+          isHeld: false,
+        });
+        continue;
+      }
+
+      // Standard Scenario A or B: student missed this lesson and caught it up in the other group:
+      // The student consumes 1 session credit in this home class package.
+      // But teacher is NOT payable on this missed lesson (teacher is paid in the attended catch-up lesson).
       history.push({
         lessonId: lesson.id,
         startsAt,
-        status: "PRESENT",
+        status: "ABSENT",
         isCatchUp: true,
-        classification: "PRESENT",
+        classification: "CAUGHT_UP_ABSENCE",
         isConsumedCredit: true,
-        isTeacherPayable: true,
+        isTeacherPayable: false,
         isRefundable: false,
         isHeld: false,
       });
@@ -708,6 +726,7 @@ export interface StudentCreditResult {
   netSessions: number;
   effectiveLessonPrice: number;
   totalPaidTuition: number;
+  netRefundableSessions: number;
   refundableSessions: number;
   refundableAmount: number;
   isFormation: boolean;
@@ -1086,6 +1105,7 @@ export function computeStudentCreditAndSessions({
     netSessions,
     effectiveLessonPrice,
     totalPaidTuition,
+    netRefundableSessions,
     refundableSessions,
     refundableAmount,
     isFormation: isForm,

@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
 import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { revalidatePath } from "next/cache";
+import { recordCatchUpAttendanceAction } from "@/lib/actions";
 
 export type BiometricScanStatus =
   | "SUCCESS"
@@ -1142,6 +1143,7 @@ export async function deleteStudentFingerprintAction(studentId: string) {
 /**
  * Fetches active lessons at the current branch for one-click Catch-Up (Rattrapage) assignment
  * when a student scans in State 3 (NO_UPCOMING_GROUP).
+ * Only returns lessons that match the same teacher and same level as student's missed lessons.
  */
 export async function getBiometricCatchUpOptionsAction(studentId: string, branchId?: number) {
   try {
@@ -1150,37 +1152,31 @@ export async function getBiometricCatchUpOptionsAction(studentId: string, branch
     const windowStart = new Date(now.getTime() - 2 * 60 * 60 * 1000);
     const windowEnd = new Date(now.getTime() + 2 * 60 * 60 * 1000);
 
-    // 1. Currently active/upcoming lessons at this branch that the student can attend as a catch-up visitor
-    const activeBranchLessons = await prisma.lesson.findMany({
-      where: {
-        branchId: activeBranchId,
-        startsAt: { lte: windowEnd },
-        endsAt: { gte: windowStart },
-      },
-      include: {
-        class: { select: { id: true, name: true } },
-        teacher: { select: { id: true, name: true } },
-        classroom: { select: { id: true, name: true } },
-      },
-      orderBy: { startsAt: "asc" },
-    });
-
-    // 2. Missed lessons (ABSENT) of this student that haven't been caught up yet
+    // 1. Missed lessons (ABSENT or NOT_DEFINED) of this student that haven't been caught up yet
     const missedAttendances = await prisma.attendance.findMany({
       where: {
         studentId,
-        status: "ABSENT",
+        status: { in: ["ABSENT", "NOT_DEFINED"] },
       },
       include: {
         lesson: {
           include: {
-            class: { select: { id: true, name: true } },
+            class: {
+              select: {
+                id: true,
+                name: true,
+                teacherId: true,
+                levelId: true,
+                formationLevelId: true,
+                isFormation: true,
+              },
+            },
             teacher: { select: { id: true, name: true } },
           },
         },
       },
       orderBy: { lesson: { startsAt: "desc" } },
-      take: 15,
+      take: 20,
     });
 
     const existingCatchUps = await prisma.catchUpAttendance.findMany({
@@ -1191,12 +1187,59 @@ export async function getBiometricCatchUpOptionsAction(studentId: string, branch
 
     const uncaughtMissedLessons = missedAttendances
       .filter((a) => !caughtUpSet.has(a.lessonId))
-      .map((a) => ({
-        lessonId: a.lessonId,
-        className: a.lesson.class.name,
-        teacherName: a.lesson.teacher.name,
-        startsAt: a.lesson.startsAt.toISOString(),
-      }));
+      .map((a) => {
+        const cls = a.lesson.class;
+        return {
+          lessonId: a.lessonId,
+          className: cls.name,
+          teacherId: a.lesson.teacherId || cls.teacherId,
+          teacherName: a.lesson.teacher.name,
+          levelId: cls.levelId,
+          formationLevelId: cls.formationLevelId,
+          isFormation: Boolean(cls.isFormation),
+          startsAt: a.lesson.startsAt.toISOString(),
+        };
+      });
+
+    // 2. Currently active/upcoming lessons at this branch
+    const allActiveBranchLessons = await prisma.lesson.findMany({
+      where: {
+        branchId: activeBranchId,
+        startsAt: { lte: windowEnd },
+        endsAt: { gte: windowStart },
+      },
+      include: {
+        class: {
+          select: {
+            id: true,
+            name: true,
+            teacherId: true,
+            levelId: true,
+            formationLevelId: true,
+            isFormation: true,
+          },
+        },
+        teacher: { select: { id: true, name: true } },
+        classroom: { select: { id: true, name: true } },
+      },
+      orderBy: { startsAt: "asc" },
+    });
+
+    // Filter activeBranchLessons so that only lessons matching the SAME TEACHER and SAME LEVEL
+    // as at least one uncaught missed lesson are suggested
+    const activeBranchLessons = allActiveBranchLessons.filter((l) => {
+      const lTeacherId = l.teacherId || l.class.teacherId;
+      const lIsFormation = Boolean(l.class.isFormation);
+      return uncaughtMissedLessons.some((m) => {
+        if (m.teacherId !== lTeacherId) return false;
+        if (m.isFormation !== lIsFormation) return false;
+        if (lIsFormation) {
+          return m.formationLevelId === l.class.formationLevelId;
+        } else {
+          return m.levelId === l.class.levelId;
+        }
+      });
+    });
 
     return {
       success: true,
@@ -1209,7 +1252,12 @@ export async function getBiometricCatchUpOptionsAction(studentId: string, branch
         startsAt: l.startsAt.toISOString(),
         endsAt: l.endsAt.toISOString(),
       })),
-      uncaughtMissedLessons,
+      uncaughtMissedLessons: uncaughtMissedLessons.map((m) => ({
+        lessonId: m.lessonId,
+        className: m.className,
+        teacherName: m.teacherName,
+        startsAt: m.startsAt,
+      })),
     };
   } catch (err) {
     console.error("getBiometricCatchUpOptionsAction error:", err);
@@ -1232,28 +1280,18 @@ export async function recordBiometricCatchUpAction(input: {
   catchUpLessonId: number;
 }) {
   try {
-    const session = await getAuthSession();
-    const recordedBy = session.userId || session.rawRole || "admin";
-
-    await prisma.catchUpAttendance.upsert({
-      where: {
-        studentId_missedLessonId: {
-          studentId: input.studentId,
-          missedLessonId: Number(input.missedLessonId),
-        },
-      },
-      create: {
-        studentId: input.studentId,
-        missedLessonId: Number(input.missedLessonId),
-        catchUpLessonId: Number(input.catchUpLessonId),
-        recordedBy,
-      },
-      update: {
-        catchUpLessonId: Number(input.catchUpLessonId),
-        recordedBy,
-        recordedAt: new Date(),
-      },
+    const res = await recordCatchUpAttendanceAction({
+      catchUpLessonId: Number(input.catchUpLessonId),
+      studentId: input.studentId,
+      missedLessonId: Number(input.missedLessonId),
     });
+
+    if (!res.success) {
+      return {
+        success: false,
+        message: res.message || "Erreur lors de l'enregistrement du rattrapage",
+      };
+    }
 
     await prisma.biometricScanLog.update({
       where: { id: Number(input.scanId) },
@@ -1266,16 +1304,9 @@ export async function recordBiometricCatchUpAction(input: {
 
     invalidateBiometricFeedCache();
 
-    try {
-      revalidatePath(`/list/attendance/take/${input.catchUpLessonId}`);
-    } catch {
-      // ignore
-    }
-
     return {
       success: true,
-      message:
-        "Rattrapage enregistré avec succès / تم تسجيل حصة التعويض بنجاح",
+      message: res.message || "Rattrapage enregistré avec succès / تم تسجيل حصة التعويض بنجاح",
     };
   } catch (err: any) {
     console.error("recordBiometricCatchUpAction error:", err);

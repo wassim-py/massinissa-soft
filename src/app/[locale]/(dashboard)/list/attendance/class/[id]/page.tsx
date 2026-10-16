@@ -21,6 +21,7 @@ export type LessonInstance = {
     lessonId: number;
     lessonName: string;
     date: string;
+    startsAt?: string;
     isFree?: boolean;
     isExtra?: boolean;
     isCatchUp?: boolean;
@@ -125,19 +126,31 @@ const ClassAttendancePage = async (
     try {
 
             const rawStudents = await prisma.$queryRaw<any[]>`
-                SELECT DISTINCT s.id, s.name, s."globalNumber", s.phone
+                SELECT 
+                    s.id, 
+                    s.name, 
+                    s."globalNumber", 
+                    s.phone,
+                    e.id as "enrollmentId",
+                    e.status as "enrollmentStatus",
+                    e."enrolledAt",
+                    (
+                        SELECT et."transferredAt"
+                        FROM "EnrollmentTransfer" et
+                        WHERE et."fromEnrollmentId" = e.id
+                        ORDER BY et."transferredAt" DESC
+                        LIMIT 1
+                    ) as "transferredAt"
                 FROM "Student" s
                 JOIN "Enrollment" e ON e."studentId" = s.id
                 WHERE e."classId" = ${classId}
-                  AND e."status" NOT IN ('TRANSFERRED', 'UNENROLLED', 'INACTIVE')
-                  AND NOT EXISTS (
-                      SELECT 1 FROM "EnrollmentTransfer" et WHERE et."fromEnrollmentId" = e.id
-                  )
+                  AND e."status" NOT IN ('UNENROLLED', 'INACTIVE')
                 ORDER BY s.name ASC
             `;
 
             const studentMap = new Map<string, any>();
             for (const s of rawStudents) {
+                const isTransferred = s.enrollmentStatus === "TRANSFERRED" || Boolean(s.transferredAt);
                 if (!studentMap.has(s.id)) {
                     studentMap.set(s.id, {
                         id: s.id,
@@ -145,8 +158,15 @@ const ClassAttendancePage = async (
                         globalNumber: s.globalNumber,
                         phone: s.phone,
                         surname: "",
+                        isTransferred,
+                        transferredAt: s.transferredAt ? new Date(s.transferredAt).toISOString() : null,
                         attendances: [],
                     });
+                } else if (!isTransferred && studentMap.get(s.id)?.isTransferred) {
+                    // Prefer active enrollment status if multiple enrollment records exist
+                    const existing = studentMap.get(s.id);
+                    existing.isTransferred = false;
+                    existing.transferredAt = null;
                 }
             }
 
@@ -177,10 +197,7 @@ const ClassAttendancePage = async (
                     AND a."studentId" IN (
                         SELECT e."studentId" FROM "Enrollment" e
                         WHERE e."classId" = ${classId}
-                          AND e."status" NOT IN ('TRANSFERRED', 'UNENROLLED', 'INACTIVE')
-                          AND NOT EXISTS (
-                              SELECT 1 FROM "EnrollmentTransfer" et WHERE et."fromEnrollmentId" = e.id
-                          )
+                          AND e."status" NOT IN ('UNENROLLED', 'INACTIVE')
                     )
                     ORDER BY l."startsAt" ASC
                 `;
@@ -240,87 +257,6 @@ const ClassAttendancePage = async (
                         },
                     },
                 });
-
-                // Also check for transferred-in students to ensure any past attendances from their first group
-                // are represented as catch-ups even for historical transfers before this update
-                const studentIds = Array.from(studentMap.keys());
-                if (studentIds.length > 0) {
-                    const historicalTransfers = await prisma.enrollmentTransfer.findMany({
-                        where: {
-                            toEnrollment: {
-                                classId: classId,
-                                studentId: { in: studentIds },
-                            },
-                        },
-                        include: {
-                            toEnrollment: { select: { studentId: true } },
-                            fromEnrollment: {
-                                include: {
-                                    class: { select: { id: true, name: true } },
-                                },
-                            },
-                        },
-                    });
-
-                    for (const transfer of historicalTransfers) {
-                        const sId = transfer.toEnrollment?.studentId;
-                        if (!sId) continue;
-                        const fromClassId = transfer.fromEnrollment?.classId;
-                        if (!fromClassId) continue;
-
-                        const existingMissedForStudent = new Set(
-                            catchUpAttendances.filter((c) => c.studentId === sId).map((c) => c.missedLessonId)
-                        );
-
-                        const fromAtts = await prisma.attendance.findMany({
-                            where: {
-                                studentId: sId,
-                                status: "PRESENT",
-                                lesson: { classId: fromClassId, isFree: false },
-                            },
-                            include: {
-                                lesson: {
-                                    select: { id: true, startsAt: true, isFree: true, isExtra: true, isCatchUp: true },
-                                },
-                            },
-                            orderBy: { lesson: { startsAt: "asc" } },
-                        });
-
-                        const availableClassLessons = allClassLessons
-                            .filter((l) => !existingMissedForStudent.has(l.id))
-                            .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
-
-                        let pIdx = 0;
-                        for (const fa of fromAtts) {
-                            if (pIdx < availableClassLessons.length) {
-                                const targetLesson = availableClassLessons[pIdx];
-                                pIdx++;
-                                existingMissedForStudent.add(targetLesson.id);
-                                catchUpAttendances.push({
-                                    id: -fa.id,
-                                    studentId: sId,
-                                    missedLessonId: targetLesson.id,
-                                    catchUpLessonId: fa.lessonId,
-                                    recordedBy: "transfer",
-                                    recordedAt: fa.lesson.startsAt,
-                                    missedLesson: {
-                                        id: targetLesson.id,
-                                        startsAt: targetLesson.startsAt,
-                                        isFree: targetLesson.isFree,
-                                        isExtra: targetLesson.isExtra,
-                                        isCatchUp: targetLesson.isCatchUp,
-                                        class: { name: classHeader.name },
-                                    },
-                                    catchUpLesson: {
-                                        id: fa.lesson.id,
-                                        startsAt: fa.lesson.startsAt,
-                                        class: { name: transfer.fromEnrollment?.class?.name || (locale === "ar" ? "فوج سابق" : "Ancien groupe") },
-                                    },
-                                });
-                            }
-                        }
-                    }
-                }
             } catch (cuErr) {
                 console.error("Error fetching catch up attendances:", cuErr);
             }
@@ -577,13 +513,19 @@ const ClassAttendancePage = async (
                 s.balance = balance;
             }
 
+            const sortedStudents = Array.from(studentMap.values()).sort((a, b) => {
+                if (a.isTransferred && !b.isTransferred) return 1;
+                if (!a.isTransferred && b.isTransferred) return -1;
+                return a.name.localeCompare(b.name);
+            });
+
             classData = {
                 id: classHeader.id,
                 name: classHeader.name,
                 isFormation: classHeader.isFormation,
                 branchId: classHeader.branchId,
                 branchName: classHeader.branch?.name || `الفرع ${classHeader.branchId}`,
-                students: Array.from(studentMap.values()),
+                students: sortedStudents,
                 catchUpAttendances,
             };
     } catch (err) {
@@ -605,6 +547,7 @@ const ClassAttendancePage = async (
         lessonId: number;
         subjectName: string;
         date: string;
+        startsAt?: string;
         isFree?: boolean;
         isExtra?: boolean;
         isCatchUp?: boolean;
@@ -622,6 +565,7 @@ const ClassAttendancePage = async (
                 lessonId: record.lessonId,
                 subjectName: record.lesson.subject.name,
                 date: dateKey,
+                startsAt: lessonMeta?.startsAt ? new Date(lessonMeta.startsAt).toISOString() : record.date ? new Date(record.date).toISOString() : undefined,
                 isFree: Boolean(lessonMeta?.isFree ?? record.isFree),
                 isExtra: Boolean(lessonMeta?.isExtra ?? record.isExtra),
                 isCatchUp: Boolean(lessonMeta?.isCatchUp ?? record.isCatchUp),
@@ -642,6 +586,7 @@ const ClassAttendancePage = async (
                     lessonId: cu.missedLesson.id,
                     subjectName: cu.missedLesson.class?.name || classHeader.name || "درس",
                     date: dateKey,
+                    startsAt: lessonMeta?.startsAt ? new Date(lessonMeta.startsAt).toISOString() : cu.missedLesson.startsAt ? new Date(cu.missedLesson.startsAt).toISOString() : undefined,
                     isFree: Boolean(lessonMeta?.isFree ?? cu.missedLesson.isFree),
                     isExtra: Boolean(lessonMeta?.isExtra ?? cu.missedLesson.isExtra),
                     isCatchUp: Boolean(lessonMeta?.isCatchUp ?? cu.missedLesson.isCatchUp),
@@ -684,6 +629,7 @@ const ClassAttendancePage = async (
             lessonId: instance.lessonId,
             lessonName: lessonName,
             date: instance.date,
+            startsAt: instance.startsAt,
             isFree: instance.isFree,
             isExtra: instance.isExtra,
             isCatchUp: instance.isCatchUp,

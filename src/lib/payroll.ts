@@ -409,9 +409,16 @@ export async function calculateTeacherPayroll(
     }
 
     // Actual student attendance (PRESENT regular attendees + catch-up visitors hosted)
-    const presentAttendances = lesson.attendances.filter((a) => a.status === "PRESENT");
-    const regularPresentCount = presentAttendances.length;
+    const visitorStudentIds = new Set(
+      catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id).map((cv) => cv.studentId)
+    );
     const visitorsInLesson = catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id);
+
+    // Regular present count excludes any student already counted as a catch-up visitor to prevent double counting
+    const presentAttendances = lesson.attendances.filter(
+      (a) => a.status === "PRESENT" && !visitorStudentIds.has(a.studentId)
+    );
+    const regularPresentCount = presentAttendances.length;
     const visitorCount = visitorsInLesson.length;
     const presentCount = regularPresentCount + visitorCount;
 
@@ -426,13 +433,19 @@ export async function calculateTeacherPayroll(
     // Rules 3 & 4: NON_PAYER and SCHOOL_FEES_ONLY earn teacher 0 DZD
     let payingWeight = 0;
     if (!lesson.isFree) {
+      const countedPayingStudentIds = new Set<string>();
+
       lesson.attendances.forEach((att) => {
+        // If this student is hosted as a visitor in this lesson, skip here (handled in visitorsInLesson)
+        if (visitorStudentIds.has(att.studentId)) return;
+
         const enrollment = lesson.class?.enrollments?.find((e) => e.studentId === att.studentId);
         const payerStatus = enrollment?.payerStatus || "NORMAL";
         if (payerStatus === "NON_PAYER" || payerStatus === "SCHOOL_FEES_ONLY") return;
 
         const classification = studentStatusAtEnd.get(`${att.studentId}_${lesson.id}`);
         if (classification && classification.isTeacherPayable) {
+          countedPayingStudentIds.add(att.studentId);
           const fam = enrollment?.student?.family;
           const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== att.studentId);
           const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
@@ -452,6 +465,9 @@ export async function calculateTeacherPayroll(
 
       // Catch-up visitors hosted in this lesson are paid as PRESENT (Rule 8)
       visitorsInLesson.forEach((cv) => {
+        if (countedPayingStudentIds.has(cv.studentId)) return;
+        countedPayingStudentIds.add(cv.studentId);
+
         const vPayerStatus = cv.student?.enrollments?.[0]?.payerStatus || "NORMAL";
         if (vPayerStatus === "NON_PAYER" || vPayerStatus === "SCHOOL_FEES_ONLY") return;
 

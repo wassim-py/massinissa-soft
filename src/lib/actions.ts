@@ -1980,8 +1980,22 @@ export const saveAttendance = async (
           justification: string | null;
         }> = [];
 
+        const visitorRecords = await tx.catchUpAttendance.findMany({
+          where: { catchUpLessonId: lessonId },
+          select: { studentId: true, missedLesson: { select: { classId: true } } },
+        });
+        const externalVisitorStudentIds = new Set(
+          visitorRecords
+            .filter((v) => v.missedLesson.classId !== lessonInfo?.classId)
+            .map((v) => v.studentId)
+        );
+
         for (const [key, value] of attendanceEntries) {
           const studentId = key.substring(key.indexOf("[") + 1, key.indexOf("]"));
+          if (externalVisitorStudentIds.has(studentId)) {
+            // External catch-up visitors are tracked via CatchUpAttendance
+            continue;
+          }
           const status = value === "PRESENT" ? "PRESENT" : value === "NOT_DEFINED" ? "NOT_DEFINED" : "ABSENT";
           const justification = status === "NOT_DEFINED" ? (data.get(`justification[${studentId}]`) as string)?.trim() || null : null;
           const existingRecord = recordsMap.get(studentId);
@@ -2550,11 +2564,53 @@ export async function searchCatchUpCandidatesAction(
 
     const currentLesson = await prisma.lesson.findUnique({
       where: { id: currentLessonId },
-      select: { id: true, classId: true, branchId: true, startsAt: true },
+      select: {
+        id: true,
+        classId: true,
+        branchId: true,
+        startsAt: true,
+        teacherId: true,
+        class: {
+          select: {
+            id: true,
+            teacherId: true,
+            levelId: true,
+            formationLevelId: true,
+            isFormation: true,
+            name: true,
+          },
+        },
+      },
     });
 
     if (!currentLesson) {
       return { success: false, error: true, message: "الحصة غير موجودة.", candidates: [] };
+    }
+
+    const targetTeacherId = currentLesson.teacherId || currentLesson.class?.teacherId;
+    const targetLevelId = currentLesson.class?.levelId;
+    const targetFormationLevelId = currentLesson.class?.formationLevelId;
+    const isFormation = Boolean(currentLesson.class?.isFormation);
+
+    if (!targetTeacherId || (!targetLevelId && !targetFormationLevelId)) {
+      return { success: true, candidates: [] };
+    }
+
+    // Find all active groups with the SAME teacher and SAME level
+    const matchingClasses = await prisma.class.findMany({
+      where: {
+        teacherId: targetTeacherId,
+        isCompleted: false,
+        ...(isFormation
+          ? { isFormation: true, formationLevelId: targetFormationLevelId }
+          : { isFormation: false, levelId: targetLevelId }),
+      },
+      select: { id: true, name: true },
+    });
+    const matchingClassIds = matchingClasses.map((c) => c.id);
+
+    if (matchingClassIds.length === 0) {
+      return { success: true, candidates: [] };
     }
 
     const trimmedQuery = searchQuery.trim();
@@ -2605,11 +2661,19 @@ export async function searchCatchUpCandidatesAction(
       searchConditions.push({ phone: { contains: trimmedQuery } });
     }
 
-    // Search students matching query (both enrolled students with missed lessons and cross-group visitors)
+    // Search students matching query who are enrolled in a group of the SAME TEACHER and SAME LEVEL
     const students = await prisma.student.findMany({
       where: {
         AND: [
           { OR: searchConditions },
+          {
+            enrollments: {
+              some: {
+                classId: { in: matchingClassIds },
+                status: "ACTIVE",
+              },
+            },
+          },
         ],
       },
       select: {
@@ -2624,6 +2688,9 @@ export async function searchCatchUpCandidatesAction(
         attendances: {
           where: {
             lessonId: { not: currentLessonId },
+            lesson: {
+              classId: { in: matchingClassIds },
+            },
           },
           select: {
             id: true,
@@ -2669,6 +2736,7 @@ export async function searchCatchUpCandidatesAction(
         },
         enrollments: {
           where: {
+            classId: { in: matchingClassIds },
             class: {
               isCompleted: false,
             },
@@ -2999,6 +3067,48 @@ export async function recordCatchUpAttendanceAction(data: {
       };
     }
 
+    // Verify both groups have the SAME TEACHER
+    const catchUpTeacherId = catchUpLesson.teacherId || catchUpLesson.class?.teacherId;
+    const missedTeacherId = missedLesson.teacherId || missedLesson.class?.teacherId;
+
+    if (!catchUpTeacherId || !missedTeacherId || catchUpTeacherId !== missedTeacherId) {
+      return {
+        success: false,
+        error: true,
+        message: "الاستدراك متاح فقط بين الأفواج التي يدرّسها نفس الأستاذ / Le rattrapage est réservé aux groupes du même enseignant.",
+      };
+    }
+
+    // Verify both groups have the SAME LEVEL
+    const catchUpIsFormation = Boolean(catchUpLesson.class?.isFormation);
+    const missedIsFormation = Boolean(missedLesson.class?.isFormation);
+
+    if (catchUpIsFormation !== missedIsFormation) {
+      return {
+        success: false,
+        error: true,
+        message: "لا يمكن الاستدراك بين فوج نظامي وفوج تكوين / Impossible de rattraper entre une classe régulière et une formation.",
+      };
+    }
+
+    if (catchUpIsFormation) {
+      if (catchUpLesson.class?.formationLevelId !== missedLesson.class?.formationLevelId) {
+        return {
+          success: false,
+          error: true,
+          message: "الاستدراك متاح فقط بين أفواج نفس المستوى / Le rattrapage est réservé aux groupes du même niveau.",
+        };
+      }
+    } else {
+      if (catchUpLesson.class?.levelId !== missedLesson.class?.levelId) {
+        return {
+          success: false,
+          error: true,
+          message: "الاستدراك متاح فقط بين أفواج نفس المستوى / Le rattrapage est réservé aux groupes du même niveau.",
+        };
+      }
+    }
+
     // Verify student is enrolled in missedLesson's class
     const enrollment = await prisma.enrollment.findFirst({
       where: {
@@ -3049,6 +3159,8 @@ export async function recordCatchUpAttendanceAction(data: {
       };
     }
 
+    // Automatically detect if this is an anticipatory (before absence) or post-absence (after absence) catch-up
+    const isBeforeAbsence = new Date(catchUpLesson.startsAt).getTime() < new Date(missedLesson.startsAt).getTime();
     const recordedBy = session.userId || session.rawRole || "admin";
 
     await prisma.$transaction(async (tx) => {
@@ -3060,7 +3172,7 @@ export async function recordCatchUpAttendanceAction(data: {
             studentId,
             lessonId: missedLessonId,
             status: "ABSENT",
-            justification: null,
+            justification: isBeforeAbsence ? "استدراك مسبق" : "استدراك لغياب سابق",
           },
         });
       }
@@ -3113,8 +3225,10 @@ export async function recordCatchUpAttendanceAction(data: {
       success: true,
       error: false,
       message: isSameGroup
-        ? "تم تسجيل الاستدراك الداخلي بنجاح وخصم حصة واحدة فقط."
-        : "تم تسجيل حضور التلميذ كزائر استدراك بنجاح.",
+        ? "تم تسجيل الاستدراك بنجاح وخصم حصة واحدة فقط."
+        : isBeforeAbsence
+        ? "تم تسجيل الاستدراك المسبق بنجاح وخصم حصة واحدة فقط."
+        : "تم تسجيل حضور التلميذ في الاستدراك بنجاح وخصم حصة واحدة فقط دون مضاعفة الدفع للأستاذ.",
     };
   } catch (error: any) {
     console.error("Error in recordCatchUpAttendanceAction:", error);
@@ -4767,6 +4881,20 @@ export const transferEnrollmentCredit = async (
       return { success: false, error: true, message: "القسم الجديد غير موجود." };
     }
 
+    // Enforce same-level transfer rule (§Transfer Architecture)
+    const fromClass = fromEnrollment.class;
+    const isSameLevel = fromClass.isFormation
+      ? toClass.isFormation && fromClass.formationLevelId === toClass.formationLevelId
+      : !toClass.isFormation && fromClass.levelId === toClass.levelId;
+
+    if (!isSameLevel) {
+      return {
+        success: false,
+        error: true,
+        message: "لا يمكن تحويل التلميذ إلا إلى أفواج من نفس المستوى الدراسي. / Le transfert ne peut être effectué que vers des groupes du même niveau.",
+      };
+    }
+
     // 3. Find or create toEnrollment
     let toEnrollment = await prisma.enrollment.findFirst({
       where: {
@@ -4777,7 +4905,7 @@ export const transferEnrollmentCredit = async (
     });
 
     let transferredAmount = 0;
-    let isFullTransfer = false;
+    let finalTransferredSessions = 0;
 
     await prisma.$transaction(async (tx) => {
       if (!toEnrollment) {
@@ -4798,7 +4926,7 @@ export const transferEnrollmentCredit = async (
         });
       }
 
-      // Calculate transferred monetary value
+      // Fetch tuition vouchers of the original group
       const studentVouchers = await tx.voucher.findMany({
         where: {
           studentId: studentId,
@@ -4811,37 +4939,7 @@ export const transferEnrollmentCredit = async (
         orderBy: { issuedAt: "desc" },
       });
 
-      const transferWithAmount = (fromEnrollment.transfersTo || []).find(
-        (t) => Number(t.amount) > 0 && t.transferredSessions > 0
-      );
-
-      let sessionPrice = 0;
-      if (studentVouchers.length > 0 && Number(studentVouchers[0].amount) > 0) {
-        sessionPrice = Number(studentVouchers[0].amount) / 4;
-      } else if (transferWithAmount) {
-        sessionPrice = Number(transferWithAmount.amount) / transferWithAmount.transferredSessions;
-      } else if (fromEnrollment.class.pricePerCycle && Number(fromEnrollment.class.pricePerCycle) > 0) {
-        sessionPrice = Number(fromEnrollment.class.pricePerCycle) / 4;
-      } else if (toClass.pricePerCycle && Number(toClass.pricePerCycle) > 0) {
-        sessionPrice = Number(toClass.pricePerCycle) / 4;
-      }
-
-      transferredAmount = Math.round(Number(transferredSessions) * sessionPrice);
-
-      // Record EnrollmentTransfer with amount and notes
-      await tx.enrollmentTransfer.create({
-        data: {
-          fromEnrollmentId: fromEnrollment.id,
-          toEnrollmentId: toEnrollment.id,
-          transferredSessions: Number(transferredSessions),
-          amount: transferredAmount,
-          notes: notes || null,
-          transferredAt: new Date(),
-          transferredBy: session.userId || "admin",
-        },
-      });
-
-      // Calculate remaining sessions in fromEnrollment to determine if it should be un-enrolled
+      // Calculate purchased sessions
       const cyclePriceFrom = Number(fromEnrollment.class.pricePerCycle || 0);
       const lessonPriceFrom = cyclePriceFrom > 0 ? cyclePriceFrom / 4 : 0;
       let purchasedSessionsFrom = 0;
@@ -4864,31 +4962,95 @@ export const transferEnrollmentCredit = async (
       const transferredOutFrom = (fromEnrollment.transfersFrom || []).reduce((sum, t) => sum + t.transferredSessions, 0);
       const offsetFrom = Number(fromEnrollment.creditResetOffset || 0);
 
+      // Fetch lesson attendance history for source class
       const fromLessons = await tx.lesson.findMany({
-        where: { classId: fromEnrollment.classId, isFree: false },
-        select: { id: true, startsAt: true, isFree: true },
+        where: {
+          classId: fromEnrollment.classId,
+          isFree: false,
+          attendances: { some: {} },
+        },
+        select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
         orderBy: { startsAt: "asc" },
       });
       const fromAttendances = await tx.attendance.findMany({
         where: {
           studentId: studentId,
-          lesson: { classId: fromEnrollment.classId, isFree: false },
+          lesson: { classId: fromEnrollment.classId },
         },
         select: {
           lessonId: true,
           status: true,
         },
       });
-      const attendedSessionsFrom = computeStudentConsumedSessions({
+      const fromCatchUps = await tx.catchUpAttendance.findMany({
+        where: {
+          studentId: studentId,
+          missedLesson: { classId: fromEnrollment.classId },
+        },
+        select: { missedLessonId: true, recordedAt: true },
+      });
+
+      const classifiedHistory = classifyStudentAttendanceHistory({
         lessons: fromLessons,
         attendances: fromAttendances,
+        catchUps: fromCatchUps,
+        referenceDate: new Date(),
       });
+
+      // Settled consumed sessions (PRESENT, INTERLEAVED_ABSENCE, FORFEITED_DROPOUT) are non-refundable and non-transferable.
+      // Unresolved trailing absences (TRAILING_ABSENCE_HELD), pre-start absences, and unconsumed sessions remain fully transferable per refund logic!
+      const settledConsumedSessions = classifiedHistory.filter(
+        (h) =>
+          h.isConsumedCredit &&
+          (h.classification === "PRESENT" ||
+            h.classification === "INTERLEAVED_ABSENCE" ||
+            h.classification === "FORFEITED_DROPOUT")
+      ).length;
 
       const availableSessionsFrom = Math.max(
         0,
-        purchasedSessionsFrom + transferredInFrom - transferredOutFrom + offsetFrom - attendedSessionsFrom
+        purchasedSessionsFrom + transferredInFrom - transferredOutFrom + offsetFrom - settledConsumedSessions
       );
-      // Student has transferred to the new group: mark fromEnrollment as TRANSFERRED
+
+      if (availableSessionsFrom <= 0) {
+        throw new Error("لا يوجد رصيد متبقي قابل للتحويل في هذا الفوج. / Aucun solde restant transférable dans ce groupe.");
+      }
+
+      // Always transfer the entire remaining balance
+      finalTransferredSessions = availableSessionsFrom;
+
+      // Calculate unit session price
+      const transferWithAmount = (fromEnrollment.transfersTo || []).find(
+        (t) => Number(t.amount) > 0 && t.transferredSessions > 0
+      );
+
+      let sessionPrice = 0;
+      if (studentVouchers.length > 0 && Number(studentVouchers[0].amount) > 0) {
+        sessionPrice = Number(studentVouchers[0].amount) / 4;
+      } else if (transferWithAmount) {
+        sessionPrice = Number(transferWithAmount.amount) / transferWithAmount.transferredSessions;
+      } else if (fromEnrollment.class.pricePerCycle && Number(fromEnrollment.class.pricePerCycle) > 0) {
+        sessionPrice = Number(fromEnrollment.class.pricePerCycle) / 4;
+      } else if (toClass.pricePerCycle && Number(toClass.pricePerCycle) > 0) {
+        sessionPrice = Number(toClass.pricePerCycle) / 4;
+      }
+
+      transferredAmount = Math.round(Number(finalTransferredSessions) * sessionPrice);
+
+      // Record EnrollmentTransfer with amount and notes
+      await tx.enrollmentTransfer.create({
+        data: {
+          fromEnrollmentId: fromEnrollment.id,
+          toEnrollmentId: toEnrollment.id,
+          transferredSessions: Number(finalTransferredSessions),
+          amount: transferredAmount,
+          notes: notes || null,
+          transferredAt: new Date(),
+          transferredBy: session.userId || "admin",
+        },
+      });
+
+      // Mark fromEnrollment as TRANSFERRED
       await tx.enrollment.update({
         where: { id: fromEnrollment.id },
         data: { status: "TRANSFERRED" },
@@ -4898,12 +5060,14 @@ export const transferEnrollmentCredit = async (
     try {
       safeRevalidatePath(`/list/payments/class/${fromEnrollment.classId}`);
       safeRevalidatePath(`/list/payments/class/${toClassId}`);
+      safeRevalidatePath(`/list/students`);
       safeRevalidatePath(`/list/students/${studentId}`);
       safeRevalidatePath(`/list/finance`);
       safeRevalidatePath(`/list/daily-ledger`);
       safeRevalidatePath("/list/attendance");
       safeRevalidatePath(`/list/attendance/class/${fromEnrollment.classId}`);
       safeRevalidatePath(`/list/attendance/class/${toClassId}`);
+      safeRevalidatePath("/list/payroll");
     } catch {
       // Ignore if executed outside Next.js request context (e.g. standalone test scripts)
     }
@@ -4918,7 +5082,7 @@ export const transferEnrollmentCredit = async (
     return {
       success: true,
       error: false,
-      message: `تم تحويل ${transferredSessions} حصص من ${fromEnrollment.class.name} إلى ${toClass.name} بنجاح.${branchTransferNote}${unenrollNote}`,
+      message: `تم تحويل كامل الرصيد المتبقي (${finalTransferredSessions} حصص) من ${fromEnrollment.class.name} إلى ${toClass.name} بنجاح.${branchTransferNote}${unenrollNote}`,
     };
   } catch (err: any) {
     console.error("transferEnrollmentCredit error:", err);

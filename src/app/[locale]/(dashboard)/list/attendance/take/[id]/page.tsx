@@ -336,18 +336,25 @@ const TakeAttendancePage = async (
       catchUps: vCatchUps,
     });
 
+    const isScenarioA = new Date(v.missedLesson.startsAt).getTime() < new Date(l.startsAt).getTime();
+    const isScenarioB = new Date(v.missedLesson.startsAt).getTime() > new Date(l.startsAt).getTime();
+
     return {
       id: v.id,
       studentId: v.studentId,
       studentName: v.student.name,
       globalNumber: v.student.globalNumber,
+      phone: s.phone || null,
       missedLessonId: v.missedLessonId,
+      missedClassId,
       missedClassName: v.missedLesson.class.name,
       missedTeacherName: v.missedLesson.teacher.name,
       missedStartsAt: v.missedLesson.startsAt,
       recordedAt: v.recordedAt,
       remainingCredits: vCredit.netSessions,
       payerStatus: vCredit.status,
+      isScenarioA,
+      isScenarioB,
     };
   });
 

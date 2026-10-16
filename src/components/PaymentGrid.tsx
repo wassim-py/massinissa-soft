@@ -86,7 +86,15 @@ export default function PaymentGrid({
   configuredInscriptionFee,
 }: {
   classData: ExtendedClass;
-  availableClassesForTransfer: { id: number; name: string; branch: { name: string } }[];
+  availableClassesForTransfer: {
+    id: number;
+    name: string;
+    levelId?: number | null;
+    formationLevelId?: number | null;
+    isFormation?: boolean;
+    pricePerCycle?: any;
+    branch: { name: string };
+  }[];
   activeTrimester?: { id: number; name: string; label: string; status: string } | null;
   classBooks?: Array<{ id: number; title: string }>;
   classBookReceipts?: Array<{ studentId: string; bookId: number; receivedAt: string | Date }>;
@@ -411,6 +419,7 @@ export default function PaymentGrid({
     const attendedSessions = creditMetrics.attendedSessions;
     const netSessions = creditMetrics.netSessions;
     const refundableSessions = creditMetrics.refundableSessions;
+    const netRefundableSessions = creditMetrics.netRefundableSessions;
     const refundableAmount = creditMetrics.refundableAmount;
     const effectiveLessonPrice = creditMetrics.effectiveLessonPrice;
     const status = creditMetrics.status;
@@ -472,6 +481,7 @@ export default function PaymentGrid({
       consumedLessons: attendedSessions,
       netSessions,
       refundableSessions,
+      netRefundableSessions,
       refundableAmount,
       effectiveLessonPrice,
       status,
@@ -513,13 +523,13 @@ export default function PaymentGrid({
   const siblingWaivedCount = processedStudents.filter((s) => s.status === "SIBLING_WAIVED").length;
 
   const handleOpenTransfer = (item: any) => {
-    const availableBalance = Math.max(0, item.netSessions);
+    const availableBalance = Math.max(0, item.netRefundableSessions ?? item.refundableSessions ?? item.netSessions);
     setTransferModal({
       isOpen: true,
       enrollment: item.enrollment,
       maxSessions: availableBalance,
     });
-    setSessionsToTransfer(Math.min(1, availableBalance));
+    setSessionsToTransfer(availableBalance);
     setTargetClassId("");
     setTransferNotes("");
   };
@@ -1028,7 +1038,7 @@ export default function PaymentGrid({
             >
               {t("voucherShort")}
             </Button>
-            {item.netSessions > 0 && (
+            {(item.netRefundableSessions ?? item.netSessions) > 0 && (
               <Button
                 variant="outline"
                 size="sm"
@@ -1432,7 +1442,24 @@ export default function PaymentGrid({
               <FormField label={t("targetClassLabel")} required>
                 <SearchableGroupSelect
                   options={availableClassesForTransfer
-                    .filter((c) => c.id !== classData.id)
+                    .filter((c) => {
+                      if (c.id === classData.id) return false;
+                      const isSrcFormation = Boolean(classData.isFormation || (classData as any).formationLevelId);
+                      const isTargetFormation = Boolean(c.isFormation || c.formationLevelId);
+                      if (isSrcFormation !== isTargetFormation) return false;
+                      if (isSrcFormation) {
+                        return (
+                          classData.formationLevelId != null &&
+                          c.formationLevelId != null &&
+                          c.formationLevelId === classData.formationLevelId
+                        );
+                      }
+                      return (
+                        classData.levelId != null &&
+                        c.levelId != null &&
+                        c.levelId === classData.levelId
+                      );
+                    })
                     .map((c) => ({
                       id: c.id,
                       name: c.name,

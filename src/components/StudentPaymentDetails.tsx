@@ -63,6 +63,7 @@ export type ExtendedEnrollmentItem = {
       Language?: { id: number; name: string } | null;
     } | null;
     branch: { id: number; name: string };
+    levelId?: number | null;
     level?: { id: number; name: string } | null;
     teacher?: { id: string; name: string; TeacherPayRate?: Array<{ percentageOfSessionFee: any }> } | null;
   };
@@ -135,7 +136,15 @@ interface StudentPaymentDetailsProps {
   classData?: any;
   isOwner?: boolean;
   activeBranchId?: number;
-  availableClassesForTransfer?: Array<{ id: number; name: string; branch: { name: string } }>;
+  availableClassesForTransfer?: Array<{
+    id: number;
+    name: string;
+    levelId?: number | null;
+    formationLevelId?: number | null;
+    isFormation?: boolean;
+    pricePerCycle?: any;
+    branch: { name: string };
+  }>;
   configuredInscriptionFee?: number;
 }
 
@@ -450,6 +459,7 @@ export default function StudentPaymentDetails({
     const attendedSessions = creditMetrics.attendedSessions;
     const netSessions = creditMetrics.netSessions;
     const unconsumedInCycle = creditMetrics.refundableSessions;
+    const netRefundableSessions = creditMetrics.netRefundableSessions;
     const refundableAmount = creditMetrics.refundableAmount;
     const effectiveLessonPrice = creditMetrics.effectiveLessonPrice;
 
@@ -533,6 +543,7 @@ export default function StudentPaymentDetails({
       attendedSessions,
       netSessions,
       unconsumedInCycle,
+      netRefundableSessions,
       refundableAmount,
       effectiveLessonPrice,
       mostRecentActiveCycle,
@@ -575,7 +586,7 @@ export default function StudentPaymentDetails({
       enrollment: enr,
       maxSessions: Math.max(0, availableSessions),
     });
-    setSessionsToTransfer(Math.min(1, Math.max(1, availableSessions)));
+    setSessionsToTransfer(Math.max(1, availableSessions));
     setTargetClassId("");
     setTransferNotes("");
   };
@@ -1255,11 +1266,11 @@ export default function StudentPaymentDetails({
                           >
                             {isExpiring ? t("issueVoucherNow") : t("issueVoucher")}
                           </Button>
-                          {cm.netSessions > 0 && (
+                          {(cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions) > 0 && (
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => handleOpenTransfer(cm.enrollment, cm.netSessions)}
+                              onClick={() => handleOpenTransfer(cm.enrollment, cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions)}
                             >
                               {t("transferCredit")}
                             </Button>
@@ -1800,7 +1811,27 @@ export default function StudentPaymentDetails({
                 <label className="font-semibold block mb-1">{t("modalTransferTargetClass")}</label>
                 <SearchableGroupSelect
                   options={availableClassesForTransfer
-                    .filter((c) => c.id !== transferModal.enrollment?.classId)
+                    .filter((c) => {
+                      if (c.id === transferModal.enrollment?.classId) return false;
+                      const fromClass = transferModal.enrollment?.class;
+                      if (!fromClass) return true;
+                      const isSrcFormation = Boolean(fromClass.isFormation || fromClass.formationLevelId);
+                      const isTargetFormation = Boolean(c.isFormation || c.formationLevelId);
+                      if (isSrcFormation !== isTargetFormation) return false;
+                      if (isSrcFormation) {
+                        return (
+                          fromClass.formationLevelId != null &&
+                          c.formationLevelId != null &&
+                          c.formationLevelId === fromClass.formationLevelId
+                        );
+                      }
+                      const fromLevelId = fromClass.level?.id ?? fromClass.levelId;
+                      return (
+                        fromLevelId != null &&
+                        c.levelId != null &&
+                        c.levelId === fromLevelId
+                      );
+                    })
                     .map((c) => ({
                       id: c.id,
                       name: c.name,

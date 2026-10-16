@@ -214,7 +214,11 @@ const SingleStudentPage = async (
         select: {
           id: true,
           name: true,
-          branch: { select: { name: true } },
+          levelId: true,
+          formationLevelId: true,
+          isFormation: true,
+          pricePerCycle: true,
+          branch: { select: { id: true, name: true } },
         },
         orderBy: [{ branchId: "asc" }, { name: "asc" }],
       }),
@@ -693,8 +697,10 @@ const SingleStudentPage = async (
                           className={`p-2.5 rounded-lg border transition-all flex items-center justify-between gap-2 text-xs ${
                             isSuspended
                               ? "border-rose-300 bg-rose-50/60"
-                              : isTransferred || isUnenrolled
-                              ? "border-dashed border-gray-300 bg-gray-50/60 opacity-80"
+                              : isTransferred
+                              ? "border-dashed border-gray-300 bg-gray-100/90 text-gray-500 opacity-60 grayscale"
+                              : isUnenrolled
+                              ? "border-dashed border-gray-300 bg-gray-50/60 opacity-70"
                               : isOne
                               ? "border-amber-400 bg-amber-50/70 ring-1 ring-amber-300"
                               : isUnpaid
@@ -704,7 +710,7 @@ const SingleStudentPage = async (
                         >
                           <div className="flex flex-col">
                             <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-gray-900">{g.className}</span>
+                              <span className={`font-bold ${isTransferred ? "text-gray-500 line-through decoration-gray-400" : "text-gray-900"}`}>{g.className}</span>
                               <Badge variant="secondary" size="sm">
                                 <Building2 className="w-3 h-3 inline me-1" />
                                 {g.branchName}
@@ -744,8 +750,8 @@ const SingleStudentPage = async (
                                 {locale === "ar" ? "معلّق" : "Suspendu"}
                               </Badge>
                             ) : isTransferred ? (
-                              <Badge variant="secondary" size="sm" withDot>
-                                {locale === "ar" ? "رصيد منقول" : "Transféré"}
+                              <Badge variant="neutral" size="sm" withDot className="bg-gray-200 text-gray-700 border-gray-300 font-bold">
+                                {locale === "ar" ? "محول (سابق)" : "Transféré"}
                               </Badge>
                             ) : isUnenrolled ? (
                               <Badge variant="neutral" size="sm" withDot>

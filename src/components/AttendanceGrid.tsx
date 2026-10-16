@@ -152,6 +152,8 @@ type AttendanceGridProps = {
         globalNumber?: number;
         phone?: string | null;
         balance?: StudentBalanceInfo;
+        isTransferred?: boolean;
+        transferredAt?: string | null;
     })[];
     lessonInstances: LessonInstance[];
     attendanceMap: Map<string, Map<string, AttendanceCellDetail | boolean>>;
@@ -620,14 +622,22 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                             </tr>
                         ) : (
                             filteredStudents.map((student, studentIndex) => {
-                                const rowBg = studentIndex % 2 === 0 ? "bg-surface" : "bg-surface-muted";
+                                const isTransferred = Boolean(student.isTransferred);
+                                const rowBg = isTransferred
+                                    ? "bg-pink-50/80 dark:bg-pink-950/20"
+                                    : studentIndex % 2 === 0
+                                    ? "bg-surface"
+                                    : "bg-surface-muted";
+                                const rowHover = isTransferred
+                                    ? "hover:bg-pink-100/70 dark:hover:bg-pink-950/40"
+                                    : "hover:bg-surface-subtle";
                                 return (
                                     <tr
                                         key={`${student.id}-${studentIndex}`}
-                                        className={`group ${rowBg} hover:bg-surface-subtle transition-colors`}
+                                        className={`group ${rowBg} ${rowHover} transition-colors`}
                                     >
                                         {/* Sticky Student Column Cell */}
-                                        <td className={`p-2 sm:p-3 text-table-body font-medium text-gray-900 border-b border-e border-border sticky start-0 ltr:left-0 rtl:right-0 z-10 w-44 sm:w-64 min-w-[150px] sm:min-w-[220px] ${rowBg} group-hover:bg-surface-subtle transition-colors shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)] rtl:shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]`}>
+                                        <td className={`p-2 sm:p-3 text-table-body font-medium text-gray-900 border-b border-e border-border sticky start-0 ltr:left-0 rtl:right-0 z-10 w-44 sm:w-64 min-w-[150px] sm:min-w-[220px] ${rowBg} group-hover:${rowHover} transition-colors shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)] rtl:shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]`}>
                                             <Link
                                                 href={`/list/students/${student.id}`}
                                                 className="flex items-center gap-2 sm:gap-2.5 min-w-0"
@@ -643,9 +653,16 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                     className="rounded-full object-cover shrink-0 border border-border group-hover:border-primary transition-colors"
                                                 />
                                                 <div className="flex flex-col min-w-0 items-start gap-0.5">
-                                                    <span className="truncate max-w-[110px] sm:max-w-[160px] group-hover:underline group-hover:text-primary transition-colors">
-                                                        {student.name}
-                                                    </span>
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="truncate max-w-[110px] sm:max-w-[160px] group-hover:underline group-hover:text-primary transition-colors">
+                                                            {student.name}
+                                                        </span>
+                                                        {isTransferred && (
+                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-pink-100 text-pink-700 border border-pink-300 dark:bg-pink-950/60 dark:text-pink-300 dark:border-pink-800 shadow-2xs">
+                                                                {locale === "ar" ? "محول" : "Transféré"}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                     <div className="flex items-center gap-1.5 flex-wrap">
                                                         {student.globalNumber ? (
                                                             <span className="text-[10px] text-muted font-mono leading-none">
@@ -663,7 +680,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                         {/* Lesson Attendance Cells */}
                                         {[...lessonInstances].reverse().map((instance) => {
                                             const isFree = Boolean(instance.isFree);
-                                            const cellBg = isFree ? "bg-amber-50/70" : "";
+                                            const cellBg = isFree ? "bg-amber-50/70" : isTransferred ? "bg-pink-50/30" : "";
                                             const studentRecords = localAttendanceMap.get(student.id);
                                             const rawRecord = studentRecords
                                                 ? studentRecords.get(instance.key)
@@ -672,6 +689,30 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                             const isActiveCell =
                                                 activePopup?.studentId === student.id &&
                                                 activePopup?.lessonKey === instance.key;
+
+                                            // Lessons strictly after the transfer date for a transferred student without records
+                                            const isAfterTransfer = Boolean(
+                                                isTransferred &&
+                                                student.transferredAt &&
+                                                new Date(instance.startsAt || `${instance.date}T23:59:59.999Z`).getTime() > new Date(student.transferredAt).getTime() &&
+                                                !rawRecord
+                                            );
+
+                                            if (isAfterTransfer) {
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <div
+                                                            className="w-5 h-5 mx-auto flex items-center justify-center text-muted/40 font-mono text-xs select-none cursor-not-allowed"
+                                                            title={locale === "ar" ? "تم تحويل التلميذ قبل هذا الدرس" : "Élève transféré avant cette séance"}
+                                                        >
+                                                            —
+                                                        </div>
+                                                    </td>
+                                                );
+                                            }
 
                                             if (!rawRecord) {
                                                 // No attendance record recorded for this lesson

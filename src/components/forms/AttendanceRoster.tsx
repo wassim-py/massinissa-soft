@@ -54,13 +54,17 @@ export interface CatchUpVisitor {
   studentId: string;
   studentName: string;
   globalNumber: number;
+  phone?: string | null;
   missedLessonId: number;
+  missedClassId?: number;
   missedClassName: string;
   missedTeacherName: string;
   missedStartsAt: string | Date;
   recordedAt: string | Date;
   remainingCredits?: number | null;
   payerStatus?: string | null;
+  isScenarioA?: boolean;
+  isScenarioB?: boolean;
 }
 
 export interface CaughtUpAbsentee {
@@ -98,6 +102,15 @@ type FullStudent = Student & {
   bookDetails?: Array<{ id: number; title: string; received: boolean; receivedAt?: string | Date | null }>;
   inscriptionStatus?: "PAID" | "WAIVED" | "UNPAID";
   creditResetOffset?: number;
+  isVisitor?: boolean;
+  visitorCatchUpId?: number;
+  missedLessonId?: number;
+  missedClassName?: string;
+  missedTeacherName?: string;
+  missedStartsAt?: string | Date;
+  isScenarioA?: boolean;
+  isScenarioB?: boolean;
+  remainingCredits?: number;
 };
 
 type FullLesson = Lesson & {
@@ -179,8 +192,18 @@ const AttendanceRoster = ({
   const cleanSearch = debouncedSearch.trim().toLowerCase();
   const cleanNumeric = cleanSearch.replace(/[^0-9]/g, "");
 
+  const formatCatchUpDate = (d?: string | Date) => {
+    if (!d) return "";
+    const dt = new Date(d);
+    return dt.toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
+      weekday: "short",
+      day: "numeric",
+      month: "numeric",
+    });
+  };
+
   const activeStudents = useMemo(() => {
-    return (students || []).filter((s) => {
+    const regular = (students || []).filter((s) => {
       const isSuspendedOrInactive =
         s.enrollmentStatus === "SUSPENDED" ||
         s.enrollmentStatus === "INACTIVE" ||
@@ -189,7 +212,45 @@ const AttendanceRoster = ({
         s.enrollmentStatus === "REFUNDED";
       return !isSuspendedOrInactive && !(s as any).isRefunded;
     });
-  }, [students]);
+
+    const visitors: FullStudent[] = (catchUpVisitors || []).map((v) => ({
+      id: v.studentId,
+      globalNumber: v.globalNumber,
+      name: v.studentName,
+      phone: v.phone || null,
+      surname: "",
+      className: v.missedClassName,
+      enrolledClassId: v.missedClassId,
+      payerStatus: v.payerStatus || "NORMAL",
+      enrollmentStatus: "ACTIVE",
+      isSuspended: false,
+      isRefunded: false,
+      isVisitor: true,
+      visitorCatchUpId: v.id,
+      missedLessonId: v.missedLessonId,
+      missedClassName: v.missedClassName,
+      missedTeacherName: v.missedTeacherName,
+      missedStartsAt: v.missedStartsAt,
+      isScenarioA: v.isScenarioA,
+      isScenarioB: v.isScenarioB,
+      remainingCredits: v.remainingCredits,
+      vouchers: [],
+      attendances: [],
+      catchUps: [],
+      transfersFrom: [],
+      transfersTo: [],
+      creditResetOffset: 0,
+      family: null,
+      isBookEligible: false,
+      hasPaidBook: false,
+      receivedBookIds: [],
+      outstandingBooks: [],
+      bookDetails: [],
+      inscriptionStatus: "PAID" as const,
+    } as any));
+
+    return [...regular, ...visitors];
+  }, [students, catchUpVisitors]);
 
   const filteredStudents = useMemo(() => {
     if (!cleanSearch) return activeStudents;
@@ -210,18 +271,6 @@ const AttendanceRoster = ({
       return matchName || matchId || matchPhone || matchClass;
     });
   }, [activeStudents, cleanSearch, cleanNumeric]);
-
-  const filteredCatchUpVisitors = useMemo(() => {
-    if (!cleanSearch) return catchUpVisitors;
-    return catchUpVisitors.filter((visitor) => {
-      const matchName = visitor.studentName.toLowerCase().includes(cleanSearch);
-      const matchId =
-        cleanNumeric && visitor.globalNumber !== undefined && visitor.globalNumber !== null
-          ? String(visitor.globalNumber).includes(cleanNumeric)
-          : false;
-      return matchName || matchId;
-    });
-  }, [catchUpVisitors, cleanSearch, cleanNumeric]);
 
   const caughtUpMap = useMemo(
     () => new Map((caughtUpAbsentees || []).map((c) => [c.studentId, c])),
@@ -303,6 +352,10 @@ const AttendanceRoster = ({
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() => {
     const initialState: Record<string, AttendanceStatus> = {};
     activeStudents.forEach((student) => {
+      if (student.isVisitor) {
+        initialState[student.id] = "PRESENT";
+        return;
+      }
       const record = existingRecords.find((r) => r.studentId === student.id);
       if (record?.status === "PRESENT" || (!record && inGroupCatchUpMap.has(student.id))) {
         initialState[student.id] = "PRESENT";
@@ -315,10 +368,10 @@ const AttendanceRoster = ({
     return initialState;
   });
 
-
   const [justifications, setJustifications] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     activeStudents.forEach((student) => {
+      if (student.isVisitor) return;
       const record = existingRecords.find((r) => r.studentId === student.id);
       if (record?.justification) {
         initial[student.id] = record.justification;
@@ -333,6 +386,13 @@ const AttendanceRoster = ({
       let changed = false;
       const next = { ...prev };
       activeStudents.forEach((student) => {
+        if (student.isVisitor) {
+          if (next[student.id] === undefined) {
+            next[student.id] = "PRESENT";
+            changed = true;
+          }
+          return;
+        }
         const record = existingRecords.find((r) => r.studentId === student.id);
         if (next[student.id] === undefined) {
           if (record?.status === "PRESENT") {
@@ -1010,11 +1070,38 @@ const AttendanceRoster = ({
                           </Badge>
                         ) : null}
 
+                        {student.isVisitor && (
+                          <div className="inline-flex items-center gap-1.5 flex-wrap">
+                            {student.isScenarioA ? (
+                              <Badge variant="warning" size="sm" withDot className="bg-amber-100 text-amber-950 border-amber-300 font-bold shadow-2xs">
+                                {locale === "ar"
+                                  ? `حضور استدراك لغياب سابق (${student.missedClassName} - ${formatCatchUpDate(student.missedStartsAt)})`
+                                  : `Rattrapage d'absence passée (${student.missedClassName} - ${formatCatchUpDate(student.missedStartsAt)})`}
+                              </Badge>
+                            ) : (
+                              <Badge variant="neutral" size="sm" withDot className="bg-blue-100 text-blue-950 border-blue-300 font-bold shadow-2xs">
+                                {locale === "ar"
+                                  ? `حضور استدراك مسبق (${student.missedClassName} - ${formatCatchUpDate(student.missedStartsAt)})`
+                                  : `Rattrapage anticipé (${student.missedClassName} - ${formatCatchUpDate(student.missedStartsAt)})`}
+                              </Badge>
+                            )}
+                            <button
+                              type="button"
+                              disabled={deletingVisitorId === student.visitorCatchUpId}
+                              onClick={() => handleRemoveVisitor(student.visitorCatchUpId!)}
+                              className="text-[11px] font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 border border-rose-200 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                              title={t("cancelCatchUpVisit")}
+                            >
+                              {deletingVisitorId === student.visitorCatchUpId ? t("canceling") : (locale === "ar" ? "إلغاء الاستدراك" : "Annuler")}
+                            </button>
+                          </div>
+                        )}
+
                         {caughtUpMap.has(student.id) && (
                           <Badge variant="neutral" size="sm" withDot className="bg-blue-100 text-blue-900 border-blue-300 font-semibold shadow-2xs">
                             {locale === "ar"
-                              ? `استدراك مسبق (${caughtUpMap.get(student.id)?.catchUpClassName})`
-                              : `Rattrapé (${caughtUpMap.get(student.id)?.catchUpClassName})`}
+                              ? `مستدرك مسبقاً (${caughtUpMap.get(student.id)?.catchUpClassName} - ${formatCatchUpDate(caughtUpMap.get(student.id)?.catchUpStartsAt)})`
+                              : `Rattrapé (${caughtUpMap.get(student.id)?.catchUpClassName} - ${formatCatchUpDate(caughtUpMap.get(student.id)?.catchUpStartsAt)})`}
                           </Badge>
                         )}
 
@@ -1040,19 +1127,21 @@ const AttendanceRoster = ({
                         )}
 
                         <span className={`w-2 h-2 rounded-full ${statusBubble.color}`}></span>
-                        {/* Inscription Fee Status Badge */}
-                        {student.inscriptionStatus === "PAID" ? (
-                          <Badge variant="success" size="sm" withDot>
-                            {locale === "ar" ? "تسجيل مسدد" : "Inscr. Payée"}
-                          </Badge>
-                        ) : student.inscriptionStatus === "WAIVED" ? (
-                          <Badge variant="secondary" size="sm" withDot>
-                            {locale === "ar" ? "تسجيل معفى" : "Inscr. Exonérée"}
-                          </Badge>
-                        ) : (
-                          <Badge variant="danger" size="sm" withDot>
-                            {locale === "ar" ? "تسجيل غير مسدد" : "Inscr. Non payée"}
-                          </Badge>
+                        {/* Inscription Fee Status Badge (hide for cross-group visitors) */}
+                        {!student.isVisitor && (
+                          student.inscriptionStatus === "PAID" ? (
+                            <Badge variant="success" size="sm" withDot>
+                              {locale === "ar" ? "تسجيل مسدد" : "Inscr. Payée"}
+                            </Badge>
+                          ) : student.inscriptionStatus === "WAIVED" ? (
+                            <Badge variant="secondary" size="sm" withDot>
+                              {locale === "ar" ? "تسجيل معفى" : "Inscr. Exonérée"}
+                            </Badge>
+                          ) : (
+                            <Badge variant="danger" size="sm" withDot>
+                              {locale === "ar" ? "تسجيل غير مسدد" : "Inscr. Non payée"}
+                            </Badge>
+                          )
                         )}
                         {student.phone && (
                           <span className="text-[11px] text-gray-400 font-mono">
@@ -1062,7 +1151,16 @@ const AttendanceRoster = ({
                       </div>
                       <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
                         <span>{statusBubble.text}</span>
-                        {!isFormation && (
+                        {student.isVisitor ? (
+                          <>
+                            <span>•</span>
+                            <span className="font-semibold text-amber-800">
+                              {locale === "ar"
+                                ? `${student.remainingCredits ?? 0} حصص متبقية في فوجه الأصلي`
+                                : `${student.remainingCredits ?? 0} séance(s) restante(s)`}
+                            </span>
+                          </>
+                        ) : !isFormation ? (
                           <>
                             <span>•</span>
                             <span className={sessionsRemaining <= 0 && !isNonPayer ? "font-semibold text-rose-600" : ""}>
@@ -1077,7 +1175,7 @@ const AttendanceRoster = ({
                                 : t("sessionsRemainingCount", { count: sessionsRemaining })}
                             </span>
                           </>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1131,7 +1229,7 @@ const AttendanceRoster = ({
 
                     <div className="flex items-center gap-1.5 shrink-0">
                       {/* Book Status Badge and Toggle Controls */}
-                      {allGroupBooks.length > 0 && (
+                      {!student.isVisitor && allGroupBooks.length > 0 && (
                         <div className="flex items-center gap-1.5">
                           <BookStatusBadge
                             status={computedBookStatus}
@@ -1263,17 +1361,21 @@ const AttendanceRoster = ({
                         </div>
                       )}
 
-                      <button
-                        type="button"
-                        onClick={() => handleRecordPaymentClick(student)}
-                        className="px-3 py-1.5 text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
-                      >
-                        {t("issueVoucher")}
-                      </button>
-                      {mostRecentVoucher && (
-                        <PrintTicketButton
-                          voucher={{ ...mostRecentVoucher, student, class: lesson.class }}
-                        />
+                      {!student.isVisitor && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleRecordPaymentClick(student)}
+                            className="px-3 py-1.5 text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
+                          >
+                            {t("issueVoucher")}
+                          </button>
+                          {mostRecentVoucher && (
+                            <PrintTicketButton
+                              voucher={{ ...mostRecentVoucher, student, class: lesson.class }}
+                            />
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -1314,129 +1416,30 @@ const AttendanceRoster = ({
         )}
       </div>
 
-      {/* Catch-Up Visitors Section (§2.12) */}
-      {(filteredCatchUpVisitors.length > 0 || (!cleanSearch && catchUpVisitors.length > 0)) && (
-        <div className="mt-8 pt-6 border-t-2 border-dashed border-amber-300/80 space-y-3 font-sans">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <span className="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center">
-                <svg className="w-4 h-4 text-amber-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </span>
-              <div>
-                <h3 className="font-bold text-base text-gray-900">
-                  {t("catchUpVisitorsTitle")}
-                </h3>
-                <p className="text-xs text-gray-500">
-                  {t("catchUpVisitorsSubtitle")}
-                </p>
-              </div>
-            </div>
-            <span className="text-xs text-amber-800 bg-amber-100/70 px-3 py-1 rounded-full border border-amber-300 font-bold">
-              {t("catchUpVisitorsCount", { count: filteredCatchUpVisitors.length })}
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {filteredCatchUpVisitors.map((visitor) => {
-              const missedDate = new Date(visitor.missedStartsAt).toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
-                weekday: "short",
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-              });
-
-              return (
-                <div
-                  key={visitor.id}
-                  className="flex flex-col md:flex-row items-start md:items-center justify-between p-3.5 border-2 border-amber-200 rounded-xl gap-4 bg-amber-50/40 shadow-xs"
-                >
-                  <div className="flex items-center gap-3.5 flex-grow">
-                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center justify-center font-bold text-xs shrink-0">
-                      <span className="font-mono text-xs font-bold leading-none tracking-tight">
-                        #{visitor.globalNumber}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Link
-                          href={`/list/students/${visitor.studentId}`}
-                          className="font-bold text-gray-900 text-sm hover:text-primary hover:underline transition-colors"
-                        >
-                          {visitor.studentName}
-                        </Link>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-600 text-white">
-                          {t("visitorBadge")}
-                        </span>
-                      </div>
-                      <div className="text-xs text-amber-900 flex flex-wrap items-center gap-2">
-                        <span>
-                          {t("compensatesAbsenceIn", { class: visitor.missedClassName })}
-                        </span>
-                        <span>•</span>
-                        <span>{t("teacherNameFormatted", { name: visitor.missedTeacherName })}</span>
-                        <span>•</span>
-                        <span className="text-gray-600">{t("originalDateFormatted", { date: missedDate })}</span>
-                      </div>
-                      <div className="flex items-center gap-2 flex-wrap pt-0.5">
-                        {visitor.remainingCredits !== undefined && visitor.remainingCredits !== null ? (
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              visitor.remainingCredits < 0
-                                ? "bg-rose-100 text-rose-800 border border-rose-300"
-                                : visitor.remainingCredits === 0
-                                ? "bg-amber-100 text-amber-900 border border-amber-300"
-                                : "bg-emerald-100 text-emerald-800 border border-emerald-300"
-                            }`}
-                          >
-                            {locale === "ar"
-                              ? `${visitor.remainingCredits} حصص متبقية في فوجه`
-                              : `${visitor.remainingCredits} séance(s) restante(s)`}
-                          </span>
-                        ) : null}
-                        <span className="text-[11px] text-amber-800 font-medium">
-                          {t("noDeductionNotice")}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 w-full md:w-auto justify-end">
-                    <button
-                      type="button"
-                      disabled={deletingVisitorId === visitor.id}
-                      onClick={() => handleRemoveVisitor(visitor.id)}
-                      className="px-3 py-1.5 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 border border-red-200 rounded-lg transition-colors disabled:opacity-50"
-                    >
-                      {deletingVisitorId === visitor.id ? t("canceling") : t("cancelCatchUpVisit")}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Save Button */}
       <form ref={formRef} action={formAction} onSubmit={handleFormSubmit} className="mt-6 flex justify-stretch sm:justify-end">
-        {Object.entries(attendance).map(([studentId, status]) => (
-          <div key={studentId}>
-            <input
-              type="hidden"
-              name={`attendance[${studentId}]`}
-              value={status}
-            />
-            {status === "NOT_DEFINED" && (
+        {Object.entries(attendance).map(([studentId, status]) => {
+          // Skip catch-up visitors so their presence is strictly maintained via CatchUpAttendance,
+          // avoiding duplicate/foreign Attendance records in saveAttendance.
+          if (catchUpVisitors.some((v) => v.studentId === studentId)) return null;
+
+          return (
+            <div key={studentId}>
               <input
                 type="hidden"
-                name={`justification[${studentId}]`}
-                value={justifications[studentId]?.trim() || ""}
+                name={`attendance[${studentId}]`}
+                value={status}
               />
-            )}
-          </div>
-        ))}
+              {status === "NOT_DEFINED" && (
+                <input
+                  type="hidden"
+                  name={`justification[${studentId}]`}
+                  value={justifications[studentId]?.trim() || ""}
+                />
+              )}
+            </div>
+          );
+        })}
 
         <SubmitButton />
       </form>
