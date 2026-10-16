@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma";
 import FormModal from "./FormModal";
 import { getAuthSession } from "@/lib/auth";
 import { serializeForClient, splitFullName } from "@/lib/utils";
+import { getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 
 // UPDATED: This type now includes "workshop"
 export type FormContainerProps = {
@@ -358,7 +359,7 @@ const FormContainer = async ({
             }
           }
 
-          const [languages, branches, teachers] = await Promise.all([
+          const [languages, branches, teachers, defaultFormationFee] = await Promise.all([
             prisma.language.findMany({
               select: { id: true, name: true },
               orderBy: { name: "asc" },
@@ -371,6 +372,7 @@ const FormContainer = async ({
               select: { id: true, name: true },
               orderBy: { name: "asc" },
             }),
+            getFormationInscriptionFeeAction(),
           ]);
           finalRelatedData = {
             languages,
@@ -378,6 +380,7 @@ const FormContainer = async ({
             teachers,
             levels: existingLevels,
             defaultBranchId: session.branchIds?.[0] || undefined,
+            defaultInscriptionFee: defaultFormationFee,
           };
           break;
         }

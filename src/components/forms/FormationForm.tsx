@@ -30,6 +30,7 @@ interface FormationFormProps {
     branches?: Array<{ id: number; name: string }>;
     teachers?: Array<{ id: string; name: string }>;
     defaultBranchId?: number;
+    defaultInscriptionFee?: number;
     levels?: Array<{ id: number; name: string; lumpSumPrice: number; teacherId?: string; levelNumber?: number; enrollmentsCount?: number }>;
   };
 }
@@ -50,6 +51,7 @@ const FormationForm = ({
   const branches = relatedData?.branches || [];
   const teachers = relatedData?.teachers || [];
   const defaultBranchId = relatedData?.defaultBranchId;
+  const defaultInscFee = relatedData?.defaultInscriptionFee ?? 1500;
 
   // --- Form State for Create / Update ---
   const [selectedLanguageId, setSelectedLanguageId] = useState<number | "new">(
@@ -75,7 +77,7 @@ const FormationForm = ({
 
   // Inscription fee
   const [inscriptionFee, setInscriptionFee] = useState<number>(
-    data?.inscriptionFee ? Number(data.inscriptionFee) : 0
+    data?.inscriptionFee ? Number(data.inscriptionFee) : defaultInscFee
   );
 
   // Levels definition for create or update

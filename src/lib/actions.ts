@@ -43,7 +43,7 @@ import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from 
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "./studentBilling";
-import { getFixedInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
+import { getFixedInscriptionFeeAction, getFormationInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
 import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds } from "./utils";
 import {
   resolveOrCreateLessonForDate,
@@ -745,6 +745,20 @@ export const updateStudent = async (
       const shouldChargeNewInsc = paidInscClassIds.size < 3;
 
       for (const classId of selectedClassIds) {
+        const clsInfo = await prisma.class.findUnique({
+          where: { id: classId },
+          select: { isFormation: true, inscriptionFee: true },
+        });
+        const isFormation = Boolean(clsInfo?.isFormation);
+        const shouldCharge = isFormation ? true : (shouldChargeNewInsc || paidInscClassIds.has(classId));
+        const defaultFee = isFormation
+          ? await getFormationInscriptionFeeAction()
+          : await getFixedInscriptionFeeAction();
+        const effectiveFee =
+          Number(clsInfo?.inscriptionFee || 0) > 0
+            ? clsInfo?.inscriptionFee
+            : new Prisma.Decimal(defaultFee);
+
         const existingEnr = currentEnrollments.find((e) => e.classId === classId);
         if (!existingEnr) {
           await prisma.enrollment.create({
@@ -752,7 +766,8 @@ export const updateStudent = async (
               studentId: data.id,
               classId,
               academicYearId: yearId,
-              inscriptionFeeCharged: shouldChargeNewInsc || paidInscClassIds.has(classId),
+              inscriptionFeeCharged: shouldCharge,
+              inscriptionFeeAmount: shouldCharge ? effectiveFee : null,
               status: "ACTIVE",
             },
           });
@@ -761,7 +776,12 @@ export const updateStudent = async (
             where: { id: existingEnr.id },
             data: {
               status: "ACTIVE",
-              ...(paidInscClassIds.size >= 3 && !paidInscClassIds.has(classId)
+              ...(existingEnr.status === "REFUNDED"
+                ? {
+                    inscriptionFeeCharged: shouldCharge,
+                    inscriptionFeeAmount: shouldCharge ? effectiveFee : null,
+                  }
+                : !isFormation && paidInscClassIds.size >= 3 && !paidInscClassIds.has(classId)
                 ? { inscriptionFeeCharged: false, inscriptionFeeAmount: null }
                 : {}),
             },
@@ -3577,7 +3597,7 @@ export async function enrollStudentInClassAction({
 
     const targetClass = await prisma.class.findUnique({
       where: { id: classId },
-      select: { id: true, name: true, branchId: true, inscriptionFee: true },
+      select: { id: true, name: true, branchId: true, inscriptionFee: true, isFormation: true },
     });
 
     if (!targetClass) {
@@ -3616,8 +3636,19 @@ export async function enrollStudentInClassAction({
     });
     const academicYearId = latestYear?.id || 1;
 
+    const isFormation = Boolean(targetClass.isFormation);
     const { paidClassIds } = await getStudentPaidInscriptionGroups(prisma, studentId);
-    const shouldChargeInsc = paidClassIds.size < 3 || paidClassIds.has(classId);
+    const shouldChargeInsc = isFormation
+      ? true
+      : (paidClassIds.size < 3 || paidClassIds.has(classId));
+
+    const defaultFee = isFormation
+      ? await getFormationInscriptionFeeAction()
+      : await getFixedInscriptionFeeAction();
+    const effectiveFee =
+      Number(targetClass.inscriptionFee || 0) > 0
+        ? targetClass.inscriptionFee
+        : new Prisma.Decimal(defaultFee);
 
     await prisma.enrollment.create({
       data: {
@@ -3625,7 +3656,7 @@ export async function enrollStudentInClassAction({
         classId,
         academicYearId,
         inscriptionFeeCharged: shouldChargeInsc,
-        inscriptionFeeAmount: shouldChargeInsc ? targetClass.inscriptionFee : null,
+        inscriptionFeeAmount: shouldChargeInsc ? effectiveFee : null,
         payerStatus: "NORMAL",
         enrolledAt: new Date(),
       },
@@ -3673,6 +3704,7 @@ async function getStudentPaidInscriptionGroups(
       classId: true,
       amount: true,
       refunds: { select: { amount: true } },
+      class: { select: { isFormation: true } },
     },
   });
 
@@ -3693,10 +3725,14 @@ async function getStudentPaidInscriptionGroups(
     }
   }
 
+  // Only regular (non-formation) groups count towards the 3-group exemption rule!
   const paidClassIds = new Set<number>();
-  for (const [cid, amt] of classPaymentsMap.entries()) {
-    if (amt > 0) {
-      paidClassIds.add(cid);
+  for (const v of allInscVouchers) {
+    if (v.classId && !v.class?.isFormation) {
+      const amt = classPaymentsMap.get(v.classId) || 0;
+      if (amt > 0) {
+        paidClassIds.add(v.classId);
+      }
     }
   }
 
@@ -3709,17 +3745,28 @@ async function syncStudentInscriptionWaiverForThreeGroups(
 ): Promise<void> {
   const { paidClassIds } = await getStudentPaidInscriptionGroups(db, studentId);
   if (paidClassIds.size >= 3) {
-    await db.enrollment.updateMany({
+    // Only waive regular classes (isFormation: false)! Never waive formation classes!
+    const regularEnrollmentsToWaive = await db.enrollment.findMany({
       where: {
         studentId,
         classId: { notIn: Array.from(paidClassIds) },
         inscriptionFeeCharged: true,
+        class: { isFormation: false },
       },
-      data: {
-        inscriptionFeeCharged: false,
-        inscriptionFeeAmount: null,
-      },
+      select: { id: true },
     });
+
+    if (regularEnrollmentsToWaive.length > 0) {
+      await db.enrollment.updateMany({
+        where: {
+          id: { in: regularEnrollmentsToWaive.map((e: any) => e.id) },
+        },
+        data: {
+          inscriptionFeeCharged: false,
+          inscriptionFeeAmount: null,
+        },
+      });
+    }
   }
 }
 
@@ -3741,16 +3788,23 @@ export async function checkStudentInscriptionExemptionAction({
   configuredInscriptionFee: number;
 }> {
   try {
-    const configuredFee = await getFixedInscriptionFeeAction();
     const targetClass = await prisma.class.findUnique({
       where: { id: classId },
-      select: { inscriptionFee: true },
+      select: { inscriptionFee: true, isFormation: true },
     });
+
+    const isFormation = Boolean(targetClass?.isFormation);
+    const configuredFee = isFormation
+      ? await getFormationInscriptionFeeAction()
+      : await getFixedInscriptionFeeAction();
+
     const requiredFee =
-      configuredFee > 0
-        ? configuredFee
-        : targetClass?.inscriptionFee && Number(targetClass.inscriptionFee) > 0
+      targetClass?.inscriptionFee && Number(targetClass.inscriptionFee) > 0
         ? Number(targetClass.inscriptionFee)
+        : configuredFee > 0
+        ? configuredFee
+        : isFormation
+        ? 1500
         : 1000;
 
     const { paidClassIds, classPaymentsMap } = await getStudentPaidInscriptionGroups(
@@ -3771,11 +3825,15 @@ export async function checkStudentInscriptionExemptionAction({
       },
     });
 
+    // Formations have their separated inscription fees and are NOT affected by waiving logic (more than 3 groups)
     const isEnrollmentWaived = Boolean(
-      enrollment &&
+      !isFormation &&
+        enrollment &&
         (!enrollment.inscriptionFeeCharged || enrollment.payerStatus === "NON_PAYER")
     );
-    const hasPaidThreeInscriptions = paidGroupsCount >= 3 || isEnrollmentWaived;
+    const hasPaidThreeInscriptions = isFormation
+      ? false
+      : paidGroupsCount >= 3 || isEnrollmentWaived;
 
     return {
       success: true,
@@ -4095,16 +4153,23 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
       });
 
       if (!enr) {
-        const configuredFee = await getFixedInscriptionFeeAction();
+        const isFormation = Boolean(targetClass?.isFormation);
+        const configuredFee = isFormation
+          ? await getFormationInscriptionFeeAction()
+          : await getFixedInscriptionFeeAction();
         const requiredFee =
-          configuredFee > 0
-            ? configuredFee
-            : targetClass?.inscriptionFee && Number(targetClass.inscriptionFee) > 0
+          targetClass?.inscriptionFee && Number(targetClass.inscriptionFee) > 0
             ? Number(targetClass.inscriptionFee)
+            : configuredFee > 0
+            ? configuredFee
+            : isFormation
+            ? 1500
             : 1000;
         const inscAmt = inscriptionItem ? Number(inscriptionItem.amount) : 0;
         const { paidClassIds } = await getStudentPaidInscriptionGroups(tx, payload.studentId);
-        const shouldChargeInsc = inscAmt > 0 || paidClassIds.size < 3 || paidClassIds.has(payload.classId);
+        const shouldChargeInsc = isFormation
+          ? true
+          : (inscAmt > 0 || paidClassIds.size < 3 || paidClassIds.has(payload.classId));
         await tx.enrollment.create({
           data: {
             studentId: payload.studentId,
@@ -4465,39 +4530,53 @@ export const issueVoucher = async (
       }
     }
 
-    // RULE §2.1: Inscription fee — first 3 enrollments per student per academic year charged, auto-waived from 4th
+    // RULE §2.1: Inscription fee
     if (data.paymentType === "INSCRIPTION") {
-      const chargedCount = await prisma.enrollment.count({
-        where: {
-          studentId: student.id,
-          academicYearId: academicYear.id,
-          inscriptionFeeCharged: true,
-          status: { not: "REFUNDED" },
-          // Exclude this class if already enrolled to avoid double counting
-          classId: { not: targetClass.id },
-        },
-      });
+      const isFormation = Boolean(targetClass.isFormation);
 
-      if (data.feeOverriddenByOwner && session.isOwner) {
-        // Owner override
-        feeOverridden = true;
-        feeOverrideNote = data.feeOverrideNote || (finalAmount === 0 ? "إعفاء استثنائي بقرار المالك" : "فرض رسم استثنائي بقرار المالك");
-        noteAppend = `[استثناء مالك: ${feeOverrideNote}]`;
-      } else if (data.feeOverriddenByOwner && !session.isOwner) {
-        return { success: false, error: true, message: "فقط المالك يملك صلاحية تجاوز قاعدة رسم التسجيل." };
+      if (isFormation) {
+        // Formations have their separated inscription fees and are NOT affected by waiving logic (more than 3 groups)
+        const defaultFormationFee = await getFormationInscriptionFeeAction();
+        const effectiveFee =
+          Number(targetClass.inscriptionFee || 0) > 0
+            ? Number(targetClass.inscriptionFee)
+            : defaultFormationFee;
+        finalAmount = data.amount > 0 ? Number(data.amount) : effectiveFee;
       } else {
-        if (chargedCount >= 3) {
-          // Auto-waived from 4th enrollment
-          finalAmount = 0;
-          isWaivedInscription = true;
-          noteAppend = `[معفى تلقائياً: التسجيل رقم ${chargedCount + 1} في السنة الدراسية ${academicYear.label}]`;
+        // Regular classes waiving logic:
+        const chargedCount = await prisma.enrollment.count({
+          where: {
+            studentId: student.id,
+            academicYearId: academicYear.id,
+            inscriptionFeeCharged: true,
+            status: { not: "REFUNDED" },
+            // Exclude this class if already enrolled to avoid double counting
+            classId: { not: targetClass.id },
+            class: { isFormation: false },
+          },
+        });
+
+        if (data.feeOverriddenByOwner && session.isOwner) {
+          // Owner override
+          feeOverridden = true;
+          feeOverrideNote = data.feeOverrideNote || (finalAmount === 0 ? "إعفاء استثنائي بقرار المالك" : "فرض رسم استثنائي بقرار المالك");
+          noteAppend = `[استثناء مالك: ${feeOverrideNote}]`;
+        } else if (data.feeOverriddenByOwner && !session.isOwner) {
+          return { success: false, error: true, message: "فقط المالك يملك صلاحية تجاوز قاعدة رسم التسجيل." };
         } else {
-          const defaultInscFee = await getFixedInscriptionFeeAction();
-          const effectiveFee =
-            Number(targetClass.inscriptionFee || 0) > 0
-              ? Number(targetClass.inscriptionFee)
-              : defaultInscFee;
-          finalAmount = data.amount > 0 ? Number(data.amount) : effectiveFee;
+          if (chargedCount >= 3) {
+            // Auto-waived from 4th enrollment
+            finalAmount = 0;
+            isWaivedInscription = true;
+            noteAppend = `[معفى تلقائياً: التسجيل رقم ${chargedCount + 1} في السنة الدراسية ${academicYear.label}]`;
+          } else {
+            const defaultInscFee = await getFixedInscriptionFeeAction();
+            const effectiveFee =
+              Number(targetClass.inscriptionFee || 0) > 0
+                ? Number(targetClass.inscriptionFee)
+                : defaultInscFee;
+            finalAmount = data.amount > 0 ? Number(data.amount) : effectiveFee;
+          }
         }
       }
     }
@@ -4595,21 +4674,27 @@ export const issueVoucher = async (
         },
       });
 
-      const defaultInscFee = await getFixedInscriptionFeeAction();
+      const isFormation = Boolean(targetClass.isFormation);
+      const defaultInscFee = isFormation
+        ? await getFormationInscriptionFeeAction()
+        : await getFixedInscriptionFeeAction();
       const effectiveFee =
-        defaultInscFee > 0
-          ? defaultInscFee
-          : Number(targetClass.inscriptionFee || 0) > 0
+        Number(targetClass.inscriptionFee || 0) > 0
           ? Number(targetClass.inscriptionFee)
+          : defaultInscFee > 0
+          ? defaultInscFee
+          : isFormation
+          ? 1500
           : 1000;
 
       const { paidClassIds } = await getStudentPaidInscriptionGroups(tx, data.studentId);
-      const shouldChargeInscription =
-        data.paymentType === "INSCRIPTION"
-          ? finalAmount > 0
-          : feeOverridden
-          ? finalAmount > 0
-          : paidClassIds.size < 3 || paidClassIds.has(data.classId);
+      const shouldChargeInscription = isFormation
+        ? true
+        : data.paymentType === "INSCRIPTION"
+        ? finalAmount > 0
+        : feeOverridden
+        ? finalAmount > 0
+        : paidClassIds.size < 3 || paidClassIds.has(data.classId);
 
       if (!existingEnrollment) {
         await tx.enrollment.create({
@@ -4632,8 +4717,13 @@ export const issueVoucher = async (
       } else {
         const updateData: any = {};
         if (data.paymentType === "INSCRIPTION") {
-          updateData.inscriptionFeeCharged = finalAmount > 0;
-          updateData.inscriptionFeeAmount = finalAmount > 0 ? new Prisma.Decimal(finalAmount) : null;
+          updateData.inscriptionFeeCharged = isFormation ? true : finalAmount > 0;
+          updateData.inscriptionFeeAmount =
+            isFormation && finalAmount <= 0
+              ? new Prisma.Decimal(effectiveFee)
+              : finalAmount > 0
+              ? new Prisma.Decimal(finalAmount)
+              : null;
           updateData.feeOverriddenByOwner = feeOverridden || existingEnrollment.feeOverriddenByOwner;
           updateData.feeOverrideNote = feeOverrideNote || existingEnrollment.feeOverrideNote;
         }
@@ -6935,8 +7025,9 @@ export const exportToExcel = async (
               }
             }
 
+            const isTargetFormation = Boolean(classTarget.isFormation);
             const totalPaid = paidInscByClass.get(classTarget.id) || 0;
-            const hasPaidThreeInscriptions = paidInscByClass.size >= 3;
+            const hasPaidThreeInscriptions = isTargetFormation ? false : paidInscByClass.size >= 3;
 
             // Inscription fee status
             let inscriptionStatus = "غير مدفوع";
@@ -6944,7 +7035,7 @@ export const exportToExcel = async (
               inscriptionStatus = `مدفوع (${totalPaid.toFixed()} دج)`;
             } else if (enrollment.feeOverriddenByOwner && !enrollment.inscriptionFeeCharged) {
               inscriptionStatus = "معفى (استثناء مالك)";
-            } else if (!enrollment.inscriptionFeeCharged || hasPaidThreeInscriptions || enrPayerStatus === "NON_PAYER") {
+            } else if (!isTargetFormation && (!enrollment.inscriptionFeeCharged || hasPaidThreeInscriptions || enrPayerStatus === "NON_PAYER")) {
               inscriptionStatus = "معفى (مسدد في 3 أفواج)";
             }
 

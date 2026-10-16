@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations } from "next-intl/server";
 import { serializeForClient } from "@/lib/utils";
-import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
+import { getFixedInscriptionFeeAction, getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 
 const ConfigurationClient = dynamic(() => import("@/components/configuration/ConfigurationClient"), {
   loading: () => (
@@ -235,7 +235,10 @@ export default async function ConfigurationPage(props: PageProps) {
     })),
   }));
 
-  const fixedInscriptionFee = await getFixedInscriptionFeeAction();
+  const [fixedInscriptionFee, formationInscriptionFee] = await Promise.all([
+    getFixedInscriptionFeeAction(),
+    getFormationInscriptionFeeAction(),
+  ]);
 
   return (
     <ConfigurationClient
@@ -248,6 +251,7 @@ export default async function ConfigurationPage(props: PageProps) {
       levels={serializeForClient(levels)}
       formationLanguages={serializeForClient(formationLanguages)}
       fixedInscriptionFee={fixedInscriptionFee}
+      formationInscriptionFee={formationInscriptionFee}
       initialTab={searchParams.tab || "accounts"}
     />
   );

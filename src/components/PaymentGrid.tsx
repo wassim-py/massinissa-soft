@@ -302,19 +302,23 @@ export default function PaymentGrid({
       }
     }
 
+    const isFormation = Boolean(classData.isFormation);
     const totalInscPaid = paidInscByClass.get(classData.id) || 0;
     const requiredInscFee =
       configuredInscriptionFee && configuredInscriptionFee > 0
         ? configuredInscriptionFee
         : Number(classData.inscriptionFee || 0) > 0
         ? Number(classData.inscriptionFee)
+        : isFormation
+        ? 1500
         : 1000;
     const isInscriptionPaid = totalInscPaid > 0;
-    const hasPaidThreeInscriptions = paidInscByClass.size >= 3;
+    const hasPaidThreeInscriptions = isFormation ? false : paidInscByClass.size >= 3;
     const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
     const enrPayerStatusForInsc = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
     const isOwnerWaived = Boolean(enrollment.feeOverriddenByOwner && !enrollment.inscriptionFeeCharged);
     const isAutoWaived =
+      !isFormation &&
       !isInscriptionPaid &&
       !isOwnerWaived &&
       (!enrollment.inscriptionFeeCharged || hasPaidThreeInscriptions || enrPayerStatusForInsc === "NON_PAYER");
@@ -387,7 +391,6 @@ export default function PaymentGrid({
       }
     });
 
-    const isFormation = Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId);
     const enrPayerStatus = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
 
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(

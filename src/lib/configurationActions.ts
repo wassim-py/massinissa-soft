@@ -1759,10 +1759,12 @@ export async function updateFixedInscriptionFeeAction(
     });
 
     await prisma.class.updateMany({
+      where: { isFormation: false },
       data: { inscriptionFee: amount },
     });
 
     safeRevalidatePath("/admin/configuration");
+    safeRevalidatePath("/list/classes");
     safeRevalidatePath("/list/finance");
     safeRevalidatePath("/list/payments");
     safeRevalidatePath("/list/students");
@@ -1770,7 +1772,7 @@ export async function updateFixedInscriptionFeeAction(
     return {
       success: true,
       error: false,
-      message: "Frais d'inscription fixes mis à jour avec succès / تم تحديث حقوق التسجيل بنجاح.",
+      message: "Frais d'inscription des cours de soutien mis à jour avec succès / تم تحديث حقوق تسجيل أفواج الدعم بنجاح.",
     };
   } catch (err: any) {
     console.error("updateFixedInscriptionFeeAction error:", err);
@@ -1778,6 +1780,77 @@ export async function updateFixedInscriptionFeeAction(
       success: false,
       error: true,
       message: err?.message || "Erreur lors de la mise à jour des frais d'inscription.",
+    };
+  }
+}
+
+// =================================================================
+// 9. FORMATION INSCRIPTION FEE CONFIGURATION (OWNER-ONLY)
+// =================================================================
+
+export async function getFormationInscriptionFeeAction(): Promise<number> {
+  try {
+    const setting = await prisma.setting.findUnique({
+      where: { id: "DEFAULT_FORMATION_INSCRIPTION_FEE" },
+    });
+    return setting?.value ? Number(setting.value) : 1500;
+  } catch {
+    return 1500;
+  }
+}
+
+export async function updateFormationInscriptionFeeAction(
+  currentState: CurrentState,
+  data: FormData
+): Promise<CurrentState> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط.",
+      };
+    }
+
+    const amountStr = data.get("amount") as string;
+    const amount = Number(amountStr);
+    if (isNaN(amount) || amount < 0) {
+      return {
+        success: false,
+        error: true,
+        message: "Montant invalide / المبلغ غير صالح.",
+      };
+    }
+
+    await prisma.setting.upsert({
+      where: { id: "DEFAULT_FORMATION_INSCRIPTION_FEE" },
+      create: { id: "DEFAULT_FORMATION_INSCRIPTION_FEE", value: String(amount) },
+      update: { value: String(amount) },
+    });
+
+    await prisma.class.updateMany({
+      where: { isFormation: true },
+      data: { inscriptionFee: amount },
+    });
+
+    safeRevalidatePath("/admin/configuration");
+    safeRevalidatePath("/list/formations");
+    safeRevalidatePath("/list/finance");
+    safeRevalidatePath("/list/payments");
+    safeRevalidatePath("/list/students");
+    safeRevalidatePath("/list/attendance");
+    return {
+      success: true,
+      error: false,
+      message: "Frais d'inscription des formations mis à jour avec succès / تم تحديث حقوق تسجيل التكوينات بنجاح.",
+    };
+  } catch (err: any) {
+    console.error("updateFormationInscriptionFeeAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "Erreur lors de la mise à jour des frais d'inscription des formations.",
     };
   }
 }

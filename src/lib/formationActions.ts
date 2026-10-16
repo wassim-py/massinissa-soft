@@ -8,6 +8,7 @@ import { canUserAccessBranch } from "@/lib/settings";
 import { serializeForClient, getLessonDateTime } from "@/lib/utils";
 import { upsertDailyLedger } from "@/lib/ledger";
 import { checkForConflicts } from "@/lib/actions";
+import { getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 
 function safeRevalidatePath(path: string) {
   try {
@@ -403,6 +404,12 @@ export async function createFormationGroup(data: {
       return { success: false, error: true, message: "Niveau de formation introuvable / المستوى التكويني المحدد غير موجود" };
     }
 
+    const defaultFormationFee = await getFormationInscriptionFeeAction();
+    const effectiveInscFee =
+      data.inscriptionFee && data.inscriptionFee > 0
+        ? data.inscriptionFee
+        : defaultFormationFee;
+
     const formationClass = await prisma.class.create({
       data: {
         name: data.name.trim(),
@@ -411,7 +418,7 @@ export async function createFormationGroup(data: {
         formationLevelId: data.formationLevelId,
         ageGroup: (data.ageGroup || "Adultes").trim(),
         pricePerCycle: new Prisma.Decimal(data.pricePerCycle || 0),
-        inscriptionFee: new Prisma.Decimal(data.inscriptionFee || 0),
+        inscriptionFee: new Prisma.Decimal(effectiveInscFee),
         hasBooks: !!data.hasBooks,
         bookFee: data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null,
       },
@@ -480,24 +487,19 @@ export async function enrollStudentInFormationGroup(data: {
       return { success: false, error: true, message: "L'élève est déjà inscrit dans ce groupe / التلميذ مسجل بالفعل في هذا الفوج التكويني" };
     }
 
-    // Rule §2.1: Count prior charged enrollments in current academic year
-    const chargedCount = await prisma.enrollment.count({
-      where: {
-        studentId: data.studentId,
-        academicYearId: academicYearId,
-        inscriptionFeeCharged: true,
-      },
-    });
-
-    const shouldChargeInscription = chargedCount < 3;
-    const feeAmount = shouldChargeInscription ? targetClass.inscriptionFee : null;
+    // Formations have separate inscription fees and are NOT affected by waiving logic (more than 3 groups)
+    const defaultFormationFee = await getFormationInscriptionFeeAction();
+    const feeAmount =
+      Number(targetClass.inscriptionFee || 0) > 0
+        ? targetClass.inscriptionFee
+        : new Prisma.Decimal(defaultFormationFee);
 
     const enrollment = await prisma.enrollment.create({
       data: {
         studentId: data.studentId,
         classId: data.classId,
         academicYearId: academicYearId,
-        inscriptionFeeCharged: shouldChargeInscription,
+        inscriptionFeeCharged: true,
         inscriptionFeeAmount: feeAmount,
         enrolledAt: new Date(),
       },
@@ -759,17 +761,12 @@ export async function levelUpStudent(data: {
       };
     }
 
-    // 5. Inscription fee handling per §2.1
-    const chargedCount = await prisma.enrollment.count({
-      where: {
-        studentId: data.studentId,
-        academicYearId: yearId,
-        inscriptionFeeCharged: true,
-      },
-    });
-
-    const shouldChargeInscription = chargedCount < 3;
-    const feeAmount = shouldChargeInscription ? targetClass.inscriptionFee : null;
+    // 5. Inscription fee handling for formations (independent from 3-group waiving logic)
+    const defaultFormationFee = await getFormationInscriptionFeeAction();
+    const feeAmount =
+      Number(targetClass.inscriptionFee || 0) > 0
+        ? targetClass.inscriptionFee
+        : new Prisma.Decimal(defaultFormationFee);
 
     // 6. Create the new Enrollment (assisted level up)
     const newEnrollment = await prisma.enrollment.create({
@@ -777,7 +774,7 @@ export async function levelUpStudent(data: {
         studentId: data.studentId,
         classId: data.targetClassId,
         academicYearId: yearId,
-        inscriptionFeeCharged: shouldChargeInscription,
+        inscriptionFeeCharged: true,
         inscriptionFeeAmount: feeAmount,
         enrolledAt: new Date(),
       },
@@ -977,6 +974,12 @@ export async function createFormationWithLevels(data: {
             ? data.initialGroupName.trim()
             : `${language.name} - ${lvl.name}`;
 
+        const defaultFormationFee = await getFormationInscriptionFeeAction();
+        const effectiveInscFee =
+          data.inscriptionFee && data.inscriptionFee > 0
+            ? data.inscriptionFee
+            : defaultFormationFee;
+
         const cls = await tx.class.create({
           data: {
             name: groupName,
@@ -988,7 +991,7 @@ export async function createFormationWithLevels(data: {
             pricePerCycle: lvl.lumpSumPrice, // lump-sum price stored as pricePerCycle
             hasBooks: !!data.hasBooks,
             bookFee: data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null,
-            inscriptionFee: new Prisma.Decimal(data.inscriptionFee || 0),
+            inscriptionFee: new Prisma.Decimal(effectiveInscFee),
           },
         });
         if (i === 0) {
@@ -1679,23 +1682,18 @@ export async function closeFormationLevelsWithCascade(data: {
             });
 
             if (!existingEnr) {
-              const chargedCount = await tx.enrollment.count({
-                where: {
-                  studentId: sId,
-                  academicYearId: yearId,
-                  inscriptionFeeCharged: true,
-                },
-              });
-
-              const shouldCharge = chargedCount < 3;
-              const feeAmount = shouldCharge ? targetClass.inscriptionFee : null;
+              const defaultFormationFee = await getFormationInscriptionFeeAction();
+              const feeAmount =
+                Number(targetClass.inscriptionFee || 0) > 0
+                  ? targetClass.inscriptionFee
+                  : new Prisma.Decimal(defaultFormationFee);
 
               await tx.enrollment.create({
                 data: {
                   studentId: sId,
                   classId: targetClass.id,
                   academicYearId: yearId,
-                  inscriptionFeeCharged: shouldCharge,
+                  inscriptionFeeCharged: true,
                   inscriptionFeeAmount: feeAmount,
                 },
               });
@@ -1776,23 +1774,18 @@ export async function enrollGraduatedStudentsInNewFormation(data: {
         });
 
         if (!existing) {
-          const chargedCount = await tx.enrollment.count({
-            where: {
-              studentId: sId,
-              academicYearId: yearId,
-              inscriptionFeeCharged: true,
-            },
-          });
-
-          const shouldCharge = chargedCount < 3;
-          const feeAmount = shouldCharge ? targetClass.inscriptionFee : null;
+          const defaultFormationFee = await getFormationInscriptionFeeAction();
+          const feeAmount =
+            Number(targetClass.inscriptionFee || 0) > 0
+              ? targetClass.inscriptionFee
+              : new Prisma.Decimal(defaultFormationFee);
 
           await tx.enrollment.create({
             data: {
               studentId: sId,
               classId: data.targetClassId,
               academicYearId: yearId,
-              inscriptionFeeCharged: shouldCharge,
+              inscriptionFeeCharged: true,
               inscriptionFeeAmount: feeAmount,
             },
           });

@@ -324,6 +324,7 @@ export default function StudentPaymentDetails({
 
   // Calculate paid inscription groups across all classes for the 3-groups exemption rule
   const paidInscByClass = new Map<number, number>();
+  const paidInscRegularClassIds = new Set<number>();
   for (const v of allVouchers) {
     if (!v.isVoided && !v.isRefund && v.paymentType === "INSCRIPTION") {
       const cid = v.classId || (v.class && v.class.id);
@@ -337,11 +338,19 @@ export default function StudentPaymentDetails({
         const netPaid = Math.max(0, vAmount - vRefunded);
         if (netPaid > 0) {
           paidInscByClass.set(cid, (paidInscByClass.get(cid) || 0) + netPaid);
+          const isVoucherFormation = Boolean(
+            (v.class as any)?.isFormation ||
+            (v.class as any)?.FormationLevel ||
+            (v.class as any)?.formationLevelId
+          );
+          if (!isVoucherFormation) {
+            paidInscRegularClassIds.add(cid);
+          }
         }
       }
     }
   }
-  const hasPaidThreeInscriptions = paidInscByClass.size >= 3;
+  const hasPaidThreeInscriptions = paidInscRegularClassIds.size >= 3;
 
   // Calculate per-class metrics
   const allClassMetrics = allEnrollments.map((enr) => {
@@ -357,17 +366,21 @@ export default function StudentPaymentDetails({
 
     const inscVouchers = activeClassVouchers.filter((v) => v.paymentType === "INSCRIPTION");
     const totalInscPaid = paidInscByClass.get(c.id) || 0;
-    const requiredInscFee =
-      configuredInscriptionFee && configuredInscriptionFee > 0
-        ? configuredInscriptionFee
-        : Number(c?.inscriptionFee || 0) > 0
-        ? Number(c?.inscriptionFee)
-        : 1000;
+    const requiredInscFee = isFormation
+      ? (Number(c?.inscriptionFee || 0) > 0
+          ? Number(c?.inscriptionFee)
+          : 1500)
+      : (configuredInscriptionFee && configuredInscriptionFee > 0
+          ? configuredInscriptionFee
+          : Number(c?.inscriptionFee || 0) > 0
+          ? Number(c?.inscriptionFee)
+          : 1000);
     const isInscriptionPaid = totalInscPaid > 0;
     const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
     const enrPayerStatusForInsc = (enr as any).payerStatus || student.payerStatus || "NORMAL";
     const isOwnerWaived = Boolean(enr.feeOverriddenByOwner && !enr.inscriptionFeeCharged);
     const isGroupWaived =
+      !isFormation &&
       !isInscriptionPaid &&
       !isOwnerWaived &&
       (hasPaidThreeInscriptions || !enr.inscriptionFeeCharged || enrPayerStatusForInsc === "NON_PAYER");

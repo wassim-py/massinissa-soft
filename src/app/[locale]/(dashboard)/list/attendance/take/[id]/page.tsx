@@ -8,7 +8,7 @@ import BackButton from "@/components/BackButton";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
-import { getActiveTrimester, getFixedInscriptionFeeAction } from "@/lib/configurationActions";
+import { getActiveTrimester, getFixedInscriptionFeeAction, getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 import { computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
 
@@ -24,7 +24,10 @@ const TakeAttendancePage = async (
   const role = await getAuthRole();
   const session = await getAuthSession();
   const activeBranchId = await getActiveBranchId();
-  const fixedInscriptionFee = await getFixedInscriptionFeeAction();
+  const [fixedInscriptionFee, formationInscriptionFee] = await Promise.all([
+    getFixedInscriptionFeeAction(),
+    getFormationInscriptionFeeAction(),
+  ]);
   const t = await getTranslations("attendance");
   const locale = await getLocale();
 
@@ -115,20 +118,18 @@ const TakeAttendancePage = async (
   );
 
   const classesMap = new Map<number, any>();
+  const isLessonClassFormation = Boolean(l.isFormation);
   classesMap.set(l.classId, {
     id: l.classId,
     name: l.className || (locale === "ar" ? "قسم" : "Groupe"),
     price: Number(l.classPrice || 0),
     pricePerCycle: Number(l.pricePerCycle || l.classPrice || 0),
-    inscriptionFee:
-      fixedInscriptionFee > 0
-        ? fixedInscriptionFee
-        : l.inscriptionFee != null
-        ? Number(l.inscriptionFee)
-        : 1000,
+    inscriptionFee: isLessonClassFormation
+      ? (l.inscriptionFee != null && Number(l.inscriptionFee) > 0 ? Number(l.inscriptionFee) : formationInscriptionFee)
+      : (fixedInscriptionFee > 0 ? fixedInscriptionFee : l.inscriptionFee != null ? Number(l.inscriptionFee) : 1000),
     bookFee: l.bookFee != null ? Number(l.bookFee) : 0,
     hasBooks: Boolean(l.hasBooks),
-    isFormation: Boolean(l.isFormation),
+    isFormation: isLessonClassFormation,
     formationLevelId: l.formationLevelId != null ? Number(l.formationLevelId) : null,
     levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
     branchId: l.branchId != null ? Number(l.branchId) : null,
@@ -136,20 +137,18 @@ const TakeAttendancePage = async (
 
   for (const lg of lessonGroups) {
     if (lg.class && !classesMap.has(lg.class.id)) {
+      const isLgFormation = Boolean(lg.class.isFormation);
       classesMap.set(lg.class.id, {
         id: lg.class.id,
         name: lg.class.name,
         price: Number(lg.class.pricePerCycle || 0),
         pricePerCycle: Number(lg.class.pricePerCycle || 0),
-        inscriptionFee:
-          fixedInscriptionFee > 0
-            ? fixedInscriptionFee
-            : lg.class.inscriptionFee != null
-            ? Number(lg.class.inscriptionFee)
-            : 1000,
+        inscriptionFee: isLgFormation
+          ? (lg.class.inscriptionFee != null && Number(lg.class.inscriptionFee) > 0 ? Number(lg.class.inscriptionFee) : formationInscriptionFee)
+          : (fixedInscriptionFee > 0 ? fixedInscriptionFee : lg.class.inscriptionFee != null ? Number(lg.class.inscriptionFee) : 1000),
         bookFee: lg.class.bookFee != null ? Number(lg.class.bookFee) : 0,
         hasBooks: Boolean(lg.class.hasBooks),
-        isFormation: Boolean(lg.class.isFormation),
+        isFormation: isLgFormation,
         formationLevelId: lg.class.formationLevelId != null ? Number(lg.class.formationLevelId) : null,
         levelId: lg.class.levelId != null ? Number(lg.class.levelId) : null,
         branchId: lg.class.branchId != null ? Number(lg.class.branchId) : null,
@@ -169,15 +168,12 @@ const TakeAttendancePage = async (
       name: combinedGroupNames || l.className || (locale === "ar" ? "قسم" : "Groupe"),
       price: Number(l.classPrice || 0),
       pricePerCycle: Number(l.pricePerCycle || l.classPrice || 0),
-      inscriptionFee:
-        fixedInscriptionFee > 0
-          ? fixedInscriptionFee
-          : l.inscriptionFee != null
-          ? Number(l.inscriptionFee)
-          : 1000,
+      inscriptionFee: isLessonClassFormation
+        ? (l.inscriptionFee != null && Number(l.inscriptionFee) > 0 ? Number(l.inscriptionFee) : formationInscriptionFee)
+        : (fixedInscriptionFee > 0 ? fixedInscriptionFee : l.inscriptionFee != null ? Number(l.inscriptionFee) : 1000),
       bookFee: l.bookFee != null ? Number(l.bookFee) : 0,
       hasBooks: Boolean(l.hasBooks),
-      isFormation: Boolean(l.isFormation),
+      isFormation: isLessonClassFormation,
       formationLevelId: l.formationLevelId != null ? Number(l.formationLevelId) : null,
       levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
       branchId: l.branchId != null ? Number(l.branchId) : null,
@@ -647,14 +643,17 @@ const TakeAttendancePage = async (
       }
     }
 
+    const isTargetFormation = Boolean(classesMap.get(studentClassId)?.isFormation);
     const totalInscPaidThisClass = paidInscByClass.get(studentClassId) || 0;
     const isInscriptionPaid = totalInscPaidThisClass > 0;
-    const hasPaidThreeInscriptions = paidInscByClass.size >= 3;
+    const hasPaidThreeInscriptions = isTargetFormation ? false : paidInscByClass.size >= 3;
     const isOwnerWaived = Boolean(enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged);
     const isAutoWaived = Boolean(
-      (enrollment && !enrollment.inscriptionFeeCharged) ||
+      !isTargetFormation && (
+        (enrollment && !enrollment.inscriptionFeeCharged) ||
         hasPaidThreeInscriptions ||
         effectivePayerStatus === "NON_PAYER"
+      )
     );
     const inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" = isInscriptionPaid
       ? "PAID"

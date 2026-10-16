@@ -10,7 +10,7 @@ import { serializeForClient } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations } from "next-intl/server";
-import { getActiveTrimester, getFixedInscriptionFeeAction } from "@/lib/configurationActions";
+import { getActiveTrimester, getFixedInscriptionFeeAction, getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 
 const ClassPaymentHistoryPage = async (
   props: { 
@@ -224,7 +224,7 @@ const ClassPaymentHistoryPage = async (
   classData.enrollments = Array.from(enrollmentMap.values());
 
   // Fetch classes across all branches for group credit transfers
-  const [availableClasses, activeTrimester, configuredInscriptionFee] = await Promise.all([
+  const [availableClasses, activeTrimester, fixedFee, formationFee] = await Promise.all([
     prisma.class.findMany({
       select: {
         id: true,
@@ -239,7 +239,10 @@ const ClassPaymentHistoryPage = async (
     }),
     getActiveTrimester(),
     getFixedInscriptionFeeAction(),
+    getFormationInscriptionFeeAction(),
   ]);
+
+  const configuredInscriptionFee = classData.isFormation ? formationFee : fixedFee;
 
   const teacherId = classData.teacherId;
   const levelId = classData.levelId;

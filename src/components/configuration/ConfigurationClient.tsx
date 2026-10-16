@@ -50,6 +50,7 @@ interface ConfigurationClientProps {
   levels?: LevelItem[];
   formationLanguages?: FormationLanguageItem[];
   fixedInscriptionFee?: number;
+  formationInscriptionFee?: number;
   initialTab?: string;
 }
 
@@ -65,6 +66,7 @@ export default function ConfigurationClient({
   levels = [],
   formationLanguages = [],
   fixedInscriptionFee = 1000,
+  formationInscriptionFee = 1500,
   initialTab = "accounts",
 }: ConfigurationClientProps) {
   const t = useTranslations("configuration");
@@ -129,7 +131,7 @@ export default function ConfigurationClient({
       key: "inscriptionFee",
       label: "Frais d'inscription / حقوق التسجيل",
       icon: Tag,
-      count: `${fixedInscriptionFee} DZD`,
+      count: `${fixedInscriptionFee} / ${formationInscriptionFee} DZD`,
       color: "text-blue-700 bg-blue-50",
     },
   ];
@@ -219,7 +221,10 @@ export default function ConfigurationClient({
           />
         )}
         {currentTab === "inscriptionFee" && (
-          <InscriptionFeeSection initialFee={fixedInscriptionFee} />
+          <InscriptionFeeSection
+            initialFee={fixedInscriptionFee}
+            initialFormationFee={formationInscriptionFee}
+          />
         )}
       </div>
     </div>
