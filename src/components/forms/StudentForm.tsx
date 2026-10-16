@@ -185,6 +185,7 @@ const StudentForm = ({
     data?.globalNumber ? Number(data.globalNumber) : 0
   );
   const [fpPendingForNewStudent, setFpPendingForNewStudent] = useState<boolean>(false);
+  const [fpTemplateData, setFpTemplateData] = useState<string | null>(null);
   const fpTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -312,6 +313,10 @@ const StudentForm = ({
             setFpEnrollingStep(0);
             setFpEnrolled(true);
 
+            if (enroll.templateData) {
+              setFpTemplateData(enroll.templateData);
+            }
+
             // If using the School PC Local Bridge for an existing student, save the fingerprint record in the Cloud DB
             if (useLocalBridge && currentStudentId && enroll.globalNumber > 0) {
               await fetch("/api/biometrics/enroll", {
@@ -322,6 +327,7 @@ const StudentForm = ({
                   studentId: currentStudentId,
                   globalNumber: Number(enroll.globalNumber),
                   fingerIndex: 0,
+                  templateData: enroll.templateData || undefined,
                 }),
               }).catch(() => {});
             }
@@ -439,6 +445,7 @@ const StudentForm = ({
             studentId: String(createdStudent.id),
             globalNumber: Number(createdStudent.globalNumber),
             fingerIndex: 0,
+            templateData: fpTemplateData || undefined,
           });
         }
 

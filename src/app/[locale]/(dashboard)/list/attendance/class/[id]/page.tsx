@@ -11,8 +11,9 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { getTranslations, getLocale } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences } from "@/lib/studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { getAlgiersDateInfo } from "@/lib/utils";
+import { StudentBalanceInfo } from "@/components/AttendanceGrid";
 
 // This type will represent a unique column in our grid
 export type LessonInstance = {
@@ -56,10 +57,17 @@ const ClassAttendancePage = async (
             where: { id: classId },
             include: {
                 branch: { select: { id: true, name: true } },
+                FormationLevel: {
+                    select: {
+                        id: true,
+                        name: true,
+                        lumpSumPrice: true,
+                    },
+                },
             },
         }),
-        prisma.$queryRaw<Array<{ id: number; startsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean }>>`
-            SELECT l.id, l."startsAt", l."isExtra", l."isCatchUp", l."isFree"
+        prisma.$queryRaw<Array<{ id: number; startsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean; isTeacherAbsent: boolean }>>`
+            SELECT l.id, l."startsAt", l."isExtra", l."isCatchUp", l."isFree", l."isTeacherAbsent"
             FROM "Lesson" l
             WHERE l."classId" = ${classId}
                OR EXISTS (
@@ -315,6 +323,258 @@ const ClassAttendancePage = async (
                 }
             } catch (cuErr) {
                 console.error("Error fetching catch up attendances:", cuErr);
+            }
+
+            // Compute remaining balance for each enrolled student
+            const studentIds = Array.from(studentMap.keys());
+            let studentsWithBilling: any[] = [];
+            if (studentIds.length > 0) {
+                try {
+                    studentsWithBilling = await prisma.student.findMany({
+                        where: { id: { in: studentIds } },
+                        include: {
+                            family: {
+                                include: {
+                                    payerStudent: {
+                                        include: {
+                                            enrollments: {
+                                                include: {
+                                                    transfersFrom: true,
+                                                    transfersTo: true,
+                                                    class: { select: { id: true, pricePerCycle: true, isFormation: true } },
+                                                },
+                                            },
+                                            vouchers: {
+                                                where: { isVoided: false, isRefund: false },
+                                                include: { refunds: true },
+                                            },
+                                            attendances: {
+                                                where: { lesson: { isFree: false } },
+                                                include: {
+                                                    lesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } },
+                                                },
+                                            },
+                                            catchUpAttendances: {
+                                                include: {
+                                                    missedLesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } },
+                                                    catchUpLesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                            vouchers: {
+                                where: {
+                                    OR: [
+                                        { classId: classId },
+                                        { paymentType: { in: ["TUITION_4SESSION", "FORMATION"] } },
+                                    ],
+                                    isVoided: false,
+                                    isRefund: false,
+                                },
+                                include: {
+                                    refunds: true,
+                                },
+                                orderBy: { issuedAt: "desc" },
+                            },
+                            enrollments: {
+                                where: { classId: classId },
+                                include: {
+                                    transfersFrom: true,
+                                    transfersTo: true,
+                                },
+                            },
+                            attendances: {
+                                where: {
+                                    lesson: {
+                                        classId: classId,
+                                        isFree: false,
+                                    },
+                                },
+                                include: {
+                                    lesson: {
+                                        select: {
+                                            id: true,
+                                            startsAt: true,
+                                            isFree: true,
+                                            isTeacherAbsent: true,
+                                            classId: true,
+                                        },
+                                    },
+                                },
+                                orderBy: {
+                                    lesson: {
+                                        startsAt: "asc",
+                                    },
+                                },
+                            },
+                            catchUpAttendances: {
+                                where: {
+                                    OR: [
+                                        { missedLesson: { classId: classId } },
+                                        { catchUpLesson: { classId: classId } },
+                                    ],
+                                },
+                                include: {
+                                    missedLesson: {
+                                        select: {
+                                            id: true,
+                                            startsAt: true,
+                                            isFree: true,
+                                            isTeacherAbsent: true,
+                                            classId: true,
+                                        },
+                                    },
+                                    catchUpLesson: {
+                                        select: {
+                                            id: true,
+                                            startsAt: true,
+                                            isFree: true,
+                                            isTeacherAbsent: true,
+                                            classId: true,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    });
+                } catch (billingErr) {
+                    console.error("Error fetching students billing data in ClassAttendancePage:", billingErr);
+                }
+            }
+
+            const billingMap = new Map(studentsWithBilling.map((s) => [s.id, s]));
+            const isFormation = Boolean(classHeader.isFormation);
+            const classPricePerCycle = Number(classHeader.pricePerCycle || 0);
+            const formationPrice = Number(classHeader.FormationLevel?.lumpSumPrice || classHeader.pricePerCycle || 0);
+            const classLessonsForBilling = allClassLessons.map((l) => ({
+                id: l.id,
+                startsAt: l.startsAt,
+                isFree: Boolean(l.isFree),
+                isTeacherAbsent: Boolean(l.isTeacherAbsent),
+            }));
+
+            for (const [studentId, s] of studentMap.entries()) {
+                const details = billingMap.get(studentId);
+                let balance: StudentBalanceInfo;
+
+                if (isFormation) {
+                    const formationVouchers = (details?.vouchers || []).filter(
+                        (v: any) =>
+                            (v.paymentType === "FORMATION" || v.paymentType === "TUITION_4SESSION") &&
+                            !v.isVoided &&
+                            !v.isRefund &&
+                            (v.classId === classId || !v.classId)
+                    );
+                    let totalPaidFormation = 0;
+                    formationVouchers.forEach((v: any) => {
+                        const vAmount = Number(v.amount || 0);
+                        const vRefunded = (v.refunds || []).reduce(
+                            (sum: number, r: any) => sum + Number(r.amount || 0),
+                            0
+                        );
+                        totalPaidFormation += Math.max(0, vAmount - vRefunded);
+                    });
+                    const isLevelPaid = formationPrice > 0 && totalPaidFormation >= formationPrice;
+                    const isLevelPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
+                    const levelRemainingBalance = Math.max(0, formationPrice - totalPaidFormation);
+
+                    balance = {
+                        isFormation: true,
+                        levelPrice: formationPrice,
+                        totalPaidFormation,
+                        levelRemainingBalance,
+                        isLevelPaid,
+                        isLevelPartiallyPaid,
+                    };
+                } else {
+                    const enrollment = details?.enrollments?.[0];
+                    const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
+
+                    const isSiblingDiscount = Boolean(
+                        details?.family?.payerStudentId &&
+                        details.family.payerStudentId !== studentId
+                    );
+                    const siblingDiscountPct = isSiblingDiscount
+                        ? Number((details?.family as any)?.discountPercentage ?? 50)
+                        : 0;
+                    const isSiblingWaived100 = siblingDiscountPct >= 100;
+
+                    let payerRemainingCredit: number | undefined = undefined;
+                    if (isSiblingDiscount && details?.family?.payerStudentId) {
+                        const payerId = details.family.payerStudentId;
+                        let targetPayerStudent: any = details.family.payerStudent;
+                        if (!targetPayerStudent) {
+                            targetPayerStudent = billingMap.get(payerId);
+                        }
+                        if (targetPayerStudent) {
+                            const payerRes = resolvePayerCredit({
+                                payerStudent: targetPayerStudent,
+                                classId: classId,
+                                classPricePerCycle: classPricePerCycle,
+                                isFormation: false,
+                            });
+                            if (payerRes) {
+                                payerRemainingCredit = payerRes.netSessions;
+                            }
+                        }
+                    }
+
+                    const isPayerSiblingPaid = isSiblingWaived100
+                        ? (payerRemainingCredit !== undefined ? payerRemainingCredit > 0 : true)
+                        : true;
+
+                    const tuitionVouchers = (details?.vouchers || []).filter(
+                        (v: any) =>
+                            v.paymentType === "TUITION_4SESSION" &&
+                            !v.isVoided &&
+                            !v.isRefund &&
+                            (v.classId === classId || !v.classId)
+                    );
+
+                    const sAttendances = (details?.attendances || []).filter(
+                        (att: any) => att.lesson && att.lesson.classId === classId && !att.lesson.isFree
+                    );
+
+                    const classCatchUpsForStudent = (catchUpAttendances || []).filter(
+                        (cu: any) => cu.studentId === studentId
+                    );
+                    const sCatchUps = [
+                        ...(details?.catchUpAttendances || []),
+                        ...classCatchUpsForStudent,
+                    ];
+
+                    const creditMetrics = computeStudentCreditAndSessions({
+                        pricePerCycle: classPricePerCycle,
+                        isFormation: false,
+                        payerStatus: effectivePayerStatus,
+                        siblingDiscountPercentage: siblingDiscountPct,
+                        isSiblingWaived: isSiblingWaived100,
+                        isPayerSiblingPaid,
+                        payerRemainingCredit,
+                        tuitionVouchers,
+                        transfersIn: enrollment?.transfersTo || [],
+                        transfersOut: enrollment?.transfersFrom || [],
+                        creditResetOffset: enrollment?.creditResetOffset || 0,
+                        attendances: sAttendances,
+                        lessons: classLessonsForBilling,
+                        catchUps: sCatchUps,
+                    });
+
+                    const net = isSiblingDiscount && payerRemainingCredit !== undefined
+                        ? payerRemainingCredit
+                        : creditMetrics.netSessions;
+
+                    balance = {
+                        isFormation: false,
+                        netSessions: net,
+                        status: creditMetrics.status,
+                        hasPayerSibling: Boolean(isSiblingDiscount && details?.family?.payerStudentId),
+                    };
+                }
+
+                s.balance = balance;
             }
 
             classData = {

@@ -11,9 +11,148 @@ import { useSearchParams } from "next/navigation";
 import { Search, X, Check, FileText, RotateCcw, Loader2 } from "lucide-react";
 import { markSingleAttendanceAction, deleteSingleAttendanceAction } from "@/lib/actions";
 import { toast } from "react-toastify";
+import { Badge } from "@/components/ui/Badge";
+
+export type StudentBalanceInfo = {
+    isFormation: boolean;
+    netSessions?: number;
+    status?: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER";
+    hasPayerSibling?: boolean;
+    levelPrice?: number;
+    totalPaidFormation?: number;
+    levelRemainingBalance?: number;
+    isLevelPaid?: boolean;
+    isLevelPartiallyPaid?: boolean;
+};
+
+function BalanceBadge({ balance, locale }: { balance: StudentBalanceInfo; locale: string }) {
+    if (balance.isFormation) {
+        if (balance.isLevelPaid) {
+            return (
+                <Badge
+                    variant="success"
+                    size="sm"
+                    withDot
+                    className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                    title={locale === "ar" ? "المستوى خالص بالكامل" : "Niveau payé en totalité"}
+                >
+                    {locale === "ar" ? "خالص بالكامل" : "Payé"}
+                </Badge>
+            );
+        }
+        if (balance.isLevelPartiallyPaid) {
+            const rem = balance.levelRemainingBalance ?? 0;
+            return (
+                <Badge
+                    variant="warning"
+                    size="sm"
+                    withDot
+                    className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                    title={locale === "ar" ? `الرصيد المتبقي: ${rem.toLocaleString("ar-DZ")} دج` : `Solde restant : ${rem.toLocaleString("fr-DZ")} DZD`}
+                >
+                    {locale === "ar"
+                        ? `متبقي ${rem.toLocaleString("ar-DZ")} دج`
+                        : `Reste ${rem.toLocaleString("fr-DZ")} DZD`}
+                </Badge>
+            );
+        }
+        const price = balance.levelPrice ?? 0;
+        return (
+            <Badge
+                variant="danger"
+                size="sm"
+                withDot
+                className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                title={locale === "ar" ? `المستوى غير مدفوع: ${price.toLocaleString("ar-DZ")} دج` : `Niveau non payé : ${price.toLocaleString("fr-DZ")} DZD`}
+            >
+                {price > 0
+                    ? (locale === "ar"
+                        ? `غير مدفوع (${price.toLocaleString("ar-DZ")} دج)`
+                        : `Non payé (${price.toLocaleString("fr-DZ")} DZD)`)
+                    : (locale === "ar" ? "غير مدفوع" : "Non payé")}
+            </Badge>
+        );
+    }
+
+    // Regular support class
+    if (balance.status === "NON_PAYER") {
+        return (
+            <Badge
+                variant="success"
+                size="sm"
+                withDot
+                className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                title={locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours"}
+            >
+                {locale === "ar" ? "معفى" : "Exonéré"}
+            </Badge>
+        );
+    }
+
+    if (balance.status === "SIBLING_WAIVED") {
+        return (
+            <Badge
+                variant="secondary"
+                size="sm"
+                withDot
+                className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                title={locale === "ar" ? "إعفاء إخوة (أخ دافع)" : "Exonéré fratrie (Fratrie)"}
+            >
+                {locale === "ar" ? "إعفاء إخوة" : "Remise fratrie"}
+            </Badge>
+        );
+    }
+
+    const net = balance.netSessions ?? 0;
+    if (net >= 2) {
+        return (
+            <Badge
+                variant="success"
+                size="sm"
+                withDot
+                className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                title={locale === "ar" ? `الرصيد المتبقي: ${net} حصص${balance.hasPayerSibling ? " (أخ دافع)" : ""}` : `Solde restant : ${net} séances${balance.hasPayerSibling ? " (Fratrie)" : ""}`}
+            >
+                {locale === "ar" ? `${net} حصص` : `${net} séances`}
+            </Badge>
+        );
+    }
+
+    if (net === 1) {
+        return (
+            <Badge
+                variant="warning"
+                size="sm"
+                withDot
+                className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                title={locale === "ar" ? "حصة واحدة متبقية (يتطلب التجديد)" : "1 séance restante (renouvellement requis)"}
+            >
+                {locale === "ar" ? "1 حصة متبقية" : "1 séance restante"}
+            </Badge>
+        );
+    }
+
+    return (
+        <Badge
+            variant="danger"
+            size="sm"
+            withDot
+            className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+            title={locale === "ar" ? `الرصيد المتبقي: ${net} حصة` : `Solde restant : ${net} séance`}
+        >
+            {net < 0
+                ? (locale === "ar" ? `${net} حصة (دين)` : `${net} séances (dette)`)
+                : (locale === "ar" ? "0 حصة" : "0 séance")}
+        </Badge>
+    );
+}
 
 type AttendanceGridProps = {
-    students: (Student & { globalNumber?: number; phone?: string | null })[];
+    students: (Student & {
+        globalNumber?: number;
+        phone?: string | null;
+        balance?: StudentBalanceInfo;
+    })[];
     lessonInstances: LessonInstance[];
     attendanceMap: Map<string, Map<string, AttendanceCellDetail | boolean>>;
 };
@@ -503,15 +642,20 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                     height={28}
                                                     className="rounded-full object-cover shrink-0 border border-border group-hover:border-primary transition-colors"
                                                 />
-                                                <div className="flex flex-col min-w-0">
+                                                <div className="flex flex-col min-w-0 items-start gap-0.5">
                                                     <span className="truncate max-w-[110px] sm:max-w-[160px] group-hover:underline group-hover:text-primary transition-colors">
                                                         {student.name}
                                                     </span>
-                                                    {student.globalNumber ? (
-                                                        <span className="text-[10px] text-muted font-mono leading-none mt-0.5">
-                                                            #{student.globalNumber}
-                                                        </span>
-                                                    ) : null}
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        {student.globalNumber ? (
+                                                            <span className="text-[10px] text-muted font-mono leading-none">
+                                                                #{student.globalNumber}
+                                                            </span>
+                                                        ) : null}
+                                                        {student.balance && (
+                                                            <BalanceBadge balance={student.balance} locale={locale} />
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </Link>
                                         </td>

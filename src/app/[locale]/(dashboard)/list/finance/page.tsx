@@ -1,4 +1,4 @@
-import dynamic from "next/dynamic";
+import nextDynamic from "next/dynamic";
 import BackButton from "@/components/BackButton";
 import prisma from "@/lib/prisma";
 import { getAuthSession, getActiveBranchId } from "@/lib/auth";
@@ -18,32 +18,35 @@ import {
   ArrowRightLeft,
 } from "lucide-react";
 
-const DailyRevenueDashboard = dynamic(() => import("@/components/revenue/DailyRevenueDashboard"), {
+const DailyRevenueDashboard = nextDynamic(() => import("@/components/revenue/DailyRevenueDashboard"), {
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement du tableau de bord...</div>,
 });
 
-const PayrollClientTabs = dynamic(() => import("../payroll/PayrollClientTabs"), {
+const PayrollClientTabs = nextDynamic(() => import("../payroll/PayrollClientTabs"), {
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement de la paie...</div>,
 });
 
-const DailyExpensesSection = dynamic(() => import("@/components/finance/DailyExpensesSection"), {
+const DailyExpensesSection = nextDynamic(() => import("@/components/finance/DailyExpensesSection"), {
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement des dépenses...</div>,
 });
 
-const CaisseNoireSection = dynamic(() => import("@/components/finance/CaisseNoireSection"), {
+const CaisseNoireSection = nextDynamic(() => import("@/components/finance/CaisseNoireSection"), {
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement de la Caisse Noire...</div>,
 });
 
-const StaffPayrollSection = dynamic(() => import("@/components/finance/StaffPayrollSection"), {
+const StaffPayrollSection = nextDynamic(() => import("@/components/finance/StaffPayrollSection"), {
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement du personnel...</div>,
 });
 
-const TransferredMoneySection = dynamic(() => import("@/components/finance/TransferredMoneySection"), {
+const TransferredMoneySection = nextDynamic(() => import("@/components/finance/TransferredMoneySection"), {
   loading: () => <div className="p-8 text-center text-muted animate-pulse">Chargement des transferts...</div>,
 });
 
 import { getTranslations, getLocale } from "next-intl/server";
 import { getCaisseNoireSummary } from "@/lib/financeActions";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 interface PageProps {
   searchParams: Promise<{

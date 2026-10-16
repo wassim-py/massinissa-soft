@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * MASSINISSA ACADEMY — SELF-HEALING LOCAL BRIDGE FOR ZKTECO K50 PRO (v3)
+ * MASSINISSA ACADEMY — SELF-HEALING LOCAL BRIDGE FOR ZKTECO K50 PRO (v4)
  * ============================================================================
  * Features:
  *   1. Active 8-second ZKTeco Protocol Heartbeat (CMD_REG_EVENT + CMD_ENABLEDEVICE)
@@ -9,8 +9,12 @@
  *      -> Immediately detects unplugged cable or restarted K50 Pro device!
  *   3. Strict 2.0-second Connect & Handshake Timeout
  *      -> Prevents Windows from hanging in SYN_SENT on Wi-Fi when unplugged!
- *   4. Pre-Enrollment Live Session Verification & Force-Reconnect Support
- *   5. Instant 0ms Server-Sent Events (SSE) on http://127.0.0.1:4375/events
+ *   4. Instant 0ms Server-Sent Events (SSE) on http://127.0.0.1:4375/events
+ *   5. Multi-Branch Cloud Biometric Template Synchronizer:
+ *      - Auto-extracts biometric template (CMD_USERTEMP_RRQ) on enrollment & pushes to Cloud DB
+ *      - Auto-downloads templates (CMD_USER_WRQ + CMD_TMP_WRITE) from Cloud DB to local K50
+ *      - One-click on-demand sync via http://127.0.0.1:4375/sync
+ *      - Auto-sync on startup and periodic 5-minute background synchronization
  * ============================================================================
  */
 
@@ -18,6 +22,8 @@ const net = require("net");
 const http = require("http");
 const https = require("https");
 const { URL } = require("url");
+const fs = require("fs");
+const path = require("path");
 
 const BRIDGE_PORT = Number(process.env.ZK_BRIDGE_PORT || 4375);
 const DEVICE_PORT = Number(process.env.ZK_DEVICE_PORT || 4370);
@@ -35,18 +41,27 @@ const CONFIGURED_IPS = (
 // ZKTeco Protocol Constants
 const TCP_MAGIC = Buffer.from([0x50, 0x50, 0x82, 0x7d]);
 const CMD_USER_WRQ = 8;
+const CMD_USERTEMP_RRQ = 9;
+const CMD_USERTEMP_WRQ = 10;
 const CMD_DELETE_USER = 18;
 const CMD_DELETE_USERTEMP = 19;
 const CMD_STARTVERIFY = 60;
 const CMD_STARTENROLL = 61;
 const CMD_CANCELCAPTURE = 62;
+const CMD_TMP_WRITE = 87;
+const CMD_CHECKSUM_BUFFER = 119;
 const CMD_GET_TIME = 201;
 const CMD_REG_EVENT = 500;
 const CMD_CONNECT = 1000;
 const CMD_ENABLEDEVICE = 1002;
 const CMD_REFRESHDATA = 1013;
 const CMD_AUTH = 1102;
+const CMD_PREPARE_DATA = 1500;
+const CMD_DATA = 1501;
+const CMD_FREE_DATA = 1502;
 const CMD_ACK_OK = 2000;
+const CMD_ACK_ERROR = 2001;
+const CMD_ACK_DATA = 2002;
 const CMD_ACK_UNAUTH = 2005;
 
 // Real-Time Event Flags
@@ -61,10 +76,11 @@ const EF_ALARM = 1024;
 const EVENT_MASK = 0x0000ffff;
 
 // Timing Constants for Self-Healing Connection
-const CONNECT_TIMEOUT_MS = 2000; // Abort SYN_SENT after 2.0s if unplugged/unreachable
-const HEARTBEAT_INTERVAL_MS = 8000; // Send ZKTeco ping every 8s so session NEVER idles out
-const ZOMBIE_TIMEOUT_MS = 14000; // If no ACK received for 14s, kill zombie socket & reconnect
-const RECONNECT_LOOP_MS = 2500; // Check & reconnect every 2.5s
+const CONNECT_TIMEOUT_MS = 2000;
+const HEARTBEAT_INTERVAL_MS = 8000;
+const ZOMBIE_TIMEOUT_MS = 14000;
+const RECONNECT_LOOP_MS = 2500;
+const SYNC_CACHE_FILE = path.join(__dirname, "synced_templates.json");
 
 const state = {
   appUrl: process.env.CLOUD_APP_URL || "",
@@ -74,12 +90,15 @@ const state = {
   lastUnrecognizedAt: 0,
   verifyFailTimer: null,
   pendingScans: [],
+  hasInitialSynced: false,
+  isSyncing: false,
   enrollment: {
     active: false,
     globalNumber: 0,
     studentId: null,
     studentName: "",
     fingerIndex: 0,
+    templateData: null,
     step: 0,
     status: "IDLE",
     message: "",
@@ -218,10 +237,6 @@ function sendToAllDevices(cmd, data = Buffer.alloc(0)) {
   return sent;
 }
 
-/**
- * A device is only considered truly connected if its socket is open AND it has responded
- * to our ZKTeco protocol packets within ZOMBIE_TIMEOUT_MS (14s).
- */
 function isDeviceTrulyAlive(dev) {
   if (!dev || !dev.isConnected || !dev.socket || dev.socket.destroyed) {
     return false;
@@ -249,13 +264,25 @@ function destroyDeviceSocket(dev, reason) {
     clearTimeout(dev.connectTimer);
     dev.connectTimer = null;
   }
+  if (dev.pendingAcks) {
+    for (const cb of dev.pendingAcks.values()) {
+      try {
+        cb({ success: false, error: "socket destroyed" });
+      } catch {}
+    }
+    dev.pendingAcks.clear();
+  }
+  if (dev.templateListener) {
+    try {
+      dev.templateListener(CMD_ACK_ERROR, Buffer.alloc(0));
+    } catch {}
+    dev.templateListener = null;
+  }
   if (dev.socket) {
     try {
       dev.socket.removeAllListeners();
       dev.socket.destroy();
-    } catch {
-      // ignore
-    }
+    } catch {}
     dev.socket = null;
   }
   if (wasConnected) {
@@ -285,11 +312,201 @@ function deleteHardwareUserOnAllDevices(globalNumber) {
   );
 }
 
+// Low-Level Promise-based ZKTeco Command Sender with ACK resolution
+function sendZkCommandWithAck(dev, cmd, data = Buffer.alloc(0), timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    if (!dev || !dev.socket || dev.socket.destroyed || !dev.isConnected) {
+      return resolve({ success: false, error: "not_connected" });
+    }
+    dev.replyId = (dev.replyId + 1) % 65530;
+    const reqReplyId = dev.replyId;
+
+    const timer = setTimeout(() => {
+      if (dev.pendingAcks) {
+        dev.pendingAcks.delete(reqReplyId);
+        dev.pendingAcks.delete("any");
+      }
+      resolve({ success: false, error: "timeout" });
+    }, timeoutMs);
+
+    const onAck = (res) => {
+      clearTimeout(timer);
+      if (dev.pendingAcks) {
+        dev.pendingAcks.delete(reqReplyId);
+        dev.pendingAcks.delete("any");
+      }
+      resolve(res);
+    };
+
+    if (!dev.pendingAcks) dev.pendingAcks = new Map();
+    dev.pendingAcks.set(reqReplyId, onAck);
+    dev.pendingAcks.set("any", onAck);
+
+    const pkt = buildZkTcpPacket(cmd, dev.sessionId, reqReplyId, data);
+    try {
+      dev.socket.write(pkt);
+    } catch {
+      clearTimeout(timer);
+      resolve({ success: false, error: "write_error" });
+    }
+  });
+}
+
+/**
+ * Downloads a student's fingerprint biometric template from the physical K50 Pro terminal
+ */
+function downloadTemplateFromDevice(dev, globalNumber, fingerIndex = 0, timeoutMs = 2500) {
+  if (!dev || !dev.isConnected || !dev.socket || dev.socket.destroyed) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    const chunks = [];
+    let expectedLen = 0;
+    let timer = null;
+    let finished = false;
+
+    const cleanup = () => {
+      dev.templateListener = null;
+      if (timer) clearTimeout(timer);
+    };
+
+    const finish = (result) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve(result);
+    };
+
+    timer = setTimeout(() => {
+      const combined = Buffer.concat(chunks);
+      finish(combined.length > 20 ? combined : null);
+    }, timeoutMs);
+
+    dev.templateListener = (cmd, payload) => {
+      if (cmd === CMD_PREPARE_DATA) {
+        if (payload.length >= 4) {
+          expectedLen = payload.readUInt32LE(0);
+        }
+      } else if (cmd === CMD_DATA) {
+        chunks.push(payload);
+        const curLen = Buffer.concat(chunks).length;
+        if (expectedLen > 0 && curLen >= expectedLen) {
+          finish(Buffer.concat(chunks));
+        }
+      } else if (cmd === CMD_ACK_OK) {
+        if (payload.length > 20) {
+          chunks.push(payload);
+        }
+        const combined = Buffer.concat(chunks);
+        finish(combined.length > 20 ? combined : null);
+      } else if (cmd === CMD_ACK_ERROR || cmd === CMD_ACK_UNAUTH) {
+        finish(null);
+      }
+    };
+
+    const reqBuf = Buffer.alloc(3);
+    reqBuf.writeUInt16LE(globalNumber & 0xffff, 0);
+    reqBuf.writeUInt8(fingerIndex & 0xff, 2);
+    sendToDevice(dev, CMD_USERTEMP_RRQ, reqBuf);
+  });
+}
+
+/**
+ * Uploads a student's biometric template buffer into the physical K50 Pro terminal flash memory
+ */
+async function uploadTemplateToDevice(dev, globalNumber, fingerIndex, templateBuffer) {
+  if (!dev || !dev.isConnected || !dev.socket || dev.socket.destroyed) {
+    return false;
+  }
+  try {
+    const CHUNK_SIZE = 1024;
+    // 1. Prepare data transfer buffer on K50
+    const prepBuf = Buffer.alloc(4);
+    prepBuf.writeUInt32LE(templateBuffer.length, 0);
+    await sendZkCommandWithAck(dev, CMD_PREPARE_DATA, prepBuf, 1500);
+
+    // 2. Send template data chunks
+    for (let offset = 0; offset < templateBuffer.length; offset += CHUNK_SIZE) {
+      const chunk = templateBuffer.subarray(
+        offset,
+        Math.min(offset + CHUNK_SIZE, templateBuffer.length)
+      );
+      await sendZkCommandWithAck(dev, CMD_DATA, chunk, 1500);
+    }
+
+    // 3. Checksum buffer on device
+    await sendZkCommandWithAck(dev, CMD_CHECKSUM_BUFFER, Buffer.alloc(0), 1500);
+
+    // 4. Commit template to flash memory: CMD_TMP_WRITE (87)
+    // Structure: uid (2 bytes uint16), fid (1 byte uint8), valid (1 byte uint8 = 1), size (2 bytes uint16)
+    const tmpWreq = Buffer.alloc(6);
+    tmpWreq.writeUInt16LE(globalNumber & 0xffff, 0);
+    tmpWreq.writeUInt8(fingerIndex & 0xff, 2);
+    tmpWreq.writeUInt8(1, 3);
+    tmpWreq.writeUInt16LE(templateBuffer.length, 4);
+
+    const writeRes = await sendZkCommandWithAck(dev, CMD_TMP_WRITE, tmpWreq, 2000);
+    if (!writeRes.success || writeRes.cmd !== CMD_ACK_OK) {
+      // Fallback to legacy CMD_USERTEMP_WRQ (10) if firmware expects command 10
+      await sendZkCommandWithAck(dev, CMD_USERTEMP_WRQ, tmpWreq, 1500);
+    }
+
+    // 5. Release transfer buffer
+    await sendZkCommandWithAck(dev, CMD_FREE_DATA, Buffer.alloc(0), 1000);
+    return true;
+  } catch (err) {
+    console.error(`[K50 Cloud Sync] Upload error for #${globalNumber}:`, err.message);
+    return false;
+  }
+}
+
+function loadSyncCache() {
+  try {
+    if (fs.existsSync(SYNC_CACHE_FILE)) {
+      return JSON.parse(fs.readFileSync(SYNC_CACHE_FILE, "utf8"));
+    }
+  } catch {}
+  return {};
+}
+
+function saveSyncCache(cache) {
+  try {
+    fs.writeFileSync(SYNC_CACHE_FILE, JSON.stringify(cache, null, 2), "utf8");
+  } catch {}
+}
+
+function fetchFromCloud(path) {
+  return new Promise((resolve) => {
+    if (!state.appUrl) return resolve(null);
+    try {
+      const targetUrl = new URL(path, state.appUrl);
+      const client = targetUrl.protocol === "https:" ? https : http;
+      const req = client.get(targetUrl, { timeout: 8000 }, (res) => {
+        let raw = "";
+        res.on("data", (chunk) => (raw += chunk));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(raw));
+          } catch {
+            resolve(null);
+          }
+        });
+      });
+      req.on("error", () => resolve(null));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(null);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 function postToCloud(path, payload) {
   return new Promise((resolve) => {
-    if (!state.appUrl) {
-      return resolve(null);
-    }
+    if (!state.appUrl) return resolve(null);
     try {
       const targetUrl = new URL(path, state.appUrl);
       const bodyStr = JSON.stringify(payload);
@@ -303,7 +520,7 @@ function postToCloud(path, payload) {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(bodyStr),
           },
-          timeout: 6000,
+          timeout: 7000,
         },
         (res) => {
           let raw = "";
@@ -329,6 +546,137 @@ function postToCloud(path, payload) {
       resolve(null);
     }
   });
+}
+
+/**
+ * Bi-directional Cloud Multi-Branch Synchronizer
+ * 1. Backfill: If any student in cloud is missing their biometric template and local K50 has it, extract & push to cloud.
+ * 2. Download: For all students in cloud, push User record + Template into local K50 Pro hardware.
+ */
+async function syncTemplatesWithCloud(force = false) {
+  if (state.isSyncing) {
+    return { success: false, message: "Sync already in progress" };
+  }
+  if (!state.appUrl) {
+    return { success: false, message: "Cloud URL not configured yet" };
+  }
+  if (!isAnyDeviceConnected()) {
+    return { success: false, message: "No K50 Pro device connected" };
+  }
+
+  state.isSyncing = true;
+  console.log(`[K50 Cloud Sync] Starting multi-branch synchronization with ${state.appUrl}...`);
+
+  try {
+    const cloudData = await fetchFromCloud("/api/biometrics/templates");
+    if (!cloudData || !cloudData.success || !Array.isArray(cloudData.templates)) {
+      console.warn("[K50 Cloud Sync] Could not fetch templates from cloud.");
+      return { success: false, message: "Failed to fetch cloud templates" };
+    }
+
+    const templates = cloudData.templates;
+    const cache = loadSyncCache();
+    let syncedCount = 0;
+    let backfilledCount = 0;
+
+    // Phase 1: BACKFILL (If local K50 has a template that the cloud doesn't have yet, upload it)
+    for (const t of templates) {
+      const isPlaceholder = !t.templateData || t.templateData.startsWith("ZK_K50_");
+      if (isPlaceholder && t.globalNumber > 0) {
+        for (const dev of devices.values()) {
+          if (!dev.isConnected) continue;
+          const tplBuf = await downloadTemplateFromDevice(dev, t.globalNumber, t.fingerIndex || 0, 1500);
+          if (tplBuf && tplBuf.length > 20) {
+            const b64 = tplBuf.toString("base64");
+            t.templateData = b64;
+            await postToCloud("/api/biometrics/templates", {
+              globalNumber: t.globalNumber,
+              fingerIndex: t.fingerIndex || 0,
+              templateData: b64,
+              branchId: state.branchId,
+            });
+            backfilledCount++;
+            console.log(
+              `[K50 Cloud Sync] ↑ Backfilled template for Student #${t.globalNumber} (${t.studentName}) to Cloud DB!`
+            );
+            break;
+          }
+        }
+      }
+    }
+
+    // Phase 2: DOWNLOAD TO HARDWARE
+    for (const t of templates) {
+      if (!t.globalNumber || t.globalNumber <= 0) continue;
+      const key = `${t.globalNumber}_${t.fingerIndex || 0}`;
+      const lastSyncedAt = cache[key]?.updatedAt;
+
+      const needsSync = force || !lastSyncedAt || lastSyncedAt !== t.updatedAt;
+      if (!needsSync) continue;
+
+      const hasRealTemplate = Boolean(
+        t.templateData && !t.templateData.startsWith("ZK_K50_") && t.templateData.length > 20
+      );
+
+      // 1. Write user record to all connected local K50 devices
+      const userPkt = buildUser72Packet(t.globalNumber, t.studentName, String(t.globalNumber));
+      sendToAllDevices(CMD_USER_WRQ, userPkt);
+
+      // 2. If real template exists, write it into the local K50 flash memory
+      if (hasRealTemplate) {
+        const tplBuf = Buffer.from(t.templateData, "base64");
+        for (const dev of devices.values()) {
+          if (!dev.isConnected) continue;
+          await uploadTemplateToDevice(dev, t.globalNumber, t.fingerIndex || 0, tplBuf);
+        }
+      }
+
+      cache[key] = {
+        globalNumber: t.globalNumber,
+        studentName: t.studentName,
+        hasTemplate: hasRealTemplate,
+        updatedAt: t.updatedAt,
+      };
+      syncedCount++;
+      console.log(
+        `[K50 Cloud Sync] ↓ Synced Student #${t.globalNumber} (${t.studentName}, template=${
+          hasRealTemplate ? "YES" : "NO"
+        }) to local K50!`
+      );
+    }
+
+    if (syncedCount > 0 || backfilledCount > 0) {
+      sendToAllDevices(CMD_REFRESHDATA);
+      sendToAllDevices(CMD_STARTVERIFY);
+      sendToAllDevices(CMD_ENABLEDEVICE);
+      saveSyncCache(cache);
+    }
+
+    console.log(
+      `[K50 Cloud Sync] ✓ Multi-branch sync complete: ${syncedCount} downloaded, ${backfilledCount} backfilled to cloud.`
+    );
+
+    broadcastSse({
+      type: "sync_complete",
+      syncedCount,
+      backfilledCount,
+      totalTemplates: templates.length,
+      timestamp: Date.now(),
+    });
+
+    return {
+      success: true,
+      syncedCount,
+      backfilledCount,
+      totalTemplates: templates.length,
+      message: `Synchronisation terminée : ${syncedCount} élèves synchronisés sur ce lecteur K50 Pro.`,
+    };
+  } catch (err) {
+    console.error("[K50 Cloud Sync] Sync error:", err);
+    return { success: false, message: err.message };
+  } finally {
+    state.isSyncing = false;
+  }
 }
 
 async function dispatchScanEvent(scanPayload) {
@@ -416,6 +764,7 @@ function handleRealTimeEvent(dev, eventType, payload) {
     if (eventType === EF_ENROLLFINGER || eventType === EF_ENROLLUSER) {
       const enrollRes = payload.length >= 2 ? payload.readUInt16LE(0) : 0;
       const enrolledNum = state.enrollment.globalNumber;
+      const fingerIdx = state.enrollment.fingerIndex || 0;
 
       sendToDevice(dev, CMD_REFRESHDATA);
       sendToDevice(dev, CMD_STARTVERIFY);
@@ -427,7 +776,38 @@ function handleRealTimeEvent(dev, eventType, payload) {
         state.enrollment.status = "SUCCESS";
         state.enrollment.message = `Fingerprint enrolled on K50 Pro (#${enrolledNum})!`;
         state.enrollment.updatedAt = Date.now();
-        console.log(`[K50 Enroll] ✓ SUCCESS for Student #${enrolledNum}`);
+        console.log(`[K50 Enroll] ✓ SUCCESS for Student #${enrolledNum}. Extracting biometric template...`);
+
+        // Automatically extract template from local K50 & persist to cloud
+        setTimeout(async () => {
+          try {
+            const tplBuf = await downloadTemplateFromDevice(dev, enrolledNum, fingerIdx, 2000);
+            if (tplBuf && tplBuf.length > 20) {
+              const b64 = tplBuf.toString("base64");
+              state.enrollment.templateData = b64;
+              console.log(
+                `[K50 Cloud Sync] ✓ Biometric template extracted (${tplBuf.length} bytes) for #${enrolledNum}. Uploading to Cloud DB...`
+              );
+              if (state.appUrl) {
+                await postToCloud("/api/biometrics/templates", {
+                  globalNumber: enrolledNum,
+                  fingerIndex: fingerIdx,
+                  templateData: b64,
+                  branchId: state.branchId,
+                });
+                console.log(
+                  `[K50 Cloud Sync] ✓ Template #${enrolledNum} saved to Cloud DB! Will auto-sync across all school branches.`
+                );
+              }
+            }
+          } catch (e) {
+            console.error(`[K50 Cloud Sync] Error extracting template after enroll:`, e.message);
+          }
+          broadcastSse({
+            type: "enroll_progress",
+            enrollment: state.enrollment,
+          });
+        }, 200);
       } else {
         state.enrollment.active = false;
         state.enrollment.status = "FAILED";
@@ -437,11 +817,11 @@ function handleRealTimeEvent(dev, eventType, payload) {
         console.warn(
           `[K50 Enroll] ✗ FAILED (code=${enrollRes}) for #${enrolledNum}`
         );
+        broadcastSse({
+          type: "enroll_progress",
+          enrollment: state.enrollment,
+        });
       }
-      broadcastSse({
-        type: "enroll_progress",
-        enrollment: state.enrollment,
-      });
       return;
     }
     return;
@@ -506,6 +886,8 @@ function connectDevice(ip, force = false) {
       isConnecting: false,
       lastRxAt: 0,
       connectTimer: null,
+      pendingAcks: new Map(),
+      templateListener: null,
     };
     devices.set(ip, dev);
   }
@@ -514,7 +896,6 @@ function connectDevice(ip, force = false) {
     destroyDeviceSocket(dev, "manual force reconnect");
   }
 
-  // Check if an existing connection has turned into a zombie (no reply in ZOMBIE_TIMEOUT_MS)
   if (dev.isConnected && !isDeviceTrulyAlive(dev)) {
     destroyDeviceSocket(dev, "idle/zombie session timeout");
   }
@@ -530,7 +911,6 @@ function connectDevice(ip, force = false) {
   dev.socket = sock;
   dev.rxBuffer = Buffer.alloc(0);
 
-  // Strict 2.0-second connect & auth timeout so it NEVER hangs in SYN_SENT on Wi-Fi
   dev.connectTimer = setTimeout(() => {
     if (!dev.isConnected) {
       destroyDeviceSocket(dev, "connect handshake timeout (2s)");
@@ -571,6 +951,23 @@ function connectDevice(ip, force = false) {
       const rId = frame.readUInt16LE(14);
       const payload = frame.subarray(16);
 
+      // 1. Template download listener
+      if (dev.templateListener) {
+        dev.templateListener(cmd, payload);
+      }
+
+      // 2. Pending request ACKs
+      if (dev.pendingAcks && dev.pendingAcks.has(rId)) {
+        const handler = dev.pendingAcks.get(rId);
+        dev.pendingAcks.delete(rId);
+        handler({ success: true, cmd, sId, rId, payload });
+      } else if (dev.pendingAcks && dev.pendingAcks.has("any") && cmd === CMD_ACK_OK) {
+        const handler = dev.pendingAcks.get("any");
+        dev.pendingAcks.delete("any");
+        handler({ success: true, cmd, sId, rId, payload });
+      }
+
+      // 3. Protocol handshake
       if (cmd === CMD_ACK_UNAUTH) {
         dev.sessionId = sId;
         dev.replyId = rId;
@@ -585,7 +982,7 @@ function connectDevice(ip, force = false) {
             dev.connectTimer = null;
           }
           console.log(
-            `[K50 Bridge v3] ✓ Connected & Authenticated to ZKTeco K50 Pro (${ip}:${DEVICE_PORT}, Session #${dev.sessionId})`
+            `[K50 Bridge v4] ✓ Connected & Authenticated to ZKTeco K50 Pro (${ip}:${DEVICE_PORT}, Session #${dev.sessionId})`
           );
           const maskBuf = Buffer.alloc(4);
           maskBuf.writeUInt32LE(EVENT_MASK, 0);
@@ -597,6 +994,12 @@ function connectDevice(ip, force = false) {
             connected: true,
             deviceIp: CONFIGURED_IPS.join(","),
           });
+
+          // Auto-trigger sync with cloud 2 seconds after connecting
+          if (state.appUrl && !state.hasInitialSynced) {
+            state.hasInitialSynced = true;
+            setTimeout(() => syncTemplatesWithCloud(false), 2000);
+          }
         }
       } else if (cmd === CMD_REG_EVENT) {
         if (dev.socket && !dev.socket.destroyed) {
@@ -620,10 +1023,6 @@ function connectDevice(ip, force = false) {
   });
 }
 
-/**
- * Ensures at least one K50 Pro has a verified fresh session (with live ACK in the last 5s),
- * or forces a fast fresh reconnect before critical operations like Enrollment.
- */
 async function ensureFreshConnectionForEnroll(timeoutMs = 2500) {
   let needsFreshReconnect = true;
   for (const dev of devices.values()) {
@@ -655,7 +1054,6 @@ setInterval(() => {
 }, RECONNECT_LOOP_MS);
 
 // 2. Active ZKTeco Protocol Heartbeat Loop every 8 seconds
-// Prevents K50 Pro session idle timeout AND keeps Realtek Ethernet awake!
 setInterval(() => {
   for (const dev of devices.values()) {
     if (!dev.isConnected) continue;
@@ -664,8 +1062,7 @@ setInterval(() => {
       connectDevice(dev.ip, false);
       continue;
     }
-    // Do not interrupt an active 3-tap finger enrollment with CMD_STARTVERIFY
-    if (!state.enrollment.active) {
+    if (!state.enrollment.active && !state.isSyncing) {
       const maskBuf = Buffer.alloc(4);
       maskBuf.writeUInt32LE(EVENT_MASK, 0);
       sendToDevice(dev, CMD_REG_EVENT, maskBuf);
@@ -675,6 +1072,13 @@ setInterval(() => {
     }
   }
 }, HEARTBEAT_INTERVAL_MS);
+
+// 3. Periodic Background Cloud Sync Loop every 5 minutes
+setInterval(() => {
+  if (state.appUrl && isAnyDeviceConnected() && !state.enrollment.active && !state.isSyncing) {
+    syncTemplatesWithCloud(false);
+  }
+}, 5 * 60 * 1000);
 
 for (const ip of CONFIGURED_IPS) {
   connectDevice(ip, false);
@@ -739,6 +1143,19 @@ const server = http.createServer((req, res) => {
 
   res.setHeader("Content-Type", "application/json; charset=utf-8");
 
+  // On-demand Multi-Branch Biometric Sync Endpoint: GET /sync
+  if (req.method === "GET" && pathname === "/sync") {
+    const appUrlParam = parsedUrl.searchParams.get("appUrl");
+    if (appUrlParam && appUrlParam.startsWith("http")) {
+      state.appUrl = appUrlParam;
+    }
+    syncTemplatesWithCloud(true).then((syncRes) => {
+      res.writeHead(200);
+      res.end(JSON.stringify(syncRes));
+    });
+    return;
+  }
+
   if (req.method === "GET" && pathname === "/status") {
     const appUrlParam = parsedUrl.searchParams.get("appUrl");
     const branchIdParam = Number(parsedUrl.searchParams.get("branchId") || 0);
@@ -749,7 +1166,13 @@ const server = http.createServer((req, res) => {
       parsedUrl.searchParams.get("forceReconnect") === "1";
 
     if (appUrlParam && appUrlParam.startsWith("http")) {
+      const wasEmpty = !state.appUrl;
       state.appUrl = appUrlParam;
+      // Auto-trigger sync with cloud if appUrl was just provided and reader is connected
+      if (wasEmpty && isAnyDeviceConnected() && !state.hasInitialSynced) {
+        state.hasInitialSynced = true;
+        setTimeout(() => syncTemplatesWithCloud(false), 2000);
+      }
     }
     if (branchIdParam > 0) {
       state.branchId = branchIdParam;
@@ -773,6 +1196,7 @@ const server = http.createServer((req, res) => {
         deviceIp: CONFIGURED_IPS.join(","),
         branchId: state.branchId,
         pendingScans: drainedScans,
+        isSyncing: state.isSyncing,
       })
     );
     return;
@@ -800,7 +1224,6 @@ const server = http.createServer((req, res) => {
         const fingerIndex = Number(data.fingerIndex || 0);
         const studentName = data.studentName || `Student #${globalNumber}`;
 
-        // Verify live session (or force a fresh reconnect if idle > 6s) before starting enrollment!
         const connected = await ensureFreshConnectionForEnroll(2500);
         if (!connected) {
           res.writeHead(200);
@@ -838,6 +1261,7 @@ const server = http.createServer((req, res) => {
           studentId: data.studentId || null,
           studentName,
           fingerIndex,
+          templateData: null,
           step: 0,
           status: "WAITING_FINGER",
           message: `Place finger 3 times on the K50 Pro reader (ID #${globalNumber})...`,
@@ -890,8 +1314,9 @@ const server = http.createServer((req, res) => {
 
 server.listen(BRIDGE_PORT, "127.0.0.1", () => {
   console.log("==============================================================");
-  console.log("  MASSINISSA ACADEMY — ZKTECO K50 PRO LOCAL BRIDGE (v3)");
+  console.log("  MASSINISSA ACADEMY — ZKTECO K50 PRO LOCAL BRIDGE (v4)");
   console.log(`  Local Server Active : http://127.0.0.1:${BRIDGE_PORT}`);
   console.log(`  K50 Pro Reader(s)   : ${CONFIGURED_IPS.join(", ")}:${DEVICE_PORT}`);
+  console.log("  Multi-Branch Sync   : Active (Auto-sync with Cloud Database)");
   console.log("==============================================================");
 });

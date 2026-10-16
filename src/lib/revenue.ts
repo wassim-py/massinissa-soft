@@ -181,6 +181,8 @@ export async function getDailyRevenueDashboardData(options?: {
           gte: startDate,
           lte: endDate,
         },
+        isVoided: false,
+        amount: { gt: 0 },
         ...(targetBranchId ? { issuingBranchId: targetBranchId } : {}),
       },
       include: {
@@ -617,6 +619,7 @@ export async function getDailyBranchLedgerData(
         issuingBranchId: branchId,
         issuedAt: { gte: startOfDay, lte: endOfDay },
         isVoided: false,
+        amount: { gt: 0 },
       },
       include: {
         student: { select: { id: true, name: true } },

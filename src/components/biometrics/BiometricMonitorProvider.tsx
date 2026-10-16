@@ -57,6 +57,8 @@ interface BiometricMonitorContextType {
     mode: "DISMISS" | "ALLOW_PRESENT" | "RESOLVED_BY_PAYMENT" | "RESOLVED_BY_CATCHUP"
   ) => Promise<void>;
   handleClearJournal: () => Promise<void>;
+  handleSyncK50Devices: () => Promise<void>;
+  isSyncingK50: boolean;
   openCatchUpModalForScan: (scan: BiometricScanResult) => void;
 }
 
@@ -71,8 +73,10 @@ const BiometricMonitorContext = createContext<BiometricMonitorContextType>({
   pinnedAlerts: [],
   liveStreamCard: null,
   deviceConnected: false,
+  isSyncingK50: false,
   handleResolveAlert: async () => {},
   handleClearJournal: async () => {},
+  handleSyncK50Devices: async () => {},
   openCatchUpModalForScan: () => {},
 });
 
@@ -764,6 +768,41 @@ export default function BiometricMonitorProvider({
     }
   }, [isAr]);
 
+  const [isSyncingK50, setIsSyncingK50] = useState<boolean>(false);
+
+  // One-click multi-branch K50 biometric sync via local bridge
+  const handleSyncK50Devices = useCallback(async () => {
+    setIsSyncingK50(true);
+    try {
+      const appOrigin = typeof window !== "undefined" ? window.location.origin : "";
+      const res = await fetch(
+        `http://127.0.0.1:4375/sync?appUrl=${encodeURIComponent(appOrigin)}`,
+        { cache: "no-store" }
+      );
+      const data = await res.json();
+      if (data.success) {
+        toast.success(
+          isAr
+            ? `تمت مزامنة قارئ البصمة بنجاح (${data.syncedCount || 0} تلميذ محدث)!`
+            : `Lecteur K50 synchronisé avec succès (${data.syncedCount || 0} empreintes mises à jour) !`
+        );
+      } else {
+        toast.info(
+          data.message ||
+            (isAr ? "القارئ متزامن بالفعل مع السيرفر." : "Lecteur déjà à jour.")
+        );
+      }
+    } catch {
+      toast.error(
+        isAr
+          ? "تعذر الاتصال ببرنامج الجسر المحلي (127.0.0.1:4375)."
+          : "Impossible de joindre le pont local (127.0.0.1:4375). Vérifiez qu'il est bien démarré."
+      );
+    } finally {
+      setIsSyncingK50(false);
+    }
+  }, [isAr]);
+
   // Open Catch-Up (Rattrapage) modal for a State 3 card
   const openCatchUpModalForScan = useCallback(async (scan: BiometricScanResult) => {
     if (!scan.studentId) return;
@@ -894,8 +933,10 @@ export default function BiometricMonitorProvider({
         pinnedAlerts,
         liveStreamCard,
         deviceConnected,
+        isSyncingK50,
         handleResolveAlert,
         handleClearJournal,
+        handleSyncK50Devices,
         openCatchUpModalForScan,
       }}
     >
@@ -1300,6 +1341,32 @@ export default function BiometricMonitorProvider({
               </div>
 
               <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleSyncK50Devices}
+                  disabled={isSyncingK50}
+                  className="px-2.5 py-1.5 rounded-md border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-700 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                  title={
+                    isAr
+                      ? "مزامنة جميع البصمات مع أجهزة الفروع الأخرى"
+                      : "Synchroniser toutes les empreintes avec les lecteurs K50 des autres branches"
+                  }
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 text-blue-600 ${
+                      isSyncingK50 ? "animate-spin" : ""
+                    }`}
+                  />
+                  <span className="hidden sm:inline">
+                    {isSyncingK50
+                      ? isAr
+                        ? "مزامنة..."
+                        : "Synchronisation..."
+                      : isAr
+                      ? "مزامنة الفروع"
+                      : "Sync K50"}
+                  </span>
+                </button>
                 {recentScans.length > 0 && (
                   <button
                     type="button"

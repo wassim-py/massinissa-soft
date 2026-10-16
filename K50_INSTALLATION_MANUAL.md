@@ -111,3 +111,23 @@ Connect all readers and the PC to a small Ethernet switch:
 | **Installer Input** | Press `[Enter]` (default `192.168.50.201`) | Enter your chosen IP (e.g. `192.168.1.201`) |
 | **Test Command** | `Test-NetConnection 192.168.50.201 -Port 4370` | `Test-NetConnection 192.168.1.201 -Port 4370` |
 | **Device was rebooted** | Auto-reconnects in 2–3s (or toggle navbar button) | Auto-reconnects in 2–3s (or toggle navbar button) |
+
+---
+
+## 7. Multi-Branch Biometric Cloud Sync (v4)
+
+When your school has multiple branches (`ECOLE`, `ANNEX`, `AMPHI`), each terminal has its own separate hardware flash memory.
+
+### How Automatic Biometric Sync Works:
+1. **Enroll Once at Any Branch (e.g. Branch A):**
+   * Go to the student's profile and click **"Enregistrer l'empreinte"**.
+   * Student taps their finger 3 times on Branch A's K50 reader.
+   * `zk-bridge` automatically extracts the raw biometric template from Branch A's reader (`CMD_USERTEMP_RRQ`) and saves it in the central cloud PostgreSQL database.
+2. **Auto-Download to Other Branches (e.g. Branch B):**
+   * As soon as Branch B's PC runs `zk-bridge` (or every 5 minutes in background), it downloads all student profiles and biometric templates from the cloud and writes them directly into Branch B's K50 reader hardware memory (`CMD_USER_WRQ` + `CMD_TMP_WRITE`).
+   * **Result:** The student can immediately walk into Branch B and scan their finger — Branch B's K50 reader recognizes them instantly!
+3. **One-Click Manual Sync Button:**
+   * Open the **Biometric Journal** drawer from the top navbar.
+   * Click **"Sync K50"** (or *مزامنة الفروع*).
+   * A toast notification will confirm: *"Lecteur K50 synchronisé avec succès (X empreintes mises à jour) !"*
+

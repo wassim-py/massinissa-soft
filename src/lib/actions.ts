@@ -44,7 +44,7 @@ import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "./studentBilling";
 import { getFixedInscriptionFeeAction } from "./configurationActions";
-import { splitFullName, getLessonDateTime } from "./utils";
+import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds } from "./utils";
 import {
   resolveOrCreateLessonForDate,
   findSiblingRecurringLessonIds,
@@ -2550,7 +2550,7 @@ export async function searchCatchUpCandidatesAction(
 
     const currentLesson = await prisma.lesson.findUnique({
       where: { id: currentLessonId },
-      select: { id: true, classId: true, branchId: true },
+      select: { id: true, classId: true, branchId: true, startsAt: true },
     });
 
     if (!currentLesson) {
@@ -2692,10 +2692,18 @@ export async function searchCatchUpCandidatesAction(
                     id: { not: currentLessonId },
                     isFree: false,
                   },
-                  orderBy: {
-                    startsAt: "asc",
+                  select: {
+                    id: true,
+                    startsAt: true,
+                    endsAt: true,
+                    isExtra: true,
+                    isCatchUp: true,
+                    isFree: true,
                   },
-                  take: 15,
+                  orderBy: {
+                    startsAt: "desc",
+                  },
+                  take: 30,
                 },
               },
             },
@@ -2704,6 +2712,77 @@ export async function searchCatchUpCandidatesAction(
       },
       take: 25,
     });
+
+    // Resolve upcoming recurring lesson instances for enrolled classes so that
+    // students can attend in advance (anticipatory catch-up) without requiring the admin
+    // to open the other group's attendance roster first.
+    const currentWeekBounds = getAlgiersWeekBounds(0, currentLesson.startsAt);
+    const nextWeekBounds = getAlgiersWeekBounds(1, currentLesson.startsAt);
+    const currentLessonDateStr = getAlgiersDateInfo(currentLesson.startsAt).dateStr;
+
+    const resolvedSlotKeys = new Set<string>();
+    const classesToCheck = new Map<number, any>();
+    for (const s of students) {
+      for (const enr of s.enrollments || []) {
+        if (enr.class && !classesToCheck.has(enr.class.id)) {
+          classesToCheck.set(enr.class.id, enr.class);
+        }
+      }
+    }
+
+    for (const [classId, cls] of classesToCheck.entries()) {
+      const classLessons = cls.lessons || [];
+      const recurringTemplates = classLessons.filter(
+        (l: any) => !l.isExtra && !l.isCatchUp && !l.isFree
+      );
+
+      for (const tmpl of recurringTemplates) {
+        const tmplInfo = getAlgiersDateInfo(tmpl.startsAt);
+        const thisWeekDateStr = currentWeekBounds.dayDates[tmplInfo.weekday];
+        const nextWeekDateStr = nextWeekBounds.dayDates[tmplInfo.weekday];
+
+        const targetDates: string[] = [];
+        if (thisWeekDateStr && thisWeekDateStr >= currentLessonDateStr) {
+          targetDates.push(thisWeekDateStr);
+        }
+        if (nextWeekDateStr) {
+          targetDates.push(nextWeekDateStr);
+        }
+
+        for (const tDate of targetDates) {
+          const slotKey = `${classId}-${tDate}-${tmplInfo.timeStr}`;
+          if (resolvedSlotKeys.has(slotKey)) continue;
+          resolvedSlotKeys.add(slotKey);
+
+          const alreadyInClass = classLessons.some((l: any) => {
+            const lInfo = getAlgiersDateInfo(l.startsAt);
+            return lInfo.dateStr === tDate && lInfo.timeStr === tmplInfo.timeStr;
+          });
+
+          if (!alreadyInClass) {
+            try {
+              const newLessonId = await resolveOrCreateLessonForDate(tmpl.id, tDate);
+              const newlyCreated = await prisma.lesson.findUnique({
+                where: { id: newLessonId },
+                select: {
+                  id: true,
+                  startsAt: true,
+                  endsAt: true,
+                  isExtra: true,
+                  isCatchUp: true,
+                  isFree: true,
+                },
+              });
+              if (newlyCreated && !classLessons.some((l: any) => l.id === newlyCreated.id)) {
+                classLessons.push(newlyCreated);
+              }
+            } catch (err) {
+              console.warn(`Could not resolve recurring lesson for class ${classId} on ${tDate}:`, err);
+            }
+          }
+        }
+      }
+    }
 
     // Collect eligible lessons for each student:
     // 1. Past uncompensated absences (status: "ABSENT" and not caught up)
@@ -4411,6 +4490,8 @@ export const issueVoucher = async (
     safeRevalidatePath(`/list/attendance/class/${data.classId}`);
     safeRevalidatePath(`/list/payments`);
     safeRevalidatePath(`/list/students/${data.studentId}`);
+    safeRevalidatePath(`/list/daily-ledger`);
+    safeRevalidatePath(`/list/finance`);
     safeRevalidatePath(`/admin`);
 
     return {
@@ -4526,6 +4607,12 @@ export const editVoucher = async (
         });
       }
 
+      // If amount is edited to 0, automatically mark voucher as VOIDED
+      if (updates.amount !== undefined && Number(updates.amount) <= 0) {
+        updates.isVoided = true;
+        updates.status = "VOIDED";
+      }
+
       // 2. Update voucher with lastEdited stamp
       await tx.voucher.update({
         where: { id: voucher.id },
@@ -4568,6 +4655,8 @@ export const editVoucher = async (
     safeRevalidatePath(`/list/payments/class/${voucher.classId}`);
     safeRevalidatePath(`/list/payments`);
     safeRevalidatePath(`/list/students/${voucher.studentId}`);
+    safeRevalidatePath(`/list/daily-ledger`);
+    safeRevalidatePath(`/list/finance`);
     return { success: true, error: false, message: "تم تعديل الوصل وتسجيل أثر المراجعة بنجاح." };
   } catch (err: any) {
     console.error("editVoucher error:", err);

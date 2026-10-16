@@ -19,6 +19,9 @@ import SurplusMoneyActions from "@/components/finance/SurplusMoneyActions";
 
 import DailyLedgerDateFilter from "@/components/daily-ledger/DailyLedgerDateFilter";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 interface PageProps {
   searchParams: Promise<{
     branchId?: string;

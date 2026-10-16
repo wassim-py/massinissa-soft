@@ -121,3 +121,22 @@ Vérifiez que la dernière ligne indique : **`TcpTestSucceeded : True`**.
 | **Le port Ethernet se coupe après une longue inactivité** | Économie d'énergie Realtek activée dans Windows | Exécutez `INSTALLER_ET_DEMARRER_PONT_K50.bat`, ou dans le Gestionnaire de périphériques (`devmgmt.msc`) $\rightarrow$ carte Realtek $\rightarrow$ Avancé $\rightarrow$ passez `Energy-Efficient Ethernet`, `Green Ethernet` et `Power Saving Mode` sur **Désactivé**. |
 | **L'élève scanne mais apparaît *"Hors créneau"*** | Le mauvais siège est sélectionné dans la barre du haut | Vérifiez que le sélecteur de siège en haut correspond bien au bâtiment physique (`ECOLE`, `ANNEX`, ou `AMPHI`). |
 | **Comment arrêter le pont en arrière-plan** | Besoin de fermer le service Node.js local | Double-cliquez sur [`ARRETER_PONT_K50.bat`](file:///c:/Users/wassi/OneDrive/Bureau/massinissa-school-software/zk-bridge/ARRETER_PONT_K50.bat). |
+
+---
+
+## 7. Synchronisation Biométrique Multi-Sièges (v4)
+
+Chaque appareil ZKTeco K50 Pro possède sa propre mémoire flash physique interne. Avec le moteur de synchronisation cloud v4 :
+
+1. **Enregistrement unique :**
+   * Vous enregistrez l'empreinte d'un élève sur le lecteur du siège A (3 passages de doigt).
+   * Le pont local extrait automatiquement le modèle biométrique et le sauvegarde dans la base de données cloud centrale PostgreSQL.
+2. **Distribution automatique aux autres sièges :**
+   * Dès que le PC du siège B est allumé avec son pont local (ou automatiquement toutes les 5 minutes), il télécharge les profils et les modèles biométriques depuis le cloud et les injecte directement dans la puce mémoire du K50 du siège B.
+3. **Reconnaissance instantanée partout :**
+   * L'élève peut désormais poser son doigt sur n'importe quel lecteur K50 de l'école — il est reconnu immédiatement sans ré-enrôlement !
+4. **Bouton de synchronisation immédiate :**
+   * Ouvrez le **Journal de présence biométrique** en haut à droite.
+   * Cliquez sur **"Sync K50"** (ou *مزامنة الفروع*).
+   * Une notification verte confirmera : *"Lecteur K50 synchronisé avec succès (X empreintes mises à jour) !"*
+
