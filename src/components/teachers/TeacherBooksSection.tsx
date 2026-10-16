@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useTransition, useMemo } from "react";
+import { useState, useTransition, useMemo, useEffect } from "react";
+import { useRouter } from "@/i18n/navigation";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { DataTable, Column } from "@/components/ui/DataTable";
-import { recordBookDropAction } from "@/lib/actions";
+import { recordBookDropAction, updateBookDropAction, deleteBookDropAction } from "@/lib/actions";
 import { toast } from "react-toastify";
-import { BookOpen, Plus, Filter, X, GraduationCap, Building2 } from "lucide-react";
+import { BookOpen, Plus, Filter, X, GraduationCap, Building2, Pencil, Trash2 } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
 export interface BookDropItem {
@@ -46,16 +47,25 @@ export default function TeacherBooksSection({
   initialDrops,
   branches,
   levels,
+  isOwner = true,
 }: {
   teacherId: string;
   teacherName: string;
   initialDrops: BookDropItem[];
   branches: OptionItem[];
   levels: OptionItem[];
+  isOwner?: boolean;
 }) {
+  const router = useRouter();
   const t = useTranslations("teacherProfile");
   const tCommon = useTranslations("common");
   const locale = useLocale();
+
+  const [drops, setDrops] = useState<BookDropItem[]>(initialDrops);
+
+  useEffect(() => {
+    setDrops(initialDrops);
+  }, [initialDrops]);
 
   // Filters: Date, Branch, Level
   const [selectedBranchId, setSelectedBranchId] = useState<string>("all");
@@ -69,12 +79,21 @@ export default function TeacherBooksSection({
   const [newBookTitle, setNewBookTitle] = useState("");
   const [newLevelId, setNewLevelId] = useState<string>(levels[0]?.id ? String(levels[0].id) : "");
   const [quantity, setQuantity] = useState<number>(15);
+
+  // Edit modal state (Owner only)
+  const [editingDrop, setEditingDrop] = useState<BookDropItem | null>(null);
+  const [editBranchId, setEditBranchId] = useState<string>("");
+  const [editQuantity, setEditQuantity] = useState<number>(15);
+
+  // Delete modal state (Owner only)
+  const [deletingDrop, setDeletingDrop] = useState<BookDropItem | null>(null);
+
   const [isPending, startTransition] = useTransition();
 
   // Distinct existing books for the dropdown
   const existingBooks = useMemo(() => {
     const map = new Map<string, { title: string; levelId: number; levelName: string }>();
-    initialDrops.forEach((d) => {
+    drops.forEach((d) => {
       if (!map.has(d.bookTitle)) {
         map.set(d.bookTitle, {
           title: d.bookTitle,
@@ -84,7 +103,7 @@ export default function TeacherBooksSection({
       }
     });
     return Array.from(map.values());
-  }, [initialDrops]);
+  }, [drops]);
 
   // Filtered drops based on Date, Branch, and Level (§2.11)
   const filteredDrops = useMemo(() => {
@@ -92,7 +111,7 @@ export default function TeacherBooksSection({
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
 
-    return initialDrops.filter((drop) => {
+    return drops.filter((drop) => {
       // Branch filter
       if (selectedBranchId !== "all" && String(drop.branchId) !== selectedBranchId) {
         return false;
@@ -116,7 +135,7 @@ export default function TeacherBooksSection({
       }
       return true;
     });
-  }, [initialDrops, selectedBranchId, selectedLevelId, dateFilter]);
+  }, [drops, selectedBranchId, selectedLevelId, dateFilter]);
 
   const totalFilteredCopies = filteredDrops.reduce((sum, d) => sum + d.quantity, 0);
 
@@ -126,8 +145,70 @@ export default function TeacherBooksSection({
     { header: t("colDepositedQty"), accessor: "quantity", align: "center" },
     { header: t("colReceivingBranch"), accessor: "branchName" },
     { header: t("colDropDate"), accessor: "dropDate" },
-    { header: t("colRecordedBy"), accessor: "recordedBy" },
+    ...(isOwner
+      ? [{ header: tCommon("actions"), accessor: "actions" as any, align: "end" as const }]
+      : [{ header: t("colRecordedBy"), accessor: "recordedBy" }]),
   ];
+
+  const handleOpenEdit = (drop: BookDropItem) => {
+    setEditingDrop(drop);
+    setEditBranchId(String(drop.branchId));
+    setEditQuantity(drop.quantity);
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDrop) return;
+    if (editQuantity < 1) {
+      toast.error(
+        locale === "ar"
+          ? "يرجى إدخال كمية صحيحة (1 على الأقل)"
+          : "Veuillez entrer une quantité valide (au moins 1)"
+      );
+      return;
+    }
+
+    startTransition(async () => {
+      const res = await updateBookDropAction({
+        id: editingDrop.id,
+        teacherId,
+        quantity: editQuantity,
+        branchId: editBranchId ? Number(editBranchId) : undefined,
+      });
+
+      if (res.success) {
+        toast.success(res.message);
+        setEditingDrop(null);
+        router.refresh();
+      } else {
+        toast.error(
+          res.message ||
+            (locale === "ar" ? "فشل تعديل إيداع الكتاب" : "Échec de modification du dépôt")
+        );
+      }
+    });
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!deletingDrop) return;
+    startTransition(async () => {
+      const res = await deleteBookDropAction({
+        id: deletingDrop.id,
+        teacherId,
+      });
+
+      if (res.success) {
+        toast.success(res.message);
+        setDeletingDrop(null);
+        router.refresh();
+      } else {
+        toast.error(
+          res.message ||
+            (locale === "ar" ? "فشل حذف إيداع الكتاب" : "Échec de suppression du dépôt")
+        );
+      }
+    });
+  };
 
   const handleRecordSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -319,9 +400,37 @@ export default function TeacherBooksSection({
               <td className="p-3.5 text-gray-700">
                 {formatDate(drop.dropDate, locale)}
               </td>
-              <td className="p-3.5 text-muted-dark text-xs">
-                {drop.recordedBy}
-              </td>
+              {isOwner ? (
+                <td className="p-3.5 text-end">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleOpenEdit(drop)}
+                      className="h-8 px-2.5 text-xs text-gray-700 hover:text-primary hover:border-primary/40"
+                      title={tCommon("edit")}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline ms-1">{tCommon("edit")}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDeletingDrop(drop)}
+                      className="h-8 px-2 text-danger hover:bg-danger-light/50"
+                      title={tCommon("delete")}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </td>
+              ) : (
+                <td className="p-3.5 text-muted-dark text-xs">
+                  {drop.recordedBy}
+                </td>
+              )}
             </tr>
           )}
           emptyTitle={t("emptyBooksTitle")}
@@ -475,6 +584,182 @@ export default function TeacherBooksSection({
                     </Button>
                   </div>
                 </form>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* Edit Book Drop Modal (Owner only) */}
+        {editingDrop && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <Card className="max-w-md w-full border border-border shadow-xl bg-surface animate-in fade-in-50 duration-150">
+              <CardHeader className="pb-3 border-b border-border">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base font-bold flex items-center gap-2">
+                      <Pencil className="w-4 h-4 text-primary" />
+                      <span>{t("editBookDropTitle")}</span>
+                    </CardTitle>
+                    <CardDescription className="mt-0.5 text-xs">
+                      {t("editBookDropDesc")}
+                    </CardDescription>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setEditingDrop(null)}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+
+              <CardContent className="pt-4">
+                <form onSubmit={handleEditSubmit} className="space-y-4 text-xs">
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1.5">
+                      {t("colBookTitle")}
+                    </label>
+                    <div className="p-2.5 bg-surface-subtle/80 rounded-lg border border-border/80 font-bold text-gray-900 flex items-center gap-2">
+                      <BookOpen className="w-4 h-4 text-primary" />
+                      <span>{editingDrop.bookTitle}</span>
+                      <Badge variant="neutral" size="sm" className="ms-auto">
+                        {editingDrop.levelName}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1.5">
+                      {t("destinationBranch")}
+                    </label>
+                    <select
+                      value={editBranchId}
+                      onChange={(e) => setEditBranchId(e.target.value)}
+                      className="w-full border border-border rounded-lg p-2 bg-surface text-gray-900 shadow-xs focus:ring-2 focus:ring-primary/20"
+                      required
+                    >
+                      {branches.map((b) => (
+                        <option key={b.id} value={String(b.id)}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1.5">
+                      {t("depositedQuantity")}
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={editQuantity}
+                      onChange={(e) => setEditQuantity(parseInt(e.target.value) || 0)}
+                      className="w-full border border-border rounded-lg p-2 bg-surface text-gray-900 font-bold shadow-xs focus:ring-2 focus:ring-primary/20"
+                      required
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2 border-t border-border/60">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setEditingDrop(null)}
+                      disabled={isPending}
+                    >
+                      {tCommon("cancel")}
+                    </Button>
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="sm"
+                      disabled={isPending}
+                    >
+                      {isPending ? tCommon("loading") : tCommon("save")}
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* Delete Book Drop Confirmation Modal (Owner only) */}
+        {deletingDrop && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <Card className="max-w-md w-full border border-border shadow-xl bg-surface animate-in fade-in-50 duration-150">
+              <CardHeader className="pb-3 border-b border-border">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-danger">
+                    <Trash2 className="w-5 h-5" />
+                    <CardTitle className="text-base font-bold text-gray-900">
+                      {t("deleteBookDropTitle")}
+                    </CardTitle>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setDeletingDrop(null)}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              </CardHeader>
+
+              <CardContent className="pt-4 space-y-4 text-xs">
+                <p className="text-muted-dark text-sm">
+                  {t("deleteBookDropConfirm")}
+                </p>
+
+                <div className="p-3 bg-surface-subtle/80 rounded-lg border border-border/60 space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-muted">{t("colBookTitle")} :</span>
+                    <span className="font-bold text-gray-900">{deletingDrop.bookTitle}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">{t("colGradeLevel")} :</span>
+                    <span className="text-gray-900">{deletingDrop.levelName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">{t("colDepositedQty")} :</span>
+                    <span className="font-bold text-primary">
+                      {deletingDrop.quantity} {locale === "ar" ? "نسخة" : "ex."}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">{t("colReceivingBranch")} :</span>
+                    <span className="text-gray-900">{deletingDrop.branchName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted">{t("colDropDate")} :</span>
+                    <span className="text-gray-900">{formatDate(deletingDrop.dropDate, locale)}</span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-border/60">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDeletingDrop(null)}
+                    disabled={isPending}
+                  >
+                    {tCommon("cancel")}
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="danger"
+                    size="sm"
+                    onClick={handleDeleteConfirm}
+                    disabled={isPending}
+                  >
+                    {isPending ? tCommon("loading") : tCommon("delete")}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </div>

@@ -254,7 +254,44 @@ const AttendanceRoster = ({
 
   const filteredStudents = useMemo(() => {
     if (!cleanSearch) return activeStudents;
-    return activeStudents.filter((student) => {
+    const pool = [
+      ...(students || []).filter((s) => {
+        const isPermanentlyRemoved =
+          s.enrollmentStatus === "INACTIVE" ||
+          s.enrollmentStatus === "UNENROLLED" ||
+          s.enrollmentStatus === "TRANSFERRED" ||
+          s.enrollmentStatus === "REFUNDED" ||
+          (s as any).isRefunded;
+        return !isPermanentlyRemoved;
+      }),
+      ...(catchUpVisitors || []).map((v) => ({
+        id: v.studentId,
+        globalNumber: v.globalNumber,
+        name: v.studentName,
+        phone: v.phone || null,
+        surname: "",
+        className: v.missedClassName,
+        enrolledClassId: v.missedClassId,
+        payerStatus: v.payerStatus || "NORMAL",
+        enrollmentStatus: "ACTIVE",
+        isSuspended: false,
+        isRefunded: false,
+        isVisitor: true,
+        visitorCatchUpId: v.id,
+        missedLessonId: v.missedLessonId,
+        missedClassName: v.missedClassName,
+        missedTeacherName: v.missedTeacherName,
+        missedStartsAt: v.missedStartsAt,
+        isScenarioA: v.isScenarioA,
+        isScenarioB: v.isScenarioB,
+        remainingCredits: v.remainingCredits,
+        vouchers: [],
+        attendances: [],
+        catchUps: [],
+        transfersFrom: [],
+      } as any)),
+    ];
+    return pool.filter((student) => {
       const matchName = student.name.toLowerCase().includes(cleanSearch);
       const matchId =
         cleanNumeric && student.globalNumber !== undefined && student.globalNumber !== null
@@ -270,7 +307,7 @@ const AttendanceRoster = ({
           : false;
       return matchName || matchId || matchPhone || matchClass;
     });
-  }, [activeStudents, cleanSearch, cleanNumeric]);
+  }, [activeStudents, students, catchUpVisitors, cleanSearch, cleanNumeric]);
 
   const caughtUpMap = useMemo(
     () => new Map((caughtUpAbsentees || []).map((c) => [c.studentId, c])),
@@ -945,7 +982,7 @@ const AttendanceRoster = ({
 
             const mostRecentVoucher =
               student.vouchers.length > 0
-                ? student.vouchers.reduce((latest, current) =>
+                ? student.vouchers.reduce((latest: any, current: any) =>
                     new Date(current.issuedAt) > new Date(latest.issuedAt) ? current : latest
                   )
                 : null;
@@ -960,7 +997,7 @@ const AttendanceRoster = ({
               id: b.id,
               title: b.title,
               received: currentReceivedSet.has(b.id),
-              receivedAt: student.bookDetails?.find((d) => d.id === b.id)?.receivedAt,
+              receivedAt: student.bookDetails?.find((d: any) => d.id === b.id)?.receivedAt,
             }));
             const computedBookStatus = computeBookStatus(
               !!student.hasPaidBook,

@@ -347,7 +347,10 @@ export async function getGroupBooksData(classId: number) {
       where: {
         teacherId,
         levelId,
-        trimesterId: activeTrimester.id,
+        OR: [
+          { trimesterId: activeTrimester.id },
+          { trimesterId: null },
+        ],
       },
       orderBy: { createdAt: "asc" },
     });

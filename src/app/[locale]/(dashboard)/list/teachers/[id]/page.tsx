@@ -653,6 +653,7 @@ const SingleTeacherPage = async (
           dropDate: d.dropDate,
           recordedBy: d.recordedBy,
         }))}
+        isOwner={session.isOwner}
       />
 
       {/* WEEKLY TIMETABLE VIEW */}

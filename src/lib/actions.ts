@@ -43,7 +43,7 @@ import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from 
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "./studentBilling";
-import { getFixedInscriptionFeeAction } from "./configurationActions";
+import { getFixedInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
 import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds } from "./utils";
 import {
   resolveOrCreateLessonForDate,
@@ -2127,14 +2127,30 @@ export const saveAttendance = async (
 
       // Restore ACTIVE status for attending students who were SUSPENDED
       if (presentStudentIds.length > 0) {
-        await prisma.enrollment.updateMany({
+        const targetClassIds = [
+          ...(lessonInfo.classId ? [lessonInfo.classId] : []),
+          ...(lessonInfo.lessonGroups?.map((lg: any) => lg.classId) || []),
+        ];
+        const suspendedEnrollments = await prisma.enrollment.findMany({
           where: {
             studentId: { in: presentStudentIds },
-            classId: lessonInfo.classId,
+            classId: { in: targetClassIds },
             status: "SUSPENDED",
           },
-          data: { status: "ACTIVE" },
+          select: { id: true, studentId: true, classId: true },
         });
+        for (const enr of suspendedEnrollments) {
+          await unsuspendEnrollmentWithDebtClearance(prisma, {
+            studentId: enr.studentId,
+            classId: enr.classId,
+            enrollmentId: enr.id,
+            trigger: "ATTENDANCE",
+            actorId: adminId,
+            actorName: adminId,
+            excludeLessonIds: [lessonId],
+            referenceDate: new Date(),
+          });
+        }
       }
 
       // Check for 4+ consecutive absences among absent students
@@ -2296,16 +2312,32 @@ export const markSingleAttendanceAction = async (input: {
 
     if (lessonInfo?.classId) {
       try {
+        const targetClassIds = [
+          ...(lessonInfo.classId ? [lessonInfo.classId] : []),
+          ...(lessonInfo.lessonGroups?.map((lg: any) => lg.classId) || []),
+        ];
         if (input.status === "PRESENT") {
           // Restore ACTIVE status if student was SUSPENDED
-          await prisma.enrollment.updateMany({
+          const suspendedEnrollments = await prisma.enrollment.findMany({
             where: {
               studentId: input.studentId,
-              classId: lessonInfo.classId,
+              classId: { in: targetClassIds },
               status: "SUSPENDED",
             },
-            data: { status: "ACTIVE" },
+            select: { id: true, studentId: true, classId: true },
           });
+          for (const enr of suspendedEnrollments) {
+            await unsuspendEnrollmentWithDebtClearance(prisma, {
+              studentId: enr.studentId,
+              classId: enr.classId,
+              enrollmentId: enr.id,
+              trigger: "ATTENDANCE",
+              actorId: session.userId || "admin",
+              actorName: session.userId || "Admin",
+              excludeLessonIds: [input.lessonId],
+              referenceDate: new Date(),
+            });
+          }
         } else if (input.status === "NOT_DEFINED") {
           // If student was SUSPENDED and the absence was justified, restore ACTIVE if consecutive unexcused absences are now < 4
           const [classLessons, studentAtts, studentCatchUps] = await Promise.all([
@@ -2337,14 +2369,26 @@ export const markSingleAttendanceAction = async (input: {
           });
 
           if (consecutiveAbsences < 4) {
-            await prisma.enrollment.updateMany({
+            const suspendedEnrollments = await prisma.enrollment.findMany({
               where: {
                 studentId: input.studentId,
-                classId: lessonInfo.classId,
+                classId: { in: targetClassIds },
                 status: "SUSPENDED",
               },
-              data: { status: "ACTIVE" },
+              select: { id: true, studentId: true, classId: true },
             });
+            for (const enr of suspendedEnrollments) {
+              await unsuspendEnrollmentWithDebtClearance(prisma, {
+                studentId: enr.studentId,
+                classId: enr.classId,
+                enrollmentId: enr.id,
+                trigger: "ATTENDANCE",
+                actorId: session.userId || "admin",
+                actorName: session.userId || "Admin",
+                excludeLessonIds: [input.lessonId],
+                referenceDate: new Date(),
+              });
+            }
           }
         } else if (input.status === "ABSENT") {
           // Check for >= 4 consecutive absences (Rules 5 & 9)
@@ -4075,6 +4119,16 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
             payerStatus: "NORMAL",
           },
         });
+      } else if (enr.status === "SUSPENDED") {
+        await unsuspendEnrollmentWithDebtClearance(tx, {
+          studentId: payload.studentId,
+          classId: payload.classId,
+          enrollmentId: enr.id,
+          trigger: "PAYMENT",
+          actorId: session.userId || "admin",
+          actorName: session.userId || "Admin",
+          referenceDate: new Date(),
+        });
       }
 
       await syncStudentInscriptionWaiverForThreeGroups(tx, payload.studentId);
@@ -4587,7 +4641,20 @@ export const issueVoucher = async (
           data.paymentType === "TUITION_4SESSION" &&
           (existingEnrollment.status === "REFUNDED" || existingEnrollment.status === "SUSPENDED")
         ) {
-          updateData.status = "ACTIVE";
+          if (existingEnrollment.status === "SUSPENDED") {
+            await unsuspendEnrollmentWithDebtClearance(tx, {
+              studentId: data.studentId,
+              classId: data.classId,
+              enrollmentId: existingEnrollment.id,
+              trigger: "PAYMENT",
+              actorId: session.userId || "admin",
+              actorName: session.userId || "Admin",
+              excludeVoucherIds: createdVoucher ? [createdVoucher.id] : [],
+              referenceDate: new Date(),
+            });
+          } else {
+            updateData.status = "ACTIVE";
+          }
         }
         if (Object.keys(updateData).length > 0) {
           await tx.enrollment.update({
@@ -8447,17 +8514,16 @@ export async function recordBookDropAction(formData: {
         return { success: false, error: true, message: "يرجى إدخال عنوان الكتاب والمستوى الدراسي." };
       }
 
-      // Find current active trimester or latest
-      const currentTrimester = await prisma.trimester.findFirst({
-        orderBy: { startDate: "desc" },
-      });
+      // Resolve current active trimester (§7.20)
+      const activeTrimester = await getActiveTrimester();
+      const currentTrimesterId = activeTrimester?.id ?? null;
 
       const newBook = await prisma.book.create({
         data: {
           teacherId: formData.teacherId,
           levelId: Number(formData.levelId),
           title: formData.newBookTitle.trim(),
-          trimesterId: currentTrimester?.id ?? null,
+          trimesterId: currentTrimesterId,
         },
       });
       targetBookId = newBook.id;
@@ -8494,6 +8560,8 @@ export async function recordBookDropAction(formData: {
     safeRevalidatePath("/list/teachers");
     safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
     safeRevalidatePath("/list/classes");
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath("/list/finance");
 
     return {
       success: true,
@@ -8504,6 +8572,145 @@ export async function recordBookDropAction(formData: {
   } catch (error: any) {
     console.error("Error in recordBookDropAction:", error);
     return { success: false, error: true, message: error.message || "فشل تسجيل إيداع الكتاب." };
+  }
+}
+
+/**
+ * Update a Book Drop (Owner-only).
+ * Allows the owner to adjust the quantity of copies dropped or reassign to another branch.
+ */
+export async function updateBookDropAction(formData: {
+  id: number;
+  teacherId: string;
+  quantity: number;
+  branchId?: number;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / هذا الإجراء متاح فقط لمالك المؤسسة.",
+      };
+    }
+
+    const quantity = Number(formData.quantity);
+    if (!quantity || quantity < 1) {
+      return {
+        success: false,
+        error: true,
+        message: "Veuillez entrer une quantité valide (au moins 1) / يرجى إدخال كمية صحيحة (1 على الأقل).",
+      };
+    }
+
+    const existingDrop = await prisma.bookDrop.findUnique({
+      where: { id: Number(formData.id) },
+      include: { book: true },
+    });
+
+    if (!existingDrop) {
+      return {
+        success: false,
+        error: true,
+        message: "Dépôt de livre introuvable / سجل إيداع الكتاب غير موجود.",
+      };
+    }
+
+    const updated = await prisma.bookDrop.update({
+      where: { id: existingDrop.id },
+      data: {
+        quantity,
+        ...(formData.branchId ? { branchId: Number(formData.branchId) } : {}),
+      },
+      include: {
+        book: { include: { level: true } },
+        branch: true,
+      },
+    });
+
+    safeRevalidatePath("/list/teachers");
+    safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
+    safeRevalidatePath("/list/classes");
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath("/list/finance");
+
+    return {
+      success: true,
+      error: false,
+      message: `تم تحديث إيداع كتاب "${updated.book.title}" بنجاح (${quantity} نسخة).`,
+      data: updated,
+    };
+  } catch (error: any) {
+    console.error("Error in updateBookDropAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "فشل تحديث إيداع الكتاب.",
+    };
+  }
+}
+
+/**
+ * Delete a Book Drop (Owner-only).
+ * Removes a book drop record and any associated copy distribution records.
+ */
+export async function deleteBookDropAction(formData: {
+  id: number;
+  teacherId: string;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / هذا الإجراء متاح فقط لمالك المؤسسة.",
+      };
+    }
+
+    const existingDrop = await prisma.bookDrop.findUnique({
+      where: { id: Number(formData.id) },
+      include: { book: true, distributions: true },
+    });
+
+    if (!existingDrop) {
+      return {
+        success: false,
+        error: true,
+        message: "Dépôt de livre introuvable / سجل إيداع الكتاب غير موجود.",
+      };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (existingDrop.distributions.length > 0) {
+        await tx.bookCopyDistribution.deleteMany({
+          where: { bookDropId: existingDrop.id },
+        });
+      }
+      await tx.bookDrop.delete({
+        where: { id: existingDrop.id },
+      });
+    });
+
+    safeRevalidatePath("/list/teachers");
+    safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
+    safeRevalidatePath("/list/classes");
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath("/list/finance");
+
+    return {
+      success: true,
+      error: false,
+      message: `تم حذف سجل إيداع كتاب "${existingDrop.book.title}" بنجاح.`,
+    };
+  } catch (error: any) {
+    console.error("Error in deleteBookDropAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "فشل حذف إيداع الكتاب.",
+    };
   }
 }
 
@@ -9660,6 +9867,252 @@ export async function updateEnrollmentPayerStatusAction(
 }
 
 /**
+ * Automatically unsuspend an enrollment and clear debts accumulated prior to return.
+ * Triggered when a suspended student either:
+ * 1. Makes a payment in the suspended group (trigger: "PAYMENT")
+ * 2. Is marked PRESENT in attendance (trigger: "ATTENDANCE")
+ * 3. Is manually reinstated to normal (trigger: "MANUAL")
+ *
+ * In all cases:
+ * - Past debts accumulated up to the return date (or excluding the new payment/presence)
+ *   are cleared by setting creditResetOffset, resetting past drop-out balance to 0.
+ * - The new payment and/or today's attendance remain active and unaffected.
+ * - Status is restored from "SUSPENDED" to "ACTIVE".
+ * - Payer status is set to "NORMAL".
+ */
+export async function unsuspendEnrollmentWithDebtClearance(
+  client: any,
+  params: {
+    studentId: string;
+    classId: number;
+    enrollmentId?: number;
+    trigger: "PAYMENT" | "ATTENDANCE" | "MANUAL";
+    actorId?: string;
+    actorName?: string;
+    excludeVoucherIds?: number[];
+    excludeLessonIds?: number[];
+    referenceDate?: Date;
+  }
+): Promise<{ success: boolean; creditResetOffset: number; rawCredit: number; enrollmentId?: number }> {
+  try {
+    const enrollment = await client.enrollment.findFirst({
+      where: params.enrollmentId
+        ? { id: params.enrollmentId }
+        : { studentId: params.studentId, classId: params.classId },
+      include: {
+        class: {
+          include: {
+            branch: true,
+            lessons: {
+              where: { isFree: false },
+              select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+            },
+            vouchers: {
+              where: { studentId: params.studentId, isVoided: false },
+              include: { refunds: true },
+            },
+          },
+        },
+        student: {
+          select: {
+            id: true,
+            name: true,
+            payerStatus: true,
+            family: true,
+            attendances: {
+              where: {
+                lesson: {
+                  classId: params.classId,
+                  isFree: false,
+                },
+              },
+              include: {
+                lesson: {
+                  select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+                },
+              },
+            },
+            catchUpAttendances: {
+              where: {
+                missedLesson: { classId: params.classId },
+              },
+              include: {
+                missedLesson: { select: { id: true, startsAt: true, classId: true } },
+                catchUpLesson: { select: { id: true, startsAt: true, classId: true } },
+              },
+            },
+          },
+        },
+        transfersFrom: true,
+        transfersTo: true,
+      },
+    });
+
+    if (!enrollment || enrollment.status !== "SUSPENDED") {
+      return { success: false, creditResetOffset: enrollment?.creditResetOffset || 0, rawCredit: 0, enrollmentId: enrollment?.id };
+    }
+
+    const refDate = params.referenceDate || new Date();
+    const refDayStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Algiers",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(refDate);
+
+    const c = enrollment.class;
+    const student = enrollment.student;
+
+    const classVouchers = (c.vouchers || []).filter(
+      (v: any) =>
+        (v.classId === c.id || !v.classId) &&
+        !(params.excludeVoucherIds || []).includes(v.id)
+    );
+
+    // Vouchers strictly prior to return date
+    const priorTuitionVouchers = classVouchers.filter((v: any) => {
+      if (v.paymentType !== "TUITION_4SESSION") return false;
+      const vDayStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Africa/Algiers",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(v.issuedAt));
+      return vDayStr < refDayStr;
+    });
+
+    const family = student.family;
+    const isSiblingDiscount = Boolean(
+      family &&
+        family.payerStudentId &&
+        family.payerStudentId !== student.id
+    );
+    const siblingDiscountPct = isSiblingDiscount
+      ? Number((family as any)?.discountPercentage ?? 50)
+      : 0;
+    const isSiblingWaived100 = siblingDiscountPct >= 100;
+
+    const cyclePrice = Number(c.pricePerCycle || 0);
+    const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+    const effectiveLessonPrice =
+      siblingDiscountPct > 0 && siblingDiscountPct < 100
+        ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+        : isSiblingWaived100
+        ? 0
+        : baseLessonPrice;
+
+    let priorPurchasedSessions = 0;
+    if (isSiblingWaived100) {
+      priorPurchasedSessions = 16;
+    } else if (effectiveLessonPrice > 0) {
+      let totalPaidTuition = 0;
+      priorTuitionVouchers.forEach((v: any) => {
+        const vAmount = Number(v.amount || 0);
+        const vRefunded = v.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
+        totalPaidTuition += Math.max(0, vAmount - vRefunded);
+      });
+      priorPurchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
+    } else {
+      priorPurchasedSessions = priorTuitionVouchers.length * 4;
+    }
+
+    const transferredOut = enrollment.transfersFrom.reduce((sum: number, t: any) => sum + t.transferredSessions, 0);
+    const transferredIn = enrollment.transfersTo.reduce((sum: number, t: any) => sum + t.transferredSessions, 0);
+
+    // Attendances strictly prior to return date and not excluded
+    const priorAtts = (student.attendances || []).filter((att: any) => {
+      if (!att.lesson || att.lesson.classId !== c.id || att.lesson.isFree) return false;
+      if ((params.excludeLessonIds || []).includes(att.lesson.id)) return false;
+      const lDayStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Africa/Algiers",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(att.lesson.startsAt));
+      return lDayStr < refDayStr;
+    });
+
+    const priorLessons = priorAtts.map((att: any) => att.lesson);
+    const priorCatchUps = (student.catchUpAttendances || []).filter((cu: any) => {
+      if (!cu.missedLesson || cu.missedLesson.classId !== c.id) return false;
+      const cuDayStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Africa/Algiers",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(cu.missedLesson.startsAt));
+      return cuDayStr < refDayStr;
+    });
+
+    const priorAttendedSessions = computeStudentConsumedSessions({
+      lessons: priorLessons,
+      attendances: priorAtts.map((att: any) => ({ lessonId: att.lesson.id, status: att.status })),
+      catchUps: priorCatchUps.map((cu: any) => ({
+        missedLessonId: cu.missedLessonId,
+        catchUpLessonId: cu.catchUpLessonId,
+      })),
+    });
+
+    const currentOffset = enrollment.creditResetOffset || 0;
+    const priorRawCredit = (priorPurchasedSessions + transferredIn - transferredOut) - priorAttendedSessions + currentOffset;
+
+    const newCreditResetOffset = priorRawCredit < 0 ? currentOffset - priorRawCredit : currentOffset;
+
+    await client.enrollment.update({
+      where: { id: enrollment.id },
+      data: {
+        status: "ACTIVE",
+        payerStatus: enrollment.payerStatus === "SUSPENDED" ? "NORMAL" : enrollment.payerStatus,
+        creditResetOffset: newCreditResetOffset,
+      },
+    });
+
+    // Audit log
+    try {
+      await client.auditLog.create({
+        data: {
+          entityType: "ENROLLMENT",
+          entityId: String(enrollment.id),
+          action: "REINSTATE_ENROLLMENT",
+          branchId: c.branchId,
+          userId: params.actorId || "system",
+          userName: params.actorName || "Système",
+          oldValue: `status:SUSPENDED,priorCredit:${priorRawCredit}`,
+          newValue: `status:ACTIVE,payerStatus:NORMAL,creditResetOffset:${newCreditResetOffset}`,
+          details: `Rétablissement automatique (${params.trigger === "PAYMENT" ? "Paiement" : params.trigger === "ATTENDANCE" ? "Présence" : "Manuel"}) dans "${c.name}". ${
+            priorRawCredit < 0
+              ? `Dettes antérieures (${Math.abs(priorRawCredit)} séances) effacées.`
+              : `Crédit antérieur conservé (${priorRawCredit} séances).`
+          }`,
+        },
+      });
+    } catch (auditErr) {
+      console.warn("Audit log creation skipped:", auditErr);
+    }
+
+    safeRevalidatePath(`/list/students/${params.studentId}`);
+    safeRevalidatePath("/list/students");
+    safeRevalidatePath("/list/payments");
+    safeRevalidatePath(`/list/payments/class/${c.id}`);
+    safeRevalidatePath(`/list/classes/${c.id}`);
+    safeRevalidatePath(`/list/attendance/class/${c.id}`);
+    safeRevalidatePath(`/list/attendance/take/${c.id}`);
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath("/admin");
+
+    return {
+      success: true,
+      creditResetOffset: newCreditResetOffset,
+      rawCredit: priorRawCredit,
+      enrollmentId: enrollment.id,
+    };
+  } catch (err) {
+    console.error("unsuspendEnrollmentWithDebtClearance error:", err);
+    return { success: false, creditResetOffset: 0, rawCredit: 0 };
+  }
+}
+
+/**
  * Toggle enrollment suspension status (ACTIVE/NORMAL <-> SUSPENDED).
  * Suspended students will not appear on the Take Attendance page or in the Dashboard Paying Students section.
  * When restored from SUSPENDED to NORMAL:
@@ -9797,111 +10250,32 @@ export async function toggleEnrollmentSuspensionAction(
         enrollmentId,
       };
     } else {
-      // Restoring to NORMAL:
-      // 1. Calculate raw credit and debts
-      const c = enrollment.class;
-      const student = enrollment.student;
-      const classVouchers = c.vouchers.filter(
-        (v) => v.classId === c.id || !v.classId
-      );
-      const tuitionVouchers = classVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
-
-      const family = student.family;
-      const isSiblingDiscount = Boolean(
-        family &&
-          family.payerStudentId &&
-          family.payerStudentId !== student.id
-      );
-      const siblingDiscountPct = isSiblingDiscount
-        ? Number((family as any)?.discountPercentage ?? 50)
-        : 0;
-      const isSiblingWaived100 = siblingDiscountPct >= 100;
-
-      const cyclePrice = Number(c.pricePerCycle || 0);
-      const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-      const effectiveLessonPrice =
-        siblingDiscountPct > 0 && siblingDiscountPct < 100
-          ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-          : siblingDiscountPct >= 100
-          ? 0
-          : baseLessonPrice;
-
-      let purchasedSessions = 0;
-      if (isSiblingWaived100) {
-        purchasedSessions = 16;
-      } else if (effectiveLessonPrice > 0) {
-        let totalPaidTuition = 0;
-        tuitionVouchers.forEach((v) => {
-          const vAmount = Number(v.amount || 0);
-          const vRefunded = v.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
-          totalPaidTuition += Math.max(0, vAmount - vRefunded);
-        });
-        purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
-      } else {
-        purchasedSessions = tuitionVouchers.length * 4;
-      }
-
-      const transferredOut = enrollment.transfersFrom.reduce((sum, t) => sum + t.transferredSessions, 0);
-      const transferredIn = enrollment.transfersTo.reduce((sum, t) => sum + t.transferredSessions, 0);
-
-      const classAtts = student.attendances.filter(
-        (att) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
-      );
-      const classLessons = classAtts.map((att) => att.lesson);
-      const attendedSessions = computeStudentConsumedSessions({
-        lessons: classLessons,
-        attendances: classAtts.map((att) => ({ lessonId: att.lesson.id, status: att.status })),
-      });
-
-      const currentOffset = enrollment.creditResetOffset || 0;
-      const rawCredit = (purchasedSessions + transferredIn - transferredOut) - attendedSessions + currentOffset;
-
-      // To strictly set lesson credit to 0 if the student has past debts:
-      // If student has negative credit (debts), offset it to 0 so debts are cleared.
-      // If student has positive credit (prepaid sessions), preserve their purchased credit.
-      const newCreditResetOffset = rawCredit < 0 ? currentOffset - rawCredit : currentOffset;
-
-      await prisma.enrollment.update({
-        where: { id: enrollmentId },
-        data: {
+      // If already active and normal, return immediately without touching credit
+      if (oldStatus === "ACTIVE" && oldPayerStatus === "NORMAL") {
+        return {
+          success: true,
+          error: false,
+          message: `Groupe "${enrollment.class.name}" : élève déjà en statut normal / التلميذ في الحالة العادية بالفعل`,
           status: "ACTIVE",
           payerStatus: "NORMAL",
-          creditResetOffset: newCreditResetOffset,
-        },
-      });
-
-      // Audit trail
-      try {
-        await prisma.auditLog.create({
-          data: {
-            entityType: "ENROLLMENT",
-            entityId: String(enrollmentId),
-            action: "REINSTATE_ENROLLMENT",
-            branchId: branchId,
-            userId: session.userId || session.rawRole || "system",
-            userName: session.userId || session.rawRole || "Admin",
-            oldValue: `status:${oldStatus},rawCredit:${rawCredit}`,
-            newValue: `status:ACTIVE,payerStatus:NORMAL,credit:${rawCredit < 0 ? 0 : rawCredit},creditResetOffset:${newCreditResetOffset}`,
-            details: `Élève réinscrit en statut normal dans "${c.name}". ${rawCredit < 0 ? `Toutes les dettes précédentes (${Math.abs(rawCredit)} séances) ont été effacées et le crédit réinitialisé à 0.` : `Crédit restant conservé (${rawCredit} séances).`}`,
-          },
-        });
-      } catch (auditErr) {
-        console.warn("Audit log creation skipped:", auditErr);
+          enrollmentId,
+        };
       }
 
-      safeRevalidatePath(`/list/students/${studentId}`);
-      safeRevalidatePath("/list/students");
-      safeRevalidatePath("/list/payments");
-      safeRevalidatePath(`/list/payments/class/${enrollment.classId}`);
-      safeRevalidatePath(`/list/classes/${enrollment.classId}`);
-      safeRevalidatePath(`/list/attendance/class/${enrollment.classId}`);
-      safeRevalidatePath(`/list/attendance/take/${enrollment.classId}`);
-      safeRevalidatePath("/admin");
+      const res = await unsuspendEnrollmentWithDebtClearance(prisma, {
+        studentId,
+        classId: enrollment.classId,
+        enrollmentId,
+        trigger: "MANUAL",
+        actorId: session.userId || session.rawRole || "system",
+        actorName: session.userId || session.rawRole || "Admin",
+        referenceDate: new Date(),
+      });
 
       return {
         success: true,
         error: false,
-        message: `Groupe "${c.name}" : réinscrit en statut Normal. Dettes effacées et crédit réinitialisé à 0 حصة / تم إعادة التلميذ للحالة العادية وتصفير الديون بنجاح`,
+        message: `Groupe "${enrollment.class.name}" : réinscrit en statut Normal. Dettes antérieures effacées et crédit réinitialisé / تم إعادة التلميذ للحالة العادية وتصفير الديون بنجاح`,
         status: "ACTIVE",
         payerStatus: "NORMAL",
         enrollmentId,

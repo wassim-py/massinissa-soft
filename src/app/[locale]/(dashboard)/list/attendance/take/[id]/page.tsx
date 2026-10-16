@@ -200,14 +200,29 @@ const TakeAttendancePage = async (
   // Resolve books for this group's teacher + level in the active trimester (§7.20)
   const teacherId = l.classTeacherId || l.teacherId;
   const levelId = l.classLevelId != null ? Number(l.classLevelId) : null;
+  const allLevelIds = Array.from(
+    new Set(
+      [
+        levelId,
+        ...lessonGroups.map((g) => (g.class?.levelId != null ? Number(g.class.levelId) : null)),
+      ].filter((id): id is number => id !== null)
+    )
+  );
 
   let groupBooks: Array<{ id: number; title: string }> = [];
-  if (teacherId && levelId && activeTrimester) {
+  if (teacherId && (levelId || allLevelIds.length > 0)) {
     groupBooks = await prisma.book.findMany({
       where: {
         teacherId,
-        levelId,
-        trimesterId: activeTrimester.id,
+        levelId: allLevelIds.length > 0 ? { in: allLevelIds } : levelId!,
+        ...(activeTrimester
+          ? {
+              OR: [
+                { trimesterId: activeTrimester.id },
+                { trimesterId: null },
+              ],
+            }
+          : {}),
       },
       select: {
         id: true,
@@ -226,13 +241,13 @@ const TakeAttendancePage = async (
         paymentType: "BOOK",
         isVoided: false,
         OR: [
-          { classId: l.classId },
-          ...(teacherId && levelId
+          { classId: { in: allClassIds } },
+          ...(teacherId && (levelId || allLevelIds.length > 0)
             ? [
                 {
                   class: {
                     teacherId,
-                    levelId,
+                    levelId: allLevelIds.length > 0 ? { in: allLevelIds } : levelId!,
                   },
                 },
               ]
@@ -386,11 +401,11 @@ const TakeAttendancePage = async (
       FROM "Student" s
       JOIN "Enrollment" e ON e."studentId" = s.id
       WHERE e."classId" IN (${Prisma.join(allClassIds)})
-        AND (e.status IS NULL OR e.status = 'ACTIVE')
+        AND (e.status IS NULL OR e.status IN ('ACTIVE', 'SUSPENDED'))
         AND s.id NOT IN (
           SELECT "studentId" FROM "Enrollment"
           WHERE "classId" IN (${Prisma.join(allClassIds)})
-            AND status IN ('SUSPENDED', 'REFUNDED', 'UNENROLLED', 'TRANSFERRED', 'INACTIVE')
+            AND status IN ('REFUNDED', 'UNENROLLED', 'TRANSFERRED', 'INACTIVE')
         )
       ORDER BY s."globalNumber" ASC, s.name ASC
     `;
@@ -727,9 +742,9 @@ const TakeAttendancePage = async (
     };
   });
 
-  // Exclude inactive (suspended) and refunded students from the attendance taking list
-  const activeStudentsWithHistory = studentsWithHistory.filter(
-    (s: any) => !s.isSuspended && !s.isRefunded
+  // Exclude refunded students from the attendance taking list (keep suspended so they can be searched and unsuspended)
+  const rosterStudents = studentsWithHistory.filter(
+    (s: any) => !s.isRefunded
   );
 
   const todaysAttendance = existingAttendance.map((a) => ({
@@ -773,7 +788,7 @@ const TakeAttendancePage = async (
         <BackButton />
         <AttendanceRoster
           lesson={serializeForClient(lesson) as any}
-          students={serializeForClient(activeStudentsWithHistory) as any}
+          students={serializeForClient(rosterStudents) as any}
           existingRecords={serializeForClient(todaysAttendance) as any}
           groupBooks={serializeForClient(groupBooks) as any}
           catchUpVisitors={serializeForClient(formattedCatchUpVisitors) as any}

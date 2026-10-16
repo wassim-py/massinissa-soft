@@ -4,7 +4,7 @@ import prisma from "@/lib/prisma";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
 import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { revalidatePath } from "next/cache";
-import { recordCatchUpAttendanceAction } from "@/lib/actions";
+import { recordCatchUpAttendanceAction, unsuspendEnrollmentWithDebtClearance } from "@/lib/actions";
 
 export type BiometricScanStatus =
   | "SUCCESS"
@@ -266,11 +266,11 @@ export async function processBiometricScan(input: {
     };
   }
 
-  // Filter active enrollments (exclude suspended/unenrolled/transferred)
+  // Filter candidate enrollments (exclude unenrolled/refunded/transferred)
   const activeEnrollments = student.enrollments.filter(
     (e) =>
       !e.status ||
-      !["SUSPENDED", "REFUNDED", "UNENROLLED", "TRANSFERRED", "INACTIVE"].includes(
+      !["REFUNDED", "UNENROLLED", "TRANSFERRED", "INACTIVE"].includes(
         e.status.toUpperCase()
       )
   );
@@ -548,6 +548,23 @@ export async function processBiometricScan(input: {
   const priorAttendances = classAttendances.filter(
     (a) => a.lessonId !== matchedLesson!.id
   );
+
+  if (enrollment && enrollment.status === "SUSPENDED") {
+    const unsuspendRes = await unsuspendEnrollmentWithDebtClearance(prisma, {
+      studentId: student.id,
+      classId: matchedLesson.studentEnrolledClassId,
+      enrollmentId: enrollment.id,
+      trigger: "ATTENDANCE",
+      actorId: "biometric_bridge",
+      actorName: "Pont Biométrique K50",
+      excludeLessonIds: [matchedLesson.id],
+      referenceDate: new Date(),
+    });
+    if (unsuspendRes.success) {
+      (enrollment as any).status = "ACTIVE";
+      (enrollment as any).creditResetOffset = unsuspendRes.creditResetOffset;
+    }
+  }
 
   const creditMetricsBefore = computeStudentCreditAndSessions({
     pricePerCycle: Number(matchedLesson.class.pricePerCycle || 0),
