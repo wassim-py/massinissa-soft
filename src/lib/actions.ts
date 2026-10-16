@@ -4877,16 +4877,6 @@ export const transferEnrollmentCredit = async (
         select: {
           lessonId: true,
           status: true,
-          lesson: {
-            select: {
-              id: true,
-              startsAt: true,
-              endsAt: true,
-              teacherId: true,
-              classroomId: true,
-              branchId: true,
-            },
-          },
         },
       });
       const attendedSessionsFrom = computeStudentConsumedSessions({
@@ -4903,95 +4893,6 @@ export const transferEnrollmentCredit = async (
         where: { id: fromEnrollment.id },
         data: { status: "TRANSFERRED" },
       });
-
-      // Automatically link student's attendances in source group as CatchUpAttendance in target group
-      const fromPresentAttendances = fromAttendances.filter((a) => a.status === "PRESENT");
-      if (fromPresentAttendances.length > 0) {
-        const toLessons = await tx.lesson.findMany({
-          where: { classId: toClassId, isFree: false },
-          include: {
-            attendances: {
-              where: { studentId: studentId },
-            },
-          },
-          orderBy: { startsAt: "asc" },
-        });
-
-        const existingToCatchUps = await tx.catchUpAttendance.findMany({
-          where: {
-            studentId: studentId,
-            missedLesson: { classId: toClassId },
-          },
-          select: { missedLessonId: true },
-        });
-        const existingToCatchUpMissedIds = new Set(existingToCatchUps.map((c) => c.missedLessonId));
-
-        const availableToLessons = toLessons.filter(
-          (l) => !existingToCatchUpMissedIds.has(l.id) && !l.attendances.some((a) => a.status === "PRESENT")
-        );
-
-        let availableIdx = 0;
-        for (const fromAtt of fromPresentAttendances) {
-          let targetLessonId: number | null = null;
-          if (availableIdx < availableToLessons.length) {
-            targetLessonId = availableToLessons[availableIdx].id;
-            availableIdx++;
-          } else {
-            // If target group does not have enough existing lessons, create a catch-up lesson slot in target group
-            let classroomId = fromAtt.lesson.classroomId;
-            if (!classroomId) {
-              const defaultRoom = await tx.classroom.findFirst({
-                where: { branchId: toClass.branchId },
-                select: { id: true },
-              });
-              classroomId = defaultRoom?.id || 1;
-            }
-            let teacherId = toClass.teacherId || fromAtt.lesson.teacherId;
-            if (!teacherId) {
-              const defaultTeacher = await tx.teacher.findFirst({ select: { id: true } });
-              teacherId = defaultTeacher?.id || "unknown";
-            }
-            const newLesson = await tx.lesson.create({
-              data: {
-                classId: toClassId,
-                teacherId: teacherId,
-                classroomId: classroomId,
-                branchId: toClass.branchId,
-                startsAt: fromAtt.lesson.startsAt,
-                endsAt: fromAtt.lesson.endsAt || new Date(new Date(fromAtt.lesson.startsAt).getTime() + 2 * 60 * 60 * 1000),
-                isCatchUp: true,
-                isFree: true, // Free so it has 0 impact on other students' billing
-                isExtra: false,
-                isTeacherAbsent: false,
-              },
-            });
-            targetLessonId = newLesson.id;
-          }
-
-          if (targetLessonId) {
-            await tx.catchUpAttendance.upsert({
-              where: {
-                studentId_missedLessonId: {
-                  studentId: studentId,
-                  missedLessonId: targetLessonId,
-                },
-              },
-              create: {
-                studentId: studentId,
-                missedLessonId: targetLessonId,
-                catchUpLessonId: fromAtt.lessonId,
-                recordedBy: "transfer",
-                recordedAt: new Date(),
-              },
-              update: {
-                catchUpLessonId: fromAtt.lessonId,
-                recordedBy: "transfer",
-                recordedAt: new Date(),
-              },
-            });
-          }
-        }
-      }
     });
 
     try {
