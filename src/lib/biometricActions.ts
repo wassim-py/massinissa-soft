@@ -5,6 +5,12 @@ import { getActiveBranchId, getAuthSession } from "@/lib/auth";
 import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import { revalidatePath } from "next/cache";
 import { recordCatchUpAttendanceAction, unsuspendEnrollmentWithDebtClearance } from "@/lib/actions";
+import {
+  getAlgiersDateInfo,
+  getAlgiersWeekBounds,
+  resolveRecurringLessonsForWeek,
+} from "@/lib/utils";
+import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
 
 export type BiometricScanStatus =
   | "SUCCESS"
@@ -193,15 +199,20 @@ export async function processBiometricScan(input: {
               branchId: true,
               pricePerCycle: true,
               isFormation: true,
+              isCompleted: true,
               lessons: {
-                where: openLessonIdNum
-                  ? {
-                      OR: [
-                        { startsAt: { gte: rangeStart, lte: rangeEnd } },
-                        { id: openLessonIdNum },
-                      ],
-                    }
-                  : { startsAt: { gte: rangeStart, lte: rangeEnd } },
+                where: {
+                  OR: [
+                    { startsAt: { gte: rangeStart, lte: rangeEnd } },
+                    {
+                      isExtra: false,
+                      isCatchUp: false,
+                      isFree: false,
+                      class: { isCompleted: false },
+                    },
+                    ...(openLessonIdNum ? [{ id: openLessonIdNum }] : []),
+                  ],
+                },
                 include: {
                   classroom: {
                     select: {
@@ -213,14 +224,20 @@ export async function processBiometricScan(input: {
                 orderBy: { startsAt: "asc" },
               },
               lessonGroups: {
-                where: openLessonIdNum
-                  ? {
-                      OR: [
-                        { lesson: { startsAt: { gte: rangeStart, lte: rangeEnd } } },
-                        { lessonId: openLessonIdNum },
-                      ],
-                    }
-                  : { lesson: { startsAt: { gte: rangeStart, lte: rangeEnd } } },
+                where: {
+                  OR: [
+                    { lesson: { startsAt: { gte: rangeStart, lte: rangeEnd } } },
+                    {
+                      lesson: {
+                        isExtra: false,
+                        isCatchUp: false,
+                        isFree: false,
+                        class: { isCompleted: false },
+                      },
+                    },
+                    ...(openLessonIdNum ? [{ lessonId: openLessonIdNum }] : []),
+                  ],
+                },
                 include: {
                   lesson: {
                     include: {
@@ -266,17 +283,18 @@ export async function processBiometricScan(input: {
     };
   }
 
-  // Filter candidate enrollments (exclude unenrolled/refunded/transferred)
+  // Filter candidate enrollments (exclude unenrolled/refunded/transferred or completed classes)
   const activeEnrollments = student.enrollments.filter(
     (e) =>
-      !e.status ||
-      !["REFUNDED", "UNENROLLED", "TRANSFERRED", "INACTIVE"].includes(
-        e.status.toUpperCase()
-      )
+      !e.class.isCompleted &&
+      (!e.status ||
+        !["REFUNDED", "UNENROLLED", "TRANSFERRED", "INACTIVE"].includes(
+          e.status.toUpperCase()
+        ))
   );
 
-  // Flatten lessons from active enrollments (both primary and multi-group lessons) and attach class metadata
-  const studentLessons = activeEnrollments
+  // Flatten raw lessons from active enrollments (both primary and multi-group lessons) and attach class metadata
+  const rawStudentLessons = activeEnrollments
     .flatMap((e) => {
       const primaryLessons = (e.class.lessons || []).map((l) => ({
         ...l,
@@ -302,7 +320,38 @@ export async function processBiometricScan(input: {
       }));
       return [...primaryLessons, ...additionalLessons];
     })
-    .filter((lesson, index, self) => index === self.findIndex((l) => l.id === lesson.id))
+    .filter((lesson, index, self) => index === self.findIndex((l) => l.id === lesson.id));
+
+  // Resolve recurring timetable lessons onto real calendar dates for the current week and next week
+  const currentWeekBounds = getAlgiersWeekBounds(0, scanTime);
+  const nextWeekBounds = getAlgiersWeekBounds(1, scanTime);
+  const resolvedCurrentWeek = resolveRecurringLessonsForWeek(rawStudentLessons, currentWeekBounds);
+  const resolvedNextWeek = resolveRecurringLessonsForWeek(rawStudentLessons, nextWeekBounds);
+
+  const allCandidateLessons = [...resolvedCurrentWeek, ...resolvedNextWeek];
+
+  // Also include any one-off or already-dated lesson instances falling in the range window
+  for (const raw of rawStudentLessons) {
+    const rawStart = new Date(raw.startsAt).getTime();
+    if (rawStart >= rangeStart.getTime() && rawStart <= rangeEnd.getTime()) {
+      const rawDateStr = getAlgiersDateInfo(raw.startsAt).dateStr;
+      const alreadyInList = allCandidateLessons.some(
+        (l) => l.id === raw.id && (l.instanceDate === rawDateStr || getAlgiersDateInfo(l.startsAt).dateStr === rawDateStr)
+      );
+      if (!alreadyInList) {
+        allCandidateLessons.push({
+          ...raw,
+          instanceDate: rawDateStr,
+        });
+      }
+    }
+  }
+
+  const studentLessons = allCandidateLessons
+    .filter((lesson, index, self) => {
+      const key = `${lesson.id}-${lesson.instanceDate || getAlgiersDateInfo(lesson.startsAt).dateStr}`;
+      return index === self.findIndex((l) => `${l.id}-${l.instanceDate || getAlgiersDateInfo(l.startsAt).dateStr}` === key);
+    })
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
   // STRICTLY BRANCH-BASED: Only match lessons taking place at the current scan branch (`branchId`)!
@@ -424,6 +473,16 @@ export async function processBiometricScan(input: {
       scan: serializeScanLog(log),
     };
   }
+
+  // Ensure the matched lesson has a persisted, dated Lesson instance for today's date in Africa/Algiers
+  const targetDateStr =
+    (matchedLesson as any).instanceDate ||
+    getAlgiersDateInfo(matchedLesson.startsAt).dateStr;
+  const persistedLessonId = await resolveOrCreateLessonForDate(
+    matchedLesson.id,
+    targetDateStr
+  );
+  matchedLesson.id = persistedLessonId;
 
   // ROUND-TRIP 2: Fetch Vouchers, Class Attendances, CatchUps, Current Lesson Attendance, and Payer Sibling in ONE Promise.all
   const enrolledClassId = (matchedLesson as any).studentEnrolledClassId || matchedLesson.classId;

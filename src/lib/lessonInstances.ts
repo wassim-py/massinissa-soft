@@ -17,6 +17,7 @@ export async function resolveOrCreateLessonForDate(
   const baseLesson = await prisma.lesson.findUnique({
     where: { id: lessonId },
     include: {
+      lessonGroups: true,
       _count: {
         select: {
           attendances: true,
@@ -189,6 +190,20 @@ export async function resolveOrCreateLessonForDate(
       extraFee: null,
     },
   });
+
+  if (baseLesson.lessonGroups && baseLesson.lessonGroups.length > 0) {
+    try {
+      await prisma.lessonGroup.createMany({
+        data: baseLesson.lessonGroups.map((lg) => ({
+          lessonId: created.id,
+          classId: lg.classId,
+        })),
+        skipDuplicates: true,
+      });
+    } catch (err) {
+      console.warn("Could not copy lessonGroups to new lesson instance:", err);
+    }
+  }
 
   return created.id;
 }
