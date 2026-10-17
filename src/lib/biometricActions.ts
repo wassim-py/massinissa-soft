@@ -878,7 +878,7 @@ export async function getBiometricLiveFeedAction(params?: {
           scannedAt: { gte: todayStart },
         },
         orderBy: { id: "desc" },
-        take: 40,
+        take: 100,
       }),
       prisma.biometricScanLog.findMany({
         where: {

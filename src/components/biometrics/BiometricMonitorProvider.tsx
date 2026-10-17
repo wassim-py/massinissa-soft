@@ -395,7 +395,7 @@ export default function BiometricMonitorProvider({
           }
           return true;
         });
-        return [scan, ...filtered].slice(0, 40);
+        return [scan, ...filtered].slice(0, 100);
       });
 
       if (scan.status === "SUCCESS" && scan.studentId && scan.lessonId) {
@@ -642,7 +642,7 @@ export default function BiometricMonitorProvider({
             const basePrev = hasNewUnrecognized
               ? prev.filter((p) => p.status !== "UNRECOGNIZED")
               : prev;
-            return [...uniqueNew, ...basePrev].slice(0, 40);
+            return [...uniqueNew, ...basePrev].slice(0, 100);
           });
 
           const chronological = [...newScans].sort((a, b) => a.id - b.id);
