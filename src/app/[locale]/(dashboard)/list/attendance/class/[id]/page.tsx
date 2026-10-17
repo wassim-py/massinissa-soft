@@ -100,11 +100,13 @@ const ClassAttendancePage = async (
         notFound();
     }
 
-    // Branch access control: branch admins see only their own branch's groups, or groups they host a lesson for
-    const hasHostedLesson = allClassLessons.some((l) =>
-      session.isOwner || canUserAccessBranch(session.rawRole, session.branchIds, l.branchId)
-    );
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, classHeader.branchId) && !hasHostedLesson) {
+    // Branch access control: owner and admins have cross-branch access to class attendance records
+    const hasBranchAccess =
+      session.isOwner ||
+      session.isOwnerOrAdmin ||
+      canUserAccessBranch(session.rawRole, session.branchIds, classHeader.branchId) ||
+      allClassLessons.some((l) => canUserAccessBranch(session.rawRole, session.branchIds, l.branchId));
+    if (!hasBranchAccess) {
         return (
             <Card className="p-8 text-center max-w-md mx-auto my-8 border-border shadow-xs font-sans">
                 <div className="flex flex-col items-center gap-3">

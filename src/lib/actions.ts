@@ -1325,24 +1325,9 @@ export const createLesson = async (
         return { success: false, error: true, message: "Compte non rattaché à une succursale / حسابك غير مرتبط بأي فرع." };
       }
 
-      // Group must belong to admin's branch
-      if (classRecord.branchId && classRecord.branchId !== adminBranchId) {
-        return { success: false, error: true, message: "Non autorisé à programmer une séance pour un groupe d'une autre succursale / غير مصرح لك ببرمجة حصة لفوج تابع لفرع آخر." };
-      }
-
-      if (isSpecialLesson) {
-        // Special lesson can be hosted in another branch's classroom so hosting admin can take attendance
-        branchId = crBranchId || adminBranchId;
-      } else {
-        // Normal recurring lessons must be within admin's branch
-        if (data.branchId && Number(data.branchId) !== adminBranchId) {
-          return { success: false, error: true, message: "Non autorisé à programmer une séance dans une autre succursale / غير مصرح لك ببرمجة حصة في فرع آخر." };
-        }
-        if (crBranchId && crBranchId !== adminBranchId) {
-          return { success: false, error: true, message: "La salle sélectionnée n'appartient pas à votre succursale / القاعة المختارة لا تنتمي إلى فرعك." };
-        }
-        branchId = adminBranchId;
-      }
+      // Fully cross-branch: Host branch admin, home branch admin, or any admin can schedule special lessons
+      // or schedule groups hosted in their branch classrooms!
+      branchId = crBranchId || (data.branchId ? Number(data.branchId) : null) || classRecord.branchId || adminBranchId;
     }
 
     if (data.date) {
@@ -1534,11 +1519,10 @@ export const updateLesson = async (
       return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
     }
 
-    if (!session.isOwner) {
-      const adminBranchId = session.branchIds[0];
-      const isHomeBranchAdmin = existing[0].classBranchId === adminBranchId;
-      const isHostingBranchAdmin = existing[0].branchId === adminBranchId;
-      if (!adminBranchId || (!isHomeBranchAdmin && !isHostingBranchAdmin)) {
+    if (!session.isOwner && !session.isOwnerOrAdmin) {
+      const isHomeBranchAdmin = existing[0].classBranchId && session.branchIds.includes(existing[0].classBranchId);
+      const isHostingBranchAdmin = existing[0].branchId && session.branchIds.includes(existing[0].branchId);
+      if (!isHomeBranchAdmin && !isHostingBranchAdmin) {
         return { success: false, error: true, message: "Non autorisé à modifier une séance d'une autre succursale / غير مصرح لك بتعديل حصة لا تنتمي إلى فرعك." };
       }
     }
@@ -1594,15 +1578,7 @@ export const updateLesson = async (
       branchId = crBranchId || Number(data.branchId) || existing[0].branchId;
     } else {
       const adminBranchId = session.branchIds[0];
-      if (isSpecialLesson) {
-        // Special lesson can be hosted in another branch's classroom so hosting admin can take attendance
-        branchId = crBranchId || existing[0].branchId;
-      } else {
-        if (crBranchId && crBranchId !== adminBranchId) {
-          return { success: false, error: true, message: "La salle sélectionnée n'appartient pas à votre succursale / القاعة المختارة لا تنتمي إلى فرعك." };
-        }
-        branchId = adminBranchId;
-      }
+      branchId = crBranchId || (data.branchId ? Number(data.branchId) : null) || existing[0].branchId || adminBranchId;
     }
 
     if (data.date) {
@@ -1845,6 +1821,7 @@ export const deleteLesson = async (
     }
     const hasBranchPerm =
       session.isOwner ||
+      session.isOwnerOrAdmin ||
       canUserAccessBranch(session.rawRole, session.branchIds, existing.branchId) ||
       (existing.class?.branchId && canUserAccessBranch(session.rawRole, session.branchIds, existing.class.branchId));
     if (!hasBranchPerm) {
@@ -1925,6 +1902,7 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
 
     const hasAbsenceBranchPerm =
       session.isOwner ||
+      session.isOwnerOrAdmin ||
       canUserAccessBranch(session.rawRole, session.branchIds, baseCheck.branchId) ||
       (baseCheck.class?.branchId && canUserAccessBranch(session.rawRole, session.branchIds, baseCheck.class.branchId));
 

@@ -452,6 +452,7 @@ const LessonListPage = async (props: {
     if (canManage) {
       const canEditLesson =
         session.isOwner ||
+        session.isOwnerOrAdmin ||
         (session.branchIds.length > 0
           ? session.branchIds.includes(lesson.branchId) ||
             session.branchIds.includes((lesson as any).classBranchId) ||

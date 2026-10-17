@@ -174,31 +174,16 @@ const LessonForm = ({
     return classes.find((c) => c.id === Number(selectedClassId)) || null;
   }, [classes, selectedClassId]);
 
-  // Classroom branch filter for special lessons: allow choosing any branch if own branch is out of classrooms
+  // Classroom branch filter: allow choosing any branch or all branches
   const [classroomBranchFilter, setClassroomBranchFilter] = useState<number | "all">("all");
 
-  // Sync classroomBranchFilter when selectedClass changes
-  useEffect(() => {
-    if (selectedClass?.branchId) {
-      setClassroomBranchFilter(selectedClass.branchId);
-    }
-  }, [selectedClass?.branchId]);
-
   // Filter classrooms by branch
-  // - For normal recurring lessons: strictly limited to the group's branch
-  // - For special lessons (extra, catch-up, free): if out of classrooms in own branch, admin can pick from any other branch
   const availableClassrooms = useMemo(() => {
-    const targetBranchId = selectedClass?.branchId || (activeBranchId ? Number(activeBranchId) : null);
-    if (lessonType === "normal") {
-      if (!targetBranchId) return classrooms;
-      return classrooms.filter((cr) => !cr.branchId || cr.branchId === targetBranchId);
-    }
-    // Special lesson:
     if (classroomBranchFilter === "all") {
       return classrooms;
     }
     return classrooms.filter((cr) => cr.branchId === Number(classroomBranchFilter));
-  }, [classrooms, activeBranchId, selectedClass, lessonType, classroomBranchFilter]);
+  }, [classrooms, classroomBranchFilter]);
 
   const watchedClassroomId = watch("classroomId");
   const chosenClassroom = useMemo(() => {
@@ -217,14 +202,14 @@ const LessonForm = ({
     return branches.find((b) => b.id === chosenClassroom.branchId) || null;
   }, [branches, chosenClassroom]);
 
-  // Keep branchId field synced with chosen classroom branch for special lessons
+  // Keep branchId field synced with chosen classroom branch
   useEffect(() => {
-    if (lessonType !== "normal" && chosenClassroom?.branchId) {
+    if (chosenClassroom?.branchId) {
       setValue("branchId", chosenClassroom.branchId);
-    } else if (lessonType === "normal") {
+    } else {
       setValue("branchId", selectedClass?.branchId || userBranchId);
     }
-  }, [lessonType, chosenClassroom?.branchId, selectedClass?.branchId, userBranchId, setValue]);
+  }, [chosenClassroom?.branchId, selectedClass?.branchId, userBranchId, setValue]);
 
   const assignedTeacher = useMemo(() => {
     if (!selectedClass || !selectedClass.teacherId) return null;
@@ -235,10 +220,9 @@ const LessonForm = ({
     Array.isArray(data?.additionalClassIds) ? data.additionalClassIds.map(Number) : []
   );
 
-  // Filter sibling groups belonging to the same teacher in the same level
+  // Filter sibling groups belonging to the same teacher in the same level (cross-branch enabled)
   const availableSiblingGroups = useMemo(() => {
     if (!selectedClass || !selectedClass.teacherId) return [];
-    const targetBranchId = selectedClass.branchId || (activeBranchId ? Number(activeBranchId) : null);
     return classes.filter((c) => {
       if (c.id === selectedClass.id) return false;
       if (c.teacherId !== selectedClass.teacherId) return false;
@@ -250,11 +234,9 @@ const LessonForm = ({
       );
       if (!sameRegularLevel && !sameFormationLevel) return false;
 
-      // Sibling group must belong to the same branch as the primary group
-      if (targetBranchId && c.branchId && c.branchId !== targetBranchId) return false;
       return true;
     });
-  }, [classes, selectedClass, activeBranchId]);
+  }, [classes, selectedClass]);
 
 
 
@@ -291,13 +273,6 @@ const LessonForm = ({
     if (typeVal === "normal") {
       setAdditionalClassIds([]);
       setValue("additionalClassIds", []);
-      // Reset classroom branch back to group's branch
-      const homeBranch = selectedClass?.branchId || (activeBranchId ? Number(activeBranchId) : 1);
-      setClassroomBranchFilter(homeBranch);
-      const currentRoom = classrooms.find((cr) => cr.id === Number(watch("classroomId")));
-      if (currentRoom?.branchId && currentRoom.branchId !== homeBranch) {
-        setValue("classroomId", "" as any);
-      }
     }
   };
 
@@ -315,7 +290,7 @@ const LessonForm = ({
 
     const selectedRoom = classrooms.find((cr) => cr.id === Number(formData.classroomId));
     const effectiveBranchId =
-      lessonType !== "normal" && selectedRoom?.branchId
+      selectedRoom?.branchId
         ? selectedRoom.branchId
         : (selectedClass?.branchId || formData.branchId);
 
@@ -443,10 +418,14 @@ const LessonForm = ({
         >
           <input type="hidden" {...register("classId")} />
           <SearchableGroupSelect
-            options={classes.map((c) => ({
-              id: c.id,
-              name: c.name,
-            }))}
+            options={classes.map((c) => {
+              const b = branches.find((branch) => branch.id === c.branchId);
+              const branchSuffix = b ? ` [${b.name}]` : "";
+              return {
+                id: c.id,
+                name: `${c.name}${branchSuffix}`,
+              };
+            })}
             value={selectedClassId ? Number(selectedClassId) : ""}
             onChange={(val) => {
               const classIdNum = val ? Number(val) : ("" as any);
@@ -505,10 +484,10 @@ const LessonForm = ({
           </div>
         </FormField>
 
-        {/* Classroom Branch Selector (Visible for Special Lessons to book another branch's room) */}
-        {lessonType !== "normal" && (
+        {/* Classroom Branch Selector (Visible when multiple branches exist) */}
+        {branches.length > 1 && (
           <FormField
-            label={locale === "ar" ? "فرع القاعة (في حال عدم توفر قاعة بفرعك)" : "Succursale de la salle (si indisponible dans votre siège)"}
+            label={locale === "ar" ? "فرع القاعة" : "Succursale de la salle"}
           >
             <Select
               value={classroomBranchFilter}
@@ -528,7 +507,9 @@ const LessonForm = ({
               </option>
               {branches.map((b) => (
                 <option value={b.id} key={b.id}>
-                  {b.name} {selectedClass?.branchId === b.id ? (locale === "ar" ? "(فرع الفوج)" : "(Siège du groupe)") : ""}
+                  {b.name}
+                  {b.id === userBranchId ? (locale === "ar" ? " (فرعك)" : " (Votre siège)") : ""}
+                  {selectedClass?.branchId === b.id && b.id !== userBranchId ? (locale === "ar" ? " (فرع الفوج)" : " (Siège du groupe)") : ""}
                 </option>
               ))}
             </Select>
@@ -548,9 +529,7 @@ const LessonForm = ({
             <option value="">{t("selectRoom")}</option>
             {availableClassrooms.map((room) => {
               const roomBranch = branches.find((b) => b.id === room.branchId);
-              const branchSuffix = roomBranch && (classroomBranchFilter === "all" || room.branchId !== selectedClass?.branchId)
-                ? ` — [${roomBranch.name}]`
-                : "";
+              const branchSuffix = roomBranch ? ` — [${roomBranch.name}]` : "";
               return (
                 <option value={room.id} key={room.id}>
                   {room.name}{branchSuffix}
@@ -560,15 +539,15 @@ const LessonForm = ({
           </Select>
         </FormField>
 
-        {/* Notice when special lesson is hosted in another branch */}
-        {lessonType !== "normal" && isCrossBranchRoom && hostingBranch && (
+        {/* Notice when lesson is hosted in another branch */}
+        {isCrossBranchRoom && hostingBranch && (
           <div className="md:col-span-2 p-3 rounded-xl bg-amber-50/90 border border-amber-200 text-amber-900 text-xs flex items-center gap-2.5 shadow-2xs">
             <Building className="w-4 h-4 shrink-0 text-amber-600" />
             <div>
               <p className="font-semibold">
                 {locale === "ar"
                   ? `الحصة مستضافة في فرع: ${hostingBranch.name}`
-                  : `Séance spéciale hébergée au siège : ${hostingBranch.name}`}
+                  : `Séance hébergée au siège : ${hostingBranch.name}`}
               </p>
               <p className="text-amber-800/80 mt-0.5">
                 {locale === "ar"
@@ -881,7 +860,12 @@ const LessonForm = ({
                         }}
                         className="w-4 h-4 rounded text-secondary focus:ring-secondary accent-secondary cursor-pointer"
                       />
-                      <span className="text-xs">{grp.name}</span>
+                      <span className="text-xs">
+                        {grp.name}
+                        {branches.find((b) => b.id === grp.branchId)
+                          ? ` [${branches.find((b) => b.id === grp.branchId)?.name}]`
+                          : ""}
+                      </span>
                     </label>
                   );
                 })}

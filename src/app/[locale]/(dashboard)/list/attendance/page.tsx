@@ -64,33 +64,30 @@ const AttendanceListPage = async (
   });
 
   // Branch Scoping Logic:
-  // 1. Branch admins see ONLY groups belonging to their own branch
-  // 2. The owner sees an additional filter/tab to view attendance records across any branch, or all branches combined
+  // Admins and Owner can filter across any branch or view their own branch by default
+  const canFilterBranches = isOwner || session.isOwnerOrAdmin;
   let selectedBranchId: number | "all" = "all";
   let branchName = "";
 
-  if (!isOwner) {
-    const branchAdminBranchId =
-      session.branchIds.length > 0 ? session.branchIds[0] : activeBranchId;
-    selectedBranchId = branchAdminBranchId;
-    const currentBranch = branches.find((b) => b.id === branchAdminBranchId);
-    branchName = currentBranch ? currentBranch.name : (locale === "ar" ? `الفرع #${branchAdminBranchId}` : `Siège #${branchAdminBranchId}`);
-  } else {
-    // Owner role
-    if (searchParams.branchId === "all") {
-      selectedBranchId = "all";
-    } else if (searchParams.branchId) {
-      const parsed = parseInt(searchParams.branchId, 10);
-      if (!isNaN(parsed) && branches.some((b) => b.id === parsed)) {
-        selectedBranchId = parsed;
-        const currentBranch = branches.find((b) => b.id === parsed);
-        branchName = currentBranch ? currentBranch.name : (locale === "ar" ? `الفرع #${parsed}` : `Siège #${parsed}`);
-      } else {
-        selectedBranchId = "all";
-      }
+  const defaultAdminBranchId =
+    session.branchIds.length > 0 ? session.branchIds[0] : activeBranchId;
+
+  if (searchParams.branchId === "all") {
+    selectedBranchId = "all";
+  } else if (searchParams.branchId) {
+    const parsed = parseInt(searchParams.branchId, 10);
+    if (!isNaN(parsed) && branches.some((b) => b.id === parsed)) {
+      selectedBranchId = parsed;
+      const currentBranch = branches.find((b) => b.id === parsed);
+      branchName = currentBranch ? currentBranch.name : (locale === "ar" ? `الفرع #${parsed}` : `Siège #${parsed}`);
     } else {
-      // Default for owner: all branches combined
-      selectedBranchId = "all";
+      selectedBranchId = isOwner ? "all" : (defaultAdminBranchId || "all");
+    }
+  } else {
+    selectedBranchId = isOwner ? "all" : (defaultAdminBranchId || "all");
+    if (selectedBranchId !== "all") {
+      const currentBranch = branches.find((b) => b.id === selectedBranchId);
+      branchName = currentBranch ? currentBranch.name : (locale === "ar" ? `الفرع #${selectedBranchId}` : `Siège #${selectedBranchId}`);
     }
   }
 
@@ -103,7 +100,7 @@ const AttendanceListPage = async (
   const createFilterUrl = (overrides: { branchId?: string | number; type?: string }) => {
     const params = new URLSearchParams();
     const branchVal = overrides.branchId !== undefined ? String(overrides.branchId) : String(selectedBranchId);
-    if (isOwner && branchVal) params.set("branchId", branchVal);
+    if (branchVal) params.set("branchId", branchVal);
     const typeVal = overrides.type !== undefined ? overrides.type : activeType;
     if (typeVal && typeVal !== "all") params.set("type", typeVal);
     if (search) params.set("search", search);
@@ -120,15 +117,27 @@ const AttendanceListPage = async (
     const workshopWhere: any = {};
 
     if (selectedBranchId !== "all") {
-      classWhere.branchId = selectedBranchId;
+      classWhere.OR = [
+        { branchId: selectedBranchId },
+        { lessons: { some: { branchId: selectedBranchId } } },
+      ];
       workshopWhere.branchId = selectedBranchId;
     }
 
     if (search) {
-      classWhere.OR = [
+      const searchConditions = [
         { name: { contains: search, mode: "insensitive" } },
         { teacher: { name: { contains: search, mode: "insensitive" } } },
       ];
+      if (classWhere.OR) {
+        classWhere.AND = [
+          { OR: classWhere.OR },
+          { OR: searchConditions },
+        ];
+        delete classWhere.OR;
+      } else {
+        classWhere.OR = searchConditions;
+      }
       workshopWhere.OR = [
         { title: { contains: search, mode: "insensitive" } },
         { guestTeacher: { contains: search, mode: "insensitive" } },
@@ -451,8 +460,8 @@ const AttendanceListPage = async (
           />
         </div>
 
-        {/* Owner Multi-Branch Filter Tabs */}
-        {isOwner && (
+        {/* Multi-Branch Filter Tabs */}
+        {canFilterBranches && (
           <div className="flex flex-wrap items-center gap-2 mt-3 pb-4 border-b border-border/70">
             <span className="text-xs font-bold text-muted ms-2">
               {t("filterByBranch")}

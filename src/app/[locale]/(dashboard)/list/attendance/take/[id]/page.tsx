@@ -69,9 +69,10 @@ const TakeAttendancePage = async (
 
   const l = rawLesson[0];
 
-  // Enforce branch-scoped attendance taking: allowed if owner, or if admin of lesson's branch, classroom's branch, or group's branch!
+  // Enforce branch-scoped attendance taking: allowed if owner or admin, or if matching lesson's branch, classroom's branch, or group's branch!
   const hasBranchAccess =
     session.isOwner ||
+    session.isOwnerOrAdmin ||
     l.branchId === activeBranchId ||
     (session.branchIds && session.branchIds.includes(l.branchId)) ||
     l.classBranchId === activeBranchId ||
