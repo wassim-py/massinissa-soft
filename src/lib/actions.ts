@@ -50,6 +50,17 @@ import {
   findSiblingRecurringLessonIds,
   syncSiblingRecurringLessons,
 } from "./lessonInstances";
+import {
+  cleanPhoneNumber,
+  normalizeStudentName,
+  tokenizeStudentName,
+  evaluateDuplicateMatch,
+  DuplicateStudentCandidate,
+  DuplicateMatchType,
+} from "./studentDeduplication";
+
+export { normalizeStudentName };
+export type { DuplicateStudentCandidate, DuplicateMatchType };
 
 type CurrentState = { success: boolean; error: boolean; message?: string };
 
@@ -558,6 +569,26 @@ export const createStudent = async (
 
     if (!canUserAccessBranch(session.rawRole, session.branchIds, branchId)) {
       return { success: false, error: true, message: "Non autorisé à inscrire un élève dans cette succursale / غير مصرح لك بتسجيل تلميذ في هذا الفرع." };
+    }
+
+    if (!data.bypassDuplicateCheck) {
+      const dupCheck = await checkStudentDuplicateAction({
+        name: data.name,
+        surname: data.surname,
+        phone: data.phone,
+        parentPhoneNumbers: data.parentPhoneNumbers,
+        birthday: data.birthday ? new Date(data.birthday).toISOString().split("T")[0] : null,
+      });
+      if (dupCheck.hasDuplicate && dupCheck.isExact) {
+        return {
+          success: false,
+          error: true,
+          duplicateDetected: true,
+          duplicates: dupCheck.duplicates,
+          message:
+            "Un élève portant exactement ce nom existe déjà / يوجد تلميذ مسجل بنفس الاسم مسبقاً. يرجى تأكيد الإنشاء.",
+        };
+      }
     }
 
     const id = crypto.randomUUID();
@@ -1251,21 +1282,40 @@ export const createLesson = async (
     }
 
     const classroomId = Number(data.classroomId);
+    const isExtra = Boolean(data.isExtra);
+    const isCatchUp = Boolean(data.isCatchUp);
+    const isFree = Boolean(data.isFree);
+    const isSpecialLesson = Boolean(isExtra || isCatchUp || isFree);
 
-    // 3. Branch lock: branch admins are locked to their own branch; owner can choose (docs/architecture.md §7.5)
+    // 3. Branch resolution:
+    // - Owner can choose any branch or auto-assign to classroom branch.
+    // - Branch Admin:
+    //   * Group must belong to admin's branch.
+    //   * For SPECIAL lessons (extra, catch-up, free): if out of classrooms in their own branch,
+    //     the admin can book ANY classroom in ANY other branch.
+    //     The lesson is hosted at the chosen classroom's branch so that branch admin can take attendance!
+    //   * For NORMAL lessons: classroom must belong to admin's own branch.
     const session = await getAuthSession();
     let branchId: number;
 
+    let crBranchId: number | null = null;
+    if (classroomId) {
+      const crRows = await prisma.$queryRaw<any[]>`
+        SELECT "branchId" FROM "Classroom" WHERE id = ${classroomId} LIMIT 1
+      `;
+      if (crRows.length === 0) {
+        return { success: false, error: true, message: "Salle introuvable / القاعة غير موجودة." };
+      }
+      crBranchId = crRows[0].branchId;
+    }
+
     if (session.isOwner) {
-      if (data.branchId) {
+      if (crBranchId) {
+        branchId = crBranchId;
+      } else if (data.branchId) {
         branchId = Number(data.branchId);
       } else if (classRecord.branchId) {
         branchId = classRecord.branchId;
-      } else if (classroomId) {
-        const crRows = await prisma.$queryRaw<any[]>`
-          SELECT "branchId" FROM "Classroom" WHERE id = ${classroomId} LIMIT 1
-        `;
-        branchId = crRows[0]?.branchId || 1;
       } else {
         branchId = 1;
       }
@@ -1274,19 +1324,24 @@ export const createLesson = async (
       if (!adminBranchId) {
         return { success: false, error: true, message: "Compte non rattaché à une succursale / حسابك غير مرتبط بأي فرع." };
       }
-      if (data.branchId && Number(data.branchId) !== adminBranchId) {
-        return { success: false, error: true, message: "Non autorisé à programmer une séance dans une autre succursale / غير مصرح لك ببرمجة حصة في فرع آخر." };
-      }
-      branchId = adminBranchId;
 
-      // Ensure chosen classroom belongs to admin's branch
-      if (classroomId) {
-        const crRows = await prisma.$queryRaw<any[]>`
-          SELECT "branchId" FROM "Classroom" WHERE id = ${classroomId} LIMIT 1
-        `;
-        if (crRows.length > 0 && crRows[0].branchId !== adminBranchId) {
+      // Group must belong to admin's branch
+      if (classRecord.branchId && classRecord.branchId !== adminBranchId) {
+        return { success: false, error: true, message: "Non autorisé à programmer une séance pour un groupe d'une autre succursale / غير مصرح لك ببرمجة حصة لفوج تابع لفرع آخر." };
+      }
+
+      if (isSpecialLesson) {
+        // Special lesson can be hosted in another branch's classroom so hosting admin can take attendance
+        branchId = crBranchId || adminBranchId;
+      } else {
+        // Normal recurring lessons must be within admin's branch
+        if (data.branchId && Number(data.branchId) !== adminBranchId) {
+          return { success: false, error: true, message: "Non autorisé à programmer une séance dans une autre succursale / غير مصرح لك ببرمجة حصة في فرع آخر." };
+        }
+        if (crBranchId && crBranchId !== adminBranchId) {
           return { success: false, error: true, message: "La salle sélectionnée n'appartient pas à votre succursale / القاعة المختارة لا تنتمي إلى فرعك." };
         }
+        branchId = adminBranchId;
       }
     }
 
@@ -1309,10 +1364,6 @@ export const createLesson = async (
 
     const startsAt = getLessonDateTime(data.day, data.startTime, data.date);
     const endsAt = getLessonDateTime(data.day, data.endTime, data.date);
-    const isExtra = Boolean(data.isExtra);
-    const isCatchUp = Boolean(data.isCatchUp);
-    const isFree = Boolean(data.isFree);
-    const isSpecialLesson = Boolean(isExtra || isCatchUp || isFree);
 
     let validAdditionalClassIds: number[] = [];
     if (isSpecialLesson && Array.isArray(data.additionalClassIds)) {
@@ -1473,8 +1524,11 @@ export const updateLesson = async (
     const session = await getAuthSession();
 
     // 1. Check existing lesson and permission
-    const existing = await prisma.$queryRaw<Array<{ branchId: number; classId: number }>>`
-      SELECT "branchId", "classId" FROM "Lesson" WHERE id = ${lessonId} LIMIT 1
+    const existing = await prisma.$queryRaw<Array<{ branchId: number; classId: number; classroomId: number; classBranchId: number }>>`
+      SELECT l."branchId", l."classId", l."classroomId", c."branchId" as "classBranchId"
+      FROM "Lesson" l
+      LEFT JOIN "Class" c ON c.id = l."classId"
+      WHERE l.id = ${lessonId} LIMIT 1
     `;
     if (existing.length === 0) {
       return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
@@ -1482,7 +1536,9 @@ export const updateLesson = async (
 
     if (!session.isOwner) {
       const adminBranchId = session.branchIds[0];
-      if (!adminBranchId || existing[0].branchId !== adminBranchId) {
+      const isHomeBranchAdmin = existing[0].classBranchId === adminBranchId;
+      const isHostingBranchAdmin = existing[0].branchId === adminBranchId;
+      if (!adminBranchId || (!isHomeBranchAdmin && !isHostingBranchAdmin)) {
         return { success: false, error: true, message: "Non autorisé à modifier une séance d'une autre succursale / غير مصرح لك بتعديل حصة لا تنتمي إلى فرعك." };
       }
     }
@@ -1516,29 +1572,36 @@ export const updateLesson = async (
     }
 
     const classroomId = Number(data.classroomId);
+    const isExtra = Boolean(data.isExtra);
+    const isCatchUp = Boolean(data.isCatchUp);
+    const isFree = Boolean(data.isFree);
+    const isSpecialLesson = Boolean(isExtra || isCatchUp || isFree);
 
-    // 4. Branch lock enforcement on update
+    let crBranchId: number | null = null;
+    if (classroomId) {
+      const crRows = await prisma.$queryRaw<any[]>`
+        SELECT "branchId" FROM "Classroom" WHERE id = ${classroomId} LIMIT 1
+      `;
+      if (crRows.length === 0) {
+        return { success: false, error: true, message: "Salle introuvable / القاعة غير موجودة." };
+      }
+      crBranchId = crRows[0].branchId;
+    }
+
+    // 4. Branch resolution on update
     let branchId: number;
     if (session.isOwner) {
-      if (data.branchId) {
-        branchId = Number(data.branchId);
-      } else {
-        branchId = existing[0].branchId;
-      }
+      branchId = crBranchId || Number(data.branchId) || existing[0].branchId;
     } else {
       const adminBranchId = session.branchIds[0];
-      if (data.branchId && Number(data.branchId) !== adminBranchId) {
-        return { success: false, error: true, message: "Non autorisé à transférer la séance vers une autre succursale / غير مصرح لك بنقل الحصة إلى فرع آخر." };
-      }
-      branchId = adminBranchId;
-
-      if (classroomId) {
-        const crRows = await prisma.$queryRaw<any[]>`
-          SELECT "branchId" FROM "Classroom" WHERE id = ${classroomId} LIMIT 1
-        `;
-        if (crRows.length > 0 && crRows[0].branchId !== adminBranchId) {
+      if (isSpecialLesson) {
+        // Special lesson can be hosted in another branch's classroom so hosting admin can take attendance
+        branchId = crBranchId || existing[0].branchId;
+      } else {
+        if (crBranchId && crBranchId !== adminBranchId) {
           return { success: false, error: true, message: "La salle sélectionnée n'appartient pas à votre succursale / القاعة المختارة لا تنتمي إلى فرعك." };
         }
+        branchId = adminBranchId;
       }
     }
 
@@ -1561,10 +1624,6 @@ export const updateLesson = async (
 
     const startsAt = getLessonDateTime(data.day, data.startTime, data.date);
     const endsAt = getLessonDateTime(data.day, data.endTime, data.date);
-    const isExtra = Boolean(data.isExtra);
-    const isCatchUp = Boolean(data.isCatchUp);
-    const isFree = Boolean(data.isFree);
-    const isSpecialLesson = Boolean(isExtra || isCatchUp || isFree);
 
     let validAdditionalClassIds: number[] = [];
     if (isSpecialLesson && Array.isArray(data.additionalClassIds)) {
@@ -1772,12 +1831,23 @@ export const deleteLesson = async (
     const session = await getAuthSession();
     const existing = await prisma.lesson.findUnique({
       where: { id },
-      select: { branchId: true, classId: true, isExtra: true, isCatchUp: true, isFree: true },
+      select: {
+        branchId: true,
+        classId: true,
+        isExtra: true,
+        isCatchUp: true,
+        isFree: true,
+        class: { select: { branchId: true } },
+      },
     });
     if (!existing) {
       return { success: false, error: true, message: "Leçon introuvable / الحصة غير موجودة." };
     }
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, existing.branchId)) {
+    const hasBranchPerm =
+      session.isOwner ||
+      canUserAccessBranch(session.rawRole, session.branchIds, existing.branchId) ||
+      (existing.class?.branchId && canUserAccessBranch(session.rawRole, session.branchIds, existing.class.branchId));
+    if (!hasBranchPerm) {
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بحذف حصة في هذا الفرع." };
     }
 
@@ -1842,14 +1912,23 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
 
     const baseCheck = await prisma.lesson.findUnique({
       where: { id: input.lessonId },
-      select: { id: true, branchId: true },
+      select: {
+        id: true,
+        branchId: true,
+        class: { select: { branchId: true } },
+      },
     });
 
     if (!baseCheck) {
       return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
     }
 
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, baseCheck.branchId)) {
+    const hasAbsenceBranchPerm =
+      session.isOwner ||
+      canUserAccessBranch(session.rawRole, session.branchIds, baseCheck.branchId) ||
+      (baseCheck.class?.branchId && canUserAccessBranch(session.rawRole, session.branchIds, baseCheck.class.branchId));
+
+    if (!hasAbsenceBranchPerm) {
       return {
         success: false,
         error: true,
@@ -3382,64 +3461,116 @@ export async function removeCatchUpAttendanceAction(
 // STUDENT RAPID ENROLLMENT & DUPLICATE PROTECTION ACTIONS
 // =================================================================
 
-function normalizeStudentName(str: string): string {
-  if (!str) return "";
-  let s = str.trim().toLowerCase();
-  s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  s = s.replace(/[أإآٱ]/g, "ا");
-  s = s.replace(/ة/g, "ه");
-  s = s.replace(/ى/g, "ي");
-  s = s.replace(/[\u064B-\u065F\u0670]/g, "");
-  s = s.replace(/[^\p{L}\p{N}\s]/gu, " ");
-  s = s.replace(/\s+/g, " ").trim();
-  return s;
-}
-
 /**
- * Checks if any existing student has the same first name and surname.
- * Uses smart Arabic and Latin normalization for high precision.
+ * Checks if any existing student has the same first name, surname, phone, or birthday.
+ * Uses smart Arabic and Latin normalization, token-set matching, compound prefix resolution,
+ * phone number normalization, and birthday comparison.
  */
 export async function checkStudentDuplicateAction({
   name,
   surname,
+  phone,
+  parentPhoneNumbers,
+  birthday,
   excludeStudentId,
 }: {
   name: string;
   surname: string;
+  phone?: string | null;
+  parentPhoneNumbers?: string[] | null;
+  birthday?: string | Date | null;
   excludeStudentId?: string;
 }): Promise<{
   hasDuplicate: boolean;
   isExact: boolean;
-  duplicates: Array<{
-    id: string;
-    globalNumber: number;
-    name: string;
-    phone: string | null;
-    branchName: string;
-    classes: string[];
-  }>;
+  duplicates: DuplicateStudentCandidate[];
 }> {
   try {
     const cleanName = name ? name.trim() : "";
     const cleanSurname = surname ? surname.trim() : "";
+    const normFirst = normalizeStudentName(cleanName);
+    const normLast = normalizeStudentName(cleanSurname);
+    const cleanPhone = cleanPhoneNumber(phone);
+    const cleanParentPhones = (parentPhoneNumbers || [])
+      .map(cleanPhoneNumber)
+      .filter((p) => p.length >= 8);
 
-    if (cleanName.length < 2 || cleanSurname.length < 2) {
+    const hasNameInput = normFirst.length >= 2 || normLast.length >= 2;
+    const hasPhoneInput = cleanPhone.length >= 8 || cleanParentPhones.length > 0;
+
+    if (!hasNameInput && !hasPhoneInput) {
       return { hasDuplicate: false, isExact: false, duplicates: [] };
     }
 
-    const normTargetFirst = normalizeStudentName(cleanName);
-    const normTargetLast = normalizeStudentName(cleanSurname);
+    // Build targeted conditions to pull candidate pool without getting truncated by common names
+    const orClauses: any[] = [];
+
+    // Clause 1: High-specificity name match (contains both surname AND name)
+    if (cleanSurname.length >= 2 && cleanName.length >= 2) {
+      orClauses.push({
+        AND: [
+          { name: { contains: cleanSurname, mode: "insensitive" } },
+          { name: { contains: cleanName, mode: "insensitive" } },
+        ],
+      });
+    }
+
+    // Clause 2: Distinctive tokens for compound names (e.g. "Ben Ali", "Abd El Kader", "Ait Ahmed")
+    const surnameTokens = tokenizeStudentName(cleanSurname).filter((t) => t.length >= 3);
+    const nameTokens = tokenizeStudentName(cleanName).filter((t) => t.length >= 3);
+
+    for (const st of surnameTokens) {
+      for (const nt of nameTokens) {
+        orClauses.push({
+          AND: [
+            { name: { contains: st, mode: "insensitive" } },
+            { name: { contains: nt, mode: "insensitive" } },
+          ],
+        });
+      }
+    }
+
+    // Clause 3: Fallback single surname search (if surname is distinctive >= 3 chars)
+    if (cleanSurname.length >= 3) {
+      orClauses.push({
+        name: { contains: cleanSurname, mode: "insensitive" },
+      });
+    }
+
+    // Clause 4: Fallback single first name search if surname is missing/short
+    if (cleanSurname.length < 3 && cleanName.length >= 3) {
+      orClauses.push({
+        name: { contains: cleanName, mode: "insensitive" },
+      });
+    }
+
+    // Clause 5: Phone match
+    if (cleanPhone.length >= 8) {
+      const phoneTail = cleanPhone.slice(-8);
+      orClauses.push({ phone: { contains: phoneTail } });
+      orClauses.push({
+        parentPhoneNumbers: { some: { phone: { contains: phoneTail } } },
+      });
+    }
+
+    // Clause 6: Parent phone matches
+    for (const pp of cleanParentPhones) {
+      const ppTail = pp.slice(-8);
+      orClauses.push({ phone: { contains: ppTail } });
+      orClauses.push({
+        parentPhoneNumbers: { some: { phone: { contains: ppTail } } },
+      });
+    }
+
+    if (orClauses.length === 0) {
+      return { hasDuplicate: false, isExact: false, duplicates: [] };
+    }
 
     const candidates = await prisma.student.findMany({
       where: {
         AND: [
           excludeStudentId ? { id: { not: excludeStudentId } } : {},
-          {
-            OR: [
-              { name: { contains: cleanSurname, mode: "insensitive" } },
-              { name: { contains: cleanName, mode: "insensitive" } },
-            ],
-          },
+          { OR: orClauses },
         ],
       },
       include: {
@@ -3449,48 +3580,37 @@ export async function checkStudentDuplicateAction({
             class: { select: { id: true, name: true } },
           },
         },
+        parentPhoneNumbers: { select: { phone: true } },
       },
-      take: 20,
+      take: 60,
     });
 
-    const matchedDuplicates: Array<{
-      id: string;
-      globalNumber: number;
-      name: string;
-      phone: string | null;
-      branchName: string;
-      classes: string[];
-    }> = [];
-
+    const evaluatedDuplicates: DuplicateStudentCandidate[] = [];
     let isExactFound = false;
 
     for (const cand of candidates) {
-      const normCand = normalizeStudentName(cand.name);
-      const containsFirst = normCand.includes(normTargetFirst);
-      const containsLast = normCand.includes(normTargetLast);
+      const match = evaluateDuplicateMatch({
+        targetName: cleanName,
+        targetSurname: cleanSurname,
+        targetPhone: phone,
+        targetParentPhones: cleanParentPhones,
+        targetBirthday: birthday ? String(birthday) : undefined,
+        candidate: cand,
+      });
 
-      if (containsFirst && containsLast) {
-        const fullCombo1 = `${normTargetLast} ${normTargetFirst}`;
-        const fullCombo2 = `${normTargetFirst} ${normTargetLast}`;
-        if (normCand === fullCombo1 || normCand === fullCombo2) {
-          isExactFound = true;
-        }
-
-        matchedDuplicates.push({
-          id: cand.id,
-          globalNumber: cand.globalNumber,
-          name: cand.name,
-          phone: cand.phone,
-          branchName: cand.registeredBranch?.name || "Siège",
-          classes: cand.enrollments.map((e) => e.class.name),
-        });
+      if (match) {
+        if (match.isExactName) isExactFound = true;
+        evaluatedDuplicates.push(match);
       }
     }
 
+    // Sort by highest similarity / relevance first
+    evaluatedDuplicates.sort((a, b) => b.similarityScore - a.similarityScore);
+
     return {
-      hasDuplicate: matchedDuplicates.length > 0,
+      hasDuplicate: evaluatedDuplicates.length > 0,
       isExact: isExactFound,
-      duplicates: matchedDuplicates.slice(0, 5),
+      duplicates: evaluatedDuplicates.slice(0, 5),
     };
   } catch (err) {
     console.error("checkStudentDuplicateAction error:", err);

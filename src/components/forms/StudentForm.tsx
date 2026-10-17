@@ -30,9 +30,11 @@ import {
   RefreshCw,
   Trash2,
   CheckCircle2,
+  ExternalLink,
 } from "lucide-react";
 import { splitFullName } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
+import { DuplicateStudentCandidate } from "@/lib/studentDeduplication";
 import {
   getStudentFingerprintStatusAction,
   enrollStudentFingerprintAction,
@@ -135,43 +137,74 @@ const StudentForm = ({
 
   const watchedName = watch("name");
   const watchedSurname = watch("surname");
+  const watchedPhone = watch("phone");
+  const watchedBirthday = watch("birthday");
   const watchedGradeId = watch("gradeId");
 
   const submitModeRef = useRef<"create" | "create_and_pay">("create");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeSubmittingMode, setActiveSubmittingMode] = useState<"create" | "create_and_pay">("create");
-  const [duplicateCandidates, setDuplicateCandidates] = useState<any[]>([]);
+  const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateStudentCandidate[]>([]);
   const [duplicateBypassed, setDuplicateBypassed] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [pendingFormData, setPendingFormData] = useState<StudentSchema | null>(null);
+  const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false);
+  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState(0);
 
-  // Debounced duplicate detection
+  // If identifying input fields change after a previous bypass, re-enable anti-duplicate protection
+  useEffect(() => {
+    if (duplicateBypassed) {
+      setDuplicateBypassed(false);
+    }
+  }, [watchedName, watchedSurname, watchedPhone]);
+
+  // Debounced multi-field duplicate detection (Name, Surname, Phone, Parent Phones, Birthday)
   useEffect(() => {
     if (type !== "create") return;
     const cleanFirst = watchedName ? watchedName.trim() : "";
     const cleanLast = watchedSurname ? watchedSurname.trim() : "";
+    const cleanPhone = watchedPhone ? watchedPhone.trim() : "";
+    const validParentPhones = (parentPhones || []).filter(Boolean);
 
-    if (cleanFirst.length < 2 || cleanLast.length < 2) {
+    const hasSufficientInput =
+      cleanFirst.length >= 2 ||
+      cleanLast.length >= 2 ||
+      cleanPhone.length >= 8 ||
+      validParentPhones.some((p) => p.replace(/\D/g, "").length >= 8);
+
+    if (!hasSufficientInput) {
       setDuplicateCandidates([]);
       return;
     }
 
     const timer = setTimeout(() => {
+      setIsCheckingDuplicate(true);
       checkStudentDuplicateAction({
         name: cleanFirst,
         surname: cleanLast,
+        phone: cleanPhone || undefined,
+        parentPhoneNumbers: validParentPhones,
+        birthday: watchedBirthday ? String(watchedBirthday) : undefined,
         excludeStudentId: data?.id,
-      }).then((res) => {
-        if (res.hasDuplicate) {
-          setDuplicateCandidates(res.duplicates);
-        } else {
+      })
+        .then((res) => {
+          if (res.hasDuplicate) {
+            setDuplicateCandidates(res.duplicates);
+            setSelectedCandidateIndex(0);
+          } else {
+            setDuplicateCandidates([]);
+          }
+        })
+        .catch(() => {
           setDuplicateCandidates([]);
-        }
-      });
+        })
+        .finally(() => {
+          setIsCheckingDuplicate(false);
+        });
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [watchedName, watchedSurname, type, data?.id]);
+  }, [watchedName, watchedSurname, watchedPhone, watchedBirthday, parentPhones, type, data?.id]);
 
   const [isClassesOpen, setIsClassesOpen] = useState(false);
   const [classSearchTerm, setClassSearchTerm] = useState("");
@@ -490,26 +523,65 @@ const StudentForm = ({
     }
   };
 
-  const handleFormSubmit = (formData: StudentSchema) => {
+  const handleFormSubmit = async (formData: StudentSchema) => {
     const mode = submitModeRef.current;
-    if (
-      type === "create" &&
-      duplicateCandidates.length > 0 &&
-      !duplicateBypassed
-    ) {
-      setPendingFormData(formData);
-      setShowDuplicateModal(true);
-      return;
+    if (type === "create" && !duplicateBypassed) {
+      if (duplicateCandidates.length > 0) {
+        setPendingFormData(formData);
+        setShowDuplicateModal(true);
+        return;
+      }
+
+      // Synchronous safety check in case the user submitted immediately before debounce completed
+      const cleanFirst = formData.name ? formData.name.trim() : "";
+      const cleanLast = formData.surname ? formData.surname.trim() : "";
+      const cleanPhone = formData.phone ? formData.phone.trim() : "";
+      const validParentPhones = (formData.parentPhoneNumbers || []).filter(Boolean);
+
+      const hasSufficientInput =
+        cleanFirst.length >= 2 ||
+        cleanLast.length >= 2 ||
+        cleanPhone.length >= 8 ||
+        validParentPhones.some((p) => p.replace(/\D/g, "").length >= 8);
+
+      if (hasSufficientInput) {
+        setIsCheckingDuplicate(true);
+        try {
+          const res = await checkStudentDuplicateAction({
+            name: cleanFirst,
+            surname: cleanLast,
+            phone: cleanPhone || undefined,
+            parentPhoneNumbers: validParentPhones,
+            birthday: formData.birthday ? String(formData.birthday) : undefined,
+            excludeStudentId: data?.id,
+          });
+
+          if (res.hasDuplicate && res.duplicates.length > 0) {
+            setDuplicateCandidates(res.duplicates);
+            setSelectedCandidateIndex(0);
+            setPendingFormData(formData);
+            setShowDuplicateModal(true);
+            return;
+          }
+        } catch {
+          // If check fails, allow normal submission
+        } finally {
+          setIsCheckingDuplicate(false);
+        }
+      }
     }
 
-    executeStudentSubmit(formData, mode);
+    executeStudentSubmit({ ...formData, bypassDuplicateCheck: duplicateBypassed }, mode);
   };
 
   const handleConfirmDuplicateBypass = () => {
     setDuplicateBypassed(true);
     setShowDuplicateModal(false);
     if (pendingFormData) {
-      executeStudentSubmit(pendingFormData, submitModeRef.current);
+      executeStudentSubmit(
+        { ...pendingFormData, bypassDuplicateCheck: true },
+        submitModeRef.current
+      );
     }
   };
 
@@ -542,6 +614,32 @@ const StudentForm = ({
     const term = classSearchTerm.toLowerCase().trim();
     return list.filter((c: any) => c.name.toLowerCase().includes(term));
   }, [classes, watchedGradeId, classSearchTerm]);
+
+  const renderMatchBadge = (cand: DuplicateStudentCandidate) => {
+    const reasonText = locale === "ar" ? cand.matchReasonAr : cand.matchReasonFr;
+    if (cand.matchType === "NAME_AND_BIRTHDAY" || cand.matchType === "EXACT_NAME") {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-800 border border-red-300">
+          <ShieldAlert className="w-3 h-3 text-red-600" />
+          {reasonText}
+        </span>
+      );
+    }
+    if (cand.matchType === "PHONE_MATCH" || cand.matchType === "PARENT_PHONE_MATCH") {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-800 border border-blue-300">
+          <AlertTriangle className="w-3 h-3 text-blue-600" />
+          {reasonText}
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+        <AlertTriangle className="w-3 h-3 text-amber-600" />
+        {reasonText}
+      </span>
+    );
+  };
 
   return (
     <form className="flex flex-col gap-6" onSubmit={handleSubmit(handleFormSubmit)}>
@@ -595,33 +693,72 @@ const StudentForm = ({
 
         {/* Live Duplicate Warning Banner */}
         {duplicateCandidates.length > 0 && !duplicateBypassed && (
-          <div className="w-full p-3 bg-amber-50 border border-amber-300 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-amber-950 shadow-2xs animate-in fade-in">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-              <div>
-                <p className="font-bold">
-                  {locale === "ar"
-                    ? `تنبيه: يوجد تلميذ مسجل بنفس الاسم: #${duplicateCandidates[0].globalNumber} ${duplicateCandidates[0].name}`
-                    : `Attention : Un élève avec ce nom existe déjà : #${duplicateCandidates[0].globalNumber} ${duplicateCandidates[0].name}`}
-                </p>
-                <p className="text-[11px] text-amber-800">
-                  {locale === "ar"
-                    ? `الفرع: ${duplicateCandidates[0].branchName} • الهاتف: ${duplicateCandidates[0].phone || "غير محدد"}`
-                    : `Siège : ${duplicateCandidates[0].branchName} • Tél : ${duplicateCandidates[0].phone || "Non renseigné"}`}
-                </p>
+          <div className="w-full p-3.5 bg-amber-50 border border-amber-300 rounded-xl space-y-2.5 text-xs text-amber-950 shadow-2xs animate-in fade-in">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex items-start sm:items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full bg-amber-200/80 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                  <ShieldAlert className="w-4 h-4 text-amber-800" />
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-bold text-sm text-gray-900">
+                      {locale === "ar"
+                        ? duplicateCandidates.length === 1
+                          ? "تنبيه: تم العثور على تلميذ مسجل بمعلومات مماثلة"
+                          : `تنبيه: تم العثور على ${duplicateCandidates.length} تلاميذ بمعلومات مماثلة`
+                        : duplicateCandidates.length === 1
+                        ? "Attention : Un élève similaire a été détecté"
+                        : `Attention : ${duplicateCandidates.length} élèves similaires détectés`}
+                    </p>
+                    {renderMatchBadge(duplicateCandidates[0])}
+                  </div>
+                  <p className="text-[11px] text-amber-900 mt-0.5">
+                    <span className="font-semibold">
+                      #{duplicateCandidates[0].globalNumber} {duplicateCandidates[0].name}
+                    </span>
+                    {" • "}
+                    <span>{duplicateCandidates[0].branchName}</span>
+                    {duplicateCandidates[0].phone && (
+                      <span> • {duplicateCandidates[0].phone}</span>
+                    )}
+                    {duplicateCandidates[0].birthday && (
+                      <span> • {duplicateCandidates[0].birthday}</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowDuplicateModal(true)}
+                  className="bg-white hover:bg-amber-100 border-amber-300 text-amber-900 font-semibold"
+                >
+                  {locale === "ar" ? "مقارنة البيانات" : "Comparer"}
+                </Button>
+                {onSwitchToExisting && (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    onClick={() => onSwitchToExisting(duplicateCandidates[0])}
+                    className="bg-amber-700 hover:bg-amber-800 text-white font-bold"
+                  >
+                    {locale === "ar" ? "تسجيل هذا التلميذ" : "Inscrire cet élève"}
+                  </Button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDuplicateBypassed(true)}
+                  title={locale === "ar" ? "تجاهل التنبيه" : "Ignorer l'alerte"}
+                  className="p-1 text-amber-700 hover:text-amber-950 rounded hover:bg-amber-200/50"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
             </div>
-            {onSwitchToExisting && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => onSwitchToExisting(duplicateCandidates[0])}
-                className="bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-900 font-bold shrink-0 self-end sm:self-center"
-              >
-                {locale === "ar" ? "تسجيل هذا التلميذ" : "Inscrire cet élève"}
-              </Button>
-            )}
           </div>
         )}
 
@@ -1125,89 +1262,249 @@ const StudentForm = ({
       )}
 
       {/* Duplicate Confirmation Modal */}
-      {showDuplicateModal && duplicateCandidates.length > 0 && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4 font-sans">
-          <div className="bg-surface rounded-xl border border-border shadow-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 animate-in fade-in zoom-in-95">
-            <div className="flex items-center gap-3 text-amber-700">
-              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
-                <ShieldAlert className="w-5 h-5 text-amber-700" />
-              </div>
-              <div>
-                <h3 className="font-bold text-base text-gray-900">
-                  {locale === "ar"
-                    ? "تنبيه: تلميذ مسجل بنفس الاسم مسبقاً"
-                    : "Attention : Élève avec le même nom détecté"}
-                </h3>
-                <p className="text-xs text-muted">
-                  {locale === "ar"
-                    ? "تم العثور على تلميذ مسجل بنفس الاسم واللقب في قاعدة البيانات"
-                    : "Un élève portant le même nom et prénom est déjà enregistré."}
-                </p>
-              </div>
-            </div>
+      {showDuplicateModal && duplicateCandidates.length > 0 && (() => {
+        const activeCand = duplicateCandidates[selectedCandidateIndex] || duplicateCandidates[0];
+        const inputFullName = [watchedSurname, watchedName].filter(Boolean).join(" ").trim() || "-";
+        const inputBirthdayStr = watchedBirthday
+          ? new Date(watchedBirthday).toISOString().split("T")[0]
+          : null;
 
-            <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl text-xs space-y-1.5 text-amber-950">
-              <div className="flex items-center gap-2 font-bold text-sm">
-                <span>#{duplicateCandidates[0].globalNumber}</span>
-                <span>{duplicateCandidates[0].name}</span>
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4 font-sans">
+            <div className="bg-surface rounded-xl border border-border shadow-2xl p-5 sm:p-6 max-w-xl w-full space-y-4 animate-in fade-in zoom-in-95 max-h-[92vh] overflow-y-auto">
+              {/* Modal Header */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                    <ShieldAlert className="w-5 h-5 text-amber-700" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base text-gray-900">
+                      {locale === "ar"
+                        ? "تنبيه: تم العثور على ملف تلميذ مماثل"
+                        : "Attention : Fiche élève similaire détectée"}
+                    </h3>
+                    <p className="text-xs text-muted">
+                      {locale === "ar"
+                        ? "يرجى مراجعة البيانات للمقارنة قبل المتابعة لتفادي التكرار"
+                        : "Veuillez comparer les données pour éviter les doublons."}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowDuplicateModal(false)}
+                  className="text-gray-400 hover:text-gray-600 p-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-muted">
-                <span>{duplicateCandidates[0].branchName}</span>
-                {duplicateCandidates[0].phone && <span>• {duplicateCandidates[0].phone}</span>}
-                {duplicateCandidates[0].classes?.length > 0 && (
-                  <span>
-                    •{" "}
-                    {locale === "ar"
-                      ? `الأفواج: ${duplicateCandidates[0].classes.join(", ")}`
-                      : `Groupes : ${duplicateCandidates[0].classes.join(", ")}`}
+
+              {/* Multiple candidates navigation tabs */}
+              {duplicateCandidates.length > 1 && (
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-border">
+                  <span className="text-[11px] font-semibold text-gray-500 shrink-0">
+                    {locale === "ar" ? "التطابقات:" : "Candidats:"}
                   </span>
-                )}
+                  {duplicateCandidates.map((cand, idx) => (
+                    <button
+                      key={cand.id}
+                      type="button"
+                      onClick={() => setSelectedCandidateIndex(idx)}
+                      className={`px-2.5 py-1 text-xs rounded-lg font-medium whitespace-nowrap transition-colors ${
+                        idx === selectedCandidateIndex
+                          ? "bg-amber-600 text-white shadow-2xs"
+                          : "bg-surface-subtle text-gray-700 hover:bg-gray-200"
+                      }`}
+                    >
+                      #{cand.globalNumber} {cand.name} ({cand.similarityScore}%)
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Match Reason Banner */}
+              <div className="p-3 bg-amber-50/90 border border-amber-200 rounded-xl flex items-center justify-between gap-2 text-xs text-amber-950">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <div>
+                    <span className="font-bold">
+                      {locale === "ar" ? activeCand.matchReasonAr : activeCand.matchReasonFr}
+                    </span>
+                    <span className="text-amber-800 text-[11px] ms-1">
+                      ({locale === "ar" ? `نسبة التطابق: ${activeCand.similarityScore}%` : `Similarité : ${activeCand.similarityScore}%`})
+                    </span>
+                  </div>
+                </div>
+                <a
+                  href={`/list/students/${activeCand.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:text-blue-900 underline shrink-0"
+                >
+                  <span>{locale === "ar" ? "فتح الملف" : "Ouvrir la fiche"}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
               </div>
-            </div>
 
-            <p className="text-xs text-gray-600 leading-relaxed">
-              {locale === "ar"
-                ? "هل ترغب في تسجيل هذا التلميذ المسجل مسبقاً في هذا الفوج، أو تأكيد إنشاء تلميذ جديد تماماً يحمل نفس الاسم (حالة تشابه أسماء)؟"
-                : "Souhaitez-vous inscrire cet élève existant dans ce groupe, ou confirmer la création d'un nouvel élève portant le même nom (homonyme) ?"}
-            </p>
+              {/* Side-by-side comparison table */}
+              <div className="border border-border rounded-xl overflow-hidden text-xs">
+                <div className="grid grid-cols-3 bg-surface-subtle font-bold p-2.5 text-gray-700 border-b border-border">
+                  <span>{locale === "ar" ? "المعلومة" : "Champ"}</span>
+                  <span>{locale === "ar" ? "المعلومة المدخلة" : "Saisie actuelle"}</span>
+                  <span>{locale === "ar" ? `الملف المسجل (#${activeCand.globalNumber})` : `Élève existant (#${activeCand.globalNumber})`}</span>
+                </div>
 
-            <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2 border-t border-border">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setShowDuplicateModal(false)}
-                className="w-full sm:w-auto"
-              >
-                {locale === "ar" ? "تعديل البيانات" : "Vérifier la saisie"}
-              </Button>
-              {onSwitchToExisting && (
+                {/* Name row */}
+                <div className="grid grid-cols-3 p-2.5 border-b border-border items-center">
+                  <span className="font-semibold text-gray-500">
+                    {locale === "ar" ? "الاسم واللقب" : "Nom & Prénom"}
+                  </span>
+                  <span className="font-medium text-gray-900">{inputFullName}</span>
+                  <div className="flex items-center gap-1.5 font-medium text-gray-900">
+                    <span>{activeCand.name}</span>
+                    {activeCand.isExactName && (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Birthday row */}
+                <div className={`grid grid-cols-3 p-2.5 border-b border-border items-center ${
+                  activeCand.hasDifferentBirthday ? "bg-amber-50/50" : activeCand.isSameBirthday ? "bg-red-50/50" : ""
+                }`}>
+                  <span className="font-semibold text-gray-500">
+                    {locale === "ar" ? "تاريخ الميلاد" : "Date de naissance"}
+                  </span>
+                  <span className="text-gray-800">{inputBirthdayStr || (locale === "ar" ? "غير محدد" : "Non renseigné")}</span>
+                  <div className="flex items-center gap-1.5 text-gray-800">
+                    <span>{activeCand.birthday || (locale === "ar" ? "غير محدد" : "Non renseigné")}</span>
+                    {activeCand.isSameBirthday && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-800 font-bold">
+                        {locale === "ar" ? "متطابق" : "Identique"}
+                      </span>
+                    )}
+                    {activeCand.hasDifferentBirthday && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-bold">
+                        {locale === "ar" ? "مختلف" : "Différente"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Phone row */}
+                <div className="grid grid-cols-3 p-2.5 border-b border-border items-center">
+                  <span className="font-semibold text-gray-500">
+                    {locale === "ar" ? "رقم الهاتف" : "Téléphone"}
+                  </span>
+                  <span className="font-mono text-gray-800" dir="ltr">
+                    {watchedPhone || (locale === "ar" ? "غير محدد" : "Non renseigné")}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-gray-800" dir="ltr">
+                      {activeCand.phone || (locale === "ar" ? "غير محدد" : "Non renseigné")}
+                    </span>
+                    {activeCand.isSamePhone && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">
+                        {locale === "ar" ? "متطابق" : "Identique"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Branch row */}
+                <div className="grid grid-cols-3 p-2.5 border-b border-border items-center">
+                  <span className="font-semibold text-gray-500">
+                    {locale === "ar" ? "الفرع" : "Siège"}
+                  </span>
+                  <span className="text-gray-500 italic">
+                    {locale === "ar" ? "الفرع الحالي" : "Siège actuel"}
+                  </span>
+                  <span className="font-medium text-gray-800">{activeCand.branchName}</span>
+                </div>
+
+                {/* Classes row */}
+                <div className="grid grid-cols-3 p-2.5 items-center">
+                  <span className="font-semibold text-gray-500">
+                    {locale === "ar" ? "الأفواج المسجل بها" : "Groupes existants"}
+                  </span>
+                  <span className="text-gray-500 italic">
+                    {locale === "ar" ? "قيد التسجيل" : "En cours de saisie"}
+                  </span>
+                  <span className="text-gray-800">
+                    {activeCand.classes.length > 0
+                      ? activeCand.classes.join(", ")
+                      : (locale === "ar" ? "لا يوجد أفواج حالية" : "Aucun groupe")}
+                  </span>
+                </div>
+              </div>
+
+              {/* Smart Contextual Guidance */}
+              {activeCand.hasDifferentBirthday ? (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-2">
+                  <span className="text-base shrink-0">💡</span>
+                  <p>
+                    {locale === "ar"
+                      ? "تواريخ الميلاد مختلفة. يُرجح أنهما تلميذان مختلفان يحملان نفس الاسم (حالة تشابه أسماء). يمكنك تأكيد الإنشاء للمتابعة دون قلق."
+                      : "Les dates de naissance sont différentes. Il s'agit très probablement d'un homonyme (deux personnes distinctes). Vous pouvez confirmer la création sereinement."}
+                  </p>
+                </div>
+              ) : activeCand.isSameBirthday || activeCand.isSamePhone ? (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2">
+                  <span className="text-base shrink-0">⚠️</span>
+                  <p>
+                    {locale === "ar"
+                      ? "تنبيه: تاريخ الميلاد أو رقم الهاتف متطابقان تماماً. يُرجى التحقق للتأكد من عدم تسجيل نفس التلميذ مرتين تفادياً للأخطاء في الحسابات والأفواج."
+                      : "Attention : La date de naissance ou le numéro de téléphone correspondent exactement. Vérifiez s'il ne s'agit pas du même élève pour éviter les doublons dans les paiements et présences."}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-600 leading-relaxed">
+                  {locale === "ar"
+                    ? "هل ترغب في اعتماد هذا التلميذ المسجل مسبقاً، أو تأكيد إنشاء تلميذ جديد تماماً يحمل نفس الاسم (حالة تشابه أسماء)؟"
+                    : "Souhaitez-vous inscrire cet élève existant, ou confirmer la création d'un nouvel élève (homonyme) ?"}
+                </p>
+              )}
+
+              {/* Action buttons */}
+              <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2 border-t border-border">
                 <Button
                   type="button"
-                  variant="primary"
+                  variant="outline"
                   size="sm"
-                  onClick={() => {
-                    setShowDuplicateModal(false);
-                    onSwitchToExisting(duplicateCandidates[0]);
-                  }}
-                  className="w-full sm:w-auto bg-primary text-white"
+                  onClick={() => setShowDuplicateModal(false)}
+                  className="w-full sm:w-auto"
                 >
-                  {locale === "ar" ? "تسجيل التلميذ الموجود" : "Inscrire l'élève existant"}
+                  {locale === "ar" ? "تعديل البيانات" : "Vérifier la saisie"}
                 </Button>
-              )}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handleConfirmDuplicateBypass}
-                className="w-full sm:w-auto text-amber-800 hover:bg-amber-50"
-              >
-                {locale === "ar" ? "تأكيد وإنشاء تلميذ جديد" : "Créer quand même"}
-              </Button>
+                {onSwitchToExisting && (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      setShowDuplicateModal(false);
+                      onSwitchToExisting(activeCand);
+                    }}
+                    className="w-full sm:w-auto bg-primary text-white font-bold"
+                  >
+                    {locale === "ar" ? "تسجيل التلميذ الموجود" : "Inscrire l'élève existant"}
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleConfirmDuplicateBypass}
+                  className="w-full sm:w-auto text-amber-900 hover:bg-amber-100 font-semibold"
+                >
+                  {locale === "ar" ? "تأكيد وإنشاء تلميذ جديد" : "Créer quand même (Homonyme)"}
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </form>
   );
 };

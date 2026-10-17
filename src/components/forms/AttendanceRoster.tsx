@@ -1569,7 +1569,7 @@ const AttendanceRoster = ({
                   data={{
                     classes: [lesson.class.id],
                     gradeId: lesson.class.levelId || undefined,
-                    registeredBranchId: lesson.branchId || undefined,
+                    registeredBranchId: lesson.class.branchId || lesson.branchId || undefined,
                     targetClassName: lesson.class.name,
                   }}
                   relatedData={resolvedStudentRelatedData}

@@ -67,8 +67,8 @@ const ClassAttendancePage = async (
                 },
             },
         }),
-        prisma.$queryRaw<Array<{ id: number; startsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean; isTeacherAbsent: boolean }>>`
-            SELECT l.id, l."startsAt", l."isExtra", l."isCatchUp", l."isFree", l."isTeacherAbsent"
+        prisma.$queryRaw<Array<{ id: number; startsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean; isTeacherAbsent: boolean; branchId: number }>>`
+            SELECT l.id, l."startsAt", l."isExtra", l."isCatchUp", l."isFree", l."isTeacherAbsent", l."branchId"
             FROM "Lesson" l
             WHERE l."classId" = ${classId}
                OR EXISTS (
@@ -100,8 +100,11 @@ const ClassAttendancePage = async (
         notFound();
     }
 
-    // Branch access control: branch admins see only their own branch's groups
-    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, classHeader.branchId)) {
+    // Branch access control: branch admins see only their own branch's groups, or groups they host a lesson for
+    const hasHostedLesson = allClassLessons.some((l) =>
+      session.isOwner || canUserAccessBranch(session.rawRole, session.branchIds, l.branchId)
+    );
+    if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, classHeader.branchId) && !hasHostedLesson) {
         return (
             <Card className="p-8 text-center max-w-md mx-auto my-8 border-border shadow-xs font-sans">
                 <div className="flex flex-col items-center gap-3">

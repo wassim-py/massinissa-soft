@@ -52,9 +52,12 @@ const TakeAttendancePage = async (
            c."formationLevelId",
            c."teacherId" as "classTeacherId",
            c."levelId" as "classLevelId",
+           c."branchId" as "classBranchId",
+           cr."branchId" as "classroomBranchId",
            t.name as "teacherName"
     FROM "Lesson" l
     LEFT JOIN "Class" c ON c.id = l."classId"
+    LEFT JOIN "Classroom" cr ON cr.id = l."classroomId"
     LEFT JOIN "Teacher" t ON t.id = l."teacherId"
     WHERE l.id = ${lessonId}
     LIMIT 1
@@ -66,11 +69,15 @@ const TakeAttendancePage = async (
 
   const l = rawLesson[0];
 
-  // Enforce branch-scoped attendance taking: an admin cannot take attendance for another branch's lesson
+  // Enforce branch-scoped attendance taking: allowed if owner, or if admin of lesson's branch, classroom's branch, or group's branch!
   const hasBranchAccess =
     session.isOwner ||
     l.branchId === activeBranchId ||
-    (session.branchIds && session.branchIds.includes(l.branchId));
+    (session.branchIds && session.branchIds.includes(l.branchId)) ||
+    l.classBranchId === activeBranchId ||
+    (session.branchIds && session.branchIds.includes(l.classBranchId)) ||
+    l.classroomBranchId === activeBranchId ||
+    (session.branchIds && session.branchIds.includes(l.classroomBranchId));
 
   if (!hasBranchAccess) {
     return (
@@ -132,7 +139,7 @@ const TakeAttendancePage = async (
     isFormation: isLessonClassFormation,
     formationLevelId: l.formationLevelId != null ? Number(l.formationLevelId) : null,
     levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
-    branchId: l.branchId != null ? Number(l.branchId) : null,
+    branchId: l.classBranchId != null ? Number(l.classBranchId) : (l.branchId != null ? Number(l.branchId) : null),
   });
 
   for (const lg of lessonGroups) {
@@ -176,7 +183,7 @@ const TakeAttendancePage = async (
       isFormation: isLessonClassFormation,
       formationLevelId: l.formationLevelId != null ? Number(l.formationLevelId) : null,
       levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
-      branchId: l.branchId != null ? Number(l.branchId) : null,
+      branchId: l.classBranchId != null ? Number(l.classBranchId) : (l.branchId != null ? Number(l.branchId) : null),
     },
     subject: { id: l.classId, name: combinedGroupNames || l.className || (locale === "ar" ? "مادة" : "Matière") },
     teacher: { id: l.teacherId, name: l.teacherName || (locale === "ar" ? "أستاذ" : "Enseignant"), surname: "" },

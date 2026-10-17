@@ -69,6 +69,9 @@ const AdminPage = async () => {
       },
       class: {
         include: {
+          branch: {
+            select: { id: true, name: true },
+          },
           enrollments: {
             include: {
               student: {
@@ -157,9 +160,9 @@ const AdminPage = async () => {
 
   const allTodaysLessons = resolveRecurringLessonsForDate(candidateLessons, now);
 
-  // Today's lessons strictly for THIS branch
+  // Today's lessons strictly for THIS branch (hosted in this branch or group belonging to this branch)
   const thisBranchTodaysLessons = allTodaysLessons.filter(
-    (l) => l.branchId === activeBranchId
+    (l) => l.branchId === activeBranchId || (l.classroom as any)?.branchId === activeBranchId || l.class.branchId === activeBranchId
   );
 
   // 1. Process Upcoming Lessons data (strictly today's lessons across branches)
@@ -178,12 +181,30 @@ const AdminPage = async () => {
       });
 
       const canTakeAttendance =
-        session.isOwner || l.branchId === activeBranchId;
+        session.isOwner ||
+        l.branchId === activeBranchId ||
+        (session.branchIds && session.branchIds.includes(l.branchId)) ||
+        l.class.branchId === activeBranchId ||
+        (session.branchIds && session.branchIds.includes(l.class.branchId)) ||
+        ((l.classroom as any)?.branchId === activeBranchId) ||
+        (session.branchIds && (l.classroom as any)?.branchId && session.branchIds.includes((l.classroom as any).branchId));
+
+      const isVisitingGroup = Boolean(
+        l.class.branchId &&
+        (l.branchId === activeBranchId || (l.classroom as any)?.branchId === activeBranchId) &&
+        l.class.branchId !== activeBranchId
+      );
+      const isHostedOut = Boolean(
+        l.class.branchId &&
+        l.class.branchId === activeBranchId &&
+        l.branchId !== activeBranchId
+      );
 
       return {
         id: l.id,
         branchId: l.branchId,
         branchName: l.branch?.name || `Siège #${l.branchId}`,
+        homeBranchName: (l.class as any)?.branch?.name || undefined,
         startsAt: new Date(l.startsAt).toISOString(),
         endsAt: new Date(l.endsAt).toISOString(),
         dateStr: l.instanceDate || todayInfo.dateStr,
@@ -195,6 +216,8 @@ const AdminPage = async () => {
         isFree: Boolean(l.isFree),
         otherBranches: Array.from(otherBranchesSet),
         canTakeAttendance,
+        isVisitingGroup,
+        isHostedOut,
       };
     }
   );

@@ -189,7 +189,9 @@ const LessonListPage = async (props: {
       );
     }
     if (selectedBranchId) {
-      whereConditions.push(Prisma.sql`l."branchId" = ${selectedBranchId}`);
+      whereConditions.push(
+        Prisma.sql`(l."branchId" = ${selectedBranchId} OR c."branchId" = ${selectedBranchId} OR cr."branchId" = ${selectedBranchId})`
+      );
     }
     if (selectedLevelId) {
       whereConditions.push(Prisma.sql`c."levelId" = ${selectedLevelId}`);
@@ -231,8 +233,8 @@ const LessonListPage = async (props: {
     const rawLessons = await prisma.$queryRaw<any[]>`
       SELECT l.id, l."startsAt", l."endsAt", l."classId", l."teacherId", l."classroomId", l."branchId",
              l."isExtra", l."isCatchUp", l."isFree", l."extraFee", l."isTeacherAbsent",
-             c.name as "className", c."isFormation", c."isCompleted", c."completedAt", c."levelId", lvl.name as "levelName",
-             t.name as "teacherName", cr.name as "classroomName", b.name as "branchName",
+             c.name as "className", c."branchId" as "classBranchId", c."isFormation", c."isCompleted", c."completedAt", c."levelId", lvl.name as "levelName",
+             t.name as "teacherName", cr.name as "classroomName", cr."branchId" as "classroomBranchId", b.name as "branchName",
              fl."languageId" as "formationLanguageId", flLang.name as "formationLanguageName",
              (
                SELECT string_agg(c_grp.name, ' + ' ORDER BY c_grp.id ASC)
@@ -316,13 +318,15 @@ const LessonListPage = async (props: {
         isTeacherAbsent: Boolean(r.isTeacherAbsent),
         extraFee: r.extraFee != null ? Number(r.extraFee) : null,
         subject: resolvedSubject,
-        class: { id: r.classId, name: groupDisplayName } as any,
+        class: { id: r.classId, name: groupDisplayName, branchId: r.classBranchId } as any,
         teacher: { id: r.teacherId, name: r.teacherName || t("teacher"), surname: "" } as any,
         classroom: r.classroomId
-          ? ({ id: r.classroomId, name: r.classroomName || t("room") } as any)
+          ? ({ id: r.classroomId, name: r.classroomName || t("room"), branchId: r.classroomBranchId } as any)
           : null,
         level: r.levelId ? { id: r.levelId, name: r.levelName || "" } : null,
         additionalClassIds: Array.isArray(r.additionalClassIds) ? r.additionalClassIds : [],
+        classBranchId: r.classBranchId,
+        classroomBranchId: r.classroomBranchId,
       };
     });
 
@@ -449,8 +453,12 @@ const LessonListPage = async (props: {
       const canEditLesson =
         session.isOwner ||
         (session.branchIds.length > 0
-          ? session.branchIds.includes(lesson.branchId)
-          : lesson.branchId === activeBranchId);
+          ? session.branchIds.includes(lesson.branchId) ||
+            session.branchIds.includes((lesson as any).classBranchId) ||
+            session.branchIds.includes((lesson as any).classroomBranchId)
+          : lesson.branchId === activeBranchId ||
+            (lesson as any).classBranchId === activeBranchId ||
+            (lesson as any).classroomBranchId === activeBranchId);
 
       if (lesson.isWorkshop && lesson.workshopId) {
         acc[lesson.id] = (

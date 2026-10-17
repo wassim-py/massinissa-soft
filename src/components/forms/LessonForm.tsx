@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { FormField, Input, Select } from "@/components/ui/FormField";
 import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
-import { Sparkles, User, CheckCircle2, Calendar, Users } from "lucide-react";
+import { Sparkles, User, CheckCircle2, Calendar, Users, Building, MapPin } from "lucide-react";
 
 export type Day = "SATURDAY" | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY";
 
@@ -174,12 +174,57 @@ const LessonForm = ({
     return classes.find((c) => c.id === Number(selectedClassId)) || null;
   }, [classes, selectedClassId]);
 
+  // Classroom branch filter for special lessons: allow choosing any branch if own branch is out of classrooms
+  const [classroomBranchFilter, setClassroomBranchFilter] = useState<number | "all">("all");
+
+  // Sync classroomBranchFilter when selectedClass changes
+  useEffect(() => {
+    if (selectedClass?.branchId) {
+      setClassroomBranchFilter(selectedClass.branchId);
+    }
+  }, [selectedClass?.branchId]);
+
   // Filter classrooms by branch
+  // - For normal recurring lessons: strictly limited to the group's branch
+  // - For special lessons (extra, catch-up, free): if out of classrooms in own branch, admin can pick from any other branch
   const availableClassrooms = useMemo(() => {
     const targetBranchId = selectedClass?.branchId || (activeBranchId ? Number(activeBranchId) : null);
-    if (!targetBranchId) return classrooms;
-    return classrooms.filter((cr) => !cr.branchId || cr.branchId === targetBranchId);
-  }, [classrooms, activeBranchId, selectedClass]);
+    if (lessonType === "normal") {
+      if (!targetBranchId) return classrooms;
+      return classrooms.filter((cr) => !cr.branchId || cr.branchId === targetBranchId);
+    }
+    // Special lesson:
+    if (classroomBranchFilter === "all") {
+      return classrooms;
+    }
+    return classrooms.filter((cr) => cr.branchId === Number(classroomBranchFilter));
+  }, [classrooms, activeBranchId, selectedClass, lessonType, classroomBranchFilter]);
+
+  const watchedClassroomId = watch("classroomId");
+  const chosenClassroom = useMemo(() => {
+    if (!watchedClassroomId) return null;
+    return classrooms.find((cr) => cr.id === Number(watchedClassroomId)) || null;
+  }, [classrooms, watchedClassroomId]);
+
+  const isCrossBranchRoom = useMemo(() => {
+    if (!chosenClassroom || !chosenClassroom.branchId) return false;
+    const groupBranch = selectedClass?.branchId || (activeBranchId ? Number(activeBranchId) : null);
+    return Boolean(groupBranch && chosenClassroom.branchId !== groupBranch);
+  }, [chosenClassroom, selectedClass, activeBranchId]);
+
+  const hostingBranch = useMemo(() => {
+    if (!chosenClassroom?.branchId) return null;
+    return branches.find((b) => b.id === chosenClassroom.branchId) || null;
+  }, [branches, chosenClassroom]);
+
+  // Keep branchId field synced with chosen classroom branch for special lessons
+  useEffect(() => {
+    if (lessonType !== "normal" && chosenClassroom?.branchId) {
+      setValue("branchId", chosenClassroom.branchId);
+    } else if (lessonType === "normal") {
+      setValue("branchId", selectedClass?.branchId || userBranchId);
+    }
+  }, [lessonType, chosenClassroom?.branchId, selectedClass?.branchId, userBranchId, setValue]);
 
   const assignedTeacher = useMemo(() => {
     if (!selectedClass || !selectedClass.teacherId) return null;
@@ -246,6 +291,13 @@ const LessonForm = ({
     if (typeVal === "normal") {
       setAdditionalClassIds([]);
       setValue("additionalClassIds", []);
+      // Reset classroom branch back to group's branch
+      const homeBranch = selectedClass?.branchId || (activeBranchId ? Number(activeBranchId) : 1);
+      setClassroomBranchFilter(homeBranch);
+      const currentRoom = classrooms.find((cr) => cr.id === Number(watch("classroomId")));
+      if (currentRoom?.branchId && currentRoom.branchId !== homeBranch) {
+        setValue("classroomId", "" as any);
+      }
     }
   };
 
@@ -261,12 +313,18 @@ const LessonForm = ({
       ? [selectedClass.name, ...additionalNames].join(" + ")
       : formData.name || "";
 
+    const selectedRoom = classrooms.find((cr) => cr.id === Number(formData.classroomId));
+    const effectiveBranchId =
+      lessonType !== "normal" && selectedRoom?.branchId
+        ? selectedRoom.branchId
+        : (selectedClass?.branchId || formData.branchId);
+
     startTransition(() => {
       formAction({
         ...formData,
         name: combinedName,
         teacherId: selectedClass?.teacherId || formData.teacherId || "",
-        branchId: selectedClass?.branchId || formData.branchId,
+        branchId: effectiveBranchId,
         additionalClassIds: lessonType !== "normal" ? additionalClassIds : [],
       });
     });
@@ -447,6 +505,36 @@ const LessonForm = ({
           </div>
         </FormField>
 
+        {/* Classroom Branch Selector (Visible for Special Lessons to book another branch's room) */}
+        {lessonType !== "normal" && (
+          <FormField
+            label={locale === "ar" ? "فرع القاعة (في حال عدم توفر قاعة بفرعك)" : "Succursale de la salle (si indisponible dans votre siège)"}
+          >
+            <Select
+              value={classroomBranchFilter}
+              onChange={(e) => {
+                const val = e.target.value === "all" ? "all" : Number(e.target.value);
+                setClassroomBranchFilter(val);
+                if (val !== "all") {
+                  const currentRoom = classrooms.find((c) => c.id === Number(watch("classroomId")));
+                  if (currentRoom && currentRoom.branchId && currentRoom.branchId !== val) {
+                    setValue("classroomId", "" as any);
+                  }
+                }
+              }}
+            >
+              <option value="all">
+                {locale === "ar" ? "جميع الفروع (عرض كل القاعات)" : "Toutes les succursales (Toutes les salles)"}
+              </option>
+              {branches.map((b) => (
+                <option value={b.id} key={b.id}>
+                  {b.name} {selectedClass?.branchId === b.id ? (locale === "ar" ? "(فرع الفوج)" : "(Siège du groupe)") : ""}
+                </option>
+              ))}
+            </Select>
+          </FormField>
+        )}
+
         {/* Room / Classroom Selector */}
         <FormField
           label={t("room")}
@@ -458,13 +546,38 @@ const LessonForm = ({
             {...register("classroomId")}
           >
             <option value="">{t("selectRoom")}</option>
-            {availableClassrooms.map((room) => (
-              <option value={room.id} key={room.id}>
-                {room.name}
-              </option>
-            ))}
+            {availableClassrooms.map((room) => {
+              const roomBranch = branches.find((b) => b.id === room.branchId);
+              const branchSuffix = roomBranch && (classroomBranchFilter === "all" || room.branchId !== selectedClass?.branchId)
+                ? ` — [${roomBranch.name}]`
+                : "";
+              return (
+                <option value={room.id} key={room.id}>
+                  {room.name}{branchSuffix}
+                </option>
+              );
+            })}
           </Select>
         </FormField>
+
+        {/* Notice when special lesson is hosted in another branch */}
+        {lessonType !== "normal" && isCrossBranchRoom && hostingBranch && (
+          <div className="md:col-span-2 p-3 rounded-xl bg-amber-50/90 border border-amber-200 text-amber-900 text-xs flex items-center gap-2.5 shadow-2xs">
+            <Building className="w-4 h-4 shrink-0 text-amber-600" />
+            <div>
+              <p className="font-semibold">
+                {locale === "ar"
+                  ? `الحصة مستضافة في فرع: ${hostingBranch.name}`
+                  : `Séance spéciale hébergée au siège : ${hostingBranch.name}`}
+              </p>
+              <p className="text-amber-800/80 mt-0.5">
+                {locale === "ar"
+                  ? `بما أن القاعة تابعة لـ "${hostingBranch.name}"، سيتمكن مدير ذلك الفرع من تسجيل حضور الفوج عند حلول موعد الحصة.`
+                  : `La salle appartenant à "${hostingBranch.name}", l'administrateur de ce siège pourra enregistrer les présences de ce groupe.`}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Date for Special Lessons */}
         {lessonType !== "normal" && (

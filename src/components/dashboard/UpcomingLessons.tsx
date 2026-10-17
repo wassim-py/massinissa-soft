@@ -30,6 +30,9 @@ export interface DashboardLessonItem {
   isFree: boolean;
   otherBranches?: string[];
   canTakeAttendance: boolean;
+  homeBranchName?: string;
+  isVisitingGroup?: boolean;
+  isHostedOut?: boolean;
 }
 
 interface UpcomingLessonsProps {
@@ -46,7 +49,7 @@ export default function UpcomingLessons({
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [viewMode, setViewMode] = useState<"upcoming" | "all">("upcoming");
   const hasMyBranchLessons = initialLessons.some(
-    (l) => l.branchId === activeBranchId
+    (l) => l.branchId === activeBranchId || l.isHostedOut || l.isVisitingGroup
   );
   const [branchFilter, setBranchFilter] = useState<"my_branch" | "all">(
     hasMyBranchLessons ? "my_branch" : "all"
@@ -66,7 +69,9 @@ export default function UpcomingLessons({
 
   // Filter lessons by branch if selected
   const branchFilteredLessons = initialLessons.filter((l) =>
-    branchFilter === "my_branch" ? l.branchId === activeBranchId : true
+    branchFilter === "my_branch"
+      ? (l.branchId === activeBranchId || l.isHostedOut || l.isVisitingGroup)
+      : true
   );
 
   // All lessons passed from admin dashboard are strictly for TODAY
@@ -246,6 +251,24 @@ export default function UpcomingLessons({
                       >
                         <Building className="w-3 h-3 mr-1 inline" />
                         {lesson.branchName}
+                      </Badge>
+                    )}
+
+                    {/* Cross-branch hosting badges */}
+                    {lesson.isVisitingGroup && (
+                      <Badge variant="accent" size="sm">
+                        <MapPin className="w-3 h-3 mr-1 inline" />
+                        {locale === "ar"
+                          ? `فوج زائر ${lesson.homeBranchName ? `(من ${lesson.homeBranchName})` : ""}`
+                          : `Groupe invité ${lesson.homeBranchName ? `(${lesson.homeBranchName})` : ""}`}
+                      </Badge>
+                    )}
+                    {lesson.isHostedOut && (
+                      <Badge variant="warning" size="sm">
+                        <MapPin className="w-3 h-3 mr-1 inline" />
+                        {locale === "ar"
+                          ? `في قاعة ${lesson.branchName}`
+                          : `Au siège ${lesson.branchName}`}
                       </Badge>
                     )}
 

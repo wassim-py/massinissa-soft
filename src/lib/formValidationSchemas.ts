@@ -70,6 +70,7 @@ export const studentSchema = z.object({
   parentPhoneNumbers: z.array(z.string()).optional(),
   registeredBranchId: z.coerce.number().optional(),
   familyId: z.union([z.coerce.number(), z.literal(""), z.null()]).optional(),
+  bypassDuplicateCheck: z.boolean().optional(),
 });
 
 export type StudentSchema = z.infer<typeof studentSchema>;
@@ -89,6 +90,7 @@ export const getStudentSchema = (t?: (key: string) => string) => {
     parentPhoneNumbers: z.array(z.string()).optional(),
     registeredBranchId: z.coerce.number().optional(),
     familyId: z.union([z.coerce.number(), z.literal(""), z.null()]).optional(),
+    bypassDuplicateCheck: z.boolean().optional(),
   });
 };
 
