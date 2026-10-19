@@ -767,19 +767,27 @@ export function resolvePayerCredit({
     );
     const payerVouchers = (payerStudent.vouchers || []).filter(
       (v: any) =>
-        (v.classId === classId || v.class?.id === classId) &&
+        (v.classId === classId || v.class?.id === classId || !v.classId) &&
         v.paymentType === "TUITION_4SESSION" &&
         !v.isVoided &&
         !v.isRefund
     );
 
     if (payerEnrollment || payerVouchers.length > 0) {
-      const payerAtts = (payerStudent.attendances || []).filter(
-        (a: any) => a.lesson && a.lesson.classId === classId && !a.lesson.isFree
-      );
-      const payerCatchUps = (payerStudent.catchUpAttendances || []).filter(
-        (cu: any) => cu.missedLesson && cu.missedLesson.classId === classId
-      );
+      const payerAtts = (payerStudent.attendances || []).filter((a: any) => {
+        if (!a.lesson || a.lesson.isFree) return false;
+        return (
+          a.lesson.classId === classId ||
+          a.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)
+        );
+      });
+      const payerCatchUps = (payerStudent.catchUpAttendances || []).filter((cu: any) => {
+        if (!cu.missedLesson) return false;
+        return (
+          cu.missedLesson.classId === classId ||
+          cu.missedLesson.lessonGroups?.some((lg: any) => lg.classId === classId)
+        );
+      });
 
       const payerTeacherId = payerEnrollment?.class?.teacherId || payerEnrollment?.class?.teacher?.id;
       const payerTeacherOverride = (payerEnrollment?.class as any)?.teacherClassRates?.find(
@@ -823,17 +831,25 @@ export function resolvePayerCredit({
       const cId = enr.classId;
       const vouchers = (payerStudent.vouchers || []).filter(
         (v: any) =>
-          (v.classId === cId || v.class?.id === cId) &&
+          (v.classId === cId || v.class?.id === cId || !v.classId) &&
           v.paymentType === "TUITION_4SESSION" &&
           !v.isVoided &&
           !v.isRefund
       );
-      const atts = (payerStudent.attendances || []).filter(
-        (a: any) => a.lesson && a.lesson.classId === cId && !a.lesson.isFree
-      );
-      const cus = (payerStudent.catchUpAttendances || []).filter(
-        (cu: any) => cu.missedLesson && cu.missedLesson.classId === cId
-      );
+      const atts = (payerStudent.attendances || []).filter((a: any) => {
+        if (!a.lesson || a.lesson.isFree) return false;
+        return (
+          a.lesson.classId === cId ||
+          a.lesson.lessonGroups?.some((lg: any) => lg.classId === cId)
+        );
+      });
+      const cus = (payerStudent.catchUpAttendances || []).filter((cu: any) => {
+        if (!cu.missedLesson) return false;
+        return (
+          cu.missedLesson.classId === cId ||
+          cu.missedLesson.lessonGroups?.some((lg: any) => lg.classId === cId)
+        );
+      });
 
       const enrTeacherId = enr.class?.teacherId || enr.class?.teacher?.id;
       const enrTeacherOverride = (enr.class as any)?.teacherClassRates?.find(
@@ -1020,6 +1036,7 @@ export function computeStudentCreditAndSessions({
     const seenLessonIds = new Set<number>();
     attendances.forEach((a) => {
       if (a.lesson && !a.lesson.isFree) {
+        if (seenLessonIds.has(a.lesson.id)) return;
         seenLessonIds.add(a.lesson.id);
         relevantLessons.push({
           id: a.lesson.id,

@@ -85,17 +85,17 @@ const ClassPaymentHistoryPage = async (
                       attendances: {
                         include: {
                           lesson: {
-                            select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true },
+                            select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true, lessonGroups: { select: { classId: true } } },
                           },
                         },
                       },
                       catchUpAttendances: {
                         include: {
                           missedLesson: {
-                            select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                            select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true, lessonGroups: { select: { classId: true } } },
                           },
                           catchUpLesson: {
-                            select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                            select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true, lessonGroups: { select: { classId: true } } },
                           },
                         },
                       },

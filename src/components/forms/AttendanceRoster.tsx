@@ -604,6 +604,110 @@ const AttendanceRoster = ({
     }
   }, [state]);
 
+  // Dynamically resolve live remaining credit for all non-sibling/payer students present in this roster
+  // so waived siblings strictly track their payer's live remaining credit in real time (Rule 3)
+  const livePayerRemainingMap = useMemo(() => {
+    const map = new Map<string, number>();
+
+    activeStudents.forEach((st) => {
+      const isSibling = Boolean(
+        st.family &&
+        st.family.payerStudentId &&
+        st.family.payerStudentId !== st.id
+      );
+      if (isSibling) return;
+
+      const stStatus = attendance[st.id];
+      const targetClassId = st.enrolledClassId || (lesson.class as any)?.id;
+      const targetClassObj = allClasses && targetClassId
+        ? allClasses.find((c: any) => c.id === targetClassId)
+        : null;
+
+      const isFormation = st.isFormation !== undefined
+        ? Boolean(st.isFormation)
+        : targetClassObj?.isFormation !== undefined
+        ? Boolean(targetClassObj.isFormation)
+        : Boolean(
+            (lesson.class as any)?.isFormation ||
+            (lesson.class as any)?.FormationLevel ||
+            (lesson.class as any)?.formationLevelId
+          );
+
+      const effectiveClassPrice =
+        st.pricePerCycle !== undefined && Number(st.pricePerCycle) > 0
+          ? Number(st.pricePerCycle)
+          : targetClassObj?.pricePerCycle !== undefined && Number(targetClassObj.pricePerCycle) > 0
+          ? Number(targetClassObj.pricePerCycle)
+          : Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0);
+
+      const tuitionVouchers = (st.vouchers || []).filter(
+        (v: any) =>
+          v.paymentType === "TUITION_4SESSION" &&
+          !v.isVoided &&
+          (v.classId === targetClassId || !v.classId)
+      );
+
+      const baseOtherAttendances = (st.attendances || []).filter(
+        (a: any) => Number(a.lessonId) !== Number(lesson.id)
+      );
+      const existingCurrentAtt: any = (st.attendances || []).find(
+        (a: any) => Number(a.lessonId) === Number(lesson.id)
+      );
+      const liveStudentAttendances =
+        !lesson.isFree &&
+        (stStatus === "PRESENT" ||
+          stStatus === "NOT_DEFINED" ||
+          Boolean(existingCurrentAtt))
+          ? [
+              ...baseOtherAttendances,
+              {
+                ...(existingCurrentAtt || {}),
+                lessonId: lesson.id,
+                studentId: st.id,
+                status: stStatus || "ABSENT",
+                lesson: existingCurrentAtt?.lesson || {
+                  id: lesson.id,
+                  startsAt:
+                    (lesson as any).startTime ||
+                    (lesson as any).startsAt ||
+                    new Date(),
+                  isFree: Boolean(lesson.isFree),
+                  isTeacherAbsent: Boolean(lesson.isTeacherAbsent),
+                },
+              },
+            ]
+          : baseOtherAttendances;
+
+      const teacherClassOverride = (lesson.class as any)?.teacherClassRates?.find(
+        (tcr: any) =>
+          tcr.teacherId === lesson.teacher.id &&
+          (Number(tcr.classId) === Number(targetClassId) || !tcr.classId)
+      )?.percentage;
+      const teacherPercentage = teacherClassOverride != null
+        ? Number(teacherClassOverride)
+        : (lesson.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+          ? Number((lesson.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+          : null;
+
+      const metrics = computeStudentCreditAndSessions({
+        pricePerCycle: effectiveClassPrice,
+        isFormation,
+        payerStatus: st.payerStatus || "NORMAL",
+        tuitionVouchers,
+        transfersIn: st.transfersTo || [],
+        transfersOut: st.transfersFrom || [],
+        creditResetOffset: st.creditResetOffset,
+        attendances: liveStudentAttendances,
+        catchUps: st.catchUps || [],
+        teacherPercentage,
+      });
+
+      map.set(st.id, metrics.netSessions);
+    });
+
+    return map;
+  }, [activeStudents, attendance, lesson, allClasses]);
+
   return (
     <>
       {/* Page Header: Title, Group Badges, and Smart Search Bar */}
@@ -832,9 +936,25 @@ const AttendanceRoster = ({
             const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
             const isSchoolFeesOnly = payerStatus === "SCHOOL_FEES_ONLY";
 
+            const payerStudentId = student.family?.payerStudentId;
+            let effectivePayerRemainingCredit: number | undefined = undefined;
+            if (isSiblingDiscount && payerStudentId) {
+              if (livePayerRemainingMap.has(payerStudentId)) {
+                effectivePayerRemainingCredit = livePayerRemainingMap.get(payerStudentId);
+              } else if (student.payerSessionsRemaining !== undefined) {
+                const isCurrentLessonConsumed =
+                  !lesson.isFree &&
+                  (currentStatus === "PRESENT" || currentStatus === "NOT_DEFINED");
+                effectivePayerRemainingCredit = Math.max(
+                  0,
+                  student.payerSessionsRemaining - (isCurrentLessonConsumed ? 1 : 0)
+                );
+              }
+            }
+
             // Rule 3: Waived sibling pass strictly follows paying sibling's remaining credit
             const isPayerSiblingPaid = isSiblingWaived100
-              ? (student.payerSessionsRemaining !== undefined ? student.payerSessionsRemaining > 0 : true)
+              ? (effectivePayerRemainingCredit !== undefined ? effectivePayerRemainingCredit > 0 : true)
               : true;
             const isWaivedTuition = isNonPayer || (isSiblingWaived100 && isPayerSiblingPaid);
 
@@ -933,7 +1053,7 @@ const AttendanceRoster = ({
               siblingDiscountPercentage: siblingDiscountPct,
               isSiblingWaived: isSiblingWaived100,
               isPayerSiblingPaid,
-              payerRemainingCredit: isSiblingDiscount ? student.payerSessionsRemaining : undefined,
+              payerRemainingCredit: isSiblingDiscount ? effectivePayerRemainingCredit : undefined,
               tuitionVouchers,
               transfersIn: student.transfersTo || [],
               transfersOut: student.transfersFrom || [],
@@ -944,8 +1064,8 @@ const AttendanceRoster = ({
             });
 
             const sessionsRemaining =
-              isSiblingDiscount && student.payerSessionsRemaining !== undefined
-                ? student.payerSessionsRemaining
+              isSiblingDiscount && effectivePayerRemainingCredit !== undefined
+                ? effectivePayerRemainingCredit
                 : creditMetrics.netSessions;
             const sessionsConsumed = creditMetrics.attendedSessions;
 

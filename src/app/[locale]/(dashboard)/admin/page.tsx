@@ -94,13 +94,13 @@ const AdminPage = async () => {
                           attendances: {
                             where: { lesson: { isFree: false } },
                             include: {
-                              lesson: { select: { id: true, startsAt: true, isFree: true, classId: true } },
+                              lesson: { select: { id: true, startsAt: true, isFree: true, classId: true, lessonGroups: { select: { classId: true } } } },
                             },
                           },
                           catchUpAttendances: {
                             include: {
                               missedLesson: {
-                                select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+                                select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true, lessonGroups: { select: { classId: true } } },
                               },
                             },
                           },
