@@ -127,7 +127,12 @@ export type StudentPaymentRecordData = {
     id: number;
     lessonId: number;
     status: string;
-    lesson?: { id: number; isFree: boolean; classId: number } | null;
+    lesson?: {
+      id: number;
+      isFree: boolean;
+      classId: number;
+      lessonGroups?: Array<{ classId: number }>;
+    } | null;
   }>;
 };
 
@@ -428,7 +433,9 @@ export default function StudentPaymentDetails({
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(
       (cu: any) =>
         cu.missedLesson?.classId === c.id ||
+        cu.missedLesson?.lessonGroups?.some((lg: any) => lg.classId === c.id) ||
         cu.catchUpLesson?.classId === c.id ||
+        cu.catchUpLesson?.lessonGroups?.some((lg: any) => lg.classId === c.id) ||
         Boolean((c as any).lessons && (c as any).lessons.some((l: any) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId))
     );
 
@@ -448,6 +455,24 @@ export default function StudentPaymentDetails({
       payerRemainingCredit = payerRes.netSessions;
     }
 
+    const teacherId = (c as any).teacherId || c.teacher?.id;
+    const teacherClassOverride = (c as any)?.teacherClassRates?.find(
+      (tcr: any) => tcr.teacherId === teacherId
+    )?.percentage;
+    const teacherPercentage = teacherClassOverride != null
+      ? Number(teacherClassOverride)
+      : (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+        ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+
+    const feeCalc = computeStudentSessionFee({
+      payerStatus: enrPayerStatus,
+      pricePerCycle: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
+      teacherPercentage,
+      isSiblingWaived: isSiblingWaived100,
+      siblingDiscountPercentage: siblingDiscountPct,
+    });
+
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
       isFormation,
@@ -455,12 +480,17 @@ export default function StudentPaymentDetails({
       siblingDiscountPercentage: siblingDiscountPct,
       isSiblingWaived: isSiblingWaived100,
       payerRemainingCredit,
+      teacherPercentage,
       tuitionVouchers,
       transfersIn: enr.transfersTo,
       transfersOut: enr.transfersFrom,
       creditResetOffset: (enr as any).creditResetOffset,
       attendances: (student.attendances || []).filter(
-        (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
+        (att: any) =>
+          att.lesson &&
+          (att.lesson.classId === c.id ||
+            att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id)) &&
+          !att.lesson.isFree
       ),
       catchUps: classCatchUps,
       lessons: (c as any).lessons,
@@ -491,30 +521,16 @@ export default function StudentPaymentDetails({
 
     const mostRecentActiveCycle = sortedActiveCycles[0] || null;
 
-    const teacherId = (c as any).teacherId || c.teacher?.id;
-    const teacherClassOverride = (c as any)?.teacherClassRates?.find(
-      (tcr: any) => tcr.teacherId === teacherId
-    )?.percentage;
-    const teacherPercentage = teacherClassOverride != null
-      ? Number(teacherClassOverride)
-      : (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
-        ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
-        : null;
-
-    const feeCalc = computeStudentSessionFee({
-      payerStatus: enrPayerStatus,
-      pricePerCycle: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
-      teacherPercentage,
-      isSiblingWaived: isSiblingWaived100,
-      siblingDiscountPercentage: siblingDiscountPct,
-    });
-
     let status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER" = "UNPAID";
     if (isFormation) {
       if (isSiblingWaived100) {
         status = "SIBLING_WAIVED";
+      } else if (enrPayerStatus === "NON_PAYER") {
+        status = "NON_PAYER";
       } else if (isLevelPaidInFull) {
         status = "PAID";
+      } else if (isLevelPartiallyPaid) {
+        status = "EXPIRING";
       } else {
         status = "UNPAID";
       }
@@ -599,13 +615,18 @@ export default function StudentPaymentDetails({
       enrollment: enr,
       maxSessions: Math.max(0, availableSessions),
     });
-    setSessionsToTransfer(Math.max(1, availableSessions));
+    setSessionsToTransfer(Math.min(1, Math.max(1, availableSessions)));
     setTargetClassId("");
     setTransferNotes("");
   };
 
   const handleExecuteTransfer = () => {
-    if (!transferModal.enrollment || !targetClassId || sessionsToTransfer < 1) {
+    if (
+      !transferModal.enrollment ||
+      !targetClassId ||
+      sessionsToTransfer < 1 ||
+      sessionsToTransfer > transferModal.maxSessions
+    ) {
       toast.error(t("transferSelectError"));
       return;
     }

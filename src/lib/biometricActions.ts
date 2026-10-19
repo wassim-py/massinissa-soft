@@ -9,7 +9,9 @@ import {
   getAlgiersDateInfo,
   getAlgiersWeekBounds,
   resolveRecurringLessonsForWeek,
+  serializeForClient,
 } from "@/lib/utils";
+import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
 
 export type BiometricScanStatus =
@@ -38,6 +40,10 @@ export interface BiometricScanResult {
   isResolved: boolean;
   alreadyPresent?: boolean;
   scannedAt: string;
+  payerStatus?: "NORMAL" | "NON_PAYER" | "SCHOOL_FEES_ONLY" | string;
+  isNonPayer?: boolean;
+  isSiblingWaived?: boolean;
+  hasPayerSibling?: boolean;
 }
 
 interface BiometricFeedCacheEntry {
@@ -200,6 +206,16 @@ export async function processBiometricScan(input: {
               pricePerCycle: true,
               isFormation: true,
               isCompleted: true,
+              teacherId: true,
+              teacher: {
+                include: {
+                  TeacherPayRate: {
+                    orderBy: { effectiveFrom: "desc" },
+                    take: 1,
+                  },
+                },
+              },
+              teacherClassRates: true,
               lessons: {
                 where: {
                   OR: [
@@ -373,7 +389,7 @@ export async function processBiometricScan(input: {
 
     if (
       isLessonInContinuousScanWindow(
-        lesson,
+        lesson as any,
         nextLesson ? nextLesson.startsAt : null,
         scanTime,
         hasPrecedingLessonToday
@@ -625,6 +641,16 @@ export async function processBiometricScan(input: {
     }
   }
 
+  const teacherId = (matchedLesson.class as any).teacherId || matchedLesson.class.teacher?.id;
+  const teacherClassOverride = (matchedLesson.class as any)?.teacherClassRates?.find(
+    (tcr: any) => tcr.teacherId === teacherId
+  )?.percentage;
+  const teacherPercentage = teacherClassOverride != null
+    ? Number(teacherClassOverride)
+    : (matchedLesson.class.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+      ? Number((matchedLesson.class.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+      : null;
+
   const creditMetricsBefore = computeStudentCreditAndSessions({
     pricePerCycle: Number(matchedLesson.class.pricePerCycle || 0),
     isFormation: Boolean(matchedLesson.class.isFormation),
@@ -633,6 +659,7 @@ export async function processBiometricScan(input: {
     isSiblingWaived,
     isPayerSiblingPaid,
     payerRemainingCredit,
+    teacherPercentage,
     tuitionVouchers,
     transfersIn: enrollment?.transfersTo || [],
     transfersOut: enrollment?.transfersFrom || [],
@@ -641,9 +668,22 @@ export async function processBiometricScan(input: {
     catchUps,
   });
 
+  const isNonPayerStudent = Boolean(
+    creditMetricsBefore.isNonPayer ||
+    effectivePayerStatus === "NON_PAYER"
+  );
+  const isSiblingStudent = Boolean(
+    isSiblingWaived ||
+    creditMetricsBefore.isSiblingWaived ||
+    needsPayerSiblingCheck ||
+    (student.family?.payerStudentId && student.family.payerStudentId !== student.id)
+  );
+
   let hasAvailableCredit = false;
-  if (matchedLesson.isFree || matchedLesson.isTeacherAbsent || creditMetricsBefore.isNonPayer) {
+  if (matchedLesson.isFree || matchedLesson.isTeacherAbsent || isNonPayerStudent) {
     hasAvailableCredit = true;
+  } else if (isSiblingStudent) {
+    hasAvailableCredit = isPayerSiblingPaid;
   } else if (matchedLesson.class.isFormation) {
     const totalPaidFormation = tuitionVouchers.reduce((sum, v) => {
       const refunded = (v.refunds || []).reduce((s, r) => s + Number(r.amount || 0), 0);
@@ -688,7 +728,13 @@ export async function processBiometricScan(input: {
 
     return {
       success: true,
-      scan: serializeScanLog(log),
+      scan: {
+        ...serializeScanLog(log),
+        payerStatus: effectivePayerStatus,
+        isNonPayer: isNonPayerStudent,
+        isSiblingWaived: Boolean(isSiblingWaived || creditMetricsBefore.isSiblingWaived),
+        hasPayerSibling: isSiblingStudent,
+      },
     };
   }
 
@@ -697,12 +743,28 @@ export async function processBiometricScan(input: {
   const consumesOneCredit =
     !matchedLesson.isFree &&
     !matchedLesson.isTeacherAbsent &&
-    !creditMetricsBefore.isNonPayer &&
+    !isNonPayerStudent &&
+    !isSiblingStudent &&
     !matchedLesson.class.isFormation;
 
-  const remainingCreditsAfter = consumesOneCredit
+  const remainingCreditsAfter = (isNonPayerStudent || isSiblingStudent)
+    ? null
+    : consumesOneCredit
     ? Math.max(0, creditMetricsBefore.netSessions - 1)
     : creditMetricsBefore.netSessions;
+
+  let scanMetadataTag: string | null = null;
+  if (isNonPayerStudent) {
+    scanMetadataTag = "WAIVED";
+  } else if (isSiblingStudent) {
+    scanMetadataTag = isSiblingWaived ? "SIBLING_WAIVED" : "PAYER_SIBLING";
+  } else if (effectivePayerStatus === "SCHOOL_FEES_ONLY") {
+    scanMetadataTag = "SCHOOL_FEES_ONLY";
+  }
+
+  const nextInfo = alreadyMarkedPresent
+    ? (scanMetadataTag ? `ALREADY_PRESENT|${scanMetadataTag}` : "ALREADY_PRESENT")
+    : scanMetadataTag;
 
   const writeOps: any[] = [];
 
@@ -768,7 +830,7 @@ export async function processBiometricScan(input: {
         lessonEndsAt: matchedLesson.endsAt,
         status: "SUCCESS",
         remainingCredits: remainingCreditsAfter,
-        nextLessonInfo: alreadyMarkedPresent ? "ALREADY_PRESENT" : null,
+        nextLessonInfo: nextInfo,
         isResolved: true,
         scannedAt: scanTime,
       },
@@ -780,7 +842,14 @@ export async function processBiometricScan(input: {
 
   return {
     success: true,
-    scan: serializeScanLog(log),
+    scan: {
+      ...serializeScanLog(log),
+      payerStatus: effectivePayerStatus,
+      isNonPayer: isNonPayerStudent,
+      isSiblingWaived: Boolean(isSiblingWaived || creditMetricsBefore.isSiblingWaived),
+      hasPayerSibling: isSiblingStudent,
+      remainingCredits: remainingCreditsAfter,
+    },
   };
 }
 
@@ -788,7 +857,52 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
   if (typeof index !== "number") {
     invalidateBiometricFeedCache(log?.branchId);
   }
-  const isAlreadyPresent = log.nextLessonInfo === "ALREADY_PRESENT";
+  const rawNext = log.nextLessonInfo || "";
+  const isAlreadyPresent = rawNext === "ALREADY_PRESENT" || rawNext.startsWith("ALREADY_PRESENT");
+
+  const hasWaivedTag = rawNext.includes("WAIVED") && !rawNext.includes("SIBLING_WAIVED");
+  const hasSiblingWaivedTag = rawNext.includes("SIBLING_WAIVED");
+  const hasPayerSiblingTag = rawNext.includes("PAYER_SIBLING");
+  const hasSchoolFeesOnlyTag = rawNext.includes("SCHOOL_FEES_ONLY");
+
+  const enr = log.student?.enrollments?.find((e: any) => e.classId === log.classId);
+  const payerStatus = hasSchoolFeesOnlyTag
+    ? "SCHOOL_FEES_ONLY"
+    : hasWaivedTag
+    ? "NON_PAYER"
+    : log.payerStatus || enr?.payerStatus || log.student?.payerStatus || "NORMAL";
+
+  const isNonPayer = Boolean(
+    hasWaivedTag ||
+    payerStatus === "NON_PAYER" ||
+    log.isNonPayer
+  );
+
+  const isSiblingWaived = Boolean(
+    hasSiblingWaivedTag ||
+    enr?.isSiblingWaived ||
+    log.isSiblingWaived
+  );
+
+  const hasPayerSibling = Boolean(
+    hasPayerSiblingTag ||
+    hasSiblingWaivedTag ||
+    isSiblingWaived ||
+    (log.student?.family?.payerStudentId && log.student.family.payerStudentId !== log.studentId) ||
+    log.hasPayerSibling
+  );
+
+  let cleanNextLessonInfo: string | null = null;
+  if (!isAlreadyPresent && rawNext) {
+    if (!hasWaivedTag && !hasSiblingWaivedTag && !hasPayerSiblingTag && !hasSchoolFeesOnlyTag) {
+      cleanNextLessonInfo = rawNext;
+    }
+  }
+
+  const remainingCredits = (isNonPayer || isSiblingWaived || hasPayerSibling)
+    ? null
+    : (log.remainingCredits ?? null);
+
   return {
     id: log.id,
     branchId: log.branchId,
@@ -803,11 +917,15 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
     lessonStartsAt: log.lessonStartsAt ? new Date(log.lessonStartsAt).toISOString() : null,
     lessonEndsAt: log.lessonEndsAt ? new Date(log.lessonEndsAt).toISOString() : null,
     status: log.status as BiometricScanStatus,
-    remainingCredits: log.remainingCredits ?? null,
-    nextLessonInfo: isAlreadyPresent ? null : log.nextLessonInfo ?? null,
+    remainingCredits,
+    nextLessonInfo: cleanNextLessonInfo,
     isResolved: Boolean(log.isResolved),
     alreadyPresent: isAlreadyPresent,
     scannedAt: new Date(log.scannedAt).toISOString(),
+    payerStatus,
+    isNonPayer,
+    isSiblingWaived,
+    hasPayerSibling,
   };
 }
 
@@ -871,12 +989,33 @@ export async function getBiometricLiveFeedAction(params?: {
       ]).catch(() => {});
     }
 
+    const studentInclude = {
+      student: {
+        select: {
+          payerStatus: true,
+          family: {
+            select: {
+              payerStudentId: true,
+            },
+          },
+          enrollments: {
+            select: {
+              classId: true,
+              payerStatus: true,
+              isSiblingWaived: true,
+            },
+          },
+        },
+      },
+    };
+
     const [allScansRaw, pinnedAlertsRaw, devicesRaw] = await Promise.all([
       prisma.biometricScanLog.findMany({
         where: {
           branchId: activeBranchId,
           scannedAt: { gte: todayStart },
         },
+        include: studentInclude,
         orderBy: { id: "desc" },
         take: 100,
       }),
@@ -887,6 +1026,7 @@ export async function getBiometricLiveFeedAction(params?: {
           status: { in: ["NO_CREDITS", "NO_UPCOMING_GROUP"] },
           scannedAt: { gte: todayStart },
         },
+        include: studentInclude,
         orderBy: { scannedAt: "desc" },
         take: 20,
       }),
@@ -989,7 +1129,7 @@ export async function resolveBiometricAlertAction(input: {
       };
     }
 
-    if (input.mode === "ALLOW_PRESENT" && scanLog.studentId && scanLog.lessonId) {
+    if ((input.mode === "ALLOW_PRESENT" || input.mode === "RESOLVED_BY_PAYMENT") && scanLog.studentId && scanLog.lessonId) {
       const existing = await prisma.attendance.findFirst({
         where: {
           studentId: scanLog.studentId,
@@ -1047,6 +1187,8 @@ export async function resolveBiometricAlertAction(input: {
       message:
         input.mode === "ALLOW_PRESENT"
           ? "Présence autorisée et enregistrée / تم تسجيل الحضور استثنائياً"
+          : input.mode === "RESOLVED_BY_PAYMENT"
+          ? "Paiement enregistré et présence confirmée / تم تسجيل الدفع وتأكيد الحضور"
           : "Alerte traitée / تمت معالجة التنبيه",
     };
   } catch (err: any) {
@@ -1390,6 +1532,122 @@ export async function recordBiometricCatchUpAction(input: {
       success: false,
       message:
         "Erreur lors de l'enregistrement du rattrapage / فشل في تسجيل حصة التعويض",
+    };
+  }
+}
+
+export async function getBiometricPaymentDataAction(
+  studentId: string,
+  classId?: number | null
+) {
+  try {
+    const session = await getAuthSession();
+    if (!session.userId && !session.rawRole) {
+      return {
+        success: false,
+        message: "Non autorisé / غير مصرح",
+      };
+    }
+
+    const student = await prisma.student.findUnique({
+      where: { id: studentId },
+      include: {
+        registeredBranch: true,
+        parentPhoneNumbers: true,
+        family: {
+          include: {
+            payerStudent: true,
+          },
+        },
+        enrollments: {
+          include: {
+            class: {
+              include: {
+                branch: true,
+                level: true,
+                FormationLevel: {
+                  include: {
+                    Language: true,
+                  },
+                },
+                teacherClassRates: true,
+                teacher: {
+                  include: {
+                    TeacherPayRate: {
+                      orderBy: { effectiveFrom: "desc" },
+                      take: 1,
+                    },
+                  },
+                },
+              },
+            },
+          },
+          orderBy: { enrolledAt: "asc" },
+        },
+      },
+    });
+
+    if (!student) {
+      return {
+        success: false,
+        message: "Étudiant introuvable / لم يتم العثور على التلميذ",
+      };
+    }
+
+    let targetClass = null;
+    if (classId) {
+      const match = student.enrollments.find(
+        (e) => e.classId === Number(classId)
+      );
+      if (match) {
+        targetClass = match.class;
+      } else {
+        targetClass = await prisma.class.findUnique({
+          where: { id: Number(classId) },
+          include: {
+            branch: true,
+            level: true,
+            FormationLevel: {
+              include: {
+                Language: true,
+              },
+            },
+            teacherClassRates: true,
+            teacher: {
+              include: {
+                TeacherPayRate: {
+                  orderBy: { effectiveFrom: "desc" },
+                  take: 1,
+                },
+              },
+            },
+          },
+        });
+      }
+    }
+
+    if (!targetClass && student.enrollments.length > 0) {
+      targetClass = student.enrollments[0].class;
+    }
+
+    const defaultInscriptionFee = await getFixedInscriptionFeeAction();
+
+    return {
+      success: true,
+      student: serializeForClient(student),
+      classData: serializeForClient(targetClass),
+      availableClasses: serializeForClient(
+        student.enrollments.map((e) => e.class).filter(Boolean)
+      ),
+      defaultInscriptionFee,
+    };
+  } catch (err: any) {
+    console.error("getBiometricPaymentDataAction error:", err);
+    return {
+      success: false,
+      message:
+        err?.message ||
+        "Erreur lors de la récupération des données de paiement / فشل في تحميل بيانات الدفع",
     };
   }
 }

@@ -111,6 +111,8 @@ type FullStudent = Student & {
   isScenarioA?: boolean;
   isScenarioB?: boolean;
   remainingCredits?: number;
+  pricePerCycle?: number;
+  isFormation?: boolean;
 };
 
 type FullLesson = Lesson & {
@@ -123,8 +125,12 @@ type FullLesson = Lesson & {
     branchId?: number | null;
     isFormation?: boolean;
     formationLevelId?: number | null;
+    teacherClassRates?: Array<{ teacherId: string; percentage: any }>;
   };
-  teacher: Teacher & { surname?: string };
+  teacher: Teacher & {
+    surname?: string;
+    TeacherPayRate?: Array<{ percentageOfSessionFee: any }>;
+  };
   subject?: { id: number; name: string };
   branchId?: number | null;
 };
@@ -141,6 +147,7 @@ const AttendanceRoster = ({
   initialSearch = "",
   studentRelatedData = { grades: [], classes: [] },
   canCreateStudent = true,
+  allClasses = [],
 }: {
   lesson: FullLesson;
   students: FullStudent[];
@@ -156,6 +163,7 @@ const AttendanceRoster = ({
     classes: Array<{ id: number; name: string; levelId?: number | null }>;
   };
   canCreateStudent?: boolean;
+  allClasses?: Array<any>;
 }) => {
   const router = useRouter();
   const t = useTranslations("attendance");
@@ -830,27 +838,47 @@ const AttendanceRoster = ({
               : true;
             const isWaivedTuition = isNonPayer || (isSiblingWaived100 && isPayerSiblingPaid);
 
+            const targetClassId = student.enrolledClassId || (lesson.class as any)?.id;
+            const targetClassObj = allClasses && targetClassId
+              ? allClasses.find((c: any) => c.id === targetClassId)
+              : null;
+
+            const isFormation = student.isFormation !== undefined
+              ? Boolean(student.isFormation)
+              : targetClassObj?.isFormation !== undefined
+              ? Boolean(targetClassObj.isFormation)
+              : Boolean(
+                  (lesson.class as any)?.isFormation ||
+                  (lesson.class as any)?.FormationLevel ||
+                  (lesson.class as any)?.formationLevelId
+                );
+
+            const effectiveClassPrice =
+              student.pricePerCycle !== undefined && Number(student.pricePerCycle) > 0
+                ? Number(student.pricePerCycle)
+                : targetClassObj?.pricePerCycle !== undefined && Number(targetClassObj.pricePerCycle) > 0
+                ? Number(targetClassObj.pricePerCycle)
+                : Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0);
+
             const tuitionVouchers = (student.vouchers || []).filter(
-              (v: any) => v.paymentType === "TUITION_4SESSION" && (v.classId === lesson.class.id || !v.classId)
-            );
-            const isFormation = Boolean(
-              (lesson.class as any)?.isFormation ||
-              (lesson.class as any)?.FormationLevel ||
-              (lesson.class as any)?.formationLevelId
+              (v: any) =>
+                v.paymentType === "TUITION_4SESSION" &&
+                !v.isVoided &&
+                (v.classId === targetClassId || !v.classId)
             );
 
             const formationVouchers = (student.vouchers || []).filter(
               (v: any) =>
                 (v.paymentType === "FORMATION" || v.paymentType === "TUITION_4SESSION") &&
                 !v.isVoided &&
-                (v.classId === lesson.class.id || !v.classId)
+                (v.classId === targetClassId || !v.classId)
             );
             const totalPaidFormation = formationVouchers.reduce((sum: number, v: any) => {
               const paid = Number(v.amount || 0);
               const refunded = (v.refunds || []).reduce((rSum: number, r: any) => rSum + Number(r.amount || 0), 0);
-              return sum + (paid - refunded);
+              return sum + Math.max(0, paid - refunded);
             }, 0);
-            const formationPrice = Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0);
+            const formationPrice = effectiveClassPrice;
             const isFormationPaidInFull = formationPrice > 0 && totalPaidFormation >= formationPrice;
             const isFormationPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
 
@@ -887,8 +915,19 @@ const AttendanceRoster = ({
                   ]
                 : baseOtherAttendances;
 
+            const teacherClassOverride = (lesson.class as any)?.teacherClassRates?.find(
+              (tcr: any) =>
+                tcr.teacherId === lesson.teacher.id &&
+                (Number(tcr.classId) === Number(targetClassId) || !tcr.classId)
+            )?.percentage;
+            const teacherPercentage = teacherClassOverride != null
+              ? Number(teacherClassOverride)
+              : (lesson.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+                ? Number((lesson.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+                : null;
+
             const creditMetrics = computeStudentCreditAndSessions({
-              pricePerCycle: Number((lesson.class as any)?.pricePerCycle || (lesson.class as any)?.price || 0),
+              pricePerCycle: effectiveClassPrice,
               isFormation,
               payerStatus,
               siblingDiscountPercentage: siblingDiscountPct,
@@ -901,6 +940,7 @@ const AttendanceRoster = ({
               creditResetOffset: student.creditResetOffset,
               attendances: liveStudentAttendances,
               catchUps: student.catchUps || [],
+              teacherPercentage,
             });
 
             const sessionsRemaining =
@@ -969,8 +1009,25 @@ const AttendanceRoster = ({
                 }
               } else if (isNonPayer) {
                 statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
+              } else if (isSiblingWaived100) {
+                statusBubble = { text: locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)", color: "bg-amber-600" };
               } else if (isSchoolFeesOnly) {
-                statusBubble = { text: locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls", color: "bg-sky-500" };
+                if (sessionsRemaining >= 2) {
+                  statusBubble = {
+                    text: locale === "ar" ? `مدفوع (${sessionsRemaining} حصص - حصة المدرسة)` : `Payé (${sessionsRemaining} séa. - Part école)`,
+                    color: "bg-green-500",
+                  };
+                } else if (sessionsRemaining === 1) {
+                  statusBubble = {
+                    text: locale === "ar" ? "جلسة واحدة متبقية (حصة المدرسة)" : "1 séance restante (Part école)",
+                    color: "bg-yellow-500",
+                  };
+                } else {
+                  statusBubble = {
+                    text: locale === "ar" ? "غير مدفوع (حصة المدرسة)" : "Non payé (Part école)",
+                    color: "bg-red-500",
+                  };
+                }
               } else if (sessionsRemaining >= 2) {
                 statusBubble = { text: t("paidGood"), color: "bg-green-500" };
               } else if (sessionsRemaining >= 1) {
@@ -1200,11 +1257,15 @@ const AttendanceRoster = ({
                         ) : !isFormation ? (
                           <>
                             <span>•</span>
-                            <span className={sessionsRemaining <= 0 && !isNonPayer ? "font-semibold text-rose-600" : ""}>
+                            <span className={sessionsRemaining <= 0 && !isNonPayer && !isSiblingWaived100 ? "font-semibold text-rose-600" : ""}>
                               {isNonPayer
                                 ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
+                                : isSiblingWaived100 && !isSiblingDiscount
+                                ? (locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)")
                                 : isSchoolFeesOnly
-                                ? (locale === "ar" ? "حصة المدرسة فقط" : "Frais d'école seuls")
+                                ? (locale === "ar"
+                                    ? `${sessionsRemaining} حصة متبقية (حصة المدرسة)`
+                                    : `${sessionsRemaining} séance(s) restante(s) (Part école)`)
                                 : isSiblingDiscount
                                 ? (locale === "ar"
                                     ? `${sessionsRemaining} حصة متبقية (أخ دافع)`
@@ -1409,7 +1470,13 @@ const AttendanceRoster = ({
                           </button>
                           {mostRecentVoucher && (
                             <PrintTicketButton
-                              voucher={{ ...mostRecentVoucher, student, class: lesson.class }}
+                              voucher={{
+                                ...mostRecentVoucher,
+                                student,
+                                class: (allClasses && student.enrolledClassId)
+                                  ? allClasses.find((c: any) => c.id === student.enrolledClassId) || lesson.class
+                                  : lesson.class,
+                              }}
                             />
                           )}
                         </>
@@ -1632,15 +1699,22 @@ const AttendanceRoster = ({
             >
               <Image src="/close.png" alt="close" width={16} height={16} />
             </button>
-            <PaymentForm
-              student={selectedStudent}
-              classData={lesson.class}
-              setOpen={setIsPaymentModalOpen}
-              type="create"
-              defaultInscriptionFee={
-                lesson.class?.inscriptionFee ? Number(lesson.class.inscriptionFee) : undefined
-              }
-            />
+            {(() => {
+              const studentClassObj = (allClasses && selectedStudent?.enrolledClassId)
+                ? allClasses.find((c: any) => c.id === selectedStudent.enrolledClassId) || lesson.class
+                : lesson.class;
+              return (
+                <PaymentForm
+                  student={selectedStudent}
+                  classData={studentClassObj}
+                  setOpen={setIsPaymentModalOpen}
+                  type="create"
+                  defaultInscriptionFee={
+                    studentClassObj?.inscriptionFee ? Number(studentClassObj.inscriptionFee) : undefined
+                  }
+                />
+              );
+            })()}
           </div>
         </div>
       )}

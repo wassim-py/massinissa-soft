@@ -1,0 +1,5456 @@
+{
+  "totalStudents": 1581,
+  "certainDuplicatesCount": 25,
+  "probableDuplicatesCount": 15,
+  "exactNameDifferentBranchCount": 6,
+  "likelySiblingsCount": 80,
+  "duplicatesCertain": [
+    {
+      "a": {
+        "id": "f9729280-e702-4b0e-a788-16a4296b8a24",
+        "globalNumber": 13,
+        "name": "وافق مرام",
+        "phone": "0656407307",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 5,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 1"
+        ],
+        "allPhones": [
+          "0656407307"
+        ],
+        "cleanName": "وافق مرام"
+      },
+      "b": {
+        "id": "6b8ffdf8-a925-46ce-b050-708b42ea03bd",
+        "globalNumber": 1515,
+        "name": "وافق وئام",
+        "phone": "0656407307",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 0,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "مجدوب 2 ثانوي ادبي"
+        ],
+        "allPhones": [
+          "0656407307"
+        ],
+        "cleanName": "وافق ويام"
+      },
+      "reason": "Identical phone (0656407307) & Typo/Variant in Name (\"وافق مرام\" vs \"وافق وئام\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "60206ca9-2840-469b-9b82-d25f56707c3d",
+        "globalNumber": 71,
+        "name": "حماشي رائد",
+        "phone": "0770585507",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 7,
+        "enrollmentsCount": 2,
+        "attendancesCount": 17,
+        "classes": [
+          "حموي علمي 2",
+          "لعرابة 3ثانوي"
+        ],
+        "allPhones": [
+          "0770585507"
+        ],
+        "cleanName": "حماشي رايد"
+      },
+      "b": {
+        "id": "64528399-3330-42a5-aca5-69dd630b19f0",
+        "globalNumber": 1079,
+        "name": "حماشي ريم",
+        "phone": "0770585507",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "بن يحي 4متوسط فوج 2"
+        ],
+        "allPhones": [
+          "0770585507"
+        ],
+        "cleanName": "حماشي ريم"
+      },
+      "reason": "Identical phone (0770585507) & Typo/Variant in Name (\"حماشي رائد\" vs \"حماشي ريم\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "186d3d8f-9c67-4249-8ccf-9ecdcd9a4cb0",
+        "globalNumber": 104,
+        "name": "شيروف سيرين",
+        "phone": "0560990222",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 4,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 2"
+        ],
+        "allPhones": [
+          "0560990222"
+        ],
+        "cleanName": "شيروف سيرين"
+      },
+      "b": {
+        "id": "98bc4ec7-06e9-4505-a015-0779492fa4ae",
+        "globalNumber": 502,
+        "name": "مشيروف سيرين نورهان",
+        "phone": "0560951998",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 1,
+        "attendancesCount": 8,
+        "classes": [
+          "كحال علوم علمي 1"
+        ],
+        "allPhones": [
+          "0560951998",
+          "0560990222"
+        ],
+        "cleanName": "مشيروف سيرين نورهان"
+      },
+      "reason": "Identical phone (0560990222) & Typo/Variant in Name (\"شيروف سيرين\" vs \"مشيروف سيرين نورهان\") [SUBSTRING_NAME]"
+    },
+    {
+      "a": {
+        "id": "4b0f9345-178b-4854-98f3-3e0e0a784173",
+        "globalNumber": 135,
+        "name": "زويد إسكندر",
+        "phone": "0797063229",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 9,
+        "enrollmentsCount": 3,
+        "attendancesCount": 18,
+        "classes": [
+          "نذير 3ثانوي السبت",
+          "حموي رياضي",
+          "نذير 3ثانوي الجمعة"
+        ],
+        "allPhones": [
+          "0797063229"
+        ],
+        "cleanName": "زويد اسكندر"
+      },
+      "b": {
+        "id": "cabda4bc-890c-4cd6-a734-0f7e2692f057",
+        "globalNumber": 1398,
+        "name": "زويد اسكندر وسيم",
+        "phone": "0797063229",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "كحال علوم رياضي 3ثانوي"
+        ],
+        "allPhones": [
+          "0797063229"
+        ],
+        "cleanName": "زويد اسكندر وسيم"
+      },
+      "reason": "Identical phone (0797063229) & Typo/Variant in Name (\"زويد إسكندر\" vs \"زويد اسكندر وسيم\") [SUBSTRING_NAME]"
+    },
+    {
+      "a": {
+        "id": "6e3ef1bd-fd16-4eb9-9e04-cd011e999aac",
+        "globalNumber": 142,
+        "name": "بعاج أسماء",
+        "phone": "0560441781",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 11,
+        "enrollmentsCount": 4,
+        "attendancesCount": 23,
+        "classes": [
+          "زهراوي علمي 1",
+          "حموي رياضي",
+          "كحال علوم رياضي 3ثانوي",
+          "نذير 3ثانوي الجمعة"
+        ],
+        "allPhones": [
+          "0560441781"
+        ],
+        "cleanName": "بعاج اسماء"
+      },
+      "b": {
+        "id": "ce858f3f-21d8-45b1-a237-2c151b57210f",
+        "globalNumber": 1448,
+        "name": "بعاج  اسيا",
+        "phone": "0560441781",
+        "birthday": "2011-12-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "بن يحي 4متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0560441781"
+        ],
+        "cleanName": "بعاج اسيا"
+      },
+      "reason": "Identical phone (0560441781) & Typo/Variant in Name (\"بعاج أسماء\" vs \"بعاج  اسيا\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "a091988d-60ae-4733-bb8d-c8f450546875",
+        "globalNumber": 167,
+        "name": "مريبعي معاذ",
+        "phone": "0795332111",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 6,
+        "enrollmentsCount": 3,
+        "attendancesCount": 18,
+        "classes": [
+          "نذير 3ثانوي السبت",
+          "حموي رياضي",
+          "نذير 3ثانوي الجمعة"
+        ],
+        "allPhones": [
+          "0795332111"
+        ],
+        "cleanName": "مريبعي معاذ"
+      },
+      "b": {
+        "id": "54f39d4f-0fb4-4635-8034-76842a78e921",
+        "globalNumber": 888,
+        "name": "مريبعي معاذ",
+        "phone": "0795332111",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 7,
+        "classes": [
+          "لعرابة 3ثانوي"
+        ],
+        "allPhones": [
+          "0795332111"
+        ],
+        "cleanName": "مريبعي معاذ"
+      },
+      "reason": "Identical phone (0795332111) & Same Name (\"مريبعي معاذ\" / \"مريبعي معاذ\")"
+    },
+    {
+      "a": {
+        "id": "69b50439-35a3-4858-83a3-9980d330570c",
+        "globalNumber": 181,
+        "name": "زغليش شكيب أرسلان",
+        "phone": "0770143426",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "زهراوي علمي 1"
+        ],
+        "allPhones": [
+          "0770143426"
+        ],
+        "cleanName": "زغليش شكيب ارسلان"
+      },
+      "b": {
+        "id": "ca8a4a71-8c5c-4a26-adb6-84265fa027e6",
+        "globalNumber": 375,
+        "name": "زغيلش شكيب أرسلان",
+        "phone": "0770143426",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "حموي علمي 3"
+        ],
+        "allPhones": [
+          "0770143426"
+        ],
+        "cleanName": "زغيلش شكيب ارسلان"
+      },
+      "reason": "Identical phone (0770143426) & Typo/Variant in Name (\"زغليش شكيب أرسلان\" vs \"زغيلش شكيب أرسلان\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "d1532467-3983-4b25-bd98-99dee1809d80",
+        "globalNumber": 253,
+        "name": "كريس امينة",
+        "phone": "0555901325",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 5,
+        "enrollmentsCount": 3,
+        "attendancesCount": 16,
+        "classes": [
+          "زهراوي ادبي 1",
+          "كحال فرنسية 3ثانوي",
+          "وجدان ادبي"
+        ],
+        "allPhones": [
+          "0555901325"
+        ],
+        "cleanName": "كريس امينه"
+      },
+      "b": {
+        "id": "8a6d7b9d-d9f2-4c4d-85b0-23e9dc5a7500",
+        "globalNumber": 546,
+        "name": "امينة كريس",
+        "phone": "0555901325",
+        "birthday": "2009-07-29T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 5,
+        "classes": [
+          "فوج قسوم"
+        ],
+        "allPhones": [
+          "0555901325",
+          "0699963656"
+        ],
+        "cleanName": "امينه كريس"
+      },
+      "reason": "Identical phone (0555901325) & Same Name (\"كريس امينة\" / \"امينة كريس\")"
+    },
+    {
+      "a": {
+        "id": "1dbbc1f0-2fbc-454b-870b-ae3c38d3d1aa",
+        "globalNumber": 298,
+        "name": "كتاب ميليسا",
+        "phone": "0793760377",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "عراس فلسفة ادبي"
+        ],
+        "allPhones": [
+          "0793760377"
+        ],
+        "cleanName": "كتاب ميليسا"
+      },
+      "b": {
+        "id": "52d38fb1-d20f-4852-87ac-babe8f38209b",
+        "globalNumber": 350,
+        "name": "كاتب ميليسا",
+        "phone": "0793760377",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "زهراوي ادبي 2"
+        ],
+        "allPhones": [
+          "0793760377"
+        ],
+        "cleanName": "كاتب ميليسا"
+      },
+      "reason": "Identical phone (0793760377) & Typo/Variant in Name (\"كتاب ميليسا\" vs \"كاتب ميليسا\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "0d16d703-51ae-4bfd-ad57-2494b7e91c12",
+        "globalNumber": 315,
+        "name": "فيلالي ميليسا",
+        "phone": "0698730747",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "كحال فرنسية 3ثانوي"
+        ],
+        "allPhones": [
+          "0698730747"
+        ],
+        "cleanName": "فيلالي ميليسا"
+      },
+      "b": {
+        "id": "be2521f0-5401-41b4-a8e8-6e67c53c7fa7",
+        "globalNumber": 755,
+        "name": "فيلالي مليسا",
+        "phone": "0698730747",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 8,
+        "classes": [
+          "فوج سمية 3 ثانوي"
+        ],
+        "allPhones": [
+          "0698730747"
+        ],
+        "cleanName": "فيلالي مليسا"
+      },
+      "reason": "Identical phone (0698730747) & Typo/Variant in Name (\"فيلالي ميليسا\" vs \"فيلالي مليسا\") [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "58d19f5f-b252-4db2-9b2b-6388dc04059b",
+        "globalNumber": 332,
+        "name": "بن عثمان رتاج",
+        "phone": "0670255369",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 14,
+        "classes": [
+          "زهراوي ادبي 2",
+          "فوج سمية 3 ثانوي"
+        ],
+        "allPhones": [
+          "0670255369"
+        ],
+        "cleanName": "بن عثمان رتاج"
+      },
+      "b": {
+        "id": "26138fa1-5a49-4fab-8d40-908f7032bcaa",
+        "globalNumber": 1203,
+        "name": "بن عثمان سراج",
+        "phone": "0670255369",
+        "birthday": "2019-01-13T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Anglais - Let's Go 02"
+        ],
+        "allPhones": [
+          "0670255369"
+        ],
+        "cleanName": "بن عثمان سراج"
+      },
+      "reason": "Identical phone (0670255369) & Typo/Variant in Name (\"بن عثمان رتاج\" vs \"بن عثمان سراج\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "eeadf04e-af30-4d69-9718-051b8e434b19",
+        "globalNumber": 370,
+        "name": "شوقي رغد",
+        "phone": "0551232084",
+        "birthday": "2009-08-11T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 4,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "حموي علمي 3"
+        ],
+        "allPhones": [
+          "0551232084"
+        ],
+        "cleanName": "شوقي رغد"
+      },
+      "b": {
+        "id": "89909af6-4fe8-44b7-86c6-bf3dbed20a9f",
+        "globalNumber": 509,
+        "name": "شوقي رغد مفيد",
+        "phone": "0551232084",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 8,
+        "classes": [
+          "كحال علوم علمي 1"
+        ],
+        "allPhones": [
+          "0551232084"
+        ],
+        "cleanName": "شوقي رغد مفيد"
+      },
+      "reason": "Identical phone (0551232084) & Typo/Variant in Name (\"شوقي رغد\" vs \"شوقي رغد مفيد\") [SUBSTRING_NAME]"
+    },
+    {
+      "a": {
+        "id": "90cb083c-de4f-4b59-b31d-9e83cef4de04",
+        "globalNumber": 432,
+        "name": "عيون سهى ملاك",
+        "phone": "0797254965",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "حموي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0797254965"
+        ],
+        "cleanName": "عيون سهي ملاك"
+      },
+      "b": {
+        "id": "b2d96d00-17e5-4bc5-805b-c13086558a19",
+        "globalNumber": 943,
+        "name": "عيون سهى",
+        "phone": "0777882768",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 5,
+        "classes": [
+          "كحال علوم 2 ثانوي",
+          "نذير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0777882768",
+          "0797254965"
+        ],
+        "cleanName": "عيون سهي"
+      },
+      "reason": "Identical phone (0797254965) & Typo/Variant in Name (\"عيون سهى ملاك\" vs \"عيون سهى\") [SUBSTRING_NAME]"
+    },
+    {
+      "a": {
+        "id": "b994ef3a-ec43-41ad-a6dd-b70f77c175fd",
+        "globalNumber": 444,
+        "name": "طراش مندر",
+        "phone": "0663044252",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "حموي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0663044252"
+        ],
+        "cleanName": "طراش مندر"
+      },
+      "b": {
+        "id": "2da08d0e-5df1-4954-80d9-fa93f7e76fc6",
+        "globalNumber": 980,
+        "name": "طراش منذر",
+        "phone": "0663044252",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "عمير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0663044252"
+        ],
+        "cleanName": "طراش منذر"
+      },
+      "reason": "Identical phone (0663044252) & Typo/Variant in Name (\"طراش مندر\" vs \"طراش منذر\") [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "3368a386-4a49-4caf-add3-cc45bb269f5b",
+        "globalNumber": 526,
+        "name": "نعيجة جيهان",
+        "phone": "0659232215",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 8,
+        "enrollmentsCount": 3,
+        "attendancesCount": 23,
+        "classes": [
+          "حموي فوج خاص",
+          "نذير 3ثانوي السبت",
+          "نذير 3 ثانوي الثلاثاء "
+        ],
+        "allPhones": [
+          "0659232215",
+          "0661157425"
+        ],
+        "cleanName": "نعيجه جيهان"
+      },
+      "b": {
+        "id": "acfd6e81-92d2-4586-ad7a-d6c4d3b72463",
+        "globalNumber": 855,
+        "name": "نعيجة ميرهان",
+        "phone": "0659232215",
+        "birthday": "2015-07-28T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "بن يحي 1 متوسط"
+        ],
+        "allPhones": [
+          "0659232215"
+        ],
+        "cleanName": "نعيجه ميرهان"
+      },
+      "reason": "Identical phone (0659232215) & Typo/Variant in Name (\"نعيجة جيهان\" vs \"نعيجة ميرهان\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "bb2bc3e7-c88f-42db-9944-05f16025972b",
+        "globalNumber": 567,
+        "name": "عرافة رشا سعيدة",
+        "phone": "0559323725",
+        "birthday": "2012-08-21T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 7,
+        "classes": [
+          "عميرش BEM فوج 2",
+          "دحدوح BEM"
+        ],
+        "allPhones": [
+          "0559323725"
+        ],
+        "cleanName": "عرافه رشا سعيده"
+      },
+      "b": {
+        "id": "26cd5400-c5ad-4025-b290-6fc64d00194e",
+        "globalNumber": 1068,
+        "name": "عرافة رشا",
+        "phone": "0559323725",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 7,
+        "classes": [
+          "بن يحي 4متوسط فوج 2",
+          "بوعبلو 4 متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0559323725",
+          "0541455315"
+        ],
+        "cleanName": "عرافه رشا"
+      },
+      "reason": "Identical phone (0559323725) & Typo/Variant in Name (\"عرافة رشا سعيدة\" vs \"عرافة رشا\") [SUBSTRING_NAME]"
+    },
+    {
+      "a": {
+        "id": "164d1a6e-bf61-4e23-ad94-84c531916eed",
+        "globalNumber": 640,
+        "name": "كنوة ميرال",
+        "phone": "0773348998",
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "لعروسي 3AM"
+        ],
+        "allPhones": [
+          "0773348998",
+          "0654842662"
+        ],
+        "cleanName": "كنوه ميرال"
+      },
+      "b": {
+        "id": "f15ed37d-1fad-462b-b7c2-b2058a592d36",
+        "globalNumber": 1115,
+        "name": "كينوة ميرال",
+        "phone": "0773348998",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 4,
+        "classes": [
+          "بن يحي 3متوسط فوج 1",
+          "حراث 3متوسط"
+        ],
+        "allPhones": [
+          "0773348998",
+          "0654842662"
+        ],
+        "cleanName": "كينوه ميرال"
+      },
+      "reason": "Identical phone (0773348998) & Typo/Variant in Name (\"كنوة ميرال\" vs \"كينوة ميرال\") [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "27d8788c-9b2e-4047-9049-e361341007c6",
+        "globalNumber": 739,
+        "name": "تمرني سناء",
+        "phone": "0661382006",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "بوالجذري 3 ثانوي"
+        ],
+        "allPhones": [
+          "0661382006",
+          "0675673558"
+        ],
+        "cleanName": "تمرني سناء"
+      },
+      "b": {
+        "id": "15e2842c-4281-4c47-9b00-3a9babbc7d67",
+        "globalNumber": 750,
+        "name": "تمرني هناء",
+        "phone": "0661382006",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "بوالجذري 3 ثانوي"
+        ],
+        "allPhones": [
+          "0661382006",
+          "0675673558"
+        ],
+        "cleanName": "تمرني هناء"
+      },
+      "reason": "Identical phone (0661382006) & Typo/Variant in Name (\"تمرني سناء\" vs \"تمرني هناء\") [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "e1cef655-8cac-47c3-8c66-742c51705f42",
+        "globalNumber": 826,
+        "name": "يعو نسرين",
+        "phone": "0776996868",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 2,
+        "attendancesCount": 8,
+        "classes": [
+          "نذير 3 ثانوي الثلاثاء ",
+          "نذير 3ثانوي السبت"
+        ],
+        "allPhones": [
+          "0776996868"
+        ],
+        "cleanName": "يعو نسرين"
+      },
+      "b": {
+        "id": "49bcaefc-50b1-42d5-aa59-f6cacd599e3b",
+        "globalNumber": 910,
+        "name": "ياعو نسرين",
+        "phone": "0776996868",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 1,
+        "attendancesCount": 7,
+        "classes": [
+          "عمير 3ثانوي"
+        ],
+        "allPhones": [
+          "0776996868"
+        ],
+        "cleanName": "ياعو نسرين"
+      },
+      "reason": "Identical phone (0776996868) & Typo/Variant in Name (\"يعو نسرين\" vs \"ياعو نسرين\") [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "f89e78d6-273f-47df-88cb-f8dfe7ce566a",
+        "globalNumber": 1006,
+        "name": "زورق كريم",
+        "phone": "0669429957",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 1 ثانوي فوج 1"
+        ],
+        "allPhones": [
+          "0669429957"
+        ],
+        "cleanName": "زورق كريم"
+      },
+      "b": {
+        "id": "376e54e0-0029-4ac1-9b44-ebd1dd6ee704",
+        "globalNumber": 1019,
+        "name": "زروق كريم",
+        "phone": "0669429957",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 6,
+        "classes": [
+          "نذير 1 ثانوي",
+          "عمير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0669429957"
+        ],
+        "cleanName": "زروق كريم"
+      },
+      "reason": "Identical phone (0669429957) & Typo/Variant in Name (\"زورق كريم\" vs \"زروق كريم\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "e32a2c20-55db-4381-9aff-9717c0bc4828",
+        "globalNumber": 1089,
+        "name": "سباطة إياد",
+        "phone": "0774434095",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "بن يحي 4متوسط فوج 2"
+        ],
+        "allPhones": [
+          "0774434095"
+        ],
+        "cleanName": "سباطه اياد"
+      },
+      "b": {
+        "id": "16e85a4e-b9a3-499b-b78f-84a59ac2ec38",
+        "globalNumber": 1091,
+        "name": "سباطة معاد",
+        "phone": "0774434095",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "بن يحي 4متوسط فوج 2"
+        ],
+        "allPhones": [
+          "0774434095"
+        ],
+        "cleanName": "سباطه معاد"
+      },
+      "reason": "Identical phone (0774434095) & Typo/Variant in Name (\"سباطة إياد\" vs \"سباطة معاد\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "f950d5c1-78c3-4a92-8743-599be4b3225d",
+        "globalNumber": 1221,
+        "name": "خزار محمد",
+        "phone": "0799706205",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Français - Project 04"
+        ],
+        "allPhones": [
+          "0799706205"
+        ],
+        "cleanName": "خزار محمد"
+      },
+      "b": {
+        "id": "cc4034af-b179-45b8-8ef8-990796a84cb5",
+        "globalNumber": 1222,
+        "name": "خزار احمد",
+        "phone": "0799706205",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Français - Project 04"
+        ],
+        "allPhones": [
+          "0799706205"
+        ],
+        "cleanName": "خزار احمد"
+      },
+      "reason": "Identical phone (0799706205) & Typo/Variant in Name (\"خزار محمد\" vs \"خزار احمد\") [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "81025532-95af-4ec8-a545-89439aba1396",
+        "globalNumber": 1272,
+        "name": "بداوي رائد",
+        "phone": "0557729800",
+        "birthday": "2009-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "بن يحي 3متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0557729800"
+        ],
+        "cleanName": "بداوي رايد"
+      },
+      "b": {
+        "id": "9640590c-866a-4415-a30c-37ee781da421",
+        "globalNumber": 1379,
+        "name": "بداوي ريم",
+        "phone": "0557729800",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0557729800"
+        ],
+        "cleanName": "بداوي ريم"
+      },
+      "reason": "Identical phone (0557729800) & Typo/Variant in Name (\"بداوي رائد\" vs \"بداوي ريم\") [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "719975a2-f7cf-466b-964a-ef9517e1f62d",
+        "globalNumber": 1342,
+        "name": "بو صفصاف زياد",
+        "phone": "0554035944",
+        "birthday": "2010-11-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "حموي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0554035944"
+        ],
+        "cleanName": "بو صفصاف زياد"
+      },
+      "b": {
+        "id": "b615835c-a2c5-42fa-8598-29354b3dd5dc",
+        "globalNumber": 1489,
+        "name": "بوصفصاف زياد",
+        "phone": "0554035944",
+        "birthday": "2011-02-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "نذير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0554035944"
+        ],
+        "cleanName": "بوصفصاف زياد"
+      },
+      "reason": "Identical phone (0554035944) & Typo/Variant in Name (\"بو صفصاف زياد\" vs \"بوصفصاف زياد\") [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "4b37b6c9-c339-4cc0-b2aa-6fe1c1bba4f0",
+        "globalNumber": 1450,
+        "name": "بن جا وحدو ندى",
+        "phone": "0541134868",
+        "birthday": "2012-02-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "مجدوب 1 ثانوي ادبي"
+        ],
+        "allPhones": [
+          "0541134868"
+        ],
+        "cleanName": "بن جا وحدو ندي"
+      },
+      "b": {
+        "id": "342c985f-878b-462e-9f3a-e57f3b0334f2",
+        "globalNumber": 1468,
+        "name": "بن جا وحدو نسيم",
+        "phone": "0541134868",
+        "birthday": "2017-07-25T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "4 ابتدائي لغة عربية"
+        ],
+        "allPhones": [
+          "0541134868"
+        ],
+        "cleanName": "بن جا وحدو نسيم"
+      },
+      "reason": "Identical phone (0541134868) & Typo/Variant in Name (\"بن جا وحدو ندى\" vs \"بن جا وحدو نسيم\") [TYPO_2]"
+    }
+  ],
+  "duplicatesProbable": [
+    {
+      "a": {
+        "id": "f9729280-e702-4b0e-a788-16a4296b8a24",
+        "globalNumber": 13,
+        "name": "وافق مرام",
+        "phone": "0656407307",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 5,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 1"
+        ],
+        "allPhones": [
+          "0656407307"
+        ],
+        "cleanName": "وافق مرام"
+      },
+      "b": {
+        "id": "fbd89862-8caa-46f0-82ad-1f8b7ec47ef4",
+        "globalNumber": 1133,
+        "name": "وافق حسام",
+        "phone": "0772896901",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 5,
+        "enrollmentsCount": 2,
+        "attendancesCount": 7,
+        "classes": [
+          "بن يحي 2 متوسط",
+          "Formation Français - Project 04"
+        ],
+        "allPhones": [
+          "0772896901"
+        ],
+        "cleanName": "وافق حسام"
+      },
+      "reason": "Near-identical Name (\"وافق مرام\" vs \"وافق حسام\") in AMPHI [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "0c1d23d5-92f0-4379-ae3f-c5479eee3492",
+        "globalNumber": 21,
+        "name": "شتيوي اياد",
+        "phone": "0797617060",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 5,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 1"
+        ],
+        "allPhones": [
+          "0797617060"
+        ],
+        "cleanName": "شتيوي اياد"
+      },
+      "b": {
+        "id": "a1922c4a-3838-40ef-a3eb-e058cb714eda",
+        "globalNumber": 210,
+        "name": "شتوي اياد",
+        "phone": null,
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 6,
+        "enrollmentsCount": 3,
+        "attendancesCount": 18,
+        "classes": [
+          "رامي رياضيات",
+          "بوالجذري 3 ثانوي",
+          "نذير 3ثانوي السبت"
+        ],
+        "allPhones": [],
+        "cleanName": "شتوي اياد"
+      },
+      "reason": "Near-identical Name (\"شتيوي اياد\" vs \"شتوي اياد\") in AMPHI [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "9caddba3-4367-4c53-9d44-849ca19534c4",
+        "globalNumber": 166,
+        "name": "غوبيش عبد المغيث",
+        "phone": "0659174995",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 4,
+        "enrollmentsCount": 1,
+        "attendancesCount": 10,
+        "classes": [
+          "حموي رياضي"
+        ],
+        "allPhones": [
+          "0659174995"
+        ],
+        "cleanName": "غوبيش عبد المغيث"
+      },
+      "b": {
+        "id": "06c29d48-d120-4210-827d-d8c367f6a8bb",
+        "globalNumber": 206,
+        "name": "غبيش عبد المغيث",
+        "phone": "0541088638",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 7,
+        "enrollmentsCount": 3,
+        "attendancesCount": 14,
+        "classes": [
+          "رامي رياضيات",
+          "نذير 3ثانوي الجمعة",
+          "لعرابة 3ثانوي"
+        ],
+        "allPhones": [
+          "0541088638"
+        ],
+        "cleanName": "غبيش عبد المغيث"
+      },
+      "reason": "Near-identical Name (\"غوبيش عبد المغيث\" vs \"غبيش عبد المغيث\") in AMPHI [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "5a7f03ca-dc23-40d7-ad01-27908836aabf",
+        "globalNumber": 191,
+        "name": "سعدي رنيم",
+        "phone": "0541721495",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 8,
+        "enrollmentsCount": 3,
+        "attendancesCount": 19,
+        "classes": [
+          "زهراوي علمي 1",
+          "لعرابة 3ثانوي",
+          "بن يحي 3 ثانوي"
+        ],
+        "allPhones": [
+          "0541721495"
+        ],
+        "cleanName": "سعدي رنيم"
+      },
+      "b": {
+        "id": "99cd8e15-7944-46e6-99b9-d0b81fae732c",
+        "globalNumber": 260,
+        "name": "سعدوني رنيم",
+        "phone": "0771691556",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "زهراوي ادبي 1"
+        ],
+        "allPhones": [
+          "0771691556"
+        ],
+        "cleanName": "سعدوني رنيم"
+      },
+      "reason": "Near-identical Name (\"سعدي رنيم\" vs \"سعدوني رنيم\") in AMPHI [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "d53f3cca-69a9-4a24-84ab-7843f88caf09",
+        "globalNumber": 242,
+        "name": "بنونة بهاء",
+        "phone": "0660326642",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 6,
+        "enrollmentsCount": 2,
+        "attendancesCount": 12,
+        "classes": [
+          "زهراوي ادبي 1",
+          "عراس فلسفة ادبي"
+        ],
+        "allPhones": [
+          "0660326642"
+        ],
+        "cleanName": "بنونه بهاء"
+      },
+      "b": {
+        "id": "a635dcc6-53af-40fe-ae7b-2cd933ab830f",
+        "globalNumber": 319,
+        "name": "بنونة بهاء",
+        "phone": "غير متوفر",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "كحال فرنسية 3ثانوي"
+        ],
+        "allPhones": [],
+        "cleanName": "بنونه بهاء"
+      },
+      "reason": "Identical Name (\"بنونة بهاء\") & Same Birthday Same Branch (AMPHI)"
+    },
+    {
+      "a": {
+        "id": "5edaf13c-0e26-4408-b5d5-bdedbd72aa62",
+        "globalNumber": 274,
+        "name": "لوزري انس",
+        "phone": "0794590743",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "زهراوي ادبي 1"
+        ],
+        "allPhones": [
+          "0794590743"
+        ],
+        "cleanName": "لوزري انس"
+      },
+      "b": {
+        "id": "f272c64d-93a7-4b2c-b0f2-764c96e9bcb9",
+        "globalNumber": 312,
+        "name": "لوزري انيس",
+        "phone": null,
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "عراس فلسفة ادبي"
+        ],
+        "allPhones": [],
+        "cleanName": "لوزري انيس"
+      },
+      "reason": "Near-identical Name (\"لوزري انس\" vs \"لوزري انيس\") in AMPHI [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "6376ee9c-4505-4a51-9d58-690904e6f3c8",
+        "globalNumber": 286,
+        "name": "بريك ادم",
+        "phone": "0792301785",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 6,
+        "enrollmentsCount": 2,
+        "attendancesCount": 12,
+        "classes": [
+          "عراس فلسفة ادبي",
+          "زهراوي ادبي 2"
+        ],
+        "allPhones": [
+          "0792301785"
+        ],
+        "cleanName": "بريك ادم"
+      },
+      "b": {
+        "id": "3ba29516-bb97-4b7a-adaf-35f18bdc18a9",
+        "globalNumber": 698,
+        "name": "مروك ادم",
+        "phone": "غير متوفر",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "مروة 5 ابتدائي"
+        ],
+        "allPhones": [],
+        "cleanName": "مروك ادم"
+      },
+      "reason": "Near-identical Name (\"بريك ادم\" vs \"مروك ادم\") in AMPHI [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "fc3fd463-e6d9-4071-8fdf-af4656b2a0cc",
+        "globalNumber": 554,
+        "name": "بولحبال رزان",
+        "phone": "0775099930",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 5,
+        "classes": [
+          "كحال علوم علمي 2"
+        ],
+        "allPhones": [
+          "0775099930"
+        ],
+        "cleanName": "بولحبال رزان"
+      },
+      "b": {
+        "id": "9bc332a3-540b-4938-9eb5-832fd4462740",
+        "globalNumber": 593,
+        "name": "بوالحبال ركان",
+        "phone": "0664286008",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 6,
+        "enrollmentsCount": 4,
+        "attendancesCount": 7,
+        "classes": [
+          "بن يحي 4متوسط فوج 3",
+          "ميمون 4متوسط فوج 2",
+          "لعروسي BEM فوج 1",
+          "بوخزر BEM فوج 1"
+        ],
+        "allPhones": [
+          "0664286008",
+          "0563182168"
+        ],
+        "cleanName": "بوالحبال ركان"
+      },
+      "reason": "Near-identical Name (\"بولحبال رزان\" vs \"بوالحبال ركان\") in ANNEX [TYPO_2]"
+    },
+    {
+      "a": {
+        "id": "50f28d94-c4aa-4ac6-b132-f398f8b07628",
+        "globalNumber": 587,
+        "name": "لطرش ميرال",
+        "phone": "غير متوفر",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "بوخزر BEM فوج 1"
+        ],
+        "allPhones": [],
+        "cleanName": "لطرش ميرال"
+      },
+      "b": {
+        "id": "7571b3ad-9f61-4957-b7e3-91999ee7a1ac",
+        "globalNumber": 1405,
+        "name": "لطرش ميراال",
+        "phone": "0774459825",
+        "birthday": "2015-05-07T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 6,
+        "enrollmentsCount": 3,
+        "attendancesCount": 3,
+        "classes": [
+          "عميرش 1AM",
+          "بن عزوز 1 متوسط",
+          "ميمون 1متوسط"
+        ],
+        "allPhones": [
+          "0774459825"
+        ],
+        "cleanName": "لطرش ميراال"
+      },
+      "reason": "Near-identical Name (\"لطرش ميرال\" vs \"لطرش ميراال\") in ANNEX [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "4723a5ea-2201-4237-ab65-d6aa533fa584",
+        "globalNumber": 598,
+        "name": "دكوش روان",
+        "phone": "0550467500",
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "لعروسي BEM فوج 1"
+        ],
+        "allPhones": [
+          "0550467500",
+          "0541545115"
+        ],
+        "cleanName": "دكوش روان"
+      },
+      "b": {
+        "id": "2c8c43f8-2cda-4e31-9f9d-d999ca1a9fbe",
+        "globalNumber": 1160,
+        "name": "دكوش  روان",
+        "phone": null,
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 0,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "لعروسي BEM فوج 1"
+        ],
+        "allPhones": [],
+        "cleanName": "دكوش روان"
+      },
+      "reason": "Identical Name (\"دكوش روان\") &  Same Branch (ANNEX)"
+    },
+    {
+      "a": {
+        "id": "e33bfaa3-242d-4a6a-9715-0b9a30370007",
+        "globalNumber": 795,
+        "name": "بن سديرة ريتاج",
+        "phone": null,
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "فوج قداري 3ثانوي"
+        ],
+        "allPhones": [],
+        "cleanName": "بن سديره ريتاج"
+      },
+      "b": {
+        "id": "322a9a1b-8375-48f4-8e6b-8b86906dc938",
+        "globalNumber": 927,
+        "name": "بن سديرة ريتاج",
+        "phone": "0659890473",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "فردي 3ثانوي  تسيير "
+        ],
+        "allPhones": [
+          "0659890473",
+          "0697349973"
+        ],
+        "cleanName": "بن سديره ريتاج"
+      },
+      "reason": "Identical Name (\"بن سديرة ريتاج\") &  Same Branch (ECOLE)"
+    },
+    {
+      "a": {
+        "id": "16426187-0100-4840-bafa-dbdf9a5d5fda",
+        "globalNumber": 921,
+        "name": "بليلي ميار",
+        "phone": "0698461412",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "فردي 3ثانوي  تسيير "
+        ],
+        "allPhones": [
+          "0698461412"
+        ],
+        "cleanName": "بليلي ميار"
+      },
+      "b": {
+        "id": "122d8bc9-efd4-4431-b1e8-aea443bc07a9",
+        "globalNumber": 1190,
+        "name": "بليلي ميار",
+        "phone": "0660691949",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "فوج قداري 3ثانوي"
+        ],
+        "allPhones": [
+          "0660691949"
+        ],
+        "cleanName": "بليلي ميار"
+      },
+      "reason": "Identical Name (\"بليلي ميار\") &  Same Branch (ECOLE)"
+    },
+    {
+      "a": {
+        "id": "f92be2d5-8a55-4f62-8a02-1f610e2eb9b4",
+        "globalNumber": 981,
+        "name": "بوشاقورة تاج الدين",
+        "phone": null,
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "عمير 2 ثانوي"
+        ],
+        "allPhones": [],
+        "cleanName": "بوشاقوره تاج الدين"
+      },
+      "b": {
+        "id": "669f4605-5a13-48f9-858a-27706f036148",
+        "globalNumber": 990,
+        "name": "بوشاقور تاج الدين",
+        "phone": null,
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 2 ثانوي"
+        ],
+        "allPhones": [],
+        "cleanName": "بوشاقور تاج الدين"
+      },
+      "reason": "Near-identical Name (\"بوشاقورة تاج الدين\" vs \"بوشاقور تاج الدين\") in ECOLE [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "43ffcbe7-1436-4d91-866b-e4535074eede",
+        "globalNumber": 1126,
+        "name": "رغيوة براء",
+        "phone": null,
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 3متوسط فوج 1"
+        ],
+        "allPhones": [],
+        "cleanName": "رغيوه براء"
+      },
+      "b": {
+        "id": "6e43a5af-5eb8-41c2-afd0-7d317502d547",
+        "globalNumber": 1324,
+        "name": "رغيوة بهاء",
+        "phone": "ولد مجدوب",
+        "birthday": "2001-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 0,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "عمير 1 ثانوي"
+        ],
+        "allPhones": [],
+        "cleanName": "رغيوه بهاء"
+      },
+      "reason": "Near-identical Name (\"رغيوة براء\" vs \"رغيوة بهاء\") in ECOLE [TYPO_1]"
+    },
+    {
+      "a": {
+        "id": "c0fefe65-5aca-406a-ab66-ee49a990a9a8",
+        "globalNumber": 1308,
+        "name": "حمدي هيثم",
+        "phone": "0778646568",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بوالجذري 3 ثانوي"
+        ],
+        "allPhones": [
+          "0778646568"
+        ],
+        "cleanName": "حمدي هيثم"
+      },
+      "b": {
+        "id": "b4d52b39-732f-4063-8351-3f59b2a7c719",
+        "globalNumber": 1386,
+        "name": "حامدي هيثم",
+        "phone": "غير متوفر",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 0,
+        "enrollmentsCount": 0,
+        "attendancesCount": 0,
+        "classes": [],
+        "allPhones": [],
+        "cleanName": "حامدي هيثم"
+      },
+      "reason": "Near-identical Name (\"حمدي هيثم\" vs \"حامدي هيثم\") in ECOLE [TYPO_1]"
+    }
+  ],
+  "exactNameDifferentPhone": [
+    {
+      "a": {
+        "id": "6d97c1e6-df5a-4962-93e5-fe0cafc530cf",
+        "globalNumber": 162,
+        "name": "مشاطي عبد المجيب",
+        "phone": "0562090722",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 10,
+        "classes": [
+          "حموي رياضي"
+        ],
+        "allPhones": [
+          "0562090722"
+        ],
+        "cleanName": "مشاطي عبد المجيب"
+      },
+      "b": {
+        "id": "2ddc3e57-4e17-421c-b810-9fbc70cc1230",
+        "globalNumber": 876,
+        "name": "مشاطي عبد المجيب",
+        "phone": "0542272805",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 8,
+        "classes": [
+          "نذير 3ثانوي الجمعة"
+        ],
+        "allPhones": [
+          "0542272805"
+        ],
+        "cleanName": "مشاطي عبد المجيب"
+      },
+      "reason": "Identical Name across different branches (AMPHI vs ECOLE), different phones"
+    },
+    {
+      "a": {
+        "id": "e6aa4ed7-59b0-4986-a464-5ae60a79d665",
+        "globalNumber": 223,
+        "name": "بوالمعالي نادية مريم",
+        "phone": null,
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "رامي رياضيات"
+        ],
+        "allPhones": [],
+        "cleanName": "بوالمعالي ناديه مريم"
+      },
+      "b": {
+        "id": "106e4a2e-cbb7-4ed7-b43a-b10f727bc781",
+        "globalNumber": 905,
+        "name": "بوالمعالي مريم نادية",
+        "phone": "0554900433",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 7,
+        "classes": [
+          "عمير 3ثانوي"
+        ],
+        "allPhones": [
+          "0554900433",
+          "0778524748"
+        ],
+        "cleanName": "بوالمعالي مريم ناديه"
+      },
+      "reason": "Identical Name across different branches (AMPHI vs ECOLE), different phones"
+    },
+    {
+      "a": {
+        "id": "8e5d78ac-222e-4b76-8ba6-e6fd2c6e07a8",
+        "globalNumber": 316,
+        "name": "عيساني رتاج",
+        "phone": null,
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 7,
+        "enrollmentsCount": 4,
+        "attendancesCount": 13,
+        "classes": [
+          "زهراوي ادبي 1",
+          "زهراوي ادبي 2",
+          "كحال فرنسية 3ثانوي",
+          "عراس انجليزية 3 ثانوي"
+        ],
+        "allPhones": [],
+        "cleanName": "عيساني رتاج"
+      },
+      "b": {
+        "id": "7a7b752e-9632-43b2-9b11-966e622e5350",
+        "globalNumber": 757,
+        "name": "عيساني رتاج",
+        "phone": "0665999811",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 8,
+        "classes": [
+          "فوج سمية 3 ثانوي"
+        ],
+        "allPhones": [
+          "0665999811",
+          "0698326162"
+        ],
+        "cleanName": "عيساني رتاج"
+      },
+      "reason": "Identical Name across different branches (AMPHI vs ECOLE), different phones"
+    },
+    {
+      "a": {
+        "id": "4024306f-b937-4e4a-8568-dd4e17f0c4cd",
+        "globalNumber": 461,
+        "name": "العزوني محمد وسيم",
+        "phone": null,
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 2,
+        "attendancesCount": 7,
+        "classes": [
+          "حموي 1 ثانوي",
+          "Intro - Intro 02"
+        ],
+        "allPhones": [],
+        "cleanName": "العزوني محمد وسيم"
+      },
+      "b": {
+        "id": "8ab3e24b-9a66-4718-b07f-4731a2e77f9f",
+        "globalNumber": 1021,
+        "name": "العزوني محمد وسيم",
+        "phone": "0675715620",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 5,
+        "classes": [
+          "نذير 1 ثانوي",
+          "عمير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0675715620",
+          "0552308459"
+        ],
+        "cleanName": "العزوني محمد وسيم"
+      },
+      "reason": "Identical Name across different branches (AMPHI vs ECOLE), different phones"
+    },
+    {
+      "a": {
+        "id": "13ab8f81-c88b-42c0-8f7c-a714fda9dbde",
+        "globalNumber": 614,
+        "name": "مرابط سندس",
+        "phone": null,
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "لعروسي BEM فوج 1"
+        ],
+        "allPhones": [],
+        "cleanName": "مرابط سندس"
+      },
+      "b": {
+        "id": "e3bf5a53-3dba-40d2-aacf-b162f43bea82",
+        "globalNumber": 1103,
+        "name": "سندس مرابط",
+        "phone": null,
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "حراث 4 متوسط"
+        ],
+        "allPhones": [],
+        "cleanName": "سندس مرابط"
+      },
+      "reason": "Identical Name across different branches (ANNEX vs ECOLE), different phones"
+    },
+    {
+      "a": {
+        "id": "2c5ea8c7-065b-400a-9103-562318dabf2f",
+        "globalNumber": 1148,
+        "name": "يوسف ديابي",
+        "phone": null,
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "بن يحي 1 متوسط"
+        ],
+        "allPhones": [],
+        "cleanName": "يوسف ديابي"
+      },
+      "b": {
+        "id": "4dbb3b4d-bc86-422a-979e-a54db5409f41",
+        "globalNumber": 1217,
+        "name": "ديابي يوسف",
+        "phone": "0795936957",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 5,
+        "classes": [
+          "Formation english- Project 01"
+        ],
+        "allPhones": [
+          "0795936957",
+          "0791672521"
+        ],
+        "cleanName": "ديابي يوسف"
+      },
+      "reason": "Identical Name across different branches (ECOLE vs ANNEX), different phones"
+    }
+  ],
+  "likelySiblings": [
+    {
+      "a": {
+        "id": "d20d8fed-6800-47a0-802d-e0f2e8950672",
+        "globalNumber": 6,
+        "name": "هامل أميرة",
+        "phone": "0776562662",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 7,
+        "enrollmentsCount": 2,
+        "attendancesCount": 22,
+        "classes": [
+          "حموي علمي 1",
+          "بوالجذري 3 ثانوي"
+        ],
+        "allPhones": [
+          "0776562662"
+        ],
+        "cleanName": "هامل اميره"
+      },
+      "b": {
+        "id": "b0d4fe75-040e-4418-b0a9-5963eff4353a",
+        "globalNumber": 752,
+        "name": "هامل اسراء",
+        "phone": "0776562662",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 8,
+        "classes": [
+          "فوج سمية 3 ثانوي"
+        ],
+        "allPhones": [
+          "0776562662"
+        ],
+        "cleanName": "هامل اسراء"
+      },
+      "reason": "Shared family name (\"هامل\") & shared phone (0776562662)",
+      "phone": "0776562662"
+    },
+    {
+      "a": {
+        "id": "7e0422c8-ff0f-421f-a383-0bb5d168e653",
+        "globalNumber": 8,
+        "name": "بوعروج تسنيم",
+        "phone": "0774025183",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 5,
+        "enrollmentsCount": 2,
+        "attendancesCount": 12,
+        "classes": [
+          "لعروسي BEM فوج 1",
+          "حموي علمي 1"
+        ],
+        "allPhones": [
+          "0774025183"
+        ],
+        "cleanName": "بوعروج تسنيم"
+      },
+      "b": {
+        "id": "6907e2cf-4911-42e7-8010-d4410925dc9e",
+        "globalNumber": 643,
+        "name": "بوعروج نسرين",
+        "phone": "0774025183",
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 3,
+        "classes": [
+          "لعروسي 3AM",
+          "حراث 3متوسط"
+        ],
+        "allPhones": [
+          "0774025183",
+          "0661160330"
+        ],
+        "cleanName": "بوعروج نسرين"
+      },
+      "reason": "Shared family name (\"بوعروج\") & shared phone (0774025183)",
+      "phone": "0774025183"
+    },
+    {
+      "a": {
+        "id": "8bfc028b-b29e-4f60-8ce2-3df626aa2fcc",
+        "globalNumber": 9,
+        "name": "فراجة هيام",
+        "phone": "0771548283",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 11,
+        "enrollmentsCount": 4,
+        "attendancesCount": 27,
+        "classes": [
+          "حموي علمي 1",
+          "كحال علوم علمي 1",
+          "نذير 3ثانوي السبت",
+          "نذير 3 ثانوي الثلاثاء "
+        ],
+        "allPhones": [
+          "0771548283"
+        ],
+        "cleanName": "فراجه هيام"
+      },
+      "b": {
+        "id": "d14c802f-9781-4b2b-bf4f-e66304ef33d6",
+        "globalNumber": 23,
+        "name": "تليلاني بشرى",
+        "phone": "0771548283",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 8,
+        "enrollmentsCount": 2,
+        "attendancesCount": 19,
+        "classes": [
+          "حموي علمي 1",
+          "نذير 3ثانوي السبت"
+        ],
+        "allPhones": [
+          "0771548283"
+        ],
+        "cleanName": "تليلاني بشري"
+      },
+      "reason": "Shared phone (0771548283) but distinct names",
+      "phone": "0771548283"
+    },
+    {
+      "a": {
+        "id": "8bfc028b-b29e-4f60-8ce2-3df626aa2fcc",
+        "globalNumber": 9,
+        "name": "فراجة هيام",
+        "phone": "0771548283",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 11,
+        "enrollmentsCount": 4,
+        "attendancesCount": 27,
+        "classes": [
+          "حموي علمي 1",
+          "كحال علوم علمي 1",
+          "نذير 3ثانوي السبت",
+          "نذير 3 ثانوي الثلاثاء "
+        ],
+        "allPhones": [
+          "0771548283"
+        ],
+        "cleanName": "فراجه هيام"
+      },
+      "b": {
+        "id": "7c1f3f77-813f-4b3d-8763-83988965fb9b",
+        "globalNumber": 468,
+        "name": "فراجة وصال",
+        "phone": "0771548283",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 6,
+        "enrollmentsCount": 3,
+        "attendancesCount": 7,
+        "classes": [
+          "حموي 1 ثانوي",
+          "نذير 1 ثانوي",
+          "كحال علوم 1 ثانوي"
+        ],
+        "allPhones": [
+          "0771548283"
+        ],
+        "cleanName": "فراجه وصال"
+      },
+      "reason": "Shared family name (\"فراجه\") & shared phone (0771548283)",
+      "phone": "0771548283"
+    },
+    {
+      "a": {
+        "id": "d14c802f-9781-4b2b-bf4f-e66304ef33d6",
+        "globalNumber": 23,
+        "name": "تليلاني بشرى",
+        "phone": "0771548283",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 8,
+        "enrollmentsCount": 2,
+        "attendancesCount": 19,
+        "classes": [
+          "حموي علمي 1",
+          "نذير 3ثانوي السبت"
+        ],
+        "allPhones": [
+          "0771548283"
+        ],
+        "cleanName": "تليلاني بشري"
+      },
+      "b": {
+        "id": "7c1f3f77-813f-4b3d-8763-83988965fb9b",
+        "globalNumber": 468,
+        "name": "فراجة وصال",
+        "phone": "0771548283",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 6,
+        "enrollmentsCount": 3,
+        "attendancesCount": 7,
+        "classes": [
+          "حموي 1 ثانوي",
+          "نذير 1 ثانوي",
+          "كحال علوم 1 ثانوي"
+        ],
+        "allPhones": [
+          "0771548283"
+        ],
+        "cleanName": "فراجه وصال"
+      },
+      "reason": "Shared phone (0771548283) but distinct names",
+      "phone": "0771548283"
+    },
+    {
+      "a": {
+        "id": "5cd4c879-3c61-495f-a6c5-5cf4d0b595c4",
+        "globalNumber": 29,
+        "name": "فاروقي أنيس",
+        "phone": "0551728749",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 13,
+        "enrollmentsCount": 4,
+        "attendancesCount": 32,
+        "classes": [
+          "حموي علمي 1",
+          "زهراوي علمي 1",
+          "بوالجذري 3 ثانوي",
+          "عمير 3ثانوي"
+        ],
+        "allPhones": [
+          "0551728749",
+          "0798627733"
+        ],
+        "cleanName": "فاروقي انيس"
+      },
+      "b": {
+        "id": "948c9db5-3d3f-40aa-9671-ef3d5ce3ff61",
+        "globalNumber": 33,
+        "name": "فاروقي مايا",
+        "phone": "0551728749",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 4,
+        "attendancesCount": 32,
+        "classes": [
+          "حموي علمي 1",
+          "زهراوي علمي 1",
+          "بوالجذري 3 ثانوي",
+          "عمير 3ثانوي"
+        ],
+        "allPhones": [
+          "0551728749",
+          "0798627733"
+        ],
+        "cleanName": "فاروقي مايا"
+      },
+      "reason": "Shared family name (\"فاروقي\") & shared phone (0551728749)",
+      "phone": "0551728749"
+    },
+    {
+      "a": {
+        "id": "e1261da5-9809-4bb3-aa45-c116bbd45cf1",
+        "globalNumber": 32,
+        "name": "بهناس اسراء",
+        "phone": "0796323152",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 5,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 1"
+        ],
+        "allPhones": [
+          "0796323152",
+          "0783321480"
+        ],
+        "cleanName": "بهناس اسراء"
+      },
+      "b": {
+        "id": "7ed7f426-4720-41b6-8981-f92b576f0f65",
+        "globalNumber": 499,
+        "name": "بهناس ميار",
+        "phone": "0783321480",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 6,
+        "enrollmentsCount": 2,
+        "attendancesCount": 19,
+        "classes": [
+          "كحال علوم علمي 1",
+          "بوالجذري 3 ثانوي"
+        ],
+        "allPhones": [
+          "0783321480"
+        ],
+        "cleanName": "بهناس ميار"
+      },
+      "reason": "Shared family name (\"بهناس\") & shared phone (0783321480)",
+      "phone": "0783321480"
+    },
+    {
+      "a": {
+        "id": "8060ab8f-3135-4cd2-a298-5671f4912723",
+        "globalNumber": 81,
+        "name": "بوهروم محمود",
+        "phone": "0540375028",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 5,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 2"
+        ],
+        "allPhones": [
+          "0540375028"
+        ],
+        "cleanName": "بوهروم محمود"
+      },
+      "b": {
+        "id": "ae863f31-9ba1-430d-af94-e0e322801086",
+        "globalNumber": 95,
+        "name": "بوهروم اية",
+        "phone": "0540375028",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 2"
+        ],
+        "allPhones": [
+          "0540375028"
+        ],
+        "cleanName": "بوهروم ايه"
+      },
+      "reason": "Shared family name (\"بوهروم\") & shared phone (0540375028)",
+      "phone": "0540375028"
+    },
+    {
+      "a": {
+        "id": "8060ab8f-3135-4cd2-a298-5671f4912723",
+        "globalNumber": 81,
+        "name": "بوهروم محمود",
+        "phone": "0540375028",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 5,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 2"
+        ],
+        "allPhones": [
+          "0540375028"
+        ],
+        "cleanName": "بوهروم محمود"
+      },
+      "b": {
+        "id": "2173d2d8-34a4-4103-974e-c42dcd113c42",
+        "globalNumber": 1263,
+        "name": "بهروم  جيهاد",
+        "phone": "0540375028",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "نذير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0540375028"
+        ],
+        "cleanName": "بهروم جيهاد"
+      },
+      "reason": "Shared phone (0540375028) but distinct names",
+      "phone": "0540375028"
+    },
+    {
+      "a": {
+        "id": "ae863f31-9ba1-430d-af94-e0e322801086",
+        "globalNumber": 95,
+        "name": "بوهروم اية",
+        "phone": "0540375028",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 2"
+        ],
+        "allPhones": [
+          "0540375028"
+        ],
+        "cleanName": "بوهروم ايه"
+      },
+      "b": {
+        "id": "2173d2d8-34a4-4103-974e-c42dcd113c42",
+        "globalNumber": 1263,
+        "name": "بهروم  جيهاد",
+        "phone": "0540375028",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "نذير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0540375028"
+        ],
+        "cleanName": "بهروم جيهاد"
+      },
+      "reason": "Shared phone (0540375028) but distinct names",
+      "phone": "0540375028"
+    },
+    {
+      "a": {
+        "id": "1fb38edf-b334-4e1c-8b03-902306ba949d",
+        "globalNumber": 105,
+        "name": "بلخميس محمد منجد",
+        "phone": "0777211727",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 9,
+        "enrollmentsCount": 4,
+        "attendancesCount": 26,
+        "classes": [
+          "حموي علمي 2",
+          "نذير 3ثانوي السبت",
+          "عمير 3ثانوي",
+          "نذير 3 ثانوي الثلاثاء "
+        ],
+        "allPhones": [
+          "0777211727"
+        ],
+        "cleanName": "بلخميس محمد منجد"
+      },
+      "b": {
+        "id": "da72524b-79ac-430c-8515-3abaeb1fb43f",
+        "globalNumber": 655,
+        "name": "بلخميس ميار",
+        "phone": "0777211727",
+        "birthday": "2013-03-30T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 5,
+        "classes": [
+          "عميرش 3AM",
+          "ميمون 3متوسط"
+        ],
+        "allPhones": [
+          "0777211727"
+        ],
+        "cleanName": "بلخميس ميار"
+      },
+      "reason": "Shared family name (\"بلخميس\") & shared phone (0777211727)",
+      "phone": "0777211727"
+    },
+    {
+      "a": {
+        "id": "f0847904-4022-4d0d-8619-577cfb939a5f",
+        "globalNumber": 106,
+        "name": "بن معاوية محمد عبد الرؤوف",
+        "phone": "0661663823",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "حموي علمي 2"
+        ],
+        "allPhones": [
+          "0661663823"
+        ],
+        "cleanName": "بن معاويه محمد عبد الرووف"
+      },
+      "b": {
+        "id": "4d5dd3da-cf0a-41bf-9f5a-b614ecb83212",
+        "globalNumber": 1228,
+        "name": "بن معاوية احمد",
+        "phone": "0794076024",
+        "birthday": "2010-07-21T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 5,
+        "classes": [
+          "بن يحي 2 ثانوي",
+          "Intro - Intro 02"
+        ],
+        "allPhones": [
+          "0794076024",
+          "0661663823"
+        ],
+        "cleanName": "بن معاويه احمد"
+      },
+      "reason": "Shared family name (\"معاويه\") & shared phone (0661663823)",
+      "phone": "0661663823"
+    },
+    {
+      "a": {
+        "id": "65b0e467-7089-491a-9189-7e00fd79ceea",
+        "globalNumber": 134,
+        "name": "ليتيم مليسا",
+        "phone": "0781510063",
+        "birthday": "2009-10-19T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 8,
+        "enrollmentsCount": 3,
+        "attendancesCount": 16,
+        "classes": [
+          "حموي رياضي",
+          "زهراوي علمي 1",
+          "كحال علوم رياضي 3ثانوي"
+        ],
+        "allPhones": [
+          "0781510063"
+        ],
+        "cleanName": "ليتيم مليسا"
+      },
+      "b": {
+        "id": "a3a2d3b9-ae4a-414d-91dc-ca86520d22bb",
+        "globalNumber": 1455,
+        "name": "ليتيم ليديا",
+        "phone": "0781510063",
+        "birthday": "2011-09-30T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "حموي 1 ثانوي"
+        ],
+        "allPhones": [
+          "0781510063"
+        ],
+        "cleanName": "ليتيم ليديا"
+      },
+      "reason": "Shared family name (\"ليتيم\") & shared phone (0781510063)",
+      "phone": "0781510063"
+    },
+    {
+      "a": {
+        "id": "5cbb5615-8262-4008-bacf-009b1dc2b2da",
+        "globalNumber": 157,
+        "name": "قاولي نهال",
+        "phone": "0696892376",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 11,
+        "enrollmentsCount": 5,
+        "attendancesCount": 24,
+        "classes": [
+          "نذير 3ثانوي الجمعة",
+          "نذير 3ثانوي السبت",
+          "حموي رياضي",
+          "كحال علوم رياضي 3ثانوي",
+          "زهراوي علمي 1"
+        ],
+        "allPhones": [
+          "0696892376",
+          "0664856737"
+        ],
+        "cleanName": "قاولي نهال"
+      },
+      "b": {
+        "id": "2cb072e8-5169-44b8-8fbd-4beac485c77f",
+        "globalNumber": 659,
+        "name": "قاولي ندى",
+        "phone": "0664856737",
+        "birthday": "2013-05-16T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 6,
+        "classes": [
+          "عميرش 3AM",
+          "بن يحي 3متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0664856737"
+        ],
+        "cleanName": "قاولي ندي"
+      },
+      "reason": "Shared family name (\"قاولي\") & shared phone (0664856737)",
+      "phone": "0664856737"
+    },
+    {
+      "a": {
+        "id": "e40c4e63-b129-4d33-92cb-0228275b8610",
+        "globalNumber": 178,
+        "name": "بن لزرق ميار",
+        "phone": "0795749091",
+        "birthday": "2009-09-24T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "زهراوي علمي 1"
+        ],
+        "allPhones": [
+          "0795749091"
+        ],
+        "cleanName": "بن لزرق ميار"
+      },
+      "b": {
+        "id": "dc2511ba-0e16-421a-bb99-e56e4de7a47a",
+        "globalNumber": 676,
+        "name": "بلزرق يوسف",
+        "phone": "0795749091",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 6,
+        "enrollmentsCount": 2,
+        "attendancesCount": 10,
+        "classes": [
+          "5 ابتدائي رياضيات",
+          "5 ابتدائي لغة عربية"
+        ],
+        "allPhones": [
+          "0795749091"
+        ],
+        "cleanName": "بلزرق يوسف"
+      },
+      "reason": "Shared phone (0795749091) but distinct names",
+      "phone": "0795749091"
+    },
+    {
+      "a": {
+        "id": "4426f946-743b-4d29-9665-b963eb932fe5",
+        "globalNumber": 188,
+        "name": "عبوة هبة",
+        "phone": "0540632987",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "زهراوي علمي 1"
+        ],
+        "allPhones": [
+          "0540632987"
+        ],
+        "cleanName": "عبوه هبه"
+      },
+      "b": {
+        "id": "c9ffc933-b0e3-4c23-b559-cb3b1b1a7c53",
+        "globalNumber": 1040,
+        "name": "عبوة لينا",
+        "phone": "0540632987",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "عمير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0540632987"
+        ],
+        "cleanName": "عبوه لينا"
+      },
+      "reason": "Shared family name (\"عبوه\") & shared phone (0540632987)",
+      "phone": "0540632987"
+    },
+    {
+      "a": {
+        "id": "4426f946-743b-4d29-9665-b963eb932fe5",
+        "globalNumber": 188,
+        "name": "عبوة هبة",
+        "phone": "0540632987",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "زهراوي علمي 1"
+        ],
+        "allPhones": [
+          "0540632987"
+        ],
+        "cleanName": "عبوه هبه"
+      },
+      "b": {
+        "id": "7dc9d27c-8225-40d0-a6e1-dc4cc01d8d62",
+        "globalNumber": 1042,
+        "name": "عبوة لميس",
+        "phone": "0540632987",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "عمير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0540632987"
+        ],
+        "cleanName": "عبوه لميس"
+      },
+      "reason": "Shared family name (\"عبوه\") & shared phone (0540632987)",
+      "phone": "0540632987"
+    },
+    {
+      "a": {
+        "id": "5a7f03ca-dc23-40d7-ad01-27908836aabf",
+        "globalNumber": 191,
+        "name": "سعدي رنيم",
+        "phone": "0541721495",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 8,
+        "enrollmentsCount": 3,
+        "attendancesCount": 19,
+        "classes": [
+          "زهراوي علمي 1",
+          "لعرابة 3ثانوي",
+          "بن يحي 3 ثانوي"
+        ],
+        "allPhones": [
+          "0541721495"
+        ],
+        "cleanName": "سعدي رنيم"
+      },
+      "b": {
+        "id": "63a0e025-6a42-4dd5-b49b-fa16acda0382",
+        "globalNumber": 1333,
+        "name": "سعدي محمد نزيم",
+        "phone": "0541721495",
+        "birthday": "2012-11-11T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "عميرش 3AM"
+        ],
+        "allPhones": [
+          "0541721495"
+        ],
+        "cleanName": "سعدي محمد نزيم"
+      },
+      "reason": "Shared family name (\"سعدي\") & shared phone (0541721495)",
+      "phone": "0541721495"
+    },
+    {
+      "a": {
+        "id": "d789b653-38cf-450c-98b8-3cdf7119dad9",
+        "globalNumber": 262,
+        "name": "بلخامسة شيماء",
+        "phone": "0797763679",
+        "birthday": "2006-12-15T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 6,
+        "enrollmentsCount": 2,
+        "attendancesCount": 11,
+        "classes": [
+          "زهراوي ادبي 1",
+          "فوج قسوم"
+        ],
+        "allPhones": [
+          "0797763679"
+        ],
+        "cleanName": "بلخامسه شيماء"
+      },
+      "b": {
+        "id": "7c6b19d4-8599-49a8-b99e-ec6fb118f145",
+        "globalNumber": 941,
+        "name": "بلخامسة حواء",
+        "phone": "0797763679",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 7,
+        "classes": [
+          "بن يحي 2 ثانوي",
+          "نذير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0797763679",
+          "0792552226"
+        ],
+        "cleanName": "بلخامسه حواء"
+      },
+      "reason": "Shared family name (\"بلخامسه\") & shared phone (0797763679)",
+      "phone": "0797763679"
+    },
+    {
+      "a": {
+        "id": "99262841-6dbb-42d5-95e9-967db9824937",
+        "globalNumber": 292,
+        "name": "بن داود سيرين",
+        "phone": "0773186474",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 9,
+        "enrollmentsCount": 3,
+        "attendancesCount": 18,
+        "classes": [
+          "عراس فلسفة ادبي",
+          "زهراوي ادبي 2",
+          "بن مهيريز ادبي"
+        ],
+        "allPhones": [
+          "0773186474"
+        ],
+        "cleanName": "بن داود سيرين"
+      },
+      "b": {
+        "id": "aa505d65-c10d-4105-a0c2-e564dae37ed9",
+        "globalNumber": 1426,
+        "name": "بن داود سفيان",
+        "phone": "0774442372",
+        "birthday": "2016-02-09T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "بن عزوز 1 متوسط"
+        ],
+        "allPhones": [
+          "0774442372",
+          "0773186474"
+        ],
+        "cleanName": "بن داود سفيان"
+      },
+      "reason": "Shared family name (\"داود\") & shared phone (0773186474)",
+      "phone": "0773186474"
+    },
+    {
+      "a": {
+        "id": "0d16d703-51ae-4bfd-ad57-2494b7e91c12",
+        "globalNumber": 315,
+        "name": "فيلالي ميليسا",
+        "phone": "0698730747",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "كحال فرنسية 3ثانوي"
+        ],
+        "allPhones": [
+          "0698730747"
+        ],
+        "cleanName": "فيلالي ميليسا"
+      },
+      "b": {
+        "id": "ece6cd07-f26a-4dce-89c6-6fe1a14740d1",
+        "globalNumber": 1545,
+        "name": "فيلالي شهرزاد",
+        "phone": "0698730747",
+        "birthday": "2011-10-02T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 2,
+        "attendancesCount": 0,
+        "classes": [
+          "قلقول 2 ثانوي",
+          "فردي 2 ثانوي تسيير واقتصاد"
+        ],
+        "allPhones": [
+          "0698730747"
+        ],
+        "cleanName": "فيلالي شهرزاد"
+      },
+      "reason": "Shared family name (\"فيلالي\") & shared phone (0698730747)",
+      "phone": "0698730747"
+    },
+    {
+      "a": {
+        "id": "50eff6f1-5739-4577-902d-5519612b5310",
+        "globalNumber": 342,
+        "name": "طراد مريم",
+        "phone": "0661295030",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "زهراوي ادبي 2"
+        ],
+        "allPhones": [
+          "0661295030"
+        ],
+        "cleanName": "طراد مريم"
+      },
+      "b": {
+        "id": "7f74563e-f8b3-41e6-b89a-b2a89563eef9",
+        "globalNumber": 754,
+        "name": "طراد بتول",
+        "phone": "0661295030",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 8,
+        "classes": [
+          "فوج سمية 3 ثانوي"
+        ],
+        "allPhones": [
+          "0661295030"
+        ],
+        "cleanName": "طراد بتول"
+      },
+      "reason": "Shared family name (\"طراد\") & shared phone (0661295030)",
+      "phone": "0661295030"
+    },
+    {
+      "a": {
+        "id": "cd9ef900-cb0e-4c91-9bc9-4f06d2e96ead",
+        "globalNumber": 359,
+        "name": "جاب الله ايمان",
+        "phone": "0782819509",
+        "birthday": "2015-12-18T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "بن يحي 1 متوسط"
+        ],
+        "allPhones": [
+          "0782819509"
+        ],
+        "cleanName": "جاب الله ايمان"
+      },
+      "b": {
+        "id": "b92bf7e6-0ee9-4dd9-9243-470e487cfeea",
+        "globalNumber": 1422,
+        "name": "شكيرد محمد ياسين",
+        "phone": "0782819509",
+        "birthday": "2015-12-07T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "Formation english- Project 01"
+        ],
+        "allPhones": [
+          "0782819509"
+        ],
+        "cleanName": "شكيرد محمد ياسين"
+      },
+      "reason": "Shared phone (0782819509) but distinct names",
+      "phone": "0782819509"
+    },
+    {
+      "a": {
+        "id": "ef822c71-01b7-4ab7-a8b9-ae01b17e751e",
+        "globalNumber": 373,
+        "name": "مصباح مرام",
+        "phone": "0792034311",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "حموي علمي 3"
+        ],
+        "allPhones": [
+          "0792034311"
+        ],
+        "cleanName": "مصباح مرام"
+      },
+      "b": {
+        "id": "194896ad-81d3-4f47-8c86-f261af7d88a7",
+        "globalNumber": 1262,
+        "name": "مصباح  رنيم",
+        "phone": "0792034311",
+        "birthday": "2009-02-10T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "نذير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0792034311"
+        ],
+        "cleanName": "مصباح رنيم"
+      },
+      "reason": "Shared family name (\"مصباح\") & shared phone (0792034311)",
+      "phone": "0792034311"
+    },
+    {
+      "a": {
+        "id": "de20cb2c-e477-4423-8179-c3b842377998",
+        "globalNumber": 398,
+        "name": "لعواقي رامي",
+        "phone": "0540005499",
+        "birthday": null,
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "حموي علمي 3"
+        ],
+        "allPhones": [
+          "0540005499"
+        ],
+        "cleanName": "لعواقي رامي"
+      },
+      "b": {
+        "id": "1e902311-c806-42e5-9f21-5d4acef98c9d",
+        "globalNumber": 1438,
+        "name": "لعوافي رنيم",
+        "phone": "0540005499",
+        "birthday": "2011-02-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 3,
+        "attendancesCount": 2,
+        "classes": [
+          "بن يحي 4متوسط فوج 4",
+          "بن يحي 4متوسط فوج 1",
+          "بوخزر BEM فوج 1"
+        ],
+        "allPhones": [
+          "0540005499"
+        ],
+        "cleanName": "لعوافي رنيم"
+      },
+      "reason": "Shared phone (0540005499) but distinct names",
+      "phone": "0540005499"
+    },
+    {
+      "a": {
+        "id": "020690e8-7a70-4738-8dc6-422af729764c",
+        "globalNumber": 427,
+        "name": "يزيد لينا",
+        "phone": "0798721400",
+        "birthday": "2011-02-11T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "حموي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0798721400"
+        ],
+        "cleanName": "يزيد لينا"
+      },
+      "b": {
+        "id": "f79d5137-a3ea-48d0-91f5-f677d9dadd84",
+        "globalNumber": 674,
+        "name": "يزيد خليل",
+        "phone": "0798721400",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 8,
+        "enrollmentsCount": 3,
+        "attendancesCount": 13,
+        "classes": [
+          "5 ابتدائي رياضيات",
+          "5 ابتدائي لغة عربية",
+          "مروة 5 ابتدائي"
+        ],
+        "allPhones": [
+          "0798721400",
+          "0782863088"
+        ],
+        "cleanName": "يزيد خليل"
+      },
+      "reason": "Shared family name (\"يزيد\") & shared phone (0798721400)",
+      "phone": "0798721400"
+    },
+    {
+      "a": {
+        "id": "b952c020-fc45-455f-99a3-fffe47d65ba7",
+        "globalNumber": 443,
+        "name": "سطانجي دورصاف",
+        "phone": "0550496712",
+        "birthday": "2010-11-23T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "حموي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0550496712"
+        ],
+        "cleanName": "سطانجي دورصاف"
+      },
+      "b": {
+        "id": "22466921-0cc1-4e29-97c0-43f62d53a322",
+        "globalNumber": 899,
+        "name": "بسطانجي ألاء نور الهدى",
+        "phone": "0550496712",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 7,
+        "classes": [
+          "لعرابة 3ثانوي"
+        ],
+        "allPhones": [
+          "0550496712",
+          "0557857159"
+        ],
+        "cleanName": "بسطانجي الاء نور الهدي"
+      },
+      "reason": "Shared phone (0550496712) but distinct names",
+      "phone": "0550496712"
+    },
+    {
+      "a": {
+        "id": "5e034160-be67-4019-979f-d90b8527dd11",
+        "globalNumber": 523,
+        "name": "بوخالفة اسراء",
+        "phone": "0774128748",
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 10,
+        "classes": [
+          "فوج قلقول"
+        ],
+        "allPhones": [
+          "0774128748"
+        ],
+        "cleanName": "بوخالفه اسراء"
+      },
+      "b": {
+        "id": "4e5895b7-5573-4688-84e9-d3884ba9853f",
+        "globalNumber": 1571,
+        "name": "بوخالفة ساجد لله",
+        "phone": "0774128748",
+        "birthday": "2012-08-21T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "عميرش BEM فوج 2"
+        ],
+        "allPhones": [
+          "0774128748"
+        ],
+        "cleanName": "بوخالفه ساجد لله"
+      },
+      "reason": "Shared family name (\"بوخالفه\") & shared phone (0774128748)",
+      "phone": "0774128748"
+    },
+    {
+      "a": {
+        "id": "cce445cb-dab2-45c1-bcfb-a82766eab946",
+        "globalNumber": 539,
+        "name": "عبيد جمانة",
+        "phone": "0661451496",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 5,
+        "classes": [
+          "وجدان علمي"
+        ],
+        "allPhones": [
+          "0661451496",
+          "0659889391"
+        ],
+        "cleanName": "عبيد جمانه"
+      },
+      "b": {
+        "id": "b35336ef-1a6e-47bf-aa6a-88dd104bfdda",
+        "globalNumber": 1538,
+        "name": "عبيد امير خالد",
+        "phone": "0661451496",
+        "birthday": "2013-09-21T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "عميرش 3AM"
+        ],
+        "allPhones": [
+          "0661451496",
+          "0659889391"
+        ],
+        "cleanName": "عبيد امير خالد"
+      },
+      "reason": "Shared family name (\"عبيد\") & shared phone (0661451496)",
+      "phone": "0661451496"
+    },
+    {
+      "a": {
+        "id": "71b05992-aad1-4f98-9eb1-b7757619f25d",
+        "globalNumber": 555,
+        "name": "فهد آيت كالي",
+        "phone": "0560046935",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "عميرش BEM فوج 1"
+        ],
+        "allPhones": [
+          "0560046935",
+          "0560050270"
+        ],
+        "cleanName": "فهد ايت كالي"
+      },
+      "b": {
+        "id": "a0f61561-3d57-422d-9ab8-f841fb98209f",
+        "globalNumber": 1061,
+        "name": "ايت كاكي فهد",
+        "phone": "0560046935",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 5,
+        "classes": [
+          "بن يحي 4متوسط فوج 1",
+          "ميمون 4متوسط فوج 2"
+        ],
+        "allPhones": [
+          "0560046935",
+          "0560056270"
+        ],
+        "cleanName": "ايت كاكي فهد"
+      },
+      "reason": "Shared family name (\"فهد\") & shared phone (0560046935)",
+      "phone": "0560046935"
+    },
+    {
+      "a": {
+        "id": "69ea5f48-9569-4306-a5e5-fa6f73a8e92d",
+        "globalNumber": 558,
+        "name": "بلحي ريماس",
+        "phone": "0558108528",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 6,
+        "enrollmentsCount": 4,
+        "attendancesCount": 11,
+        "classes": [
+          "عميرش BEM فوج 2",
+          "عميرش BEM فوج 1",
+          "بن يحي 4متوسط فوج 2",
+          "ميمون 4متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0558108528"
+        ],
+        "cleanName": "بلحي ريماس"
+      },
+      "b": {
+        "id": "f7ae90ef-5b62-40d0-841d-87cc8f6b44c4",
+        "globalNumber": 1223,
+        "name": "بلحي ليليان",
+        "phone": "0558108528",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Français - Project 04"
+        ],
+        "allPhones": [
+          "0558108528"
+        ],
+        "cleanName": "بلحي ليليان"
+      },
+      "reason": "Shared family name (\"بلحي\") & shared phone (0558108528)",
+      "phone": "0558108528"
+    },
+    {
+      "a": {
+        "id": "367e3c70-eafc-4c5e-8eba-b3cdf1dbf9c4",
+        "globalNumber": 562,
+        "name": "ايت سعدي اماني",
+        "phone": "0661926583",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 7,
+        "enrollmentsCount": 4,
+        "attendancesCount": 12,
+        "classes": [
+          "بوخزر BEM فوج 2",
+          "عميرش BEM فوج 1",
+          "بن يحي 4متوسط فوج 1",
+          "بوعبلو 4 متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0661926583",
+          "0556151131"
+        ],
+        "cleanName": "ايت سعدي اماني"
+      },
+      "b": {
+        "id": "50b9d935-281d-4aa1-ba61-29242638e721",
+        "globalNumber": 1549,
+        "name": "ايت سعدي مروان",
+        "phone": "0661926583",
+        "birthday": "2011-02-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "عمير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0661926583"
+        ],
+        "cleanName": "ايت سعدي مروان"
+      },
+      "reason": "Shared family name (\"ايت\") & shared phone (0661926583)",
+      "phone": "0661926583"
+    },
+    {
+      "a": {
+        "id": "647d0705-58e2-4afc-a9d5-552ea8424963",
+        "globalNumber": 574,
+        "name": "حركات سراج",
+        "phone": "0551915327",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 7,
+        "enrollmentsCount": 4,
+        "attendancesCount": 14,
+        "classes": [
+          "عميرش BEM فوج 2",
+          "بوخزر BEM فوج 2",
+          "بن يحي 4متوسط فوج 1",
+          "ميمون 4متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0551915327"
+        ],
+        "cleanName": "حركات سراج"
+      },
+      "b": {
+        "id": "956505e1-dad0-47f6-add8-a49fe319d4d3",
+        "globalNumber": 670,
+        "name": "حركاتي جواد",
+        "phone": "0551915327",
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 2,
+        "classes": [
+          "عميرش 1AM",
+          "ميمون 1متوسط"
+        ],
+        "allPhones": [
+          "0551915327"
+        ],
+        "cleanName": "حركاتي جواد"
+      },
+      "reason": "Shared phone (0551915327) but distinct names",
+      "phone": "0551915327"
+    },
+    {
+      "a": {
+        "id": "3826aa72-3d9c-4f82-a914-227fbdb88758",
+        "globalNumber": 575,
+        "name": "حفناوي دينا",
+        "phone": "0658017005",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 6,
+        "enrollmentsCount": 3,
+        "attendancesCount": 10,
+        "classes": [
+          "عميرش BEM فوج 2",
+          "لعروسي BEM فوج 1",
+          "بن يحي 4متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0658017005"
+        ],
+        "cleanName": "حفناوي دينا"
+      },
+      "b": {
+        "id": "4a48e54a-e5a8-403c-a01e-34cc11e28ac0",
+        "globalNumber": 1447,
+        "name": "حفناوي انسام",
+        "phone": "0658017005",
+        "birthday": "2012-02-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "بن يحي 1 ثانوي فوج 1"
+        ],
+        "allPhones": [
+          "0658017005"
+        ],
+        "cleanName": "حفناوي انسام"
+      },
+      "reason": "Shared family name (\"حفناوي\") & shared phone (0658017005)",
+      "phone": "0658017005"
+    },
+    {
+      "a": {
+        "id": "2c8ac8c8-8dd0-4b4d-93a3-4d6630c9811f",
+        "globalNumber": 583,
+        "name": "علاء الدين ديلهمية",
+        "phone": "0554541689",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 8,
+        "classes": [
+          "بوخزر BEM فوج 1",
+          "دحدوح BEM"
+        ],
+        "allPhones": [
+          "0554541689"
+        ],
+        "cleanName": "علاء الدين ديلهميه"
+      },
+      "b": {
+        "id": "c16466e2-41a4-4010-9177-73a1c09310d3",
+        "globalNumber": 1220,
+        "name": "دلاهمية قطر الندى",
+        "phone": "0554541689",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Français - Project 04"
+        ],
+        "allPhones": [
+          "0554541689"
+        ],
+        "cleanName": "دلاهميه قطر الندي"
+      },
+      "reason": "Shared phone (0554541689) but distinct names",
+      "phone": "0554541689"
+    },
+    {
+      "a": {
+        "id": "0b68fbbd-ac14-4426-8b87-0c95f0b39eca",
+        "globalNumber": 594,
+        "name": "يزيد أسامة",
+        "phone": "0782863088",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 7,
+        "enrollmentsCount": 5,
+        "attendancesCount": 14,
+        "classes": [
+          "بوخزر BEM فوج 2",
+          "بن يحي 4متوسط فوج 1",
+          "ميمون 4متوسط فوج 1",
+          "بوعبلو 4 متوسط فوج 1",
+          "ميمون 4متوسط فوج 2"
+        ],
+        "allPhones": [
+          "0782863088"
+        ],
+        "cleanName": "يزيد اسامه"
+      },
+      "b": {
+        "id": "f79d5137-a3ea-48d0-91f5-f677d9dadd84",
+        "globalNumber": 674,
+        "name": "يزيد خليل",
+        "phone": "0798721400",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 8,
+        "enrollmentsCount": 3,
+        "attendancesCount": 13,
+        "classes": [
+          "5 ابتدائي رياضيات",
+          "5 ابتدائي لغة عربية",
+          "مروة 5 ابتدائي"
+        ],
+        "allPhones": [
+          "0798721400",
+          "0782863088"
+        ],
+        "cleanName": "يزيد خليل"
+      },
+      "reason": "Shared family name (\"يزيد\") & shared phone (0782863088)",
+      "phone": "0782863088"
+    },
+    {
+      "a": {
+        "id": "09a9adca-eeb4-4068-a716-8f5b17037c1c",
+        "globalNumber": 595,
+        "name": "العلوي جاد",
+        "phone": "0661937467",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 10,
+        "enrollmentsCount": 4,
+        "attendancesCount": 11,
+        "classes": [
+          "بوخزر BEM فوج 2",
+          "بن يحي 4متوسط فوج 1",
+          "ميمون 4متوسط فوج 1",
+          "ميمون 4متوسط فوج 2"
+        ],
+        "allPhones": [
+          "0661937467"
+        ],
+        "cleanName": "العلوي جاد"
+      },
+      "b": {
+        "id": "2e45febc-4dab-405e-bcc0-8a61578432d4",
+        "globalNumber": 1139,
+        "name": "العلوي ايمان",
+        "phone": "0661937467",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 2 متوسط"
+        ],
+        "allPhones": [
+          "0661937467"
+        ],
+        "cleanName": "العلوي ايمان"
+      },
+      "reason": "Shared family name (\"العلوي\") & shared phone (0661937467)",
+      "phone": "0661937467"
+    },
+    {
+      "a": {
+        "id": "4df84109-8d04-433b-82ba-b7f39c58d861",
+        "globalNumber": 600,
+        "name": "بوعبد الله سيرين",
+        "phone": "0775274422",
+        "birthday": "2012-05-14T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 8,
+        "enrollmentsCount": 4,
+        "attendancesCount": 13,
+        "classes": [
+          "لعروسي BEM فوج 1",
+          "بوخزر BEM فوج 1",
+          "بن يحي 4متوسط فوج 2",
+          "دحدوح BEM"
+        ],
+        "allPhones": [
+          "0775274422",
+          "0776040161"
+        ],
+        "cleanName": "بوعبد الله سيرين"
+      },
+      "b": {
+        "id": "edef8086-dc6e-43c6-bc9e-ff093bb60d07",
+        "globalNumber": 1071,
+        "name": "بوعبدالله نور",
+        "phone": "0775274422",
+        "birthday": "2015-11-11T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "بوخزر 2AM"
+        ],
+        "allPhones": [
+          "0775274422"
+        ],
+        "cleanName": "بوعبدالله نور"
+      },
+      "reason": "Shared phone (0775274422) but distinct names",
+      "phone": "0775274422"
+    },
+    {
+      "a": {
+        "id": "b9073004-b280-4d1f-9356-e886cd00fa15",
+        "globalNumber": 620,
+        "name": "عزوزي بيلسان",
+        "phone": "0550535356",
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 5,
+        "enrollmentsCount": 3,
+        "attendancesCount": 11,
+        "classes": [
+          "دحدوح BEM",
+          "بن يحي 4متوسط فوج 2",
+          "بوعبلو 4 متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0550535356"
+        ],
+        "cleanName": "عزوزي بيلسان"
+      },
+      "b": {
+        "id": "4257a814-991b-4698-818c-70f23bdd9d96",
+        "globalNumber": 632,
+        "name": "عزوزي أرسلان",
+        "phone": "0550535356",
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 4,
+        "classes": [
+          "بوخزر 3AM",
+          "ميمون 3متوسط"
+        ],
+        "allPhones": [
+          "0550535356"
+        ],
+        "cleanName": "عزوزي ارسلان"
+      },
+      "reason": "Shared family name (\"عزوزي\") & shared phone (0550535356)",
+      "phone": "0550535356"
+    },
+    {
+      "a": {
+        "id": "fe3a28af-6ac8-4b5a-bdb9-ac0cf2e47574",
+        "globalNumber": 626,
+        "name": "دمدوم اروى",
+        "phone": "0777038039",
+        "birthday": "2012-07-28T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 7,
+        "classes": [
+          "دحدوح BEM",
+          "بوعبلو 4 متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0777038039",
+          "0550382316"
+        ],
+        "cleanName": "دمدوم اروي"
+      },
+      "b": {
+        "id": "f524b241-8d9b-40a1-bb75-64e63093a7b7",
+        "globalNumber": 945,
+        "name": "دمدوم امجد",
+        "phone": "0777038039",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "نذير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0777038039"
+        ],
+        "cleanName": "دمدوم امجد"
+      },
+      "reason": "Shared family name (\"دمدوم\") & shared phone (0777038039)",
+      "phone": "0777038039"
+    },
+    {
+      "a": {
+        "id": "22ab3545-1bc9-4505-83a2-7c1ae96cd119",
+        "globalNumber": 634,
+        "name": "شمني هديل",
+        "phone": "0541684205",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 5,
+        "classes": [
+          "بوخزر 3AM",
+          "بن يحي 3متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0541684205",
+          "0697552963"
+        ],
+        "cleanName": "شمني هديل"
+      },
+      "b": {
+        "id": "0f4c7e99-36d7-4321-b258-df0f561b5336",
+        "globalNumber": 1285,
+        "name": "شمني هبة الرحمان",
+        "phone": "0697552963",
+        "birthday": "2010-11-11T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "مجدوب 2 ثانوي ادبي"
+        ],
+        "allPhones": [
+          "0697552963",
+          "0541684205"
+        ],
+        "cleanName": "شمني هبه الرحمان"
+      },
+      "reason": "Shared family name (\"شمني\") & shared phone (0541684205)",
+      "phone": "0541684205"
+    },
+    {
+      "a": {
+        "id": "419c536a-6533-4294-8646-f7368d294c17",
+        "globalNumber": 642,
+        "name": "بيدي ياسمين",
+        "phone": "0657163791",
+        "birthday": "2013-11-06T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 7,
+        "enrollmentsCount": 5,
+        "attendancesCount": 10,
+        "classes": [
+          "لعروسي 3AM",
+          "عميرش 3AM",
+          "ميمون 3متوسط",
+          "بن يحي 3متوسط فوج 1",
+          "طيار 3AM"
+        ],
+        "allPhones": [
+          "0657163791"
+        ],
+        "cleanName": "بيدي ياسمين"
+      },
+      "b": {
+        "id": "317e4896-317e-4e64-a38d-1b680d0b8f72",
+        "globalNumber": 712,
+        "name": "بيدي يحي احمد",
+        "phone": "0657163791",
+        "birthday": null,
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 3,
+        "attendancesCount": 7,
+        "classes": [
+          "3 ابتدائي لغة عربية",
+          "3 ابتدائي رياضيات",
+          "Formation Anglais - Let's Go 02"
+        ],
+        "allPhones": [
+          "0657163791"
+        ],
+        "cleanName": "بيدي يحي احمد"
+      },
+      "reason": "Shared family name (\"بيدي\") & shared phone (0657163791)",
+      "phone": "0657163791"
+    },
+    {
+      "a": {
+        "id": "f4d87f03-44ac-4bf1-9401-9662d4dadbc5",
+        "globalNumber": 647,
+        "name": "قسامة فاطمة",
+        "phone": "0661132371",
+        "birthday": "2013-07-26T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 7,
+        "enrollmentsCount": 4,
+        "attendancesCount": 8,
+        "classes": [
+          "لعروسي 3AM",
+          "ميمون 3متوسط",
+          "بن يحي 3متوسط فوج 1",
+          "عميرش 3AM"
+        ],
+        "allPhones": [
+          "0661132371"
+        ],
+        "cleanName": "قسامه فاطمه"
+      },
+      "b": {
+        "id": "e7124bb1-174c-45c2-8cc7-6cb77e8cbb5f",
+        "globalNumber": 1178,
+        "name": "قسامة هشام",
+        "phone": "0670037606",
+        "birthday": "2016-01-31T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 9,
+        "enrollmentsCount": 5,
+        "attendancesCount": 7,
+        "classes": [
+          "عميرش 1AM",
+          "بن يحي 1 متوسط",
+          "ميمون 1متوسط",
+          "Formation Français - Project 04",
+          "بن عزوز 1 متوسط"
+        ],
+        "allPhones": [
+          "0670037606",
+          "0661132371"
+        ],
+        "cleanName": "قسامه هشام"
+      },
+      "reason": "Shared family name (\"قسامه\") & shared phone (0661132371)",
+      "phone": "0661132371"
+    },
+    {
+      "a": {
+        "id": "c28be45f-9224-4efd-9087-be63d4f8730b",
+        "globalNumber": 648,
+        "name": "فلياشي مناف",
+        "phone": "0772565927",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 5,
+        "enrollmentsCount": 3,
+        "attendancesCount": 6,
+        "classes": [
+          "لعروسي 3AM",
+          "ميمون 3متوسط",
+          "بن يحي 3متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0772565927"
+        ],
+        "cleanName": "فلياشي مناف"
+      },
+      "b": {
+        "id": "4b1e3358-8b31-4076-b056-b46a30e1ed1c",
+        "globalNumber": 1179,
+        "name": "فلياشي نزيم",
+        "phone": "0772565927",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 6,
+        "enrollmentsCount": 3,
+        "attendancesCount": 3,
+        "classes": [
+          "عميرش 1AM",
+          "بن عزوز 1 متوسط",
+          "ميمون 1متوسط"
+        ],
+        "allPhones": [
+          "0772565927"
+        ],
+        "cleanName": "فلياشي نزيم"
+      },
+      "reason": "Shared family name (\"فلياشي\") & shared phone (0772565927)",
+      "phone": "0772565927"
+    },
+    {
+      "a": {
+        "id": "a3ab476c-a07f-4496-a68f-1ccaf793a3da",
+        "globalNumber": 652,
+        "name": "بن هلال عبد الرحمان",
+        "phone": "0666772288",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 4,
+        "classes": [
+          "طيار 3AM",
+          "عميرش 3AM"
+        ],
+        "allPhones": [
+          "0666772288"
+        ],
+        "cleanName": "بن هلال عبد الرحمان"
+      },
+      "b": {
+        "id": "065afd7c-78f7-4091-8c2a-5441c65de735",
+        "globalNumber": 1410,
+        "name": "بن علال  ياسمين",
+        "phone": "0666772288",
+        "birthday": "2011-02-02T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "بن يحي 1 متوسط"
+        ],
+        "allPhones": [
+          "0666772288"
+        ],
+        "cleanName": "بن علال ياسمين"
+      },
+      "reason": "Shared phone (0666772288) but distinct names",
+      "phone": "0666772288"
+    },
+    {
+      "a": {
+        "id": "812aa7ca-89ed-4055-84d9-33868d560d67",
+        "globalNumber": 656,
+        "name": "بن كحمان محمد امير",
+        "phone": "0553410039",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "عميرش 3AM"
+        ],
+        "allPhones": [
+          "0553410039",
+          "0557837845"
+        ],
+        "cleanName": "بن كحمان محمد امير"
+      },
+      "b": {
+        "id": "30bdfc2a-c00d-40e1-b95c-e89c735b2c18",
+        "globalNumber": 1020,
+        "name": "بن كحمان ملاك",
+        "phone": "0553410039",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 6,
+        "classes": [
+          "نذير 1 ثانوي",
+          "عمير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0553410039",
+          "0557837845"
+        ],
+        "cleanName": "بن كحمان ملاك"
+      },
+      "reason": "Shared family name (\"كحمان\") & shared phone (0553410039)",
+      "phone": "0553410039"
+    },
+    {
+      "a": {
+        "id": "f3d4d898-9fad-46d5-8c9e-7f70ca48aa87",
+        "globalNumber": 672,
+        "name": "حيمد محمد مهدي",
+        "phone": "0770243227",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 2,
+        "classes": [
+          "عميرش 1AM",
+          "بن عزوز 1 متوسط"
+        ],
+        "allPhones": [
+          "0770243227"
+        ],
+        "cleanName": "حيمد محمد مهدي"
+      },
+      "b": {
+        "id": "a80a394f-eddf-4734-86ab-abdae9bb84e7",
+        "globalNumber": 699,
+        "name": "حيمد أمير",
+        "phone": "0770243227",
+        "birthday": "2017-04-09T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 5,
+        "classes": [
+          "4 ابتدائي رياضيات"
+        ],
+        "allPhones": [
+          "0770243227"
+        ],
+        "cleanName": "حيمد امير"
+      },
+      "reason": "Shared family name (\"حيمد\") & shared phone (0770243227)",
+      "phone": "0770243227"
+    },
+    {
+      "a": {
+        "id": "ab0a1f0e-bad7-4d79-ab3a-5dc1c9358576",
+        "globalNumber": 681,
+        "name": "غولة ميراس",
+        "phone": "0799776980",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 8,
+        "enrollmentsCount": 3,
+        "attendancesCount": 11,
+        "classes": [
+          "مروة 5 ابتدائي",
+          "5 ابتدائي رياضيات",
+          "5 ابتدائي لغة عربية"
+        ],
+        "allPhones": [
+          "0799776980"
+        ],
+        "cleanName": "غوله ميراس"
+      },
+      "b": {
+        "id": "253810a2-eabe-404f-b759-7cc80d4430fb",
+        "globalNumber": 1288,
+        "name": "غولة محمد اسر",
+        "phone": "0799776980",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 1,
+        "classes": [
+          "دراجي 1 ثانوي",
+          "كحال علوم 1 ثانوي"
+        ],
+        "allPhones": [
+          "0799776980"
+        ],
+        "cleanName": "غوله محمد اسر"
+      },
+      "reason": "Shared family name (\"غوله\") & shared phone (0799776980)",
+      "phone": "0799776980"
+    },
+    {
+      "a": {
+        "id": "30f489ac-bf9e-4e16-b93b-3a6da47fb3bb",
+        "globalNumber": 688,
+        "name": "عبد الرزاق اسلام",
+        "phone": "0783275504",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 3,
+        "attendancesCount": 14,
+        "classes": [
+          "5 ابتدائي رياضيات",
+          "5 ابتدائي لغة عربية",
+          "بن عزوز 5 ابتدائي"
+        ],
+        "allPhones": [
+          "0783275504"
+        ],
+        "cleanName": "عبد الرزاق اسلام"
+      },
+      "b": {
+        "id": "379c8291-83cc-4f30-bc5c-f970675e479d",
+        "globalNumber": 1150,
+        "name": "ولاء عبد الرزاق",
+        "phone": "0783275504",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "ميمون 1متوسط"
+        ],
+        "allPhones": [
+          "0783275504"
+        ],
+        "cleanName": "ولاء عبد الرزاق"
+      },
+      "reason": "Shared family name (\"عبد\") & shared phone (0783275504)",
+      "phone": "0783275504"
+    },
+    {
+      "a": {
+        "id": "30f489ac-bf9e-4e16-b93b-3a6da47fb3bb",
+        "globalNumber": 688,
+        "name": "عبد الرزاق اسلام",
+        "phone": "0783275504",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 3,
+        "attendancesCount": 14,
+        "classes": [
+          "5 ابتدائي رياضيات",
+          "5 ابتدائي لغة عربية",
+          "بن عزوز 5 ابتدائي"
+        ],
+        "allPhones": [
+          "0783275504"
+        ],
+        "cleanName": "عبد الرزاق اسلام"
+      },
+      "b": {
+        "id": "a77b7a03-6df8-4941-b5b3-8f9c4870f75e",
+        "globalNumber": 1414,
+        "name": "عبد الرزاق  محمد ولاء",
+        "phone": "0783275504",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "بن يحي 1 متوسط"
+        ],
+        "allPhones": [
+          "0783275504"
+        ],
+        "cleanName": "عبد الرزاق محمد ولاء"
+      },
+      "reason": "Shared family name (\"عبد\") & shared phone (0783275504)",
+      "phone": "0783275504"
+    },
+    {
+      "a": {
+        "id": "0634e36c-ba5d-408f-92b3-b5640ad8c2f1",
+        "globalNumber": 691,
+        "name": "بوخزر ريماس",
+        "phone": "0775277125",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "بن يحي 2 متوسط"
+        ],
+        "allPhones": [
+          "0775277125"
+        ],
+        "cleanName": "بوخزر ريماس"
+      },
+      "b": {
+        "id": "f2a8ba64-e1be-4d1e-bb7d-f30583413875",
+        "globalNumber": 1163,
+        "name": "بوخزر رنيم",
+        "phone": "0775277125",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 3,
+        "classes": [
+          "نذير 1 ثانوي",
+          "بن يحي 1 ثانوي فوج 1"
+        ],
+        "allPhones": [
+          "0775277125"
+        ],
+        "cleanName": "بوخزر رنيم"
+      },
+      "reason": "Shared family name (\"بوخزر\") & shared phone (0775277125)",
+      "phone": "0775277125"
+    },
+    {
+      "a": {
+        "id": "2aa3e350-2c57-4abf-8d19-86b5d5d45404",
+        "globalNumber": 692,
+        "name": "تليلي دعاء",
+        "phone": "0791440520",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 7,
+        "classes": [
+          "بن عزوز 5 ابتدائي",
+          "مروة 5 ابتدائي"
+        ],
+        "allPhones": [
+          "0791440520",
+          "0699661114"
+        ],
+        "cleanName": "تليلي دعاء"
+      },
+      "b": {
+        "id": "dfaf74fb-c6ea-4f5a-a71b-e413c0c692fc",
+        "globalNumber": 1196,
+        "name": "تليلي محمد",
+        "phone": "0699661114",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Anglais - Let's Go 01"
+        ],
+        "allPhones": [
+          "0699661114"
+        ],
+        "cleanName": "تليلي محمد"
+      },
+      "reason": "Shared family name (\"تليلي\") & shared phone (0699661114)",
+      "phone": "0699661114"
+    },
+    {
+      "a": {
+        "id": "f25bdd34-661f-4bde-9044-47fdee4c72cf",
+        "globalNumber": 725,
+        "name": "ربعي زينب",
+        "phone": "0662533950",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "بوالجذري 3 ثانوي"
+        ],
+        "allPhones": [
+          "0662533950",
+          "0550309394"
+        ],
+        "cleanName": "ربعي زينب"
+      },
+      "b": {
+        "id": "e5e38ea5-2678-400e-9e02-462146157894",
+        "globalNumber": 1233,
+        "name": "ربعي محمد امين",
+        "phone": "0662913982",
+        "birthday": "2014-03-08T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 6,
+        "enrollmentsCount": 3,
+        "attendancesCount": 4,
+        "classes": [
+          "بوخزر 2AM",
+          "ميمون 2AM",
+          "بن يحي 2 متوسط"
+        ],
+        "allPhones": [
+          "0662913982",
+          "0662533950"
+        ],
+        "cleanName": "ربعي محمد امين"
+      },
+      "reason": "Shared family name (\"ربعي\") & shared phone (0662533950)",
+      "phone": "0662533950"
+    },
+    {
+      "a": {
+        "id": "be2521f0-5401-41b4-a8e8-6e67c53c7fa7",
+        "globalNumber": 755,
+        "name": "فيلالي مليسا",
+        "phone": "0698730747",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 8,
+        "classes": [
+          "فوج سمية 3 ثانوي"
+        ],
+        "allPhones": [
+          "0698730747"
+        ],
+        "cleanName": "فيلالي مليسا"
+      },
+      "b": {
+        "id": "ece6cd07-f26a-4dce-89c6-6fe1a14740d1",
+        "globalNumber": 1545,
+        "name": "فيلالي شهرزاد",
+        "phone": "0698730747",
+        "birthday": "2011-10-02T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 2,
+        "attendancesCount": 0,
+        "classes": [
+          "قلقول 2 ثانوي",
+          "فردي 2 ثانوي تسيير واقتصاد"
+        ],
+        "allPhones": [
+          "0698730747"
+        ],
+        "cleanName": "فيلالي شهرزاد"
+      },
+      "reason": "Shared family name (\"فيلالي\") & shared phone (0698730747)",
+      "phone": "0698730747"
+    },
+    {
+      "a": {
+        "id": "ffbf3d51-7436-4d95-8242-6bd84f17fcd2",
+        "globalNumber": 772,
+        "name": "بن صاوشة إبراهيم",
+        "phone": "0697897131",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 7,
+        "classes": [
+          "فوج قداري 3ثانوي"
+        ],
+        "allPhones": [
+          "0697897131",
+          "0552308433"
+        ],
+        "cleanName": "بن صاوشه ابراهيم"
+      },
+      "b": {
+        "id": "f78d2cc6-3d1f-4fd0-bf58-723906e8e0d7",
+        "globalNumber": 1176,
+        "name": "بن صاوشة اريج",
+        "phone": "0697897131",
+        "birthday": "2004-08-05T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "فوج قسوم"
+        ],
+        "allPhones": [
+          "0697897131"
+        ],
+        "cleanName": "بن صاوشه اريج"
+      },
+      "reason": "Shared family name (\"صاوشه\") & shared phone (0697897131)",
+      "phone": "0697897131"
+    },
+    {
+      "a": {
+        "id": "0a7fea5d-1fab-4b08-b301-0662e5b8e41e",
+        "globalNumber": 775,
+        "name": "حماني محمد الهادي",
+        "phone": "0667470166",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "فوج قداري 3ثانوي"
+        ],
+        "allPhones": [
+          "0667470166",
+          "0656916156"
+        ],
+        "cleanName": "حماني محمد الهادي"
+      },
+      "b": {
+        "id": "1dbf026b-833e-44da-b9b7-8130f294e7d2",
+        "globalNumber": 1232,
+        "name": "حماني بتول",
+        "phone": "0770242560",
+        "birthday": "2014-02-16T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "بوخزر 3AM"
+        ],
+        "allPhones": [
+          "0770242560",
+          "0667470166"
+        ],
+        "cleanName": "حماني بتول"
+      },
+      "reason": "Shared family name (\"حماني\") & shared phone (0667470166)",
+      "phone": "0667470166"
+    },
+    {
+      "a": {
+        "id": "54540568-953d-4131-9cc2-eec53b81563f",
+        "globalNumber": 784,
+        "name": "بوعروج لؤي",
+        "phone": "0551890458",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 17,
+        "classes": [
+          "فوج قداري 3ثانوي",
+          "فردي 3ثانوي  تسيير "
+        ],
+        "allPhones": [
+          "0551890458",
+          "0666205692"
+        ],
+        "cleanName": "بوعروج لوي"
+      },
+      "b": {
+        "id": "f5fb2f93-f692-44dc-8832-39c8fa1e540a",
+        "globalNumber": 799,
+        "name": "بوعروج حسان",
+        "phone": "0551890458",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 0,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "فوج قداري 3ثانوي"
+        ],
+        "allPhones": [
+          "0551890458",
+          "0666205692"
+        ],
+        "cleanName": "بوعروج حسان"
+      },
+      "reason": "Shared family name (\"بوعروج\") & shared phone (0551890458)",
+      "phone": "0551890458"
+    },
+    {
+      "a": {
+        "id": "54540568-953d-4131-9cc2-eec53b81563f",
+        "globalNumber": 784,
+        "name": "بوعروج لؤي",
+        "phone": "0551890458",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 17,
+        "classes": [
+          "فوج قداري 3ثانوي",
+          "فردي 3ثانوي  تسيير "
+        ],
+        "allPhones": [
+          "0551890458",
+          "0666205692"
+        ],
+        "cleanName": "بوعروج لوي"
+      },
+      "b": {
+        "id": "7ec448f7-b0e9-4cc9-b035-ab6e71404273",
+        "globalNumber": 924,
+        "name": "بوعروج محمد",
+        "phone": "0551890458",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "فردي 3ثانوي  تسيير "
+        ],
+        "allPhones": [
+          "0551890458",
+          "0659369367"
+        ],
+        "cleanName": "بوعروج محمد"
+      },
+      "reason": "Shared family name (\"بوعروج\") & shared phone (0551890458)",
+      "phone": "0551890458"
+    },
+    {
+      "a": {
+        "id": "f5fb2f93-f692-44dc-8832-39c8fa1e540a",
+        "globalNumber": 799,
+        "name": "بوعروج حسان",
+        "phone": "0551890458",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 0,
+        "enrollmentsCount": 1,
+        "attendancesCount": 11,
+        "classes": [
+          "فوج قداري 3ثانوي"
+        ],
+        "allPhones": [
+          "0551890458",
+          "0666205692"
+        ],
+        "cleanName": "بوعروج حسان"
+      },
+      "b": {
+        "id": "7ec448f7-b0e9-4cc9-b035-ab6e71404273",
+        "globalNumber": 924,
+        "name": "بوعروج محمد",
+        "phone": "0551890458",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 1,
+        "attendancesCount": 6,
+        "classes": [
+          "فردي 3ثانوي  تسيير "
+        ],
+        "allPhones": [
+          "0551890458",
+          "0659369367"
+        ],
+        "cleanName": "بوعروج محمد"
+      },
+      "reason": "Shared family name (\"بوعروج\") & shared phone (0551890458)",
+      "phone": "0551890458"
+    },
+    {
+      "a": {
+        "id": "1f6b21b0-6479-4928-bcf4-f2f9118edccf",
+        "globalNumber": 895,
+        "name": "حمانة عبد الودود",
+        "phone": "0655130075",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 7,
+        "classes": [
+          "لعرابة 3ثانوي"
+        ],
+        "allPhones": [
+          "0655130075",
+          "0779202032"
+        ],
+        "cleanName": "حمانه عبد الودود"
+      },
+      "b": {
+        "id": "4d320fd5-6948-4b4e-a395-60dc44b1d545",
+        "globalNumber": 1394,
+        "name": "حمانة عبد المعز",
+        "phone": "0779202032",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "لعرابة 3ثانوي"
+        ],
+        "allPhones": [
+          "0779202032",
+          "0670157213"
+        ],
+        "cleanName": "حمانه عبد المعز"
+      },
+      "reason": "Shared family name (\"حمانه\") & shared phone (0779202032)",
+      "phone": "0779202032"
+    },
+    {
+      "a": {
+        "id": "83ee4c3f-e8b1-46a2-870c-7f13ffde2cd6",
+        "globalNumber": 1003,
+        "name": "دربال ناريمان",
+        "phone": "0792994049",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 1 ثانوي فوج 1"
+        ],
+        "allPhones": [
+          "0792994049"
+        ],
+        "cleanName": "دربال ناريمان"
+      },
+      "b": {
+        "id": "4f2b73e8-0203-4ab2-aeb0-4a6bdc862d59",
+        "globalNumber": 1058,
+        "name": "دربال فادي عبد الصمد",
+        "phone": "0792994049",
+        "birthday": "2010-07-03T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "حموي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0792994049",
+          "0656130969"
+        ],
+        "cleanName": "دربال فادي عبد الصمد"
+      },
+      "reason": "Shared family name (\"دربال\") & shared phone (0792994049)",
+      "phone": "0792994049"
+    },
+    {
+      "a": {
+        "id": "c9ffc933-b0e3-4c23-b559-cb3b1b1a7c53",
+        "globalNumber": 1040,
+        "name": "عبوة لينا",
+        "phone": "0540632987",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "عمير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0540632987"
+        ],
+        "cleanName": "عبوه لينا"
+      },
+      "b": {
+        "id": "7dc9d27c-8225-40d0-a6e1-dc4cc01d8d62",
+        "globalNumber": 1042,
+        "name": "عبوة لميس",
+        "phone": "0540632987",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "عمير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0540632987"
+        ],
+        "cleanName": "عبوه لميس"
+      },
+      "reason": "Shared family name (\"عبوه\") & shared phone (0540632987)",
+      "phone": "0540632987"
+    },
+    {
+      "a": {
+        "id": "e0900a86-2861-40c6-983c-87fd14607de3",
+        "globalNumber": 1072,
+        "name": "فنيخ رفيف",
+        "phone": "0661202498",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "بن يحي 4متوسط فوج 2"
+        ],
+        "allPhones": [
+          "0661202498",
+          "0770499138"
+        ],
+        "cleanName": "فنيخ رفيف"
+      },
+      "b": {
+        "id": "b6246524-3651-483f-9805-07aa28ca4d76",
+        "globalNumber": 1134,
+        "name": "فنيخ نور",
+        "phone": "0661202498",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 2 متوسط"
+        ],
+        "allPhones": [
+          "0661202498",
+          "0770499138"
+        ],
+        "cleanName": "فنيخ نور"
+      },
+      "reason": "Shared family name (\"فنيخ\") & shared phone (0661202498)",
+      "phone": "0661202498"
+    },
+    {
+      "a": {
+        "id": "57c84071-c4ed-4436-be97-a3510ed9f51c",
+        "globalNumber": 1116,
+        "name": "بوالقرون رافي",
+        "phone": "0798253625",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 3متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0798253625",
+          "0555918731"
+        ],
+        "cleanName": "بوالقرون رافي"
+      },
+      "b": {
+        "id": "f83c5b70-b4f6-4b26-9b35-bf0c38a4e09c",
+        "globalNumber": 1143,
+        "name": "بوالقرون رسيم",
+        "phone": "0798253625",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 5,
+        "enrollmentsCount": 2,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 1 متوسط",
+          "Formation Français - Project 04"
+        ],
+        "allPhones": [
+          "0798253625",
+          "0555918731"
+        ],
+        "cleanName": "بوالقرون رسيم"
+      },
+      "reason": "Shared family name (\"بوالقرون\") & shared phone (0798253625)",
+      "phone": "0798253625"
+    },
+    {
+      "a": {
+        "id": "57c84071-c4ed-4436-be97-a3510ed9f51c",
+        "globalNumber": 1116,
+        "name": "بوالقرون رافي",
+        "phone": "0798253625",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 3متوسط فوج 1"
+        ],
+        "allPhones": [
+          "0798253625",
+          "0555918731"
+        ],
+        "cleanName": "بوالقرون رافي"
+      },
+      "b": {
+        "id": "846add57-ed1b-4a8b-a5bf-a7f72fba4ba2",
+        "globalNumber": 1199,
+        "name": "بوالقرون ركان",
+        "phone": "0555918731",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Anglais - Let's Go 01"
+        ],
+        "allPhones": [
+          "0555918731"
+        ],
+        "cleanName": "بوالقرون ركان"
+      },
+      "reason": "Shared family name (\"بوالقرون\") & shared phone (0555918731)",
+      "phone": "0555918731"
+    },
+    {
+      "a": {
+        "id": "f83c5b70-b4f6-4b26-9b35-bf0c38a4e09c",
+        "globalNumber": 1143,
+        "name": "بوالقرون رسيم",
+        "phone": "0798253625",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 5,
+        "enrollmentsCount": 2,
+        "attendancesCount": 3,
+        "classes": [
+          "بن يحي 1 متوسط",
+          "Formation Français - Project 04"
+        ],
+        "allPhones": [
+          "0798253625",
+          "0555918731"
+        ],
+        "cleanName": "بوالقرون رسيم"
+      },
+      "b": {
+        "id": "846add57-ed1b-4a8b-a5bf-a7f72fba4ba2",
+        "globalNumber": 1199,
+        "name": "بوالقرون ركان",
+        "phone": "0555918731",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Anglais - Let's Go 01"
+        ],
+        "allPhones": [
+          "0555918731"
+        ],
+        "cleanName": "بوالقرون ركان"
+      },
+      "reason": "Shared family name (\"بوالقرون\") & shared phone (0555918731)",
+      "phone": "0555918731"
+    },
+    {
+      "a": {
+        "id": "c9fd1a95-a88c-4923-b00e-cd1a35f9891b",
+        "globalNumber": 1147,
+        "name": "بن داود شعبان",
+        "phone": "0774442372",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "بن يحي 1 متوسط"
+        ],
+        "allPhones": [
+          "0774442372"
+        ],
+        "cleanName": "بن داود شعبان"
+      },
+      "b": {
+        "id": "aa505d65-c10d-4105-a0c2-e564dae37ed9",
+        "globalNumber": 1426,
+        "name": "بن داود سفيان",
+        "phone": "0774442372",
+        "birthday": "2016-02-09T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "بن عزوز 1 متوسط"
+        ],
+        "allPhones": [
+          "0774442372",
+          "0773186474"
+        ],
+        "cleanName": "بن داود سفيان"
+      },
+      "reason": "Shared family name (\"داود\") & shared phone (0774442372)",
+      "phone": "0774442372"
+    },
+    {
+      "a": {
+        "id": "379c8291-83cc-4f30-bc5c-f970675e479d",
+        "globalNumber": 1150,
+        "name": "ولاء عبد الرزاق",
+        "phone": "0783275504",
+        "birthday": null,
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "ميمون 1متوسط"
+        ],
+        "allPhones": [
+          "0783275504"
+        ],
+        "cleanName": "ولاء عبد الرزاق"
+      },
+      "b": {
+        "id": "a77b7a03-6df8-4941-b5b3-8f9c4870f75e",
+        "globalNumber": 1414,
+        "name": "عبد الرزاق  محمد ولاء",
+        "phone": "0783275504",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 0,
+        "classes": [
+          "بن يحي 1 متوسط"
+        ],
+        "allPhones": [
+          "0783275504"
+        ],
+        "cleanName": "عبد الرزاق محمد ولاء"
+      },
+      "reason": "Shared family name (\"ولاء\") & shared phone (0783275504)",
+      "phone": "0783275504"
+    },
+    {
+      "a": {
+        "id": "2713a167-08e1-422b-bb79-9514178737b4",
+        "globalNumber": 1188,
+        "name": "خريز انوار",
+        "phone": "0675082148",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "فوج قداري 3ثانوي"
+        ],
+        "allPhones": [
+          "0675082148",
+          "0675082156"
+        ],
+        "cleanName": "خريز انوار"
+      },
+      "b": {
+        "id": "15511035-e9eb-41da-8f9d-6583a5c6e200",
+        "globalNumber": 1412,
+        "name": "خريس  مرام",
+        "phone": "0542120587",
+        "birthday": "2012-04-26T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "لعروسي BEM فوج 1"
+        ],
+        "allPhones": [
+          "0542120587",
+          "0675082148"
+        ],
+        "cleanName": "خريس مرام"
+      },
+      "reason": "Shared phone (0675082148) but distinct names",
+      "phone": "0675082148"
+    },
+    {
+      "a": {
+        "id": "75175d5b-9150-460c-8b8b-d37118343e2e",
+        "globalNumber": 1206,
+        "name": "بو الودنين نظال",
+        "phone": "0560156099",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Anglais - Let's Go 02"
+        ],
+        "allPhones": [
+          "0560156099"
+        ],
+        "cleanName": "بو الودنين نظال"
+      },
+      "b": {
+        "id": "47d92dca-0a35-47f1-ab32-1c639a33f671",
+        "globalNumber": 1207,
+        "name": "بو الودنين محمد",
+        "phone": "0560156099",
+        "birthday": "2008-01-01T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 4,
+        "classes": [
+          "Formation Anglais - Let's Go 02"
+        ],
+        "allPhones": [
+          "0560156099"
+        ],
+        "cleanName": "بو الودنين محمد"
+      },
+      "reason": "Shared family name (\"الودنين\") & shared phone (0560156099)",
+      "phone": "0560156099"
+    },
+    {
+      "a": {
+        "id": "67579ea9-b696-46a9-9749-bc7b61f0f300",
+        "globalNumber": 1250,
+        "name": "مخلوفي حنين",
+        "phone": "0697875066",
+        "birthday": "2011-02-23T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 3,
+        "classes": [
+          "نذير 1 ثانوي",
+          "حموي 1 ثانوي"
+        ],
+        "allPhones": [
+          "0697875066",
+          "0671540121"
+        ],
+        "cleanName": "مخلوفي حنين"
+      },
+      "b": {
+        "id": "ec3b3e97-57d0-4b4f-aa15-b3be4387a480",
+        "globalNumber": 1482,
+        "name": "خلوفي  اماني",
+        "phone": "0671540121",
+        "birthday": "2010-02-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "مجدوب 1 ثانوي ادبي"
+        ],
+        "allPhones": [
+          "0671540121"
+        ],
+        "cleanName": "خلوفي اماني"
+      },
+      "reason": "Shared phone (0671540121) but distinct names",
+      "phone": "0671540121"
+    },
+    {
+      "a": {
+        "id": "5fd4e622-29d7-43b6-bbbc-624e0c829627",
+        "globalNumber": 1254,
+        "name": "بلخولي قصي",
+        "phone": "0696751511",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 5,
+        "classes": [
+          "نذير 2 ثانوي",
+          "حموي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0696751511"
+        ],
+        "cleanName": "بلخولي قصي"
+      },
+      "b": {
+        "id": "b224ab20-fbb3-4ceb-bd56-94407c471085",
+        "globalNumber": 1255,
+        "name": "بلخولي لجين",
+        "phone": "0696751511",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "نذير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0696751511",
+          "0557029659"
+        ],
+        "cleanName": "بلخولي لجين"
+      },
+      "reason": "Shared family name (\"بلخولي\") & shared phone (0696751511)",
+      "phone": "0696751511"
+    },
+    {
+      "a": {
+        "id": "07341dc8-9cc9-4068-9c6a-033cc900bc69",
+        "globalNumber": 1258,
+        "name": "عابد اميرة",
+        "phone": "0790583295",
+        "birthday": "2008-10-01T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "نذير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0790583295"
+        ],
+        "cleanName": "عابد اميره"
+      },
+      "b": {
+        "id": "5c43b0fb-be8e-4d31-ab53-fefe465f41b6",
+        "globalNumber": 1317,
+        "name": "عابد علاء الدين",
+        "phone": "0790583295",
+        "birthday": "2014-01-22T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "عميرش 3AM"
+        ],
+        "allPhones": [
+          "0790583295",
+          "0772323335"
+        ],
+        "cleanName": "عابد علاء الدين"
+      },
+      "reason": "Shared family name (\"عابد\") & shared phone (0790583295)",
+      "phone": "0790583295"
+    },
+    {
+      "a": {
+        "id": "4992b87e-619e-4d5f-b0d2-273b71a892a5",
+        "globalNumber": 1274,
+        "name": "بوقليع هاجر",
+        "phone": "0655725851",
+        "birthday": "2012-05-05T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "بوخزر BEM فوج 2"
+        ],
+        "allPhones": [
+          "0655725851",
+          "0659823050"
+        ],
+        "cleanName": "بوقليع هاجر"
+      },
+      "b": {
+        "id": "83fee042-00e6-4e76-982f-a0f4e8145046",
+        "globalNumber": 1340,
+        "name": "بوقليع اويس عبد الرحمان",
+        "phone": "0655725851",
+        "birthday": "2015-06-13T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "Formation english- Project 01"
+        ],
+        "allPhones": [
+          "0655725851",
+          "0659823050"
+        ],
+        "cleanName": "بوقليع اويس عبد الرحمان"
+      },
+      "reason": "Shared family name (\"بوقليع\") & shared phone (0655725851)",
+      "phone": "0655725851"
+    },
+    {
+      "a": {
+        "id": "8aeec59f-2b09-4131-9db2-a1b39d0f1a42",
+        "globalNumber": 1302,
+        "name": "ضاوي اياد",
+        "phone": "0770330822",
+        "birthday": "2011-11-11T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 3,
+        "classes": [
+          "نذير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0770330822"
+        ],
+        "cleanName": "ضاوي اياد"
+      },
+      "b": {
+        "id": "40cfd8b5-96d6-469a-a82f-89ba48031bee",
+        "globalNumber": 1344,
+        "name": "ضاوي محمد",
+        "phone": "0770330822",
+        "birthday": "2010-12-05T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "حموي 2 ثانوي"
+        ],
+        "allPhones": [
+          "0770330822"
+        ],
+        "cleanName": "ضاوي محمد"
+      },
+      "reason": "Shared family name (\"ضاوي\") & shared phone (0770330822)",
+      "phone": "0770330822"
+    },
+    {
+      "a": {
+        "id": "0abbba83-19fc-4e95-aa27-49435b5fa3fc",
+        "globalNumber": 1306,
+        "name": "سيفي امجد",
+        "phone": "0549290359",
+        "birthday": "2017-01-26T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 7,
+        "enrollmentsCount": 4,
+        "attendancesCount": 9,
+        "classes": [
+          "5 ابتدائي رياضيات",
+          "5 ابتدائي لغة عربية",
+          "بن عزوز 5 ابتدائي",
+          "مروة 5 ابتدائي"
+        ],
+        "allPhones": [
+          "0549290359"
+        ],
+        "cleanName": "سيفي امجد"
+      },
+      "b": {
+        "id": "6027e2d3-baba-4397-9aec-eb7f8c80213b",
+        "globalNumber": 1573,
+        "name": "سيفي اريج",
+        "phone": "0549290359",
+        "birthday": "2015-07-30T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 5,
+        "enrollmentsCount": 2,
+        "attendancesCount": 0,
+        "classes": [
+          "Formation english- Project 01",
+          "بن عزوز 1 متوسط"
+        ],
+        "allPhones": [
+          "0549290359"
+        ],
+        "cleanName": "سيفي اريج"
+      },
+      "reason": "Shared family name (\"سيفي\") & shared phone (0549290359)",
+      "phone": "0549290359"
+    },
+    {
+      "a": {
+        "id": "4920bb8e-31a3-4a41-a877-1c921728ed16",
+        "globalNumber": 1389,
+        "name": "مخلوف وائل",
+        "phone": "0559793193",
+        "birthday": "2016-12-13T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "مروة 5 ابتدائي"
+        ],
+        "allPhones": [
+          "0559793193",
+          "055876464585"
+        ],
+        "cleanName": "مخلوف وايل"
+      },
+      "b": {
+        "id": "246bf46f-35b4-4fef-855d-f3643d68074b",
+        "globalNumber": 1390,
+        "name": "مخلوف اسلام",
+        "phone": "0559793193",
+        "birthday": "2016-11-13T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 1,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "مروة 5 ابتدائي"
+        ],
+        "allPhones": [
+          "0559793193",
+          "0558764585"
+        ],
+        "cleanName": "مخلوف اسلام"
+      },
+      "reason": "Shared family name (\"مخلوف\") & shared phone (0559793193)",
+      "phone": "0559793193"
+    },
+    {
+      "a": {
+        "id": "726d208e-970b-4b9d-ab06-acd34cd3ca08",
+        "globalNumber": 1403,
+        "name": "بن يمينة  ريما منال",
+        "phone": "0659385578",
+        "birthday": "2015-02-23T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 2,
+        "classes": [
+          "عميرش 2AM",
+          "ميمون 2AM"
+        ],
+        "allPhones": [
+          "0659385578",
+          "0661374474"
+        ],
+        "cleanName": "بن يمينه ريما منال"
+      },
+      "b": {
+        "id": "8b6afa06-f3d9-48b2-b290-e5038827d080",
+        "globalNumber": 1546,
+        "name": "بن يمينة مايا",
+        "phone": "065938557",
+        "birthday": "2012-07-26T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 1,
+        "classes": [
+          "عميرش BEM فوج 2"
+        ],
+        "allPhones": [
+          "065938557",
+          "0661374474"
+        ],
+        "cleanName": "بن يمينه مايا"
+      },
+      "reason": "Shared family name (\"يمينه\") & shared phone (0661374474)",
+      "phone": "0661374474"
+    },
+    {
+      "a": {
+        "id": "59fdbad7-7328-41d7-87aa-30c2a7b28d51",
+        "globalNumber": 1466,
+        "name": "قداري شهيناز",
+        "phone": "0798447245",
+        "birthday": "2011-12-20T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 4,
+        "enrollmentsCount": 2,
+        "attendancesCount": 2,
+        "classes": [
+          "حموي 1 ثانوي",
+          "نذير 1 ثانوي"
+        ],
+        "allPhones": [
+          "0798447245",
+          "0660225756"
+        ],
+        "cleanName": "قداري شهيناز"
+      },
+      "b": {
+        "id": "e4b5833b-a308-487e-948b-1e7e46a26c1c",
+        "globalNumber": 1484,
+        "name": "قداري زكرياء",
+        "phone": "0798447245",
+        "birthday": "2013-05-05T00:00:00.000Z",
+        "branchName": "ANNEX",
+        "branchId": 2,
+        "vouchersCount": 0,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "Formation english- Project 01"
+        ],
+        "allPhones": [
+          "0798447245",
+          "0660225756"
+        ],
+        "cleanName": "قداري زكرياء"
+      },
+      "reason": "Shared family name (\"قداري\") & shared phone (0798447245)",
+      "phone": "0798447245"
+    },
+    {
+      "a": {
+        "id": "af129fd0-1aac-4af0-a903-2eb66e1dffb5",
+        "globalNumber": 1498,
+        "name": "زنيزن سارة",
+        "phone": "0795324039",
+        "birthday": "2010-01-02T00:00:00.000Z",
+        "branchName": "ECOLE",
+        "branchId": 1,
+        "vouchersCount": 2,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "نذير 2 ثانوي"
+        ],
+        "allPhones": [
+          "0795324039"
+        ],
+        "cleanName": "زنيزن ساره"
+      },
+      "b": {
+        "id": "481703ea-5116-4707-92c0-ac4813167847",
+        "globalNumber": 1514,
+        "name": "زنيزن ياسر",
+        "phone": "0795324039",
+        "birthday": "2008-05-03T00:00:00.000Z",
+        "branchName": "AMPHI",
+        "branchId": 3,
+        "vouchersCount": 3,
+        "enrollmentsCount": 1,
+        "attendancesCount": 2,
+        "classes": [
+          "حموي علمي 3"
+        ],
+        "allPhones": [
+          "0795324039"
+        ],
+        "cleanName": "زنيزن ياسر"
+      },
+      "reason": "Shared family name (\"زنيزن\") & shared phone (0795324039)",
+      "phone": "0795324039"
+    }
+  ]
+}

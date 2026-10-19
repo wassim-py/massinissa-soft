@@ -230,16 +230,130 @@ function makeCommKey(key: number, sessionId: number, ticks: number = 50): Buffer
   return buf;
 }
 
-function toAsciiName(name: string, globalNumber: number): string {
-  const cleaned = (name || "")
+/**
+ * Translates/formats student names into clean, readable Latin ASCII (max 23 chars)
+ * for display on ZKTeco K50 TFT LCD screens.
+ * - Preserves Latin/French names and cleans accents.
+ * - Accurately transliterates Algerian Arabic names and prefixes phonetically.
+ * - Prevents the device from displaying "Student #..." when names are in Arabic or have accents.
+ */
+function formatDeviceStudentName(rawName: string, globalNumber: number): string {
+  if (!rawName || typeof rawName !== "string") {
+    return `ID #${globalNumber}`;
+  }
+
+  let text = rawName.trim();
+  if (!text) return `ID #${globalNumber}`;
+
+  // Check if string contains Arabic characters
+  const hasArabic = /[\u0600-\u06FF]/.test(text);
+
+  if (hasArabic) {
+    // 1. Strip Tashkeel (harakat), Tatweel (kashida), and Quranic marks
+    text = text
+      .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, "")
+      .replace(/[\u0640]/g, "");
+
+    // 2. Normalize common Algerian prefixes and composite religious names
+    text = text
+      .replace(/عبد\s*الله/g, "Abdallah")
+      .replace(/عبد\s*الرحمن/g, "Abdelrahman")
+      .replace(/عبد\s*الرحمان/g, "Abdelrahman")
+      .replace(/عبد\s*القادر/g, "Abdelkader")
+      .replace(/عبد\s*الكريم/g, "Abdelkarim")
+      .replace(/عبد\s*العزيز/g, "Abdelaziz")
+      .replace(/عبد\s*المالك/g, "Abdelmalek")
+      .replace(/عبد\s*الحميد/g, "Abdelhamid")
+      .replace(/عبد\s*الحليم/g, "Abdelhalim")
+      .replace(/عبد\s*الرزاق/g, "Abderrezak")
+      .replace(/عبد\s*الرؤوف/g, "Abderraouf")
+      .replace(/عبد\s*النور/g, "Abdennour")
+      .replace(/عبد\s*المؤمن/g, "Abdelmoumen")
+      .replace(/عبد\s*الحق/g, "Abdelhak")
+      .replace(/عبد\s*المجيد/g, "Abdelmadjid")
+      .replace(/عبد\s*الوهاب/g, "Abdelwahab")
+      .replace(/عبد\s*اللطيف/g, "Abdellatif")
+      .replace(/عبد\s*/g, "Abd ")
+      .replace(/بن\s*/g, "Ben ")
+      .replace(/بو\s*/g, "Bou ")
+      .replace(/ولد\s*/g, "Ould ")
+      .replace(/أيت\s*|ايت\s*/g, "Ait ")
+      .replace(/بل\s*/g, "Bel ")
+      .replace(/ال\s*/g, "El ");
+
+    // 3. Common Algerian / Arabic Names dictionary for perfect phonetic French/English spelling
+    const nameMap: Record<string, string> = {
+      "محمد": "Mohamed", "محمود": "Mahmoud", "احمد": "Ahmed", "أحمد": "Ahmed",
+      "علي": "Ali", "عمر": "Omar", "عثمان": "Othmane", "يوسف": "Youssef",
+      "يونس": "Younes", "ياسين": "Yassine", "يحيى": "Yahia", "ابراهيم": "Ibrahim",
+      "إبراهيم": "Ibrahim", "اسماعيل": "Ismail", "إسماعيل": "Ismail", "ايوب": "Ayoub",
+      "أيوب": "Ayoub", "حمزة": "Hamza", "خالد": "Khaled", "وسيم": "Wassim",
+      "تموسي": "Temoussi", "بلقاسم": "Belkacem", "فاطمة": "Fatima", "مريم": "Meryem",
+      "سارة": "Sarah", "خديجة": "Khadidja", "عائشة": "Aicha", "امينة": "Amina",
+      "أمينة": "Amina", "امين": "Amine", "أمين": "Amine", "اسلام": "Islam",
+      "إسلام": "Islam", "ايمن": "Aymen", "أيمن": "Aymen", "انور": "Anouar",
+      "أنور": "Anouar", "مهدي": "Mehdi", "كريم": "Karim", "رياض": "Riad",
+      "وليد": "Walid", "بلال": "Bilal", "طه": "Taha", "سامي": "Sami",
+      "صالح": "Salah", "حسام": "Houssam", "طارق": "Tarek", "مراد": "Mourad",
+      "فارس": "Fares", "حكيم": "Hakim", "عادل": "Adel", "سفيان": "Sofiane",
+      "سمير": "Samir", "رضوان": "Redouane", "نور": "Nour", "هدى": "Houda",
+      "سلمى": "Salma", "رانيا": "Rania", "مروة": "Marwa", "اية": "Aya",
+      "آية": "Aya", "هبة": "Hiba", "زينب": "Zineb", "صفاء": "Safaa",
+      "وئام": "Wiam", "احلام": "Ahlem", "أحلام": "Ahlem", "اسماء": "Asma",
+      "أسماء": "Asma", "شيماء": "Chaimaa", "زهور": "Zohour", "جمال": "Djamel",
+      "جهاد": "Djihad", "جعفر": "Djaafar", "شكيب": "Chakib", "شمس": "Chams",
+      "بشير": "Bachir", "منير": "Mounir", "نذير": "Nadhir", "نبيل": "Nabil",
+      "الياس": "Ilyes", "إلياس": "Ilyes", "زكرياء": "Zakaria", "زكريا": "Zakaria",
+    };
+
+    for (const [ar, lat] of Object.entries(nameMap)) {
+      const reg = new RegExp(`(^|\\s)${ar}(\\s|$)`, "g");
+      text = text.replace(reg, `$1${lat}$2`);
+    }
+
+    // 4. Letter-by-letter transliteration for remaining Arabic characters
+    const charMap: Record<string, string> = {
+      "أ": "A", "إ": "I", "آ": "A", "ا": "A", "ء": "", "ئ": "Y", "ؤ": "Ou",
+      "ب": "B", "ت": "T", "ث": "Th", "ج": "Dj", "ح": "H", "خ": "Kh",
+      "د": "D", "ذ": "Dh", "ر": "R", "ز": "Z", "س": "S", "ش": "Ch",
+      "ص": "S", "ض": "D", "ط": "T", "ظ": "Dh", "ع": "A", "غ": "Gh",
+      "ف": "F", "ق": "K", "ك": "K", "ل": "L", "م": "M", "ن": "N",
+      "ه": "H", "و": "Ou", "ي": "Y", "ى": "A", "ة": "a"
+    };
+
+    let transliterated = "";
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (charMap[ch] !== undefined) {
+        transliterated += charMap[ch];
+      } else {
+        transliterated += ch;
+      }
+    }
+    text = transliterated;
+  }
+
+  // Decompose any Latin accents (é -> e, etc.) and strip unsupported non-ASCII
+  text = text
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/[^a-zA-Z0-9\s\.\-']/g, "")
+    .replace(/\s+/g, " ")
     .trim();
-  if (!cleaned) {
-    return `Student #${globalNumber}`;
+
+  if (!text) {
+    return `ID #${globalNumber}`;
   }
-  return cleaned.slice(0, 23);
+
+  // Format Title Case: "mohamed benali" -> "Mohamed Benali"
+  text = text
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+
+  // Max 23 characters for ZKTeco 24-byte null-terminated name buffer
+  return text.slice(0, 23);
 }
 
 /**
@@ -253,7 +367,7 @@ function buildUser72Packet(
   const buf = Buffer.alloc(72, 0);
   buf.writeUInt16LE(uid & 0xffff, 0);
   buf.writeUInt8(0, 2);
-  buf.write(toAsciiName(name, uid), 11, 24, "ascii");
+  buf.write(formatDeviceStudentName(name, uid), 11, 24, "ascii");
   buf.writeUInt32LE(0, 35);
   buf.writeUInt8(0, 39);
   buf.write("1", 40, 7, "ascii");

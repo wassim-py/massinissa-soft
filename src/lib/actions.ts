@@ -1132,6 +1132,9 @@ export const checkForConflicts = async ({
   excludeId = -1,
   startsAt: explicitStartsAt,
   endsAt: explicitEndsAt,
+  isExtra = false,
+  isCatchUp = false,
+  isFree = false,
 }: {
   classId: number | number[];
   teacherId: string;
@@ -1142,6 +1145,9 @@ export const checkForConflicts = async ({
   excludeId?: number;
   startsAt?: Date;
   endsAt?: Date;
+  isExtra?: boolean;
+  isCatchUp?: boolean;
+  isFree?: boolean;
 }) => {
   try {
     const startsAt = explicitStartsAt || getLessonDateTime(day, startTime);
@@ -1154,20 +1160,22 @@ export const checkForConflicts = async ({
     // 1. Teacher conflict check:
     // Full start-end time range comparison. Flag overlapping-but-offset lessons:
     // - Overlaps if startsAt < otherEndsAt AND endsAt > otherStartsAt
-    // - Also checks same day of week across recurring lessons by comparing time ranges
+    // - Also checks same day of week across active recurring lessons by comparing time ranges
     if (teacherId) {
       const teacherConflict = await prisma.$queryRaw<any[]>`
-        SELECT id FROM "Lesson"
-        WHERE "teacherId" = ${teacherId}
-          AND id NOT IN (${Prisma.join(excludedIds)})
+        SELECT l.id FROM "Lesson" l
+        LEFT JOIN "Class" c ON c.id = l."classId"
+        WHERE l."teacherId" = ${teacherId}
+          AND l.id NOT IN (${Prisma.join(excludedIds)})
+          AND (c."isCompleted" = false OR c."isCompleted" IS NULL)
           AND (
-            ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
+            (l."startsAt" < ${endsAt} AND l."endsAt" > ${startsAt})
             OR
             (
-              "isExtra" = false AND "isCatchUp" = false
-              AND EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
-              AND "startsAt"::time < ${endsAt}::time
-              AND "endsAt"::time > ${startsAt}::time
+              l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false
+              AND EXTRACT(DOW FROM l."startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
+              AND l."startsAt"::time < ${endsAt}::time
+              AND l."endsAt"::time > ${startsAt}::time
             )
           )
         LIMIT 1
@@ -1197,14 +1205,15 @@ export const checkForConflicts = async ({
           )
         )
           AND l.id NOT IN (${Prisma.join(excludedIds)})
+          AND (c."isCompleted" = false OR c."isCompleted" IS NULL)
           AND (
-            ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
+            (l."startsAt" < ${endsAt} AND l."endsAt" > ${startsAt})
             OR
             (
-              "isExtra" = false AND "isCatchUp" = false
-              AND EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
-              AND "startsAt"::time < ${endsAt}::time
-              AND "endsAt"::time > ${startsAt}::time
+              l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false
+              AND EXTRACT(DOW FROM l."startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
+              AND l."startsAt"::time < ${endsAt}::time
+              AND l."endsAt"::time > ${startsAt}::time
             )
           )
         LIMIT 1
@@ -1218,17 +1227,20 @@ export const checkForConflicts = async ({
     // 3. Classroom conflict check
     if (classroomId) {
       const classroomConflict = await prisma.$queryRaw<any[]>`
-        SELECT id FROM "Lesson"
-        WHERE "classroomId" = ${Number(classroomId)}
-          AND id NOT IN (${Prisma.join(excludedIds)})
+        SELECT l.id FROM "Lesson" l
+        LEFT JOIN "Class" c ON c.id = l."classId"
+        WHERE l."classroomId" = ${Number(classroomId)}
+          AND l.id NOT IN (${Prisma.join(excludedIds)})
+          AND (c."isCompleted" = false OR c."isCompleted" IS NULL)
+          AND l."isTeacherAbsent" = false
           AND (
-            ("startsAt" < ${endsAt} AND "endsAt" > ${startsAt})
+            (l."startsAt" < ${endsAt} AND l."endsAt" > ${startsAt})
             OR
             (
-              "isExtra" = false AND "isCatchUp" = false
-              AND EXTRACT(DOW FROM "startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
-              AND "startsAt"::time < ${endsAt}::time
-              AND "endsAt"::time > ${startsAt}::time
+              l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false
+              AND EXTRACT(DOW FROM l."startsAt") = EXTRACT(DOW FROM ${startsAt}::timestamp)
+              AND l."startsAt"::time < ${endsAt}::time
+              AND l."endsAt"::time > ${startsAt}::time
             )
           )
         LIMIT 1
@@ -1396,6 +1408,9 @@ export const createLesson = async (
       endTime: data.endTime,
       startsAt,
       endsAt,
+      isExtra,
+      isCatchUp,
+      isFree,
     });
     if (conflict) {
       return { success: false, error: true, message: conflict };
@@ -1648,6 +1663,9 @@ export const updateLesson = async (
       excludeId: lessonId,
       startsAt,
       endsAt,
+      isExtra,
+      isCatchUp,
+      isFree,
     });
     if (conflict) {
       return { success: false, error: true, message: conflict };
@@ -2874,8 +2892,16 @@ export async function searchCatchUpCandidatesAction(
                 pricePerCycle: true,
                 isFormation: true,
                 teacher: {
-                  select: { id: true, name: true },
+                  select: {
+                    id: true,
+                    name: true,
+                    TeacherPayRate: {
+                      orderBy: { effectiveFrom: "desc" },
+                      take: 1,
+                    },
+                  },
                 },
+                teacherClassRates: true,
                 lessons: {
                   where: {
                     id: { not: currentLessonId },
@@ -2996,6 +3022,14 @@ export async function searchCatchUpCandidatesAction(
         const vCatchUps = (s.catchUpAttendances || []).filter(
           (cu: any) => cu.missedLesson?.classId === cls.id
         );
+        const teacherClassOverride = (cls.teacherClassRates as any[])?.find(
+          (tcr: any) => tcr.teacherId === cls.teacher?.id
+        )?.percentage;
+        const teacherPercentage = teacherClassOverride != null
+          ? Number(teacherClassOverride)
+          : cls.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
+            ? Number(cls.teacher.TeacherPayRate[0].percentageOfSessionFee)
+            : null;
         const metrics = computeStudentCreditAndSessions({
           pricePerCycle: Number(cls.pricePerCycle || 0),
           isFormation: Boolean(cls.isFormation),
@@ -3008,6 +3042,7 @@ export async function searchCatchUpCandidatesAction(
           creditResetOffset: Number(enr.creditResetOffset || 0),
           attendances: vAtts,
           catchUps: vCatchUps,
+          teacherPercentage,
         });
         classCreditsMap.set(cls.id, metrics.netSessions);
       });
@@ -4099,9 +4134,15 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
                 classId: payload.classId,
                 paymentType: "FORMATION",
                 isVoided: false,
+                isRefund: false,
               },
+              include: { refunds: true },
             });
-            const prevPaid = prevVouchers.reduce((s, v) => s + Number(v.amount || 0), 0);
+            const prevPaid = prevVouchers.reduce((s, v) => {
+              const paid = Number(v.amount || 0);
+              const refunded = (v.refunds || []).reduce((rSum, r) => rSum + Number(r.amount || 0), 0);
+              return s + Math.max(0, paid - refunded);
+            }, 0);
             const remaining = Math.max(0, fullPrice - (prevPaid + amt));
             if (remaining > 0) {
               isPartial = true;
@@ -4112,6 +4153,13 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
             );
             if (activePartial) {
               completesVoucherIdVal = activePartial.id;
+              await tx.voucher.update({
+                where: { id: activePartial.id },
+                data: {
+                  remainingBalance: remaining > 0 ? new Prisma.Decimal(remaining) : new Prisma.Decimal(0),
+                  isPartial: remaining > 0,
+                },
+              });
             }
           }
         }
@@ -5271,8 +5319,17 @@ export const transferEnrollmentCredit = async (
         throw new Error("لا يوجد رصيد متبقي قابل للتحويل في هذا الفوج. / Aucun solde restant transférable dans ce groupe.");
       }
 
-      // Always transfer the entire remaining balance
-      finalTransferredSessions = availableSessionsFrom;
+      // User can transfer any amount of available credit of the student (1 to availableSessionsFrom)
+      const requestedSessions = Number(transferredSessions);
+      if (isNaN(requestedSessions) || requestedSessions < 1) {
+        throw new Error("يرجى إدخال عدد حصص صحيح للتحويل. / Veuillez spécifier un nombre valide de séances à transférer.");
+      }
+      if (requestedSessions > availableSessionsFrom) {
+        throw new Error(
+          `لا يمكن تحويل أكثر من الرصيد المتاح (${availableSessionsFrom} حصص). / Impossible de transférer plus que le solde disponible (${availableSessionsFrom} séances).`
+        );
+      }
+      finalTransferredSessions = requestedSessions;
 
       // Calculate unit session price
       const transferWithAmount = (fromEnrollment.transfersTo || []).find(
@@ -5305,11 +5362,13 @@ export const transferEnrollmentCredit = async (
         },
       });
 
-      // Mark fromEnrollment as TRANSFERRED
-      await tx.enrollment.update({
-        where: { id: fromEnrollment.id },
-        data: { status: "TRANSFERRED" },
-      });
+      // Mark fromEnrollment as TRANSFERRED only if all available sessions were transferred
+      if (finalTransferredSessions >= availableSessionsFrom) {
+        await tx.enrollment.update({
+          where: { id: fromEnrollment.id },
+          data: { status: "TRANSFERRED" },
+        });
+      }
     });
 
     try {
@@ -5337,7 +5396,7 @@ export const transferEnrollmentCredit = async (
     return {
       success: true,
       error: false,
-      message: `تم تحويل كامل الرصيد المتبقي (${finalTransferredSessions} حصص) من ${fromEnrollment.class.name} إلى ${toClass.name} بنجاح.${branchTransferNote}${unenrollNote}`,
+      message: `تم تحويل ${finalTransferredSessions} حصص من ${fromEnrollment.class.name} إلى ${toClass.name} بنجاح.${branchTransferNote}${unenrollNote}`,
     };
   } catch (err: any) {
     console.error("transferEnrollmentCredit error:", err);
@@ -5856,10 +5915,10 @@ export const createRefund = async (
     // Calculate sum of existing refunds
     const totalRefundedSoFar = voucher.refunds.reduce((sum, r) => sum + Number(r.amount), 0);
     const voucherAmount = Number(voucher.amount);
-    const remainingBalance = Number(voucher.remainingBalance ?? (voucherAmount - totalRefundedSoFar));
+    const unrefundedVoucherMoney = Math.max(0, voucherAmount - totalRefundedSoFar);
 
     // Validation 1: Cannot refund an already fully refunded or voided voucher
-    if (voucher.isVoided || remainingBalance <= 0) {
+    if (voucher.isVoided || unrefundedVoucherMoney <= 0) {
       return {
         success: false,
         error: true,
@@ -6084,7 +6143,7 @@ export const createRefund = async (
         const pricePerSession = voucherAmount / 4;
         maxRefundableByConsumption = Math.round(unconsumedInCycle * pricePerSession);
       }
-      const maxRefundable = Math.min(remainingBalance, maxRefundableByConsumption);
+      const maxRefundable = Math.min(unrefundedVoucherMoney, maxRefundableByConsumption);
 
       if (maxRefundable <= 0) {
         return {
@@ -6103,16 +6162,16 @@ export const createRefund = async (
       }
     } else {
       // For non-class vouchers (e.g. workshops), validate against remaining balance only
-      if (data.amount > remainingBalance) {
+      if (data.amount > unrefundedVoucherMoney) {
         return {
           success: false,
           error: true,
-          message: `مبلغ الاسترداد (${data.amount.toLocaleString()} دج) يتجاوز الرصيد المتبقي المتاح للاسترداد (${remainingBalance.toLocaleString()} دج).`,
+          message: `مبلغ الاسترداد (${data.amount.toLocaleString()} دج) يتجاوز الرصيد المتبقي المتاح للاسترداد (${unrefundedVoucherMoney.toLocaleString()} دج).`,
         };
       }
     }
 
-    const newRemainingBalance = remainingBalance - data.amount;
+    const newRemainingBalance = unrefundedVoucherMoney - data.amount;
     const newOriginalAmount = Math.max(0, voucherAmount - data.amount);
     const isFullRefund = newRemainingBalance <= 0 || newOriginalAmount <= 0;
     const userIdentifier = session.userId || "admin";
@@ -6263,7 +6322,7 @@ export const createRefund = async (
           editedBy: userIdentifier,
           editedAt: new Date(),
           fieldName: isFullRefund ? "refund_full" : "refund_partial",
-          oldValue: `الرصيد المتبقي: ${remainingBalance.toLocaleString()} دج`,
+          oldValue: `الرصيد المتبقي: ${unrefundedVoucherMoney.toLocaleString()} دج`,
           newValue: `الرصيد المتبقي: ${Math.max(0, newRemainingBalance).toLocaleString()} دج (استرداد ${data.amount.toLocaleString()} دج عبر وصل استرداد #${refundVoucherNumber})`,
           reason: data.reason.trim(),
         },
@@ -6286,7 +6345,7 @@ export const createRefund = async (
           branchId: voucher.targetBranchId,
           userId: userIdentifier,
           userName: userIdentifier,
-          oldValue: String(remainingBalance),
+          oldValue: String(unrefundedVoucherMoney),
           newValue: String(Math.max(0, newRemainingBalance)),
           details: `استرداد ${isFullRefund ? "كامل" : "جزئي"} بمبلغ ${data.amount} دج للوصل #${voucher.number}، وتم إصدار وصل استرداد جديد #${refundVoucherNumber}. السبب: ${data.reason.trim()}`,
           timestamp: new Date(),
@@ -7002,6 +7061,15 @@ export const exportToExcel = async (
             where: { id: options.classId },
             include: {
               branch: true,
+              teacherClassRates: true,
+              teacher: {
+                include: {
+                  TeacherPayRate: {
+                    orderBy: { effectiveFrom: "desc" },
+                    take: 1,
+                  },
+                },
+              },
               enrollments: {
                 include: {
                   student: {
@@ -7177,6 +7245,15 @@ export const exportToExcel = async (
                 })
               : null;
 
+            const teacherClassOverride = (classTarget.teacherClassRates as any[])?.find(
+              (tcr: any) => tcr.teacherId === classTarget.teacherId
+            )?.percentage;
+            const teacherPercentage = teacherClassOverride != null
+              ? Number(teacherClassOverride)
+              : (classTarget as any).teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
+                ? Number((classTarget as any).teacher.TeacherPayRate[0].percentageOfSessionFee)
+                : null;
+
             const creditMetrics = computeStudentCreditAndSessions({
               pricePerCycle: Number(classTarget.pricePerCycle || 0),
               isFormation,
@@ -7191,6 +7268,7 @@ export const exportToExcel = async (
               attendances: studentAtts,
               catchUps: classCatchUps,
               lessons: classTarget.lessons as any,
+              teacherPercentage,
             });
 
             const consumed = creditMetrics.attendedSessions;
@@ -7200,6 +7278,14 @@ export const exportToExcel = async (
             let statusText = "غير دافع";
             if (creditMetrics.isNonPayer) {
               statusText = "معفى من الرسوم";
+            } else if (creditMetrics.isSchoolFeesOnly) {
+              if (remaining >= 2) {
+                statusText = `دافع (${remaining} حصص - حصة المدرسة)`;
+              } else if (remaining === 1) {
+                statusText = "حصة واحدة متبقية (حصة المدرسة)";
+              } else {
+                statusText = "غير دافع (حصة المدرسة)";
+              }
             } else if (isWaivedSibling) {
               if (remaining >= 2) {
                 statusText = siblingDiscountPct >= 100
@@ -7269,7 +7355,15 @@ export const exportToExcel = async (
             where: { id: classId },
             include: {
                 branch: true,
-                teacher: true,
+                teacherClassRates: true,
+                teacher: {
+                  include: {
+                    TeacherPayRate: {
+                      orderBy: { effectiveFrom: "desc" },
+                      take: 1,
+                    },
+                  },
+                },
                 level: true,
                 FormationLevel: { include: { Language: true } },
                 vouchers: {
@@ -7571,6 +7665,15 @@ export const exportToExcel = async (
                 (cu: any) => classData.lessons.some((l) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId)
             );
 
+            const teacherClassOverride = (classData.teacherClassRates as any[])?.find(
+              (tcr: any) => tcr.teacherId === classData.teacherId
+            )?.percentage;
+            const teacherPercentage = teacherClassOverride != null
+              ? Number(teacherClassOverride)
+              : (classData.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+                ? Number((classData.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+                : null;
+
             const creditMetrics = computeStudentCreditAndSessions({
                 pricePerCycle: Number(classData.pricePerCycle || 0),
                 isFormation: Boolean(classData.isFormation),
@@ -7585,6 +7688,7 @@ export const exportToExcel = async (
                 attendances: studentAtts,
                 lessons: classData.lessons as any,
                 catchUps: classCatchUps,
+                teacherPercentage,
             });
 
             const paidSessionsCount = isNonPayer

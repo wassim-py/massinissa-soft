@@ -48,6 +48,12 @@ type FormState = {
   student?: any;
 };
 
+type BridgeDevice = {
+  ip: string;
+  port: number;
+  connected: boolean;
+};
+
 const StudentForm = ({
   type,
   data,
@@ -221,6 +227,28 @@ const StudentForm = ({
   const [fpTemplateData, setFpTemplateData] = useState<string | null>(null);
   const fpTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Multi-Device support: detect connected readers from local bridge
+  const [availableDevices, setAvailableDevices] = useState<BridgeDevice[]>([]);
+  const [selectedDeviceIp, setSelectedDeviceIp] = useState<string>("");
+
+  useEffect(() => {
+    fetch("http://127.0.0.1:4375/status", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((resData) => {
+        if (resData?.devices && Array.isArray(resData.devices)) {
+          const list: BridgeDevice[] = resData.devices;
+          setAvailableDevices(list);
+          const alive = list.filter((d) => d.connected);
+          if (alive.length > 0) {
+            setSelectedDeviceIp((prev) => (prev && alive.some((d) => d.ip === prev) ? prev : alive[0].ip));
+          } else if (list.length > 0) {
+            setSelectedDeviceIp((prev) => (prev && list.some((d) => d.ip === prev) ? prev : list[0].ip));
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (type === "update" && data?.id) {
       getStudentFingerprintStatusAction(String(data.id)).then((res) => {
@@ -235,14 +263,24 @@ const StudentForm = ({
   }, [type, data?.id]);
 
   const handleStartFingerprintEnroll = async () => {
-    if (fpTimerRef.current) clearInterval(fpTimerRef.current);
-    setFpIsEnrolling(true);
-    setFpEnrollingStep(0);
-
     const fullName =
       [watchedSurname, watchedName].filter(Boolean).join(" ").trim() ||
       data?.name ||
       "";
+
+    if (!fullName) {
+      toast.warning(
+        locale === "ar"
+          ? "يرجى إدخال اسم ولقب التلميذ أولاً ليظهر اسمه الكامل على شاشة جهاز البصمة."
+          : "Veuillez d'abord saisir le nom et prénom de l'élève pour qu'ils s'affichent sur l'écran du lecteur."
+      );
+      return;
+    }
+
+    if (fpTimerRef.current) clearInterval(fpTimerRef.current);
+    setFpIsEnrolling(true);
+    setFpEnrollingStep(0);
+
     const currentStudentId =
       type === "update" && data?.id ? String(data.id) : null;
 
@@ -278,7 +316,7 @@ const StudentForm = ({
           numData?.globalNumber || data?.globalNumber || 1
         );
 
-        // Start 3-tap hardware enrollment on the School PC's local K50 Pro via 127.0.0.1:4375
+        // Start 3-tap hardware enrollment on the School PC's targeted K50 Pro via 127.0.0.1:4375
         const bridgeStartRes = await fetch("http://127.0.0.1:4375/enroll", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -287,6 +325,7 @@ const StudentForm = ({
             globalNumber: targetGlobalNumber,
             studentName: fullName,
             fingerIndex: 0,
+            deviceIp: selectedDeviceIp || undefined,
           }),
         });
         startData = await bridgeStartRes.json();
@@ -1060,6 +1099,37 @@ const StudentForm = ({
 
       {/* §7.4 Biometric Fingerprint Enrollment Card (ZKTeco K50/ID PRO) */}
       <div className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3.5 space-y-2.5">
+        {/* Multi-Device Selector if more than 1 device is detected */}
+        {availableDevices.length > 1 && !fpIsEnrolling && (
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-white rounded-md border border-gray-200">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium text-gray-700">
+                {locale === "ar" ? "جهاز التسجيل المختار:" : "Lecteur d'enrôlement :"}
+              </span>
+              <select
+                value={selectedDeviceIp}
+                onChange={(e) => setSelectedDeviceIp(e.target.value)}
+                className="text-xs bg-gray-50 border border-gray-300 rounded px-2 py-1 text-gray-800 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              >
+                {availableDevices.map((d, idx) => (
+                  <option key={d.ip} value={d.ip}>
+                    {locale === "ar"
+                      ? `جهاز ${idx + 1} (${d.ip})`
+                      : `Lecteur ${idx + 1} (${d.ip})`}
+                    {d.connected ? "" : " (Hors-ligne)"}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <span className="text-[11px] text-emerald-600 font-medium flex items-center gap-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              {locale === "ar"
+                ? "الأجهزة الأخرى ستواصل تسجيل الحضور تلقائياً"
+                : "Les autres lecteurs continuent la prise de présence"}
+            </span>
+          </div>
+        )}
+
         {fpIsEnrolling ? (
           /* State B: Waiting for 3 real finger taps on K50 Pro */
           <div className="space-y-2">
@@ -1071,12 +1141,12 @@ const StudentForm = ({
                 </span>
                 <span>
                   {locale === "ar"
-                    ? `جاري تسجيل البصمة على جهاز K50 Pro${
+                    ? `جاري تسجيل البصمة على الجهاز ${selectedDeviceIp ? `(${selectedDeviceIp})` : ""}${
                         fpTargetGlobalNumber || data?.globalNumber
                           ? ` (رقم #${fpTargetGlobalNumber || data?.globalNumber})`
                           : ""
                       }...`
-                    : `Enregistrement en cours sur le lecteur K50 Pro${
+                    : `Enregistrement sur le lecteur ${selectedDeviceIp ? `(${selectedDeviceIp})` : ""}${
                         fpTargetGlobalNumber || data?.globalNumber
                           ? ` (ID #${fpTargetGlobalNumber || data?.globalNumber})`
                           : ""

@@ -171,6 +171,24 @@ export async function resolveOrCreateLessonForDate(
         endsAt: targetEndsAt,
       },
     });
+
+    if (baseLesson.lessonGroups && baseLesson.lessonGroups.length > 0) {
+      try {
+        await prisma.lessonGroup.deleteMany({
+          where: { lessonId: unusedSibling.id },
+        });
+        await prisma.lessonGroup.createMany({
+          data: baseLesson.lessonGroups.map((lg) => ({
+            lessonId: unusedSibling.id,
+            classId: lg.classId,
+          })),
+          skipDuplicates: true,
+        });
+      } catch (err) {
+        console.warn("Could not sync lessonGroups to unusedSibling lesson instance:", err);
+      }
+    }
+
     return unusedSibling.id;
   }
 
@@ -227,6 +245,7 @@ export async function findSiblingRecurringLessonIds(
         isExtra: true,
         isCatchUp: true,
         isFree: true,
+        lessonGroups: { select: { classId: true } },
       },
     });
     if (!base || base.isExtra || base.isCatchUp || base.isFree) {
@@ -236,9 +255,17 @@ export async function findSiblingRecurringLessonIds(
     const baseStart = getAlgiersDateInfo(base.startsAt);
     const baseEnd = getAlgiersDateInfo(base.endsAt);
 
+    const allClasses = [
+      base.classId,
+      ...(base.lessonGroups || []).map((lg) => lg.classId),
+    ];
+
     const candidates = await prisma.lesson.findMany({
       where: {
-        classId: base.classId,
+        OR: [
+          { classId: { in: allClasses } },
+          { lessonGroups: { some: { classId: { in: allClasses } } } },
+        ],
         isExtra: false,
         isCatchUp: false,
         isFree: false,

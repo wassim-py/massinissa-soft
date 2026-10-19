@@ -190,11 +190,13 @@ const LessonListPage = async (props: {
     }
     if (selectedBranchId) {
       whereConditions.push(
-        Prisma.sql`(l."branchId" = ${selectedBranchId} OR c."branchId" = ${selectedBranchId} OR cr."branchId" = ${selectedBranchId})`
+        Prisma.sql`(l."branchId" = ${selectedBranchId} OR c."branchId" = ${selectedBranchId} OR cr."branchId" = ${selectedBranchId} OR EXISTS (SELECT 1 FROM "LessonGroup" lg JOIN "Class" c_lg ON c_lg.id = lg."classId" WHERE lg."lessonId" = l.id AND c_lg."branchId" = ${selectedBranchId}))`
       );
     }
     if (selectedLevelId) {
-      whereConditions.push(Prisma.sql`c."levelId" = ${selectedLevelId}`);
+      whereConditions.push(
+        Prisma.sql`(c."levelId" = ${selectedLevelId} OR EXISTS (SELECT 1 FROM "LessonGroup" lg JOIN "Class" c_lg ON c_lg.id = lg."classId" WHERE lg."lessonId" = l.id AND c_lg."levelId" = ${selectedLevelId}))`
+      );
     }
     if (selectedSubjectId) {
       const subjectOrConditions: Prisma.Sql[] = [];

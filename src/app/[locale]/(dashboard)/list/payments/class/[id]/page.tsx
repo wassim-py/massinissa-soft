@@ -47,6 +47,7 @@ const ClassPaymentHistoryPage = async (
     where: { id: classId },
     include: {
       branch: true,
+      teacherClassRates: true,
       teacher: {
         include: {
           TeacherPayRate: {
@@ -57,8 +58,11 @@ const ClassPaymentHistoryPage = async (
       },
       enrollments: {
         where: {
-          status: "ACTIVE",
-          transfersFrom: { none: {} },
+          OR: [
+            { status: "ACTIVE", transfersFrom: { none: {} } },
+            { status: "TRANSFERRED" },
+            { transfersFrom: { some: {} } },
+          ],
         },
         include: {
           student: {
@@ -184,6 +188,25 @@ const ClassPaymentHistoryPage = async (
 
   if (!classData) {
     notFound();
+  }
+
+  // Include multi-group lessons where this class is a participating group via LessonGroup
+  const multiGroupLessons = await prisma.lesson.findMany({
+    where: {
+      lessonGroups: { some: { classId: classData.id } },
+      classId: { not: classData.id },
+      isFree: false,
+    },
+    include: {
+      attendances: true,
+    },
+    orderBy: { startsAt: "asc" },
+  });
+
+  if (multiGroupLessons.length > 0) {
+    classData.lessons = [...classData.lessons, ...multiGroupLessons].sort(
+      (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+    );
   }
 
   // Branch isolation: a branch admin cannot access payments of a class in another branch

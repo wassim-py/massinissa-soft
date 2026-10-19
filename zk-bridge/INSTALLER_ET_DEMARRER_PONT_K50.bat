@@ -4,7 +4,8 @@ title Installation du Pont Biometrique ZKTeco K50 Pro - Massinissa Academy
 color 0B
 
 echo ============================================================================
-echo   MASSINISSA ACADEMY - INSTALLATION DU PONT LOCAL ZKTECO K50 PRO (v3)
+echo   MASSINISSA ACADEMY - INSTALLATION DU PONT LOCAL ZKTECO K50 PRO (v4)
+echo   (Support Multi-Lecteurs & Noms Complets sur Ecran LCD)
 echo ============================================================================
 echo.
 
@@ -24,7 +25,7 @@ set "BRIDGE_DIR=%USERPROFILE%\MassinissaK50Bridge"
 if not exist "%BRIDGE_DIR%" mkdir "%BRIDGE_DIR%"
 
 copy /Y "%~dp0zk-bridge.js" "%BRIDGE_DIR%\zk-bridge.js" >nul
-echo [OK] Fichier zk-bridge.js (v3 Anti-Veille) installe dans : %BRIDGE_DIR%
+echo [OK] Fichier zk-bridge.js (v4 Multi-Lecteurs) installe dans : %BRIDGE_DIR%
 
 :: 3. Demander les adresses IP des lecteurs K50 Pro (par defaut 192.168.50.201)
 set "DEVICE_IPS=192.168.50.201"
@@ -61,9 +62,10 @@ wscript.exe "%STARTUP_VBS%"
 echo.
 echo ============================================================================
 echo   INSTALLATION TERMINEE AVEC SUCCES !
-echo   - Le Pont ZKTeco K50 Pro (v3 Anti-Veille) tourne en arriere-plan (127.0.0.1:4375)
+echo   - Le Pont ZKTeco K50 Pro (v4 Multi-Lecteurs) tourne en arriere-plan (127.0.0.1:4375)
 echo   - Lecteur(s) configure(s) : %DEVICE_IPS%:4370
-echo   - Maintien de session actif toutes les 8 secondes (0 deconnexion d'inactivite).
+echo   - Enrolement cible & Prise de presence continue sur les autres lecteurs.
+echo   - Noms complets des eleves transliteres affiches sur l'ecran LCD.
 echo ============================================================================
 echo.
 pause

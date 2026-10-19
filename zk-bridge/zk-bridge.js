@@ -94,6 +94,7 @@ const state = {
   isSyncing: false,
   enrollment: {
     active: false,
+    enrollingDeviceIp: null,
     globalNumber: 0,
     studentId: null,
     studentName: "",
@@ -192,21 +193,137 @@ function makeCommKey(key, sessionId, ticks = 50) {
   return buf;
 }
 
-function toAsciiName(name, globalNumber) {
-  const cleaned = String(name || "")
+/**
+ * Translates/formats student names into clean, readable Latin ASCII (max 23 chars)
+ * for display on ZKTeco K50 TFT LCD screens.
+ * - Preserves Latin/French names and cleans accents.
+ * - Accurately transliterates Algerian Arabic names and prefixes phonetically.
+ * - Prevents the device from displaying "Student #..." when names are in Arabic or have accents.
+ */
+function formatDeviceStudentName(rawName, globalNumber) {
+  if (!rawName || typeof rawName !== "string") {
+    return `ID #${globalNumber}`;
+  }
+
+  let text = rawName.trim();
+  if (!text) return `ID #${globalNumber}`;
+
+  // Check if string contains Arabic characters
+  const hasArabic = /[\u0600-\u06FF]/.test(text);
+
+  if (hasArabic) {
+    // 1. Strip Tashkeel (harakat), Tatweel (kashida), and Quranic marks
+    text = text
+      .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, "")
+      .replace(/[\u0640]/g, "");
+
+    // 2. Normalize common Algerian prefixes and composite religious names
+    text = text
+      .replace(/عبد\s*الله/g, "Abdallah")
+      .replace(/عبد\s*الرحمن/g, "Abdelrahman")
+      .replace(/عبد\s*الرحمان/g, "Abdelrahman")
+      .replace(/عبد\s*القادر/g, "Abdelkader")
+      .replace(/عبد\s*الكريم/g, "Abdelkarim")
+      .replace(/عبد\s*العزيز/g, "Abdelaziz")
+      .replace(/عبد\s*المالك/g, "Abdelmalek")
+      .replace(/عبد\s*الحميد/g, "Abdelhamid")
+      .replace(/عبد\s*الحليم/g, "Abdelhalim")
+      .replace(/عبد\s*الرزاق/g, "Abderrezak")
+      .replace(/عبد\s*الرؤوف/g, "Abderraouf")
+      .replace(/عبد\s*النور/g, "Abdennour")
+      .replace(/عبد\s*المؤمن/g, "Abdelmoumen")
+      .replace(/عبد\s*الحق/g, "Abdelhak")
+      .replace(/عبد\s*المجيد/g, "Abdelmadjid")
+      .replace(/عبد\s*الوهاب/g, "Abdelwahab")
+      .replace(/عبد\s*اللطيف/g, "Abdellatif")
+      .replace(/عبد\s*/g, "Abd ")
+      .replace(/بن\s*/g, "Ben ")
+      .replace(/بو\s*/g, "Bou ")
+      .replace(/ولد\s*/g, "Ould ")
+      .replace(/أيت\s*|ايت\s*/g, "Ait ")
+      .replace(/بل\s*/g, "Bel ")
+      .replace(/ال\s*/g, "El ");
+
+    // 3. Common Algerian / Arabic Names dictionary for perfect phonetic French/English spelling
+    const nameMap = {
+      "محمد": "Mohamed", "محمود": "Mahmoud", "احمد": "Ahmed", "أحمد": "Ahmed",
+      "علي": "Ali", "عمر": "Omar", "عثمان": "Othmane", "يوسف": "Youssef",
+      "يونس": "Younes", "ياسين": "Yassine", "يحيى": "Yahia", "ابراهيم": "Ibrahim",
+      "إبراهيم": "Ibrahim", "اسماعيل": "Ismail", "إسماعيل": "Ismail", "ايوب": "Ayoub",
+      "أيوب": "Ayoub", "حمزة": "Hamza", "خالد": "Khaled", "وسيم": "Wassim",
+      "تموسي": "Temoussi", "بلقاسم": "Belkacem", "فاطمة": "Fatima", "مريم": "Meryem",
+      "سارة": "Sarah", "خديجة": "Khadidja", "عائشة": "Aicha", "امينة": "Amina",
+      "أمينة": "Amina", "امين": "Amine", "أمين": "Amine", "اسلام": "Islam",
+      "إسلام": "Islam", "ايمن": "Aymen", "أيمن": "Aymen", "انور": "Anouar",
+      "أنور": "Anouar", "مهدي": "Mehdi", "كريم": "Karim", "رياض": "Riad",
+      "وليد": "Walid", "بلال": "Bilal", "طه": "Taha", "سامي": "Sami",
+      "صالح": "Salah", "حسام": "Houssam", "طارق": "Tarek", "مراد": "Mourad",
+      "فارس": "Fares", "حكيم": "Hakim", "عادل": "Adel", "سفيان": "Sofiane",
+      "سمير": "Samir", "رضوان": "Redouane", "نور": "Nour", "هدى": "Houda",
+      "سلمى": "Salma", "رانيا": "Rania", "مروة": "Marwa", "اية": "Aya",
+      "آية": "Aya", "هبة": "Hiba", "زينب": "Zineb", "صفاء": "Safaa",
+      "وئام": "Wiam", "احلام": "Ahlem", "أحلام": "Ahlem", "اسماء": "Asma",
+      "أسماء": "Asma", "شيماء": "Chaimaa", "زهور": "Zohour", "جمال": "Djamel",
+      "جهاد": "Djihad", "جعفر": "Djaafar", "شكيب": "Chakib", "شمس": "Chams",
+      "بشير": "Bachir", "منير": "Mounir", "نذير": "Nadhir", "نبيل": "Nabil",
+      "الياس": "Ilyes", "إلياس": "Ilyes", "زكرياء": "Zakaria", "زكريا": "Zakaria",
+    };
+
+    for (const [ar, lat] of Object.entries(nameMap)) {
+      const reg = new RegExp(`(^|\\s)${ar}(\\s|$)`, "g");
+      text = text.replace(reg, `$1${lat}$2`);
+    }
+
+    // 4. Letter-by-letter transliteration for remaining Arabic characters
+    const charMap = {
+      "أ": "A", "إ": "I", "آ": "A", "ا": "A", "ء": "", "ئ": "Y", "ؤ": "Ou",
+      "ب": "B", "ت": "T", "ث": "Th", "ج": "Dj", "ح": "H", "خ": "Kh",
+      "د": "D", "ذ": "Dh", "ر": "R", "ز": "Z", "س": "S", "ش": "Ch",
+      "ص": "S", "ض": "D", "ط": "T", "ظ": "Dh", "ع": "A", "غ": "Gh",
+      "ف": "F", "ق": "K", "ك": "K", "ل": "L", "م": "M", "ن": "N",
+      "ه": "H", "و": "Ou", "ي": "Y", "ى": "A", "ة": "a"
+    };
+
+    let transliterated = "";
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (charMap[ch] !== undefined) {
+        transliterated += charMap[ch];
+      } else {
+        transliterated += ch;
+      }
+    }
+    text = transliterated;
+  }
+
+  // Decompose any Latin accents (é -> e, etc.) and strip unsupported non-ASCII
+  text = text
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/[^a-zA-Z0-9\s\.\-']/g, "")
+    .replace(/\s+/g, " ")
     .trim();
-  if (!cleaned) return `Student #${globalNumber}`;
-  return cleaned.slice(0, 23);
+
+  if (!text) {
+    return `ID #${globalNumber}`;
+  }
+
+  // Format Title Case: "mohamed benali" -> "Mohamed Benali"
+  text = text
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+
+  // Max 23 characters for ZKTeco 24-byte null-terminated name buffer
+  return text.slice(0, 23);
 }
 
 function buildUser72Packet(uid, name, userId) {
   const buf = Buffer.alloc(72, 0);
   buf.writeUInt16LE(uid & 0xffff, 0);
   buf.writeUInt8(0, 2);
-  buf.write(toAsciiName(name, uid), 11, 24, "ascii");
+  buf.write(formatDeviceStudentName(name, uid), 11, 24, "ascii");
   buf.writeUInt32LE(0, 35);
   buf.writeUInt8(0, 39);
   buf.write("1", 40, 7, "ascii");
@@ -611,7 +728,11 @@ async function syncTemplatesWithCloud(force = false) {
       const key = `${t.globalNumber}_${t.fingerIndex || 0}`;
       const lastSyncedAt = cache[key]?.updatedAt;
 
-      const needsSync = force || !lastSyncedAt || lastSyncedAt !== t.updatedAt;
+      const needsSync =
+        force ||
+        !lastSyncedAt ||
+        lastSyncedAt !== t.updatedAt ||
+        cache[key]?.studentName !== t.studentName;
       if (!needsSync) continue;
 
       const hasRealTemplate = Boolean(
@@ -737,8 +858,12 @@ function scheduleUnrecognizedFingerCheck(delayMs = 220) {
 function handleRealTimeEvent(dev, eventType, payload) {
   dev.lastRxAt = Date.now();
 
-  // 1. Enrollment mode (3 finger taps)
-  if (state.enrollment.active) {
+  // 1. Enrollment mode (3 finger taps on the specific enrolling reader only!)
+  const isEnrollingDevice =
+    state.enrollment.active &&
+    (!state.enrollment.enrollingDeviceIp || dev.ip === state.enrollment.enrollingDeviceIp);
+
+  if (isEnrollingDevice) {
     if (
       eventType === EF_VERIFY ||
       eventType === EF_FPFTR ||
@@ -755,7 +880,7 @@ function handleRealTimeEvent(dev, eventType, payload) {
           enrollment: state.enrollment,
         });
         console.log(
-          `[K50 Enroll] Student #${state.enrollment.globalNumber} -> Tap ${state.enrollment.step}/3`
+          `[K50 Enroll] (${dev.ip}) Student #${state.enrollment.globalNumber} -> Tap ${state.enrollment.step}/3`
         );
       }
       return;
@@ -773,12 +898,13 @@ function handleRealTimeEvent(dev, eventType, payload) {
       if (enrollRes === 0) {
         state.enrollment.step = 3;
         state.enrollment.active = false;
+        state.enrollment.enrollingDeviceIp = null;
         state.enrollment.status = "SUCCESS";
         state.enrollment.message = `Fingerprint enrolled on K50 Pro (#${enrolledNum})!`;
         state.enrollment.updatedAt = Date.now();
-        console.log(`[K50 Enroll] ✓ SUCCESS for Student #${enrolledNum}. Extracting biometric template...`);
+        console.log(`[K50 Enroll] ✓ SUCCESS on ${dev.ip} for Student #${enrolledNum}. Extracting biometric template...`);
 
-        // Automatically extract template from local K50 & persist to cloud
+        // Automatically extract template from local K50 & persist to cloud + sibling devices
         setTimeout(async () => {
           try {
             const tplBuf = await downloadTemplateFromDevice(dev, enrolledNum, fingerIdx, 2000);
@@ -799,6 +925,23 @@ function handleRealTimeEvent(dev, eventType, payload) {
                   `[K50 Cloud Sync] ✓ Template #${enrolledNum} saved to Cloud DB! Will auto-sync across all school branches.`
                 );
               }
+
+              // Immediately push the newly registered template to all other devices connected to this PC!
+              const userPkt = buildUser72Packet(enrolledNum, state.enrollment.studentName, String(enrolledNum));
+              for (const otherDev of devices.values()) {
+                if (otherDev.ip !== dev.ip && isDeviceTrulyAlive(otherDev)) {
+                  try {
+                    sendToDevice(otherDev, CMD_USER_WRQ, userPkt);
+                    await uploadTemplateToDevice(otherDev, enrolledNum, fingerIdx, tplBuf);
+                    sendToDevice(otherDev, CMD_REFRESHDATA);
+                    sendToDevice(otherDev, CMD_STARTVERIFY);
+                    sendToDevice(otherDev, CMD_ENABLEDEVICE);
+                    console.log(`[K50 Multi-Device] ✓ Instant sync of newly registered student #${enrolledNum} to sibling reader ${otherDev.ip}!`);
+                  } catch (pushErr) {
+                    console.warn(`[K50 Multi-Device] Could not push to sibling ${otherDev.ip}:`, pushErr.message);
+                  }
+                }
+              }
             }
           } catch (e) {
             console.error(`[K50 Cloud Sync] Error extracting template after enroll:`, e.message);
@@ -810,12 +953,13 @@ function handleRealTimeEvent(dev, eventType, payload) {
         }, 200);
       } else {
         state.enrollment.active = false;
+        state.enrollment.enrollingDeviceIp = null;
         state.enrollment.status = "FAILED";
         state.enrollment.message =
           "Failed to read finger on K50 Pro (finger already registered or poorly placed). Please try again.";
         state.enrollment.updatedAt = Date.now();
         console.warn(
-          `[K50 Enroll] ✗ FAILED (code=${enrollRes}) for #${enrolledNum}`
+          `[K50 Enroll] ✗ FAILED (code=${enrollRes}) on ${dev.ip} for #${enrolledNum}`
         );
         broadcastSse({
           type: "enroll_progress",
@@ -1023,16 +1167,24 @@ function connectDevice(ip, force = false) {
   });
 }
 
-async function ensureFreshConnectionForEnroll(timeoutMs = 2500) {
-  let needsFreshReconnect = true;
-  for (const dev of devices.values()) {
-    if (isDeviceTrulyAlive(dev) && Date.now() - dev.lastRxAt < 6000) {
-      needsFreshReconnect = false;
-      break;
+async function ensureTargetDeviceReadyForEnroll(targetIp = null, timeoutMs = 2500) {
+  let dev = targetIp && devices.has(targetIp) ? devices.get(targetIp) : null;
+  if (!dev) {
+    for (const d of devices.values()) {
+      if (isDeviceTrulyAlive(d)) {
+        dev = d;
+        break;
+      }
     }
   }
 
-  if (needsFreshReconnect) {
+  if (dev && isDeviceTrulyAlive(dev) && Date.now() - dev.lastRxAt < 6000) {
+    return dev;
+  }
+
+  if (dev) {
+    connectDevice(dev.ip, true);
+  } else {
     for (const ip of CONFIGURED_IPS) {
       connectDevice(ip, true);
     }
@@ -1040,10 +1192,20 @@ async function ensureFreshConnectionForEnroll(timeoutMs = 2500) {
 
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (isAnyDeviceConnected()) return true;
+    if (dev && isDeviceTrulyAlive(dev)) return dev;
+    if (!dev) {
+      for (const d of devices.values()) {
+        if (isDeviceTrulyAlive(d)) return d;
+      }
+    }
     await new Promise((r) => setTimeout(r, 80));
   }
-  return isAnyDeviceConnected();
+
+  if (dev && isDeviceTrulyAlive(dev)) return dev;
+  for (const d of devices.values()) {
+    if (isDeviceTrulyAlive(d)) return d;
+  }
+  return null;
 }
 
 // 1. Reconnection & Zombie-Check Loop every 2.5 seconds
@@ -1187,6 +1349,12 @@ const server = http.createServer((req, res) => {
 
     const connected = isAnyDeviceConnected();
     const drainedScans = state.pendingScans.splice(0, state.pendingScans.length);
+    const devicesList = Array.from(devices.values()).map((d) => ({
+      ip: d.ip,
+      port: DEVICE_PORT,
+      connected: isDeviceTrulyAlive(d),
+      lastRxAt: d.lastRxAt,
+    }));
 
     res.writeHead(200);
     res.end(
@@ -1194,6 +1362,8 @@ const server = http.createServer((req, res) => {
         success: true,
         connected,
         deviceIp: CONFIGURED_IPS.join(","),
+        devices: devicesList,
+        enrollingDeviceIp: state.enrollment.enrollingDeviceIp,
         branchId: state.branchId,
         pendingScans: drainedScans,
         isSyncing: state.isSyncing,
@@ -1223,40 +1393,52 @@ const server = http.createServer((req, res) => {
         const globalNumber = Number(data.globalNumber || 1);
         const fingerIndex = Number(data.fingerIndex || 0);
         const studentName = data.studentName || `Student #${globalNumber}`;
+        const targetIp = data.deviceIp || null;
 
-        const connected = await ensureFreshConnectionForEnroll(2500);
-        if (!connected) {
+        const targetDev = await ensureTargetDeviceReadyForEnroll(targetIp, 2500);
+        if (!targetDev) {
           res.writeHead(200);
           res.end(
             JSON.stringify({
               success: false,
-              message: `Cannot reach K50 Pro (${CONFIGURED_IPS.join(", ")}). Please check that the Ethernet cable is plugged in.`,
+              message: `Cannot reach K50 Pro (${targetIp || CONFIGURED_IPS.join(", ")}). Please check that the Ethernet cable is plugged in.`,
             })
           );
           return;
         }
 
-        sendToAllDevices(CMD_CANCELCAPTURE);
+        // Put target device into enrollment mode ONLY
+        sendToDevice(targetDev, CMD_CANCELCAPTURE);
         const userPkt = buildUser72Packet(
           globalNumber,
           studentName,
           String(globalNumber)
         );
-        sendToAllDevices(CMD_USER_WRQ, userPkt);
+        sendToDevice(targetDev, CMD_USER_WRQ, userPkt);
 
         const delTempBuf = Buffer.alloc(25, 0);
         delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
         delTempBuf.writeUInt8(fingerIndex, 24);
-        sendToAllDevices(CMD_DELETE_USERTEMP, delTempBuf);
+        sendToDevice(targetDev, CMD_DELETE_USERTEMP, delTempBuf);
 
         const enrollBuf = Buffer.alloc(26, 0);
         enrollBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
         enrollBuf.writeUInt8(fingerIndex, 24);
         enrollBuf.writeUInt8(1, 25);
-        sendToAllDevices(CMD_STARTENROLL, enrollBuf);
+        sendToDevice(targetDev, CMD_STARTENROLL, enrollBuf);
+
+        // Put all OTHER connected devices into verify mode so attendance continues uninterrupted!
+        for (const [ip, otherDev] of devices.entries()) {
+          if (ip !== targetDev.ip && isDeviceTrulyAlive(otherDev)) {
+            sendToDevice(otherDev, CMD_CANCELCAPTURE);
+            sendToDevice(otherDev, CMD_STARTVERIFY);
+            sendToDevice(otherDev, CMD_ENABLEDEVICE);
+          }
+        }
 
         state.enrollment = {
           active: true,
+          enrollingDeviceIp: targetDev.ip,
           globalNumber,
           studentId: data.studentId || null,
           studentName,
@@ -1264,7 +1446,7 @@ const server = http.createServer((req, res) => {
           templateData: null,
           step: 0,
           status: "WAITING_FINGER",
-          message: `Place finger 3 times on the K50 Pro reader (ID #${globalNumber})...`,
+          message: `Place finger 3 times on reader ${targetDev.ip} (ID #${globalNumber})...`,
           startedAt: Date.now(),
           updatedAt: Date.now(),
         };
@@ -1274,6 +1456,7 @@ const server = http.createServer((req, res) => {
           JSON.stringify({
             success: true,
             globalNumber,
+            enrollingDeviceIp: targetDev.ip,
             enrollment: state.enrollment,
           })
         );
@@ -1296,12 +1479,22 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    const enrollingIp = state.enrollment.enrollingDeviceIp;
     state.enrollment.active = false;
+    state.enrollment.enrollingDeviceIp = null;
     state.enrollment.status = "CANCELLED";
     state.enrollment.updatedAt = Date.now();
-    sendToAllDevices(CMD_CANCELCAPTURE);
-    sendToAllDevices(CMD_STARTVERIFY);
-    sendToAllDevices(CMD_ENABLEDEVICE);
+
+    if (enrollingIp && devices.has(enrollingIp)) {
+      const dev = devices.get(enrollingIp);
+      sendToDevice(dev, CMD_CANCELCAPTURE);
+      sendToDevice(dev, CMD_STARTVERIFY);
+      sendToDevice(dev, CMD_ENABLEDEVICE);
+    } else {
+      sendToAllDevices(CMD_CANCELCAPTURE);
+      sendToAllDevices(CMD_STARTVERIFY);
+      sendToAllDevices(CMD_ENABLEDEVICE);
+    }
 
     res.writeHead(200);
     res.end(JSON.stringify({ success: true }));

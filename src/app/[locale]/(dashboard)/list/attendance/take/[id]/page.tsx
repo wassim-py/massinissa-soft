@@ -168,6 +168,19 @@ const TakeAttendancePage = async (
     .map((c) => c.name)
     .join(" + ");
 
+  const [teacherRates, classRates] = await Promise.all([
+    l.teacherId
+      ? prisma.teacherPayRate.findMany({
+          where: { teacherId: l.teacherId },
+          orderBy: { effectiveFrom: "desc" },
+          take: 1,
+        })
+      : Promise.resolve([]),
+    prisma.teacherClassRate.findMany({
+      where: { classId: { in: allClassIds } },
+    }),
+  ]);
+
   const lesson = {
     id: l.id,
     name: combinedGroupNames || l.className || (locale === "ar" ? "درس" : "Séance"),
@@ -185,9 +198,15 @@ const TakeAttendancePage = async (
       formationLevelId: l.formationLevelId != null ? Number(l.formationLevelId) : null,
       levelId: l.classLevelId != null ? Number(l.classLevelId) : null,
       branchId: l.classBranchId != null ? Number(l.classBranchId) : (l.branchId != null ? Number(l.branchId) : null),
+      teacherClassRates: classRates,
     },
     subject: { id: l.classId, name: combinedGroupNames || l.className || (locale === "ar" ? "مادة" : "Matière") },
-    teacher: { id: l.teacherId, name: l.teacherName || (locale === "ar" ? "أستاذ" : "Enseignant"), surname: "" },
+    teacher: {
+      id: l.teacherId,
+      name: l.teacherName || (locale === "ar" ? "أستاذ" : "Enseignant"),
+      surname: "",
+      TeacherPayRate: teacherRates,
+    },
     startTime: l.startsAt,
     endTime: l.endsAt,
     isExtra: Boolean(l.isExtra),
@@ -400,26 +419,28 @@ const TakeAttendancePage = async (
 
   let rawStudents: any[] = [];
   try {
-    rawStudents = await prisma.$queryRaw<any[]>`
-      SELECT DISTINCT s.id, s.name, s."globalNumber", s.phone, e."classId" as "enrolledClassId"
+    const candidateEnrollments = await prisma.$queryRaw<any[]>`
+      SELECT s.id, s.name, s."globalNumber", s.phone,
+             e.id as "enrollmentId", e."classId" as "enrolledClassId", e.status as "enrollmentStatus", e."enrolledAt"
       FROM "Student" s
       JOIN "Enrollment" e ON e."studentId" = s.id
       WHERE e."classId" IN (${Prisma.join(allClassIds)})
         AND (e.status IS NULL OR e.status IN ('ACTIVE', 'SUSPENDED'))
-        AND s.id NOT IN (
-          SELECT "studentId" FROM "Enrollment"
-          WHERE "classId" IN (${Prisma.join(allClassIds)})
-            AND status IN ('REFUNDED', 'UNENROLLED', 'TRANSFERRED', 'INACTIVE')
-        )
-      ORDER BY s."globalNumber" ASC, s.name ASC
+      ORDER BY s."globalNumber" ASC, s.name ASC, e."enrolledAt" DESC
     `;
-    // Deduplicate defensively
+    // Deduplicate defensively, prioritizing ACTIVE over SUSPENDED
     const sMap = new Map<string, any>();
-    for (const s of rawStudents) {
-      if (!sMap.has(s.id)) {
-        sMap.set(s.id, {
-          ...s,
-          className: classesMap.get(s.enrolledClassId)?.name || "",
+    for (const row of candidateEnrollments) {
+      const existing = sMap.get(row.id);
+      if (!existing) {
+        sMap.set(row.id, {
+          ...row,
+          className: classesMap.get(row.enrolledClassId)?.name || "",
+        });
+      } else if (existing.enrollmentStatus !== "ACTIVE" && row.enrollmentStatus === "ACTIVE") {
+        sMap.set(row.id, {
+          ...row,
+          className: classesMap.get(row.enrolledClassId)?.name || "",
         });
       }
     }
@@ -473,7 +494,10 @@ const TakeAttendancePage = async (
           attendances: {
             where: {
               lesson: {
-                classId: { in: allClassIds },
+                OR: [
+                  { classId: { in: allClassIds } },
+                  { lessonGroups: { some: { classId: { in: allClassIds } } } },
+                ],
                 isFree: false,
               },
             },
@@ -485,6 +509,7 @@ const TakeAttendancePage = async (
                   isFree: true,
                   isTeacherAbsent: true,
                   classId: true,
+                  lessonGroups: { select: { classId: true } },
                 },
               },
             },
@@ -497,7 +522,10 @@ const TakeAttendancePage = async (
           catchUpAttendances: {
             where: {
               missedLesson: {
-                classId: { in: allClassIds },
+                OR: [
+                  { classId: { in: allClassIds } },
+                  { lessonGroups: { some: { classId: { in: allClassIds } } } },
+                ],
               },
             },
             include: {
@@ -508,6 +536,7 @@ const TakeAttendancePage = async (
                   isFree: true,
                   isTeacherAbsent: true,
                   classId: true,
+                  lessonGroups: { select: { classId: true } },
                 },
               },
             },
@@ -711,14 +740,24 @@ const TakeAttendancePage = async (
         v.status !== "REFUNDED" &&
         Number(v.amount || 0) > 0
     );
-    const isRefunded = enrollmentStatus === "REFUNDED" || (hasRefundRecord && !hasActiveTuitionVoucher);
+    const isRefunded = enrollmentStatus === "REFUNDED";
 
-    const sAttendances = (details?.attendances || []).filter(
-      (a: any) => !a.lesson || a.lesson.classId === studentClassId
-    );
-    const sCatchUps = (details?.catchUpAttendances || []).filter(
-      (cu: any) => !cu.missedLesson || cu.missedLesson.classId === studentClassId
-    );
+    const sAttendances = (details?.attendances || []).filter((a: any) => {
+      if (!a.lesson) return true;
+      const lessonClassIds = [
+        a.lesson.classId,
+        ...(a.lesson.lessonGroups?.map((lg: any) => lg.classId) || []),
+      ];
+      return lessonClassIds.includes(studentClassId);
+    });
+    const sCatchUps = (details?.catchUpAttendances || []).filter((cu: any) => {
+      if (!cu.missedLesson) return true;
+      const missedLessonClassIds = [
+        cu.missedLesson.classId,
+        ...(cu.missedLesson.lessonGroups?.map((lg: any) => lg.classId) || []),
+      ];
+      return missedLessonClassIds.includes(studentClassId);
+    });
 
     return {
       id: s.id,
@@ -728,6 +767,8 @@ const TakeAttendancePage = async (
       surname: "",
       className: studentClass?.name || s.className || "",
       enrolledClassId: studentClassId,
+      pricePerCycle: Number(studentClass?.pricePerCycle || 0),
+      isFormation: Boolean(studentClass?.isFormation),
       payerStatus: effectivePayerStatus,
       enrollmentStatus,
       isSuspended: isSuspendedOrInactive,
@@ -804,6 +845,7 @@ const TakeAttendancePage = async (
           initialSearch={searchQuery}
           studentRelatedData={serializeForClient(studentRelatedData) as any}
           canCreateStudent={canCreateStudent}
+          allClasses={serializeForClient(Array.from(classesMap.values())) as any}
         />
       </CardContent>
     </Card>

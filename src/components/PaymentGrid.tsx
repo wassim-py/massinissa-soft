@@ -44,6 +44,7 @@ export type ExtendedEnrollment = Enrollment & {
 export type ExtendedClass = Class & {
   branch: { id: number; name: string };
   teacher?: { id: string; name: string; TeacherPayRate?: Array<{ percentageOfSessionFee: any }> } | null;
+  teacherClassRates?: Array<{ teacherId: string; percentage: any }>;
   enrollments: ExtendedEnrollment[];
   vouchers: (Voucher & {
     series?: { scope: string; id: number } | null;
@@ -381,6 +382,17 @@ export default function PaymentGrid({
 
     // Tuition cycles & sessions
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
+    const formationVouchers = activeVouchers.filter((v) => v.paymentType === "FORMATION");
+
+    const formationPrice = Number(classData.pricePerCycle || 0);
+    const totalPaidFormation = formationVouchers.reduce((sum: number, v: any) => {
+      const paid = Number(v.amount || 0);
+      const refunded = (v.refunds || []).reduce((rSum: number, r: any) => rSum + Number(r.amount || 0), 0);
+      return sum + Math.max(0, paid - refunded);
+    }, 0);
+    const formationRemaining = Math.max(0, formationPrice - totalPaidFormation);
+    const isFormationPaidInFull = formationPrice > 0 && totalPaidFormation >= formationPrice;
+    const isFormationPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
 
     // Consumed non-free sessions (accounting for Massinissa absence rules)
     const studentAtts: Array<{ lessonId: number; status: string }> = [];
@@ -400,6 +412,15 @@ export default function PaymentGrid({
         classData.lessons.some((l: any) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId)
     );
 
+    const teacherClassOverride = (classData.teacherClassRates as any[])?.find(
+      (tcr: any) => tcr.teacherId === classData.teacherId
+    )?.percentage;
+    const teacherPercentage = teacherClassOverride != null
+      ? Number(teacherClassOverride)
+      : classData.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
+        ? Number(classData.teacher.TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: Number(classData.pricePerCycle || 0),
       isFormation,
@@ -414,6 +435,7 @@ export default function PaymentGrid({
       attendances: studentAtts,
       catchUps: classCatchUps,
       lessons: classData.lessons as any,
+      teacherPercentage,
     });
 
     const purchasedSessions = creditMetrics.purchasedSessions;
@@ -425,7 +447,21 @@ export default function PaymentGrid({
     const netRefundableSessions = creditMetrics.netRefundableSessions;
     const refundableAmount = creditMetrics.refundableAmount;
     const effectiveLessonPrice = creditMetrics.effectiveLessonPrice;
-    const status = creditMetrics.status;
+
+    let computedStatus = creditMetrics.status;
+    if (isFormation) {
+      if (isSiblingWaived100) {
+        computedStatus = "SIBLING_WAIVED";
+      } else if (enrPayerStatus === "NON_PAYER") {
+        computedStatus = "NON_PAYER";
+      } else if (isFormationPaidInFull) {
+        computedStatus = "PAID";
+      } else if (isFormationPartiallyPaid) {
+        computedStatus = "EXPIRING";
+      } else {
+        computedStatus = "UNPAID";
+      }
+    }
 
     const latestVoucher =
       activeVouchers.length > 0
@@ -477,6 +513,13 @@ export default function PaymentGrid({
       isWaivedSibling: isSiblingWaived100,
       hasPayerSibling: isSiblingDiscount,
       tuitionVouchers,
+      formationVouchers,
+      isFormation,
+      formationPrice,
+      totalPaidFormation,
+      formationRemaining,
+      isFormationPaidInFull,
+      isFormationPartiallyPaid,
       purchasedSessions,
       transferredIn,
       transferredOut,
@@ -487,7 +530,8 @@ export default function PaymentGrid({
       netRefundableSessions,
       refundableAmount,
       effectiveLessonPrice,
-      status,
+      status: computedStatus,
+      isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
       bookReceivedCount,
       totalBooks: classBooks.length,
       bookStatus,
@@ -497,6 +541,17 @@ export default function PaymentGrid({
 
   // Filter logic
   const filteredStudents = processedStudents.filter((item) => {
+    const isTransferred =
+      item.enrollment.status === "TRANSFERRED" ||
+      (item.enrollment.transfersFrom &&
+        item.enrollment.transfersFrom.length > 0 &&
+        item.enrollment.status !== "ACTIVE");
+
+    // Transferred students will not show on their first group unless searched up
+    if (isTransferred && !searchTerm.trim()) {
+      return false;
+    }
+
     // Search filter
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase().trim();
@@ -518,12 +573,23 @@ export default function PaymentGrid({
     return true;
   });
 
+  // Active non-transferred students list for KPI counters
+  const activeStudentsList = processedStudents.filter(
+    (item) =>
+      item.enrollment.status !== "TRANSFERRED" &&
+      !(
+        item.enrollment.transfersFrom &&
+        item.enrollment.transfersFrom.length > 0 &&
+        item.enrollment.status !== "ACTIVE"
+      )
+  );
+
   // Counts for summary cards
-  const totalCount = processedStudents.length;
-  const paidCount = processedStudents.filter((s) => s.status === "PAID").length;
-  const expiringCount = processedStudents.filter((s) => s.status === "EXPIRING").length;
-  const unpaidCount = processedStudents.filter((s) => s.status === "UNPAID").length;
-  const siblingWaivedCount = processedStudents.filter((s) => s.status === "SIBLING_WAIVED").length;
+  const totalCount = activeStudentsList.length;
+  const paidCount = activeStudentsList.filter((s) => s.status === "PAID").length;
+  const expiringCount = activeStudentsList.filter((s) => s.status === "EXPIRING").length;
+  const unpaidCount = activeStudentsList.filter((s) => s.status === "UNPAID").length;
+  const siblingWaivedCount = activeStudentsList.filter((s) => s.status === "SIBLING_WAIVED").length;
 
   const handleOpenTransfer = (item: any) => {
     const availableBalance = Math.max(0, item.netRefundableSessions ?? item.refundableSessions ?? item.netSessions);
@@ -532,13 +598,18 @@ export default function PaymentGrid({
       enrollment: item.enrollment,
       maxSessions: availableBalance,
     });
-    setSessionsToTransfer(availableBalance);
+    setSessionsToTransfer(Math.min(1, availableBalance));
     setTargetClassId("");
     setTransferNotes("");
   };
 
   const handleExecuteTransfer = () => {
-    if (!transferModal.enrollment || !targetClassId || sessionsToTransfer < 1) {
+    if (
+      !transferModal.enrollment ||
+      !targetClassId ||
+      sessionsToTransfer < 1 ||
+      sessionsToTransfer > transferModal.maxSessions
+    ) {
       toast.error(t("invalidTransferError"));
       return;
     }
@@ -623,6 +694,10 @@ export default function PaymentGrid({
         const hasNeverAttended = (item.attendedSessions ?? 0) === 0;
         maxRefundable = hasNeverAttended ? rem : 0;
         canRefund = !v.isRefund && !isVoidedOrRefunded && rem > 0 && hasNeverAttended;
+        recordUnconsumedInCycle = undefined;
+      } else if (v.paymentType === "FORMATION") {
+        maxRefundable = rem;
+        canRefund = !v.isRefund && !isVoidedOrRefunded && rem > 0;
         recordUnconsumedInCycle = undefined;
       } else {
         const isMostRecentCycle = Boolean(mostRecentActiveCycle && mostRecentActiveCycle.id === v.id);
@@ -855,11 +930,21 @@ export default function PaymentGrid({
 
   const renderRow = (item: typeof processedStudents[0], index: number) => {
     const s = item.student;
+    const isTransferred =
+      item.enrollment.status === "TRANSFERRED" ||
+      (item.enrollment.transfersFrom &&
+        item.enrollment.transfersFrom.length > 0 &&
+        item.enrollment.status !== "ACTIVE");
+
     return (
       <tr
         key={`${s.id}-${index}`}
         className={`hover:bg-surface-subtle/50 transition-colors ${
-          item.status === "UNPAID" ? "bg-danger-light/20" : ""
+          isTransferred
+            ? "bg-pink-50/70 hover:bg-pink-100/70"
+            : item.status === "UNPAID"
+            ? "bg-danger-light/20"
+            : ""
         }`}
       >
         {/* 1. Global Student ID */}
@@ -876,6 +961,11 @@ export default function PaymentGrid({
             >
               {s.name}
             </Link>
+            {isTransferred && (
+              <Badge variant="neutral" size="sm" className="bg-pink-100 text-pink-700 border-pink-300 font-bold">
+                {locale === "ar" ? "محول" : "Transféré"}
+              </Badge>
+            )}
             {((item.enrollment as any)?.payerStatus || (s as any)?.payerStatus) === "NON_PAYER" && (
               <Badge variant="success" size="sm">
                 {locale === "ar" ? "معفى" : "Non-payeur"}
@@ -950,12 +1040,44 @@ export default function PaymentGrid({
           </td>
         )}
 
-        {/* 6. Session Credit Balance */}
+        {/* 6. Session Credit / Monetary Balance */}
         <td className="py-3 px-3 text-center">
-          {item.status === "NON_PAYER" ? (
-            <Badge variant="success" size="sm">
-              {locale === "ar" ? "معفى" : "Exonéré"}
+          {item.status === "NON_PAYER" || item.status === "SIBLING_WAIVED" ? (
+            <Badge variant={item.status === "NON_PAYER" ? "success" : "secondary"} size="sm">
+              {item.status === "NON_PAYER"
+                ? (locale === "ar" ? "معفى" : "Exonéré")
+                : (locale === "ar" ? "أخ دافع" : "Remise fratrie")}
             </Badge>
+          ) : item.isFormation ? (
+            <div className="flex flex-col items-center gap-0.5">
+              <Badge
+                variant={
+                  item.isFormationPaidInFull
+                    ? "success"
+                    : item.isFormationPartiallyPaid
+                    ? "warning"
+                    : "danger"
+                }
+                size="sm"
+              >
+                {item.isFormationPaidInFull
+                  ? (locale === "ar" ? "خالص" : "Payé en totalité")
+                  : item.isFormationPartiallyPaid
+                  ? (locale === "ar"
+                      ? `متبقي ${item.formationRemaining.toLocaleString("ar-DZ")} دج`
+                      : `Reste ${item.formationRemaining.toLocaleString("fr-DZ")} DZD`)
+                  : (locale === "ar"
+                      ? `غير مدفوع (${item.formationPrice.toLocaleString("ar-DZ")} دج)`
+                      : `Non payé (${item.formationPrice.toLocaleString("fr-DZ")} DZD)`)}
+              </Badge>
+              {item.totalPaidFormation > 0 && !item.isFormationPaidInFull && (
+                <span className="text-[10px] text-muted font-medium">
+                  {locale === "ar"
+                    ? `مدفوع: ${item.totalPaidFormation.toLocaleString("ar-DZ")} دج`
+                    : `Payé: ${item.totalPaidFormation.toLocaleString("fr-DZ")} DZD`}
+                </span>
+              )}
+            </div>
           ) : (
             <div className="flex flex-col items-center gap-0.5">
               <Badge
@@ -972,14 +1094,19 @@ export default function PaymentGrid({
                   count: item.netSessions,
                 })}
               </Badge>
+              {item.isSchoolFeesOnly && (
+                <span className="text-[10px] text-amber-700 font-medium">
+                  {locale === "ar" ? "حصة المدرسة" : "Part école"}
+                </span>
+              )}
               {item.hasPayerSibling && (
                 <span className="text-[10px] text-muted font-medium">
-                  {locale === "ar" ? "إعفاء إخوة" : "Remise fratrie"}
+                  {locale === "ar" ? "أخ دافع" : "Remise fratrie"}
                 </span>
               )}
             </div>
           )}
-          {item.transferredIn > 0 && (
+          {item.transferredIn > 0 && !item.isFormation && (
             <span
               className="block text-[10px] text-purple-700 font-medium mt-0.5"
               title={
@@ -997,51 +1124,53 @@ export default function PaymentGrid({
 
         {/* 7. Status Badge */}
         <td className="py-3 px-3 text-center">
-          {item.status === "PAID" && (
+          {isTransferred ? (
+            <Badge variant="neutral" size="sm" withDot className="bg-pink-100 text-pink-700 border-pink-300 font-bold">
+              {locale === "ar" ? "محول" : "Transféré"}
+            </Badge>
+          ) : item.status === "PAID" ? (
             <Badge variant="success" size="sm" withDot>
-              {t("paid")}
+              {item.isFormation ? (locale === "ar" ? "خالص" : "Payé") : t("paid")}
             </Badge>
-          )}
-          {item.status === "EXPIRING" && (
+          ) : item.status === "EXPIRING" ? (
             <Badge variant="warning" size="sm" withDot>
-              {t("expiringOneLeft")}
+              {item.isFormation ? (locale === "ar" ? "دفع جزئي" : "Paiement partiel") : t("expiringOneLeft")}
             </Badge>
-          )}
-          {item.status === "UNPAID" && (
+          ) : item.status === "UNPAID" ? (
             <Badge variant="danger" size="sm" withDot>
               {t("unpaid")}
             </Badge>
-          )}
-          {item.status === "SIBLING_WAIVED" && (
+          ) : item.status === "SIBLING_WAIVED" ? (
             <Badge variant="secondary" size="sm" withDot>
               {t("siblingWaived")}
             </Badge>
-          )}
-          {item.status === "NON_PAYER" && (
+          ) : item.status === "NON_PAYER" ? (
             <Badge variant="success" size="sm" withDot>
               {locale === "ar" ? "معفى من الرسوم" : "Non-payeur"}
             </Badge>
-          )}
+          ) : null}
         </td>
 
         {/* 8. Actions */}
         <td className="py-3 px-3 text-center">
           <div className="flex items-center justify-center gap-1.5 flex-wrap">
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() =>
-                setVoucherModal({
-                  isOpen: true,
-                  student: s,
-                  type: "create",
-                })
-              }
-              title={t("newVoucherTooltip")}
-            >
-              {t("voucherShort")}
-            </Button>
-            {(item.netRefundableSessions ?? item.netSessions) > 0 && (
+            {!isTransferred && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() =>
+                  setVoucherModal({
+                    isOpen: true,
+                    student: s,
+                    type: "create",
+                  })
+                }
+                title={t("newVoucherTooltip")}
+              >
+                {t("voucherShort")}
+              </Button>
+            )}
+            {!isTransferred && (item.netRefundableSessions ?? item.netSessions) > 0 && (
               <Button
                 variant="outline"
                 size="sm"
@@ -1060,7 +1189,7 @@ export default function PaymentGrid({
             >
               {t("modificationRecords")}
             </Button>
-            {item.latestVoucher && (
+            {!isTransferred && item.latestVoucher && (
               <PrintTicketButton
                 voucher={{
                   ...item.latestVoucher,
@@ -1172,16 +1301,26 @@ export default function PaymentGrid({
           {filteredStudents.length > 0 ? (
             filteredStudents.map((item, index) => {
               const s = item.student;
+              const isTransferred =
+                item.enrollment.status === "TRANSFERRED" ||
+                (item.enrollment.transfersFrom &&
+                  item.enrollment.transfersFrom.length > 0 &&
+                  item.enrollment.status !== "ACTIVE");
+
               return (
                 <Card
                   key={`${s.id}-${index}`}
                   className={`p-4 border shadow-xs space-y-3 ${
-                    item.status === "UNPAID" ? "border-danger-soft bg-danger-light/10" : "border-border"
+                    isTransferred
+                      ? "bg-pink-50/70 border-pink-200"
+                      : item.status === "UNPAID"
+                      ? "border-danger-soft bg-danger-light/10"
+                      : "border-border"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs font-mono text-muted font-bold bg-surface-muted px-1.5 py-0.5 rounded border border-border">
                           #{s.globalNumber ?? (index + 1)}
                         </span>
@@ -1191,6 +1330,11 @@ export default function PaymentGrid({
                         >
                           {s.name}
                         </Link>
+                        {isTransferred && (
+                          <Badge variant="neutral" size="sm" className="bg-pink-100 text-pink-700 border-pink-300 font-bold">
+                            {locale === "ar" ? "محول" : "Transféré"}
+                          </Badge>
+                        )}
                         {item.transferredIn > 0 && (
                           <Badge
                             variant="secondary"
@@ -1217,41 +1361,73 @@ export default function PaymentGrid({
                         )}
                       </div>
                     </div>
-                    {item.status === "PAID" && (
+                    {isTransferred ? (
+                      <Badge variant="neutral" size="sm" withDot className="bg-pink-100 text-pink-700 border-pink-300 font-bold">
+                        {locale === "ar" ? "محول" : "Transféré"}
+                      </Badge>
+                    ) : item.status === "PAID" ? (
                       <Badge variant="success" size="sm" withDot>
-                        {t("paid")}
+                        {item.isFormation ? (locale === "ar" ? "خالص" : "Payé") : t("paid")}
                       </Badge>
-                    )}
-                    {item.status === "EXPIRING" && (
+                    ) : item.status === "EXPIRING" ? (
                       <Badge variant="warning" size="sm" withDot>
-                        {t("expiringOneLeft")}
+                        {item.isFormation ? (locale === "ar" ? "دفع جزئي" : "Paiement partiel") : t("expiringOneLeft")}
                       </Badge>
-                    )}
-                    {item.status === "UNPAID" && (
+                    ) : item.status === "UNPAID" ? (
                       <Badge variant="danger" size="sm" withDot>
                         {t("unpaid")}
                       </Badge>
-                    )}
-                    {item.status === "SIBLING_WAIVED" && (
+                    ) : item.status === "SIBLING_WAIVED" ? (
                       <Badge variant="secondary" size="sm" withDot>
                         {t("siblingWaived")}
                       </Badge>
-                    )}
-                    {item.status === "NON_PAYER" && (
+                    ) : item.status === "NON_PAYER" ? (
                       <Badge variant="success" size="sm" withDot>
                         {locale === "ar" ? "معفى من الرسوم" : "Non-payeur"}
                       </Badge>
-                    )}
+                    ) : null}
                   </div>
 
                   {/* Metrics Row without Consumed Lessons */}
                   <div className="grid grid-cols-2 gap-2 bg-surface-muted p-2.5 rounded-lg text-center text-xs">
                     <div>
                       <span className="text-[10px] text-muted block mb-0.5">{t("remainingBalance")}</span>
-                      {item.status === "NON_PAYER" ? (
-                        <Badge variant="success" size="sm">
-                          {locale === "ar" ? "معفى" : "Exonéré"}
+                      {item.status === "NON_PAYER" || item.status === "SIBLING_WAIVED" ? (
+                        <Badge variant={item.status === "NON_PAYER" ? "success" : "secondary"} size="sm">
+                          {item.status === "NON_PAYER"
+                            ? (locale === "ar" ? "معفى" : "Exonéré")
+                            : (locale === "ar" ? "أخ دافع" : "Remise fratrie")}
                         </Badge>
+                      ) : item.isFormation ? (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <Badge
+                            variant={
+                              item.isFormationPaidInFull
+                                ? "success"
+                                : item.isFormationPartiallyPaid
+                                ? "warning"
+                                : "danger"
+                            }
+                            size="sm"
+                          >
+                            {item.isFormationPaidInFull
+                              ? (locale === "ar" ? "خالص" : "Payé en totalité")
+                              : item.isFormationPartiallyPaid
+                              ? (locale === "ar"
+                                  ? `متبقي ${item.formationRemaining.toLocaleString("ar-DZ")} دج`
+                                  : `Reste ${item.formationRemaining.toLocaleString("fr-DZ")} DZD`)
+                              : (locale === "ar"
+                                  ? `غير مدفوع (${item.formationPrice.toLocaleString("ar-DZ")} دج)`
+                                  : `Non payé (${item.formationPrice.toLocaleString("fr-DZ")} DZD)`)}
+                          </Badge>
+                          {item.totalPaidFormation > 0 && !item.isFormationPaidInFull && (
+                            <span className="text-[10px] text-muted font-medium">
+                              {locale === "ar"
+                                ? `مدفوع: ${item.totalPaidFormation.toLocaleString("ar-DZ")} دج`
+                                : `Payé: ${item.totalPaidFormation.toLocaleString("fr-DZ")} DZD`}
+                            </span>
+                          )}
+                        </div>
                       ) : (
                         <div className="flex flex-col items-center gap-0.5">
                           <Badge
@@ -1266,9 +1442,14 @@ export default function PaymentGrid({
                           >
                             {t("sessionsCount", { count: item.netSessions })}
                           </Badge>
+                          {item.isSchoolFeesOnly && (
+                            <span className="text-[10px] text-amber-700 font-medium">
+                              {locale === "ar" ? "حصة المدرسة" : "Part école"}
+                            </span>
+                          )}
                           {item.hasPayerSibling && (
                             <span className="text-[10px] text-muted font-medium">
-                              {locale === "ar" ? "إعفاء إخوة" : "Remise fratrie"}
+                              {locale === "ar" ? "أخ دافع" : "Remise fratrie"}
                             </span>
                           )}
                         </div>
@@ -1309,21 +1490,23 @@ export default function PaymentGrid({
 
                   {/* Mobile Actions */}
                   <div className="flex items-center gap-1.5 pt-2 border-t border-border flex-wrap">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="flex-1"
-                      onClick={() =>
-                        setVoucherModal({
-                          isOpen: true,
-                          student: s,
-                          type: "create",
-                        })
-                      }
-                    >
-                      {t("voucherShort")}
-                    </Button>
-                    {item.netSessions > 0 && (
+                    {!isTransferred && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() =>
+                          setVoucherModal({
+                            isOpen: true,
+                            student: s,
+                            type: "create",
+                          })
+                        }
+                      >
+                        {t("voucherShort")}
+                      </Button>
+                    )}
+                    {!isTransferred && item.netSessions > 0 && (
                       <Button
                         variant="outline"
                         size="sm"

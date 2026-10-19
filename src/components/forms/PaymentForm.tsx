@@ -39,6 +39,7 @@ const PaymentForm = ({
   initialNotes,
   isRetake,
   isBookPaid,
+  onSuccess,
 }: {
   student: ExtendedStudent;
   classData: Class | any;
@@ -51,6 +52,7 @@ const PaymentForm = ({
   initialNotes?: string;
   isRetake?: boolean;
   isBookPaid?: boolean;
+  onSuccess?: (bundle?: any) => void;
 }) => {
   const router = useRouter();
   const t = useTranslations("payments");
@@ -252,6 +254,7 @@ const PaymentForm = ({
       if (res.success && res.bundle) {
         toast.success(res.message);
         setIssuedBundle(res.bundle);
+        onSuccess?.(res.bundle);
         startTransition(() => {
           router.refresh();
         });
@@ -308,6 +311,7 @@ const PaymentForm = ({
     if (updateState?.success) {
       toast.success(updateState.message);
       setOpen(false);
+      onSuccess?.();
       startTransition(() => {
         router.refresh();
       });

@@ -413,7 +413,11 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
     } | null>(null);
 
     const filteredStudents = useMemo(() => {
-        if (!searchQuery.trim()) return students;
+        const hasSearch = Boolean(searchQuery.trim());
+        if (!hasSearch) {
+            // Transferred students do not show in their first group unless searched up
+            return students.filter((student) => !student.isTransferred);
+        }
         const q = searchQuery.toLowerCase().trim();
         return students.filter((student) => {
             const nameMatch = student.name?.toLowerCase().includes(q);
@@ -474,7 +478,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         <span className="px-2.5 py-1 bg-surface rounded-md border border-border text-gray-700 font-semibold shadow-2xs">
                             {searchQuery.trim()
                                 ? t("studentsFoundCount", { count: filteredStudents.length })
-                                : t("totalGroupStudents", { count: students.length })}
+                                : t("totalGroupStudents", { count: students.filter((s) => !s.isTransferred).length })}
                         </span>
                     </div>
                 </div>

@@ -32,6 +32,9 @@ import {
   Info,
   Trash2,
   ChevronUp,
+  Sparkles,
+  Users,
+  ShieldAlert,
 } from "lucide-react";
 import {
   BiometricScanResult,
@@ -39,7 +42,9 @@ import {
   clearBiometricJournalAction,
   getBiometricCatchUpOptionsAction,
   recordBiometricCatchUpAction,
+  getBiometricPaymentDataAction,
 } from "@/lib/biometricActions";
+import PaymentForm from "@/components/forms/PaymentForm";
 
 interface BiometricMonitorContextType {
   isEnabled: boolean;
@@ -60,6 +65,7 @@ interface BiometricMonitorContextType {
   handleSyncK50Devices: () => Promise<void>;
   isSyncingK50: boolean;
   openCatchUpModalForScan: (scan: BiometricScanResult) => void;
+  openPaymentModalForScan: (scan: BiometricScanResult) => void;
 }
 
 const BiometricMonitorContext = createContext<BiometricMonitorContextType>({
@@ -78,6 +84,7 @@ const BiometricMonitorContext = createContext<BiometricMonitorContextType>({
   handleClearJournal: async () => {},
   handleSyncK50Devices: async () => {},
   openCatchUpModalForScan: () => {},
+  openPaymentModalForScan: () => {},
 });
 
 export const useBiometricMonitor = () => useContext(BiometricMonitorContext);
@@ -259,6 +266,18 @@ export default function BiometricMonitorProvider({
   const [selectedMissedLessonId, setSelectedMissedLessonId] = useState<string>("");
   const [selectedCatchUpLessonId, setSelectedCatchUpLessonId] = useState<string>("");
   const [isSavingCatchUp, setIsSavingCatchUp] = useState<boolean>(false);
+
+  // Payment Modal state for State 2 cards
+  const [paymentTargetScan, setPaymentTargetScan] =
+    useState<BiometricScanResult | null>(null);
+  const [paymentLoading, setPaymentLoading] = useState<boolean>(false);
+  const [paymentData, setPaymentData] = useState<{
+    student: any;
+    classData: any;
+    availableClasses: any[];
+    defaultInscriptionFee: number;
+  } | null>(null);
+  const [selectedPaymentClassId, setSelectedPaymentClassId] = useState<string>("");
 
   const lastSeenIdRef = useRef<number>(0);
   const currentBranchIdRef = useRef<number | null>(null);
@@ -735,7 +754,10 @@ export default function BiometricMonitorProvider({
       }
 
       const res = await resolveBiometricAlertAction({ scanId, mode });
-      if (res.success && mode === "ALLOW_PRESENT") {
+      if (
+        res.success &&
+        (mode === "ALLOW_PRESENT" || mode === "RESOLVED_BY_PAYMENT")
+      ) {
         toast.success(res.message);
         if (targetAlert && targetAlert.studentId && targetAlert.lessonId) {
           window.dispatchEvent(
@@ -875,6 +897,59 @@ export default function BiometricMonitorProvider({
     }
   };
 
+  // Open Payment modal for a State 2 card
+  const openPaymentModalForScan = useCallback(
+    async (scan: BiometricScanResult) => {
+      if (!scan.studentId) return;
+      setPaymentTargetScan(scan);
+      setPaymentLoading(true);
+      setPaymentData(null);
+      setSelectedPaymentClassId(scan.classId ? String(scan.classId) : "");
+
+      try {
+        const res = await getBiometricPaymentDataAction(
+          scan.studentId,
+          scan.classId
+        );
+        if (res.success && res.student && res.classData) {
+          setPaymentData({
+            student: res.student,
+            classData: res.classData,
+            availableClasses: res.availableClasses || [],
+            defaultInscriptionFee: res.defaultInscriptionFee ?? 1000,
+          });
+          setSelectedPaymentClassId(String(res.classData.id));
+        } else {
+          toast.error(
+            res.message ||
+              (isAr
+                ? "تعذر تحميل بيانات الدفع"
+                : "Impossible de charger les données de paiement")
+          );
+        }
+      } catch (err: any) {
+        toast.error(err?.message || "Erreur de chargement");
+      } finally {
+        setPaymentLoading(false);
+      }
+    },
+    [isAr]
+  );
+
+  const handleSelectPaymentClass = (newClassId: string) => {
+    setSelectedPaymentClassId(newClassId);
+    if (paymentData?.availableClasses) {
+      const found = paymentData.availableClasses.find(
+        (c: any) => String(c.id) === newClassId
+      );
+      if (found) {
+        setPaymentData((prev) =>
+          prev ? { ...prev, classData: found } : null
+        );
+      }
+    }
+  };
+
   // Filtered scans for the Drawer
   const filteredDrawerScans = useMemo(() => {
     return recentScans.filter((s) => {
@@ -938,6 +1013,7 @@ export default function BiometricMonitorProvider({
         handleClearJournal,
         handleSyncK50Devices,
         openCatchUpModalForScan,
+        openPaymentModalForScan,
       }}
     >
       {children}
@@ -1060,11 +1136,7 @@ export default function BiometricMonitorProvider({
                       <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-gray-100">
                         <button
                           type="button"
-                          onClick={() => {
-                            if (alert.studentId) {
-                              router.push(`/list/students/${alert.studentId}`);
-                            }
-                          }}
+                          onClick={() => openPaymentModalForScan(alert)}
                           className="flex-1 py-1.5 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-colors"
                         >
                           <CreditCard className="w-3.5 h-3.5" />
@@ -1084,6 +1156,18 @@ export default function BiometricMonitorProvider({
                             {isAr ? "سماح استثنائي" : "Autoriser présence"}
                           </span>
                         </button>
+                        {alert.studentId && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              router.push(`/list/students/${alert.studentId}`)
+                            }
+                            className="p-1.5 rounded-md bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-700 border border-gray-300 cursor-pointer transition-colors"
+                            title={isAr ? "الملف الشخصي" : "Profil"}
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -1248,14 +1332,39 @@ export default function BiometricMonitorProvider({
                       )}
                     </div>
                     <div className="pt-1 flex items-center justify-between">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px]">
-                        <CreditCard className="w-3 h-3 shrink-0" />
-                        <span>
-                          {isAr
-                            ? `الرصيد المتبقي: ${liveStreamCard.remainingCredits ?? 0} حصص`
-                            : `Solde : ${liveStreamCard.remainingCredits ?? 0} séance(s) restante(s)`}
+                      {liveStreamCard.isNonPayer || liveStreamCard.payerStatus === "NON_PAYER" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px]">
+                          <Sparkles className="w-3 h-3 shrink-0 text-emerald-600" />
+                          <span>
+                            {isAr ? "معفى من الرسوم" : "Non-payeur (Exonéré)"}
+                          </span>
                         </span>
-                      </span>
+                      ) : liveStreamCard.hasPayerSibling || liveStreamCard.isSiblingWaived ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 font-semibold text-[11px]">
+                          <Users className="w-3 h-3 shrink-0 text-purple-600" />
+                          <span>
+                            {isAr ? "أخ دافع" : "Remise fratrie"}
+                          </span>
+                        </span>
+                      ) : liveStreamCard.payerStatus === "SCHOOL_FEES_ONLY" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-semibold text-[11px]">
+                          <ShieldAlert className="w-3 h-3 shrink-0 text-amber-600" />
+                          <span>
+                            {isAr
+                              ? `الرصيد المتبقي: ${liveStreamCard.remainingCredits ?? 0} حصص (حصة المدرسة)`
+                              : `Solde : ${liveStreamCard.remainingCredits ?? 0} séance(s) (Part école)`}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px]">
+                          <CreditCard className="w-3 h-3 shrink-0" />
+                          <span>
+                            {isAr
+                              ? `الرصيد المتبقي: ${liveStreamCard.remainingCredits ?? 0} حصص`
+                              : `Solde : ${liveStreamCard.remainingCredits ?? 0} séance(s) restante(s)`}
+                          </span>
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1620,12 +1729,25 @@ export default function BiometricMonitorProvider({
                             <span>{scan.classroomName}</span>
                           </span>
                         )}
-                        {scan.remainingCredits !== null && (
+                        {scan.isNonPayer || scan.payerStatus === "NON_PAYER" ? (
+                          <span className="font-semibold text-emerald-700">
+                            ({isAr ? "معفى من الرسوم" : "Exonéré"})
+                          </span>
+                        ) : scan.hasPayerSibling || scan.isSiblingWaived ? (
+                          <span className="font-semibold text-purple-700">
+                            ({isAr ? "أخ دافع" : "Remise fratrie"})
+                          </span>
+                        ) : scan.payerStatus === "SCHOOL_FEES_ONLY" ? (
+                          <span className="font-semibold text-amber-800">
+                            ({scan.remainingCredits ?? 0}{" "}
+                            {isAr ? "حصص (حصة المدرسة)" : "séances (Part école)"})
+                          </span>
+                        ) : scan.remainingCredits !== null ? (
                           <span className="font-semibold text-gray-800">
                             ({scan.remainingCredits}{" "}
                             {isAr ? "حصص متبقية" : "séances rest."})
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     )}
 
@@ -1636,8 +1758,7 @@ export default function BiometricMonitorProvider({
                           <button
                             type="button"
                             onClick={() => {
-                              setIsDrawerOpen(false);
-                              router.push(`/list/students/${scan.studentId}`);
+                              openPaymentModalForScan(scan);
                             }}
                             className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors"
                           >
@@ -1657,6 +1778,19 @@ export default function BiometricMonitorProvider({
                             {isAr ? "سماح بالحضور" : "Autoriser présence"}
                           </span>
                         </button>
+                        {scan.studentId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsDrawerOpen(false);
+                              router.push(`/list/students/${scan.studentId}`);
+                            }}
+                            className="p-1 rounded-md bg-white hover:bg-gray-50 border border-gray-300 text-gray-500 hover:text-gray-700 cursor-pointer transition-colors"
+                            title={isAr ? "الملف الشخصي" : "Profil"}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
                     )}
 
@@ -1847,6 +1981,116 @@ export default function BiometricMonitorProvider({
                   </button>
                 </div>
               </form>
+            )}
+          </div>
+        </div>
+      )}
+      {/* ===================================================================== */}
+      {/* ONE-CLICK PAYMENT MODAL FOR STATE 2 (NO CREDITS) SCANS                */}
+      {/* ===================================================================== */}
+      {paymentTargetScan && (
+        <div
+          dir={isAr ? "rtl" : "ltr"}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4 backdrop-blur-xs pointer-events-auto"
+          onClick={() => {
+            if (!paymentLoading) setPaymentTargetScan(null);
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto border border-gray-200 relative text-start"
+          >
+            <button
+              type="button"
+              onClick={() => setPaymentTargetScan(null)}
+              className="absolute top-4 end-4 text-gray-400 hover:text-gray-700 hover:bg-gray-100 p-1.5 rounded-lg z-20 cursor-pointer transition-colors"
+              title={isAr ? "إغلاق" : "Fermer"}
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {paymentLoading ? (
+              <div className="p-10 text-center flex flex-col items-center justify-center gap-3">
+                <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
+                <span className="text-sm text-gray-600 font-medium">
+                  {isAr
+                    ? "جاري تحميل بيانات الدفع..."
+                    : "Chargement des données de paiement..."}
+                </span>
+              </div>
+            ) : paymentData && paymentData.classData ? (
+              <div className="p-1">
+                {/* Optional Class Selector if student has multiple enrolled classes */}
+                {paymentData.availableClasses &&
+                  paymentData.availableClasses.length > 1 && (
+                    <div className="px-5 pt-4 pb-1">
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        {isAr
+                          ? "اختر الفوج المستهدف للوصل:"
+                          : "Groupe cible pour le paiement :"}
+                      </label>
+                      <select
+                        value={selectedPaymentClassId}
+                        onChange={(e) =>
+                          handleSelectPaymentClass(e.target.value)
+                        }
+                        className="w-full text-xs rounded-lg border border-gray-300 p-2 bg-white text-gray-800 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                      >
+                        {paymentData.availableClasses.map((cls: any) => (
+                          <option key={cls.id} value={cls.id}>
+                            {cls.name} ({cls.branch?.name || ""}) -{" "}
+                            {cls.pricePerCycle?.toLocaleString()} DZD
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                <PaymentForm
+                  student={paymentData.student}
+                  classData={paymentData.classData}
+                  setOpen={(open) => {
+                    if (!open) {
+                      setPaymentTargetScan(null);
+                    }
+                  }}
+                  type="create"
+                  defaultInscriptionFee={paymentData.defaultInscriptionFee}
+                  onSuccess={async () => {
+                    if (paymentTargetScan?.id) {
+                      await handleResolveAlert(
+                        paymentTargetScan.id,
+                        "RESOLVED_BY_PAYMENT"
+                      );
+                    }
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="p-8 text-center space-y-3">
+                <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto" />
+                <p className="text-sm font-semibold text-gray-800">
+                  {isAr
+                    ? "تعذر العثور على بيانات الفوج أو التسجيل لهذا التلميذ."
+                    : "Impossible de charger les données du groupe ou de l'étudiant."}
+                </p>
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const stId = paymentTargetScan.studentId;
+                      setPaymentTargetScan(null);
+                      if (stId) router.push(`/list/students/${stId}`);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 cursor-pointer transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>
+                      {isAr ? "فتح ملف التلميذ" : "Ouvrir la fiche de l'élève"}
+                    </span>
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>

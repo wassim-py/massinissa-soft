@@ -292,13 +292,13 @@ const ClassAttendancePage = async (
                                             attendances: {
                                                 where: { lesson: { isFree: false } },
                                                 include: {
-                                                    lesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } },
+                                                    lesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true, lessonGroups: { select: { classId: true } } } },
                                                 },
                                             },
                                             catchUpAttendances: {
                                                 include: {
-                                                    missedLesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } },
-                                                    catchUpLesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } },
+                                                    missedLesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true, lessonGroups: { select: { classId: true } } } },
+                                                    catchUpLesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true, lessonGroups: { select: { classId: true } } } },
                                                 },
                                             },
                                         },
@@ -329,7 +329,10 @@ const ClassAttendancePage = async (
                             attendances: {
                                 where: {
                                     lesson: {
-                                        classId: classId,
+                                        OR: [
+                                            { classId: classId },
+                                            { lessonGroups: { some: { classId: classId } } },
+                                        ],
                                         isFree: false,
                                     },
                                 },
@@ -341,6 +344,7 @@ const ClassAttendancePage = async (
                                             isFree: true,
                                             isTeacherAbsent: true,
                                             classId: true,
+                                            lessonGroups: { select: { classId: true } },
                                         },
                                     },
                                 },
@@ -354,7 +358,9 @@ const ClassAttendancePage = async (
                                 where: {
                                     OR: [
                                         { missedLesson: { classId: classId } },
+                                        { missedLesson: { lessonGroups: { some: { classId: classId } } } },
                                         { catchUpLesson: { classId: classId } },
+                                        { catchUpLesson: { lessonGroups: { some: { classId: classId } } } },
                                     ],
                                 },
                                 include: {
@@ -365,6 +371,7 @@ const ClassAttendancePage = async (
                                             isFree: true,
                                             isTeacherAbsent: true,
                                             classId: true,
+                                            lessonGroups: { select: { classId: true } },
                                         },
                                     },
                                     catchUpLesson: {
@@ -374,6 +381,7 @@ const ClassAttendancePage = async (
                                             isFree: true,
                                             isTeacherAbsent: true,
                                             classId: true,
+                                            lessonGroups: { select: { classId: true } },
                                         },
                                     },
                                 },
@@ -475,7 +483,11 @@ const ClassAttendancePage = async (
                     );
 
                     const sAttendances = (details?.attendances || []).filter(
-                        (att: any) => att.lesson && att.lesson.classId === classId && !att.lesson.isFree
+                        (att: any) =>
+                            att.lesson &&
+                            (att.lesson.classId === classId ||
+                                att.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)) &&
+                            !att.lesson.isFree
                     );
 
                     const classCatchUpsForStudent = (catchUpAttendances || []).filter(

@@ -99,17 +99,38 @@ const SingleStudentPage = async (
                   attendances: {
                     include: {
                       lesson: {
-                        select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true },
+                        select: {
+                          id: true,
+                          isFree: true,
+                          isTeacherAbsent: true,
+                          classId: true,
+                          startsAt: true,
+                          lessonGroups: { select: { classId: true } },
+                        },
                       },
                     },
                   },
                   catchUpAttendances: {
                     include: {
                       missedLesson: {
-                        select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                        select: {
+                          id: true,
+                          classId: true,
+                          startsAt: true,
+                          isFree: true,
+                          isTeacherAbsent: true,
+                          lessonGroups: { select: { classId: true } },
+                        },
                       },
                       catchUpLesson: {
-                        select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                        select: {
+                          id: true,
+                          classId: true,
+                          startsAt: true,
+                          isFree: true,
+                          isTeacherAbsent: true,
+                          lessonGroups: { select: { classId: true } },
+                        },
                       },
                     },
                   },
@@ -194,17 +215,38 @@ const SingleStudentPage = async (
           attendances: {
             include: {
               lesson: {
-                select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true },
+                select: {
+                  id: true,
+                  isFree: true,
+                  isTeacherAbsent: true,
+                  classId: true,
+                  startsAt: true,
+                  lessonGroups: { select: { classId: true } },
+                },
               },
             },
           },
           catchUpAttendances: {
             include: {
               missedLesson: {
-                select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                select: {
+                  id: true,
+                  classId: true,
+                  startsAt: true,
+                  isFree: true,
+                  isTeacherAbsent: true,
+                  lessonGroups: { select: { classId: true } },
+                },
               },
               catchUpLesson: {
-                select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                select: {
+                  id: true,
+                  classId: true,
+                  startsAt: true,
+                  isFree: true,
+                  isTeacherAbsent: true,
+                  lessonGroups: { select: { classId: true } },
+                },
               },
             },
           },
@@ -299,6 +341,15 @@ const SingleStudentPage = async (
         payerRemainingCredit = payerRes.netSessions;
       }
 
+      const teacherClassOverride = (c.teacherClassRates as any[])?.find(
+        (tcr: any) => tcr.teacherId === c.teacherId
+      )?.percentage;
+      const teacherPercentage = teacherClassOverride != null
+        ? Number(teacherClassOverride)
+        : (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+          ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+          : null;
+
       const creditMetrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(c?.pricePerCycle || 0),
         isFormation,
@@ -310,6 +361,7 @@ const SingleStudentPage = async (
         transfersIn: enr.transfersTo,
         transfersOut: enr.transfersFrom,
         creditResetOffset: (enr as any).creditResetOffset,
+        teacherPercentage,
         attendances: (studentPaymentData?.attendances || []).filter(
           (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
         ),
@@ -321,15 +373,6 @@ const SingleStudentPage = async (
       const transferredOut = creditMetrics.transferredOut;
       const attendedSessions = creditMetrics.attendedSessions;
       const netSessions = creditMetrics.netSessions;
-
-      const teacherClassOverride = (c.teacherClassRates as any[])?.find(
-        (tcr: any) => tcr.teacherId === c.teacherId
-      )?.percentage;
-      const teacherPercentage = teacherClassOverride != null
-        ? Number(teacherClassOverride)
-        : (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
-          ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
-          : null;
 
       const feeCalc = computeStudentSessionFee({
         payerStatus: enrStatus,
@@ -360,7 +403,11 @@ const SingleStudentPage = async (
         hasPayerSibling,
         isNonPayer: enrStatus === "NON_PAYER",
         payerStatus: enrStatus,
-        status: (enr as any).status || "ACTIVE",
+        status:
+          (enr as any).status === "TRANSFERRED" ||
+          (enr.transfersFrom && enr.transfersFrom.length > 0)
+            ? "TRANSFERRED"
+            : (enr as any).status || "ACTIVE",
         studentSessionFee: feeCalc.studentSessionFee,
         studentCycleFee: feeCalc.studentCycleFee,
         schoolPercentage: feeCalc.schoolPercentage,

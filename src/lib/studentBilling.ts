@@ -689,6 +689,7 @@ export interface ComputeStudentCreditParams {
   siblingDiscountPercentage?: number | null;
   isSiblingWaived?: boolean;
   isPayerSiblingPaid?: boolean;
+  teacherPercentage?: number | null;
   tuitionVouchers?: Array<{
     amount?: any;
     isVoided?: boolean;
@@ -732,6 +733,7 @@ export interface StudentCreditResult {
   isFormation: boolean;
   isNonPayer: boolean;
   isSiblingWaived: boolean;
+  isSchoolFeesOnly: boolean;
   status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER";
 }
 
@@ -779,10 +781,21 @@ export function resolvePayerCredit({
         (cu: any) => cu.missedLesson && cu.missedLesson.classId === classId
       );
 
+      const payerTeacherId = payerEnrollment?.class?.teacherId || payerEnrollment?.class?.teacher?.id;
+      const payerTeacherOverride = (payerEnrollment?.class as any)?.teacherClassRates?.find(
+        (tcr: any) => tcr.teacherId === payerTeacherId
+      )?.percentage;
+      const payerTeacherPercentage = payerTeacherOverride != null
+        ? Number(payerTeacherOverride)
+        : (payerEnrollment?.class?.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+          ? Number((payerEnrollment?.class?.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+          : null;
+
       const metrics = computeStudentCreditAndSessions({
         pricePerCycle: classPricePerCycle ?? Number(payerEnrollment?.class?.pricePerCycle || 0),
         isFormation: isFormation ?? Boolean(payerEnrollment?.class?.isFormation),
         payerStatus: payerEnrollment?.payerStatus || payerStudent.payerStatus || "NORMAL",
+        teacherPercentage: payerTeacherPercentage,
         tuitionVouchers: payerVouchers,
         transfersIn: payerEnrollment?.transfersTo || [],
         transfersOut: payerEnrollment?.transfersFrom || [],
@@ -822,10 +835,21 @@ export function resolvePayerCredit({
         (cu: any) => cu.missedLesson && cu.missedLesson.classId === cId
       );
 
+      const enrTeacherId = enr.class?.teacherId || enr.class?.teacher?.id;
+      const enrTeacherOverride = (enr.class as any)?.teacherClassRates?.find(
+        (tcr: any) => tcr.teacherId === enrTeacherId
+      )?.percentage;
+      const enrTeacherPercentage = enrTeacherOverride != null
+        ? Number(enrTeacherOverride)
+        : (enr.class?.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+          ? Number((enr.class?.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+          : null;
+
       const metrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(enr.class?.pricePerCycle || 0),
         isFormation: Boolean(enr.class?.isFormation),
         payerStatus: enr.payerStatus || payerStudent.payerStatus || "NORMAL",
+        teacherPercentage: enrTeacherPercentage,
         tuitionVouchers: vouchers,
         transfersIn: enr.transfersTo || [],
         transfersOut: enr.transfersFrom || [],
@@ -883,6 +907,7 @@ export function computeStudentCreditAndSessions({
   siblingDiscountPercentage,
   isSiblingWaived = false,
   isPayerSiblingPaid = true,
+  teacherPercentage,
   tuitionVouchers = [],
   transfersIn = 0,
   transfersOut = 0,
@@ -893,7 +918,9 @@ export function computeStudentCreditAndSessions({
   payerRemainingCredit,
 }: ComputeStudentCreditParams): StudentCreditResult {
   const isForm = Boolean(isFormation);
-  const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
+  const normStatus = normalizePayerStatus(payerStatus);
+  const isNonPayer = normStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
+  const isSchoolFeesOnly = normStatus === "SCHOOL_FEES_ONLY";
 
   const siblingDiscountPct =
     siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
@@ -905,12 +932,6 @@ export function computeStudentCreditAndSessions({
 
   const cyclePrice = Math.max(0, Number(pricePerCycle || 0));
   const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-  const effectiveLessonPrice =
-    siblingDiscountPct > 0 && siblingDiscountPct < 100
-      ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-      : isSiblingWaived100
-      ? 0
-      : baseLessonPrice;
 
   const validVouchers = tuitionVouchers.filter(
     (v) => !v.isVoided && !v.isRefund && v.status !== "REFUNDED"
@@ -922,12 +943,34 @@ export function computeStudentCreditAndSessions({
     totalPaidTuition += Math.max(0, vAmount - vRefunded);
   });
 
+  let effectiveLessonPrice = baseLessonPrice;
+  if (isSiblingWaived100 || isNonPayer) {
+    effectiveLessonPrice = 0;
+  } else if (isSchoolFeesOnly) {
+    if (teacherPercentage !== undefined && teacherPercentage !== null) {
+      const tPercent = Math.max(0, Math.min(100, Number(teacherPercentage)));
+      const sPercent = Math.max(0, 100 - tPercent);
+      effectiveLessonPrice = (baseLessonPrice * sPercent) / 100;
+    } else {
+      const firstPositiveVoucher = validVouchers.find((v) => Number(v.amount || 0) > 0);
+      if (firstPositiveVoucher && Number(firstPositiveVoucher.amount) < cyclePrice) {
+        effectiveLessonPrice = Number(firstPositiveVoucher.amount) / 4;
+      } else {
+        effectiveLessonPrice = baseLessonPrice;
+      }
+    }
+  } else if (siblingDiscountPct > 0 && siblingDiscountPct < 100) {
+    effectiveLessonPrice = baseLessonPrice * (1 - siblingDiscountPct / 100);
+  }
+
   let purchasedSessions = 0;
   if (!isForm) {
     if (isNonPayer) {
-      purchasedSessions = 16;
+      purchasedSessions = 0;
     } else if (isSiblingWaived100) {
-      purchasedSessions = isPayerSiblingPaid ? 16 : 0;
+      purchasedSessions = isPayerSiblingPaid && payerRemainingCredit !== undefined && payerRemainingCredit !== null
+        ? payerRemainingCredit
+        : 0;
     } else if (effectiveLessonPrice > 0) {
       purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
     } else {
@@ -1045,8 +1088,12 @@ export function computeStudentCreditAndSessions({
     ).length + extraCatchUpConsumed;
 
   let calculatedNetSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - attendedSessions + offset;
-  if (payerRemainingCredit !== undefined && payerRemainingCredit !== null) {
+  if (isNonPayer) {
+    calculatedNetSessions = 0;
+  } else if (payerRemainingCredit !== undefined && payerRemainingCredit !== null) {
     calculatedNetSessions = payerRemainingCredit;
+  } else if (isSiblingWaived100) {
+    calculatedNetSessions = 0;
   }
   const netSessions = calculatedNetSessions;
   const netRefundableSessions = isForm
@@ -1111,6 +1158,7 @@ export function computeStudentCreditAndSessions({
     isFormation: isForm,
     isNonPayer,
     isSiblingWaived: isSiblingWaived100,
+    isSchoolFeesOnly,
     status,
   };
 }
