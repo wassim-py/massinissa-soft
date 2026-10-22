@@ -10,14 +10,14 @@ import { ITEM_PER_PAGE } from "@/lib/settings";
 import DeclareMissingMoneyModal from "@/components/daily-ledger/DeclareMissingMoneyModal";
 import DeclareSurplusMoneyModal from "@/components/daily-ledger/DeclareSurplusMoneyModal";
 import { Link } from "@/i18n/navigation";
-import { format } from "date-fns";
-import { arDZ } from "date-fns/locale";
 import { getTranslations, getLocale } from "next-intl/server";
 import { AlertCircle, ArrowDownRight, ArrowUpRight, Banknote, Calendar, CheckCircle2, Clock, Coins, PlusCircle, ShieldAlert, Sparkles, Store, Wallet, ArrowRightLeft } from "lucide-react";
 import MissingMoneyActions from "@/components/finance/MissingMoneyActions";
 import SurplusMoneyActions from "@/components/finance/SurplusMoneyActions";
 
 import DailyLedgerDateFilter from "@/components/daily-ledger/DailyLedgerDateFilter";
+import { formatVoucherDisplay, formatPaymentTime } from "@/lib/voucherUtils";
+import { formatDZD, getAlgiersTodayDateString, formatAlgiersDate } from "@/lib/algiersDate";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -89,7 +89,10 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
     }
   }
 
-  const targetDateStr = isOwner && searchParams.date ? searchParams.date : new Date().toISOString().split("T")[0];
+  const targetDateStr =
+    searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
+      ? searchParams.date
+      : getAlgiersTodayDateString();
 
   const [ledgerData, allBranches] = await Promise.all([
     getDailyBranchLedgerData(selectedBranchId, targetDateStr),
@@ -127,14 +130,10 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
     ...surplusMoneyList.map((s) => ({ ...s, type: "SURPLUS" as const })),
   ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const formatDZD = (num: number) =>
-    locale === "ar"
-      ? `${num.toLocaleString("ar-DZ")} دج`
-      : `${num.toLocaleString("fr-DZ")} DZD`;
-
-  const parsedDate = new Date(targetDateStr);
-  const formattedSelectedDate = format(parsedDate, "d MMMM yyyy", {
-    locale: locale === "ar" ? arDZ : undefined,
+  const formattedSelectedDate = formatAlgiersDate(targetDateStr, locale, {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
   });
 
   return (
@@ -160,12 +159,12 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
-            {/* Selected Date Badge & Date Picker (Date picker is Owner only) */}
+            {/* Selected Date Badge & Date Picker */}
             <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-surface-muted border border-border text-xs font-semibold text-gray-800">
               <Calendar className="w-4 h-4 text-primary shrink-0" />
               <span>{formattedSelectedDate}</span>
             </div>
-            {isOwner && <DailyLedgerDateFilter currentDate={targetDateStr} />}
+            <DailyLedgerDateFilter currentDate={targetDateStr} />
           </div>
         </div>
 
@@ -206,7 +205,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           </div>
           <div className="mt-3">
             <p className="text-2xl font-bold font-mono text-success-text">
-              +{formatDZD(summary.grossRevenue)}
+              +{formatDZD(summary.grossRevenue, locale)}
             </p>
             <p className="text-[11px] text-muted mt-1 leading-snug">
               {t("grossCollectedHelper")}
@@ -226,7 +225,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           </div>
           <div className="mt-3">
             <p className="text-2xl font-bold font-mono text-danger">
-              {summary.refunds > 0 ? `-${formatDZD(summary.refunds)}` : formatDZD(0)}
+              {summary.refunds > 0 ? `-${formatDZD(summary.refunds, locale)}` : formatDZD(0, locale)}
             </p>
             <p className="text-[11px] text-muted mt-1 leading-snug">
               {t("refundsHelper")}
@@ -248,7 +247,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           </div>
           <div className="mt-3">
             <p className="text-2xl font-bold font-mono text-danger">
-              {summary.confirmedMissing > 0 ? `-${formatDZD(summary.confirmedMissing)}` : formatDZD(0)}
+              {summary.confirmedMissing > 0 ? `-${formatDZD(summary.confirmedMissing, locale)}` : formatDZD(0, locale)}
             </p>
             <p className="text-[11px] text-muted mt-1 leading-snug">
               {t("confirmedMissingHelper")}
@@ -270,7 +269,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           </div>
           <div className="mt-3">
             <p className="text-2xl font-bold font-mono text-success-text">
-              {summary.confirmedSurplus > 0 ? `+${formatDZD(summary.confirmedSurplus)}` : formatDZD(0)}
+              {summary.confirmedSurplus > 0 ? `+${formatDZD(summary.confirmedSurplus, locale)}` : formatDZD(0, locale)}
             </p>
             <p className="text-[11px] text-muted mt-1 leading-snug">
               {t("confirmedSurplusHelper")}
@@ -290,7 +289,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
           </div>
           <div className="mt-3">
             <p className="text-2xl font-bold font-mono text-primary">
-              {formatDZD(summary.netCash)}
+              {formatDZD(summary.netCash, locale)}
             </p>
             <p className="text-[11px] text-muted mt-1 leading-snug">
               {t("netCashInBoxHelper")}
@@ -320,7 +319,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                 <span className="w-2.5 h-2.5 rounded-full bg-success"></span>
               </div>
               <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
-                {formatDZD(summary.inscription)}
+                {formatDZD(summary.inscription, locale)}
               </p>
               <p className="text-form-helper text-muted mt-1">
                 {t("inscriptionFeesHelper")}
@@ -334,7 +333,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
               </div>
               <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
-                {formatDZD(summary.book)}
+                {formatDZD(summary.book, locale)}
               </p>
               <p className="text-form-helper text-muted mt-1">
                 {t("bookFeesHelper")}
@@ -348,7 +347,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                 <span className="w-2.5 h-2.5 rounded-full bg-primary"></span>
               </div>
               <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
-                {formatDZD(summary.tuition)}
+                {formatDZD(summary.tuition, locale)}
               </p>
               <p className="text-form-helper text-muted mt-1">
                 {t("tuitionFeesHelper")}
@@ -362,7 +361,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
               </div>
               <p className="text-2xl font-bold font-mono text-gray-900 mt-3">
-                {formatDZD(summary.atelierFormation)}
+                {formatDZD(summary.atelierFormation, locale)}
               </p>
               <p className="text-form-helper text-muted mt-1">
                 {t("dawaratFormationFeesHelper")}
@@ -418,8 +417,11 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                   </Badge>
                 </td>
                 <td className="p-3.5 text-muted text-xs">
-                  {format(new Date(item.createdAt), "HH:mm, d MMM", {
-                    locale: locale === "ar" ? arDZ : undefined,
+                  {formatAlgiersDate(item.createdAt, locale, {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    day: "numeric",
+                    month: "short",
                   })}
                 </td>
                 <td
@@ -427,7 +429,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                     item.type === "MISSING" ? "text-danger" : "text-success-text"
                   }`}
                 >
-                  {item.type === "MISSING" ? `-${formatDZD(item.amount)}` : `+${formatDZD(item.amount)}`}
+                  {item.type === "MISSING" ? `-${formatDZD(item.amount, locale)}` : `+${formatDZD(item.amount, locale)}`}
                 </td>
                 <td className="p-3.5 text-gray-800 font-medium">
                   {item.reason || "—"}
@@ -506,9 +508,14 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                     key={v.id}
                     className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
                   >
-                    <td className="p-3.5 font-mono text-xs font-bold text-primary" dir="ltr">
+                    <td className="p-3.5 font-mono text-xs font-bold text-primary whitespace-nowrap" dir="ltr">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span>#{v.number}</span>
+                        <span>
+                          {(v as any).voucherDisplay ||
+                            formatVoucherDisplay(v as any, {
+                              branchName: branch.name,
+                            })}
+                        </span>
                         {v.isRefund && (
                           <Badge variant="danger" size="sm">
                             {locale === "ar" ? "استرداد" : "Remboursement"}
@@ -557,10 +564,10 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                       </Badge>
                     </td>
                     <td className="p-3.5 text-muted text-xs">
-                      {format(new Date(v.issuedAt), "HH:mm")}
+                      {formatPaymentTime(v.issuedAt)}
                     </td>
                     <td className={`p-3.5 font-mono font-bold text-end ${v.isRefund ? "text-danger" : "text-success-text"}`}>
-                      {v.isRefund ? `-${formatDZD(v.amount)}` : `+${formatDZD(v.amount)}`}
+                      {v.isRefund ? `-${formatDZD(v.amount, locale)}` : `+${formatDZD(v.amount, locale)}`}
                     </td>
                   </tr>
                 )}
@@ -685,7 +692,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                     {item.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
                   </td>
                   <td className="p-3.5 font-mono text-end text-xs text-gray-700">
-                    <div>{item.amount > 0 ? formatDZD(item.amount) : "—"}</div>
+                    <div>{item.amount > 0 ? formatDZD(item.amount, locale) : "—"}</div>
                     <div className="text-[10px] text-muted">{locale === "ar" ? "(رصيد حصص)" : "(crédit)"}</div>
                   </td>
                   <td className="p-3.5 text-center">

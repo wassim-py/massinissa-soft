@@ -4,10 +4,10 @@ import React, { useState, useEffect, useTransition } from "react";
 import Image from "next/image";
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
-import { searchStudentsForEnrollmentAction, enrollStudentInClassAction } from "@/lib/actions";
+import { searchStudentsForEnrollmentAction, enrollStudentInClassAction, transferEnrollmentCredit } from "@/lib/actions";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-import { Search, X, UserCheck, CreditCard, Loader2 } from "lucide-react";
+import { Search, X, UserCheck, CreditCard, ArrowRightLeft, Loader2 } from "lucide-react";
 
 interface CandidateStudent {
   id: string;
@@ -17,6 +17,13 @@ interface CandidateStudent {
   branchName: string;
   classes: string[];
   isAlreadyEnrolled: boolean;
+  transferableInfo?: {
+    fromEnrollmentId: number;
+    fromClassId: number;
+    fromClassName: string;
+    transferableSessions: number;
+    openEndedHeldSessions: number;
+  } | null;
 }
 
 interface EnrollExistingStudentTabProps {
@@ -108,6 +115,43 @@ export default function EnrollExistingStudentTab({
         }
       } catch (err: any) {
         toast.error(err?.message || "Erreur lors de l'inscription");
+      } finally {
+        setEnrollingStudentId(null);
+      }
+    });
+  };
+
+  const handleTransferAndEnroll = (student: CandidateStudent) => {
+    const info = student.transferableInfo;
+    if (!info) return;
+    setEnrollingStudentId(student.id);
+
+    startTransition(async () => {
+      try {
+        const res = await transferEnrollmentCredit(
+          { success: false, error: false, message: "" },
+          {
+            fromEnrollmentId: info.fromEnrollmentId,
+            toClassId: classId,
+            studentId: student.id,
+            transferredSessions: info.transferableSessions,
+            notes:
+              locale === "ar"
+                ? `تحويل رصيد مباشر عند الحضور في ${className}`
+                : `Transfert direct lors de la présence dans ${className}`,
+          }
+        );
+
+        if (res.success) {
+          toast.success(res.message);
+          if (onSuccess) {
+            onSuccess(student);
+          }
+        } else {
+          toast.error(res.message);
+        }
+      } catch (err: any) {
+        toast.error(err?.message || "Erreur lors du transfert et de l'inscription");
       } finally {
         setEnrollingStudentId(null);
       }
@@ -210,6 +254,13 @@ export default function EnrollExistingStudentTab({
                           {locale === "ar" ? "مسجل بهذا الفوج" : "Déjà dans ce groupe"}
                         </Badge>
                       )}
+                      {Boolean(student.transferableInfo && student.transferableInfo.transferableSessions > 0) && (
+                        <Badge variant="primary" size="sm" className="bg-blue-100 text-blue-900 border-blue-300 font-semibold shadow-2xs">
+                          {locale === "ar"
+                            ? `رصيد متاح للتحويل: ${student.transferableInfo!.transferableSessions} حصص من ${student.transferableInfo!.fromClassName}`
+                            : `Solde transférable : ${student.transferableInfo!.transferableSessions} s. depuis ${student.transferableInfo!.fromClassName}`}
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-xs text-muted mt-1">
                       {student.phone && (
@@ -239,6 +290,28 @@ export default function EnrollExistingStudentTab({
                     </span>
                   ) : (
                     <>
+                      {Boolean(student.transferableInfo && student.transferableInfo.transferableSessions > 0) && (
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          disabled={isCurrentEnrolling}
+                          isLoading={isCurrentEnrolling}
+                          onClick={() => handleTransferAndEnroll(student)}
+                          className="bg-blue-600 hover:bg-blue-700 border-blue-600 font-bold"
+                          leftIcon={<ArrowRightLeft className="w-3.5 h-3.5" />}
+                          title={
+                            locale === "ar"
+                              ? `تحويل ${student.transferableInfo!.transferableSessions} حصة من ${student.transferableInfo!.fromClassName} والتسجيل مباشرة`
+                              : `Transférer ${student.transferableInfo!.transferableSessions} séance(s) depuis ${student.transferableInfo!.fromClassName} et inscrire`
+                          }
+                        >
+                          {locale === "ar"
+                            ? `تحويل (${student.transferableInfo!.transferableSessions} ح.) وتسجيل`
+                            : `Transférer (${student.transferableInfo!.transferableSessions} s.)`}
+                        </Button>
+                      )}
+
                       <Button
                         type="button"
                         variant="outline"

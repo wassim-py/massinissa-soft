@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import ExportButton from "@/components/ExportButton";
 import { Card } from "@/components/ui/Card";
 import { Calendar, SlidersHorizontal } from "lucide-react";
+import { getAlgiersDateInfo } from "@/lib/algiersDate";
 
 interface RevenueFilterBarProps {
   branches: Array<{ id: number; name: string }>;
@@ -27,14 +28,12 @@ export default function RevenueFilterBar({
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // Helper date calculations
-  const now = new Date();
-  const todayStr = now.toISOString().split("T")[0];
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - 7);
-  const weekStartStr = weekStart.toISOString().split("T")[0];
-  const firstOfMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
-  const firstOfMonthStr = firstOfMonth.toISOString().split("T")[0];
+  // Helper date calculations strictly anchored to Africa/Algiers
+  const algiersToday = getAlgiersDateInfo();
+  const todayStr = algiersToday.dateStr;
+  const weekStartDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const weekStartStr = getAlgiersDateInfo(weekStartDate).dateStr;
+  const firstOfMonthStr = `${algiersToday.year}-${String(algiersToday.month).padStart(2, "0")}-01`;
 
   // Active time tab resolution (merging Aggregation Mode & Date Range)
   const isToday = dateFrom === todayStr && dateTo === todayStr && periodMode === "daily";

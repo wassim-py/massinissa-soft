@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import prisma from "./prisma";
+import { normalizeDateToAlgiersStartOfDay } from "./algiersDate";
 
 export type LedgerVoucherCategory =
   | "TUITION"
@@ -10,10 +11,10 @@ export type LedgerVoucherCategory =
 
 /**
  * Normalizes any timestamp to midnight UTC for clean calendar-day ledger aggregation.
+ * Strictly anchored to Africa/Algiers calendar day boundaries.
  */
 export function normalizeDateToStartOfDay(date: Date | string): Date {
-  const d = new Date(date);
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+  return normalizeDateToAlgiersStartOfDay(date);
 }
 
 /**
@@ -103,7 +104,7 @@ export async function syncDailyLedgerFromVouchers() {
     const amount = Number(v.amount);
     if (amount <= 0) continue;
 
-    const normalizedDate = normalizeDateToStartOfDay(v.issuedAt);
+    const normalizedDate = normalizeDateToAlgiersStartOfDay(v.issuedAt);
     const dateKey = normalizedDate.toISOString();
     const type = resolveLedgerType(v.paymentType, v.class?.isFormation ?? false);
     const branchId = v.issuingBranchId; // Physical cash is received in the cash box of the ISSUING branch
@@ -121,7 +122,7 @@ export async function syncDailyLedgerFromVouchers() {
     const amount = Number(r.amount);
     if (amount <= 0) continue;
 
-    const normalizedDate = normalizeDateToStartOfDay(r.refundedAt);
+    const normalizedDate = normalizeDateToAlgiersStartOfDay(r.refundedAt);
     const dateKey = normalizedDate.toISOString();
     const type: LedgerVoucherCategory = "REFUND";
     const branchId = r.voucher.issuingBranchId; // Physical cash refund is paid out of the ISSUING branch cash box

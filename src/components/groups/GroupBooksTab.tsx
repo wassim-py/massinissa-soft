@@ -16,6 +16,7 @@ import {
   toggleBookReceiptAction,
 } from "@/lib/bookActions";
 import { executeWithRetry } from "@/lib/retryUtils";
+import { formatDZD } from "@/lib/algiersDate";
 import { toast } from "react-toastify";
 import {
   BookOpen,
@@ -690,8 +691,8 @@ export default function GroupBooksTab({
                 <Badge variant="accent" size="md">
                   <span>
                     {isAr
-                      ? `رسم الكتاب: ${classData.bookFee.toLocaleString()} دج`
-                      : `Frais livre : ${classData.bookFee.toLocaleString()} DZD`}
+                      ? `رسم الكتاب: ${formatDZD(classData.bookFee, "ar")}`
+                      : `Frais livre : ${formatDZD(classData.bookFee, "fr")}`}
                   </span>
                 </Badge>
               )}

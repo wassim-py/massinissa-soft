@@ -24,6 +24,7 @@ import {
   getAlgiersWeekBounds,
   resolveRecurringLessonsForWeek,
 } from "@/lib/utils";
+import { formatDZD } from "@/lib/algiersDate";
 import { getTranslations, getLocale } from "next-intl/server";
 import {
   GraduationCap,
@@ -35,6 +36,7 @@ import {
   Building2,
   MapPin,
   Clock,
+  Coins,
 } from "lucide-react";
 
 function formatDate(date: Date | string, locale: string) {
@@ -46,11 +48,12 @@ function formatDate(date: Date | string, locale: string) {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Africa/Algiers",
   }).format(d);
 }
 
-const formatDZD = (num: number, locale: string) =>
-  `${Number(num || 0).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD`;
+// formatDZD is imported from @/lib/algiersDate
+
 
 const SingleTeacherPage = async (
   props: {
@@ -315,6 +318,18 @@ const SingleTeacherPage = async (
             <ShieldCheck className="w-3.5 h-3.5 text-primary" />
             <span>{tProfile("ownerBadge")}</span>
           </Badge>
+          {session.isOwner && (
+            <a href="#teacher-payroll-section">
+              <Button
+                variant="primary"
+                size="sm"
+                className="text-xs shadow-xs cursor-pointer"
+                leftIcon={<Coins className="w-3.5 h-3.5" />}
+              >
+                {tProfile("calculatePayrollBtn")}
+              </Button>
+            </a>
+          )}
           <Link href="/list/finance?section=payroll&tab=payslips">
             <Button
               variant="soft"
@@ -501,8 +516,12 @@ const SingleTeacherPage = async (
 
       {/* SECTION 6: CURRENT PAYROLL (§2.9 & Req 6) */}
       <TeacherPayrollSection
+        teacherId={t.id}
+        teacherName={t.name}
+        teacherPhone={(t as any).phone}
         payroll={serializeForClient(currentPayroll)}
         periodLabel={thisMonthLabel}
+        isOwner={session.isOwner}
       />
 
       {/* SECTION 2: UPCOMING LESSONS IN SCHEDULE */}

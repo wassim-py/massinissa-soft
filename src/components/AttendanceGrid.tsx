@@ -435,6 +435,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
         return date.toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
             month: "short",
             day: "numeric",
+            timeZone: "Africa/Algiers",
         });
     };
 
@@ -444,6 +445,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
             year: "numeric",
             month: "short",
             day: "numeric",
+            timeZone: "Africa/Algiers",
         });
     };
 

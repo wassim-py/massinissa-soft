@@ -389,7 +389,7 @@ const TakeAttendancePage = async (
       missedTeacherName: v.missedLesson.teacher.name,
       missedStartsAt: v.missedLesson.startsAt,
       recordedAt: v.recordedAt,
-      remainingCredits: vCredit.netSessions,
+      remainingCredits: Math.max(vCredit.netSessions, vCredit.transferableSessions),
       payerStatus: vCredit.status,
       isScenarioA,
       isScenarioB,

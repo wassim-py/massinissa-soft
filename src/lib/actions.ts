@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { revalidateFinancialRoutes } from "@/lib/revalidation";
 
 const safeRevalidatePath = (path: string) => {
   try {
@@ -44,7 +45,7 @@ import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "./studentBilling";
 import { getFixedInscriptionFeeAction, getFormationInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
-import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds } from "./utils";
+import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds, serializeForClient } from "./utils";
 import {
   resolveOrCreateLessonForDate,
   findSiblingRecurringLessonIds,
@@ -839,9 +840,15 @@ export const updateStudent = async (
       });
 
       if (currentStudent?.payerOfFamily && currentStudent.familyId !== newFamilyId) {
+        // Reassign to remaining sibling in the old family if any (Decision #4)
+        const remainingInOldFam = await prisma.student.findFirst({
+          where: { familyId: currentStudent.familyId, id: { not: data.id } },
+          orderBy: { createdAt: "asc" },
+          select: { id: true },
+        });
         await prisma.family.update({
           where: { id: currentStudent.payerOfFamily.id },
-          data: { payerStudentId: null },
+          data: { payerStudentId: remainingInOldFam?.id || null },
         });
       }
 
@@ -909,7 +916,28 @@ export const deleteStudent = async (
     await prisma.$executeRaw`DELETE FROM "StudentFingerprint" WHERE "studentId" = ${id} OR "globalNumber" = ${deletedGlobalNumber}`;
     await prisma.$executeRaw`DELETE FROM "BiometricScanLog" WHERE "studentId" = ${id} OR "globalNumber" = ${deletedGlobalNumber}`;
     await prisma.$executeRaw`DELETE FROM "ParentPhoneNumber" WHERE "studentId" = ${id}`;
-    await prisma.$executeRaw`UPDATE "Family" SET "payerStudentId" = NULL WHERE "payerStudentId" = ${id}`;
+
+    // Reassign primary payer role to remaining sibling in the family if any (Decision #4)
+    const payerFamily = await prisma.family.findUnique({
+      where: { payerStudentId: id },
+      include: {
+        students: {
+          where: { id: { not: id } },
+          orderBy: { createdAt: "asc" },
+          select: { id: true },
+        },
+      },
+    });
+    if (payerFamily) {
+      const nextPayer = payerFamily.students[0]?.id || null;
+      await prisma.family.update({
+        where: { id: payerFamily.id },
+        data: { payerStudentId: nextPayer },
+      });
+    } else {
+      await prisma.$executeRaw`UPDATE "Family" SET "payerStudentId" = NULL WHERE "payerStudentId" = ${id}`;
+    }
+
     await prisma.$executeRaw`DELETE FROM "BookReceipt" WHERE "studentId" = ${id}`;
     await prisma.$executeRaw`DELETE FROM "BookCopyDistribution" WHERE "studentId" = ${id}`;
     await prisma.$executeRaw`DELETE FROM "LevelTest" WHERE "studentId" = ${id}`;
@@ -981,6 +1009,20 @@ export const createParent = async (
       familyName = [data.surname, data.name].filter(Boolean).join(" ").trim() || null;
     }
 
+    if (payerStudentId) {
+      const existingPayer = await prisma.family.findUnique({
+        where: { payerStudentId },
+        select: { id: true, name: true },
+      });
+      if (existingPayer) {
+        return {
+          success: false,
+          error: true,
+          message: `Cet élève est déjà le payeur principal de la famille "${existingPayer.name || `#${existingPayer.id}`}". / هذا التلميذ هو بالفعل الدافع الرئيسي لعائلة أخرى.`,
+        };
+      }
+    }
+
     await prisma.$transaction(async (tx) => {
       const newFam = await tx.family.create({
         data: {
@@ -1045,6 +1087,20 @@ export const updateParent = async (
     }
     if (!familyName) {
       familyName = [data.surname, data.name].filter(Boolean).join(" ").trim() || null;
+    }
+
+    if (payerStudentId) {
+      const existingPayer = await prisma.family.findUnique({
+        where: { payerStudentId },
+        select: { id: true, name: true },
+      });
+      if (existingPayer && existingPayer.id !== familyId) {
+        return {
+          success: false,
+          error: true,
+          message: `Cet élève est déjà le payeur principal de la famille "${existingPayer.name || `#${existingPayer.id}`}". / هذا التلميذ هو بالفعل الدافع الرئيسي لعائلة أخرى.`,
+        };
+      }
     }
 
     await prisma.$transaction(async (tx) => {
@@ -3044,7 +3100,7 @@ export async function searchCatchUpCandidatesAction(
           catchUps: vCatchUps,
           teacherPercentage,
         });
-        classCreditsMap.set(cls.id, metrics.netSessions);
+        classCreditsMap.set(cls.id, Math.max(metrics.netSessions, metrics.transferableSessions));
       });
 
       const eligiblePastLessons: Array<{
@@ -3650,6 +3706,13 @@ export async function searchStudentsForEnrollmentAction({
     branchName: string;
     classes: string[];
     isAlreadyEnrolled: boolean;
+    transferableInfo?: {
+      fromEnrollmentId: number;
+      fromClassId: number;
+      fromClassName: string;
+      transferableSessions: number;
+      openEndedHeldSessions: number;
+    } | null;
   }>;
   message?: string;
 }> {
@@ -3658,6 +3721,11 @@ export async function searchStudentsForEnrollmentAction({
     if (!trimmed) {
       return { success: true, candidates: [] };
     }
+
+    const targetClass = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { id: true, levelId: true, formationLevelId: true, isFormation: true },
+    });
 
     const isNumeric = !isNaN(Number(trimmed));
 
@@ -3671,9 +3739,59 @@ export async function searchStudentsForEnrollmentAction({
       },
       include: {
         registeredBranch: { select: { name: true } },
+        family: true,
+        vouchers: {
+          where: { isVoided: false, isRefund: false, paymentType: "TUITION_4SESSION" },
+          include: { refunds: true },
+        },
+        attendances: {
+          where: { lesson: { isFree: false } },
+          select: {
+            lessonId: true,
+            status: true,
+            lesson: {
+              select: {
+                id: true,
+                startsAt: true,
+                isFree: true,
+                isTeacherAbsent: true,
+                classId: true,
+              },
+            },
+          },
+        },
+        catchUpAttendances: {
+          select: {
+            missedLessonId: true,
+            catchUpLessonId: true,
+            missedLesson: { select: { classId: true } },
+          },
+        },
         enrollments: {
           include: {
-            class: { select: { id: true, name: true } },
+            class: {
+              select: {
+                id: true,
+                name: true,
+                levelId: true,
+                formationLevelId: true,
+                pricePerCycle: true,
+                isFormation: true,
+                teacherId: true,
+                teacher: {
+                  select: {
+                    id: true,
+                    TeacherPayRate: {
+                      orderBy: { effectiveFrom: "desc" },
+                      take: 1,
+                    },
+                  },
+                },
+                teacherClassRates: true,
+              },
+            },
+            transfersFrom: true,
+            transfersTo: true,
           },
         },
       },
@@ -3681,15 +3799,87 @@ export async function searchStudentsForEnrollmentAction({
       orderBy: { name: "asc" },
     });
 
-    const candidates = students.map((s) => ({
-      id: s.id,
-      globalNumber: s.globalNumber,
-      name: s.name,
-      phone: s.phone,
-      branchName: s.registeredBranch?.name || "Siège",
-      classes: s.enrollments.map((e) => e.class.name),
-      isAlreadyEnrolled: s.enrollments.some((e) => e.class.id === classId),
-    }));
+    const candidates = students.map((s) => {
+      const isSiblingDiscount = Boolean(s.family?.payerStudentId && s.family.payerStudentId !== s.id);
+      const siblingDiscountPct = isSiblingDiscount ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
+      const isSiblingWaived100 = siblingDiscountPct >= 100;
+
+      let bestTransfer: {
+        fromEnrollmentId: number;
+        fromClassId: number;
+        fromClassName: string;
+        transferableSessions: number;
+        openEndedHeldSessions: number;
+      } | null = null;
+
+      if (targetClass) {
+        for (const enr of s.enrollments || []) {
+          if (enr.class.id === classId) continue;
+          if (enr.status === "TRANSFERRED" || enr.status === "UNENROLLED") continue;
+
+          const isSameLevel = targetClass.isFormation
+            ? Boolean(enr.class.isFormation && enr.class.formationLevelId === targetClass.formationLevelId)
+            : Boolean(!enr.class.isFormation && enr.class.levelId === targetClass.levelId);
+
+          if (!isSameLevel) continue;
+
+          const cls = enr.class;
+          const vTuition = (s.vouchers || []).filter((v: any) => v.classId === cls.id || !v.classId);
+          const vAtts = (s.attendances || []).filter((a: any) => a.lesson.classId === cls.id);
+          const vCatchUps = (s.catchUpAttendances || []).filter(
+            (cu: any) => cu.missedLesson?.classId === cls.id
+          );
+
+          const teacherId = cls.teacherId || cls.teacher?.id;
+          const teacherClassOverride = (cls.teacherClassRates as any[])?.find(
+            (tcr: any) => tcr.teacherId === teacherId
+          )?.percentage;
+          const teacherPercentage = teacherClassOverride != null
+            ? Number(teacherClassOverride)
+            : cls.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
+              ? Number(cls.teacher.TeacherPayRate[0].percentageOfSessionFee)
+              : null;
+
+          const metrics = computeStudentCreditAndSessions({
+            pricePerCycle: Number(cls.pricePerCycle || 0),
+            isFormation: Boolean(cls.isFormation),
+            payerStatus: enr.payerStatus || s.payerStatus || "NORMAL",
+            siblingDiscountPercentage: siblingDiscountPct,
+            isSiblingWaived: isSiblingWaived100,
+            tuitionVouchers: vTuition,
+            transfersIn: enr.transfersTo || [],
+            transfersOut: enr.transfersFrom || [],
+            creditResetOffset: Number(enr.creditResetOffset || 0),
+            attendances: vAtts,
+            catchUps: vCatchUps,
+            teacherPercentage,
+          });
+
+          if (metrics.transferableSessions > 0) {
+            if (!bestTransfer || metrics.transferableSessions > bestTransfer.transferableSessions) {
+              bestTransfer = {
+                fromEnrollmentId: enr.id,
+                fromClassId: cls.id,
+                fromClassName: cls.name,
+                transferableSessions: metrics.transferableSessions,
+                openEndedHeldSessions: metrics.openEndedHeldSessions,
+              };
+            }
+          }
+        }
+      }
+
+      return {
+        id: s.id,
+        globalNumber: s.globalNumber,
+        name: s.name,
+        phone: s.phone,
+        branchName: s.registeredBranch?.name || "Siège",
+        classes: s.enrollments.map((e) => e.class.name),
+        isAlreadyEnrolled: s.enrollments.some((e) => e.class.id === classId),
+        transferableInfo: bestTransfer,
+      };
+    });
 
     return { success: true, candidates };
   } catch (err: any) {
@@ -4013,6 +4203,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
   message: string;
   bundle?: any;
 }> {
+  // Triggers financial cache revalidation via revalidateFinancialRoutes (/list/daily-ledger, /list/revenue)
   try {
     const session = await getAuthSession();
     const issuingBranchId = await getActiveBranchId();
@@ -4346,8 +4537,11 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
     });
 
     try {
-      safeRevalidatePath(`/list/payments/class/${payload.classId}`);
-      safeRevalidatePath(`/list/students/${payload.studentId}`);
+      await revalidateFinancialRoutes({
+        classId: payload.classId,
+        studentId: payload.studentId,
+        branchId: issuingBranchId,
+      });
       safeRevalidatePath("/list/attendance");
       safeRevalidatePath(`/list/attendance/class/${payload.classId}`);
       if (targetClass.isFormation) {
@@ -4658,20 +4852,38 @@ export const issueVoucher = async (
     let feeOverrideNote = data.feeOverrideNote || null;
 
     // RULE §2.4: Sibling discount — percentage discount for siblings of designated payer; inscription and book fees unaffected
-    if (data.paymentType === "TUITION_4SESSION") {
+    // Formations excluded; primary payer must be active and paid
+    if (data.paymentType === "TUITION_4SESSION" && !isFormationClass) {
       const family = student.family;
       if (family && family.payerStudentId && family.payerStudentId !== student.id) {
-        const discountPct = Number(family.discountPercentage ?? 50);
-        if (discountPct >= 100) {
-          finalAmount = 0;
-          isWaivedSibling = true;
-          noteAppend = "[إعفاء إخوة: معفى 100% من معاليم الحصص]";
-        } else {
-          if (isNaN(finalAmount) || finalAmount <= 0) {
-            const basePrice = Number(targetClass.pricePerCycle || 0);
-            finalAmount = Math.max(0, basePrice * (1 - discountPct / 100));
+        let isPayerActiveAndPaid = false;
+        const payerStudent = await prisma.student.findUnique({
+          where: { id: family.payerStudentId },
+          include: {
+            enrollments: { include: { class: true } },
+            vouchers: { where: { isVoided: false, isRefund: false } },
+            attendances: { include: { lesson: true } },
+            catchUpAttendances: { include: { missedLesson: true } },
+          },
+        });
+        if (payerStudent) {
+          const payerRes = resolvePayerCredit({ payerStudent });
+          isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+        }
+
+        if (isPayerActiveAndPaid) {
+          const discountPct = Number(family.discountPercentage ?? 50);
+          if (discountPct >= 100) {
+            finalAmount = 0;
+            isWaivedSibling = true;
+            noteAppend = "[إعفاء إخوة: معفى 100% من معاليم الحصص]";
+          } else {
+            if (isNaN(finalAmount) || finalAmount <= 0) {
+              const basePrice = Number(targetClass.pricePerCycle || 0);
+              finalAmount = Math.max(0, basePrice * (1 - discountPct / 100));
+            }
+            noteAppend = `[خصم إخوة: تخفيض ${discountPct}%]`;
           }
-          noteAppend = `[خصم إخوة: تخفيض ${discountPct}%]`;
         }
       }
     }
@@ -4903,13 +5115,14 @@ export const issueVoucher = async (
       await syncStudentInscriptionWaiverForThreeGroups(tx, data.studentId);
     });
 
-    safeRevalidatePath(`/list/payments/class/${data.classId}`);
-    safeRevalidatePath(`/list/attendance/class/${data.classId}`);
-    safeRevalidatePath(`/list/payments`);
-    safeRevalidatePath(`/list/students/${data.studentId}`);
-    safeRevalidatePath(`/list/daily-ledger`);
-    safeRevalidatePath(`/list/finance`);
-    safeRevalidatePath(`/admin`);
+    await revalidateFinancialRoutes({
+      classId: data.classId,
+      studentId: data.studentId,
+      branchId: issuingBranchId,
+    });
+    if (data.classId) {
+      safeRevalidatePath(`/list/attendance/class/${data.classId}`);
+    }
 
     return {
       success: true,
@@ -4939,6 +5152,7 @@ export const editVoucher = async (
   currentState: CurrentState,
   data: VoucherEditSchema & { amount?: number; paymentType?: string; isVoided?: boolean }
 ) => {
+  // Triggers financial cache revalidation via revalidateFinancialRoutes (/list/revenue, /list/daily-ledger)
   try {
     const session = await getAuthSession();
     if (!data.voucherId) {
@@ -5069,11 +5283,12 @@ export const editVoucher = async (
       }
     });
 
-    safeRevalidatePath(`/list/payments/class/${voucher.classId}`);
-    safeRevalidatePath(`/list/payments`);
-    safeRevalidatePath(`/list/students/${voucher.studentId}`);
-    safeRevalidatePath(`/list/daily-ledger`);
-    safeRevalidatePath(`/list/finance`);
+    await revalidateFinancialRoutes({
+      classId: voucher.classId,
+      studentId: voucher.studentId,
+      branchId: voucher.issuingBranchId,
+      workshopId: voucher.workshopId,
+    });
     return { success: true, error: false, message: "تم تعديل الوصل وتسجيل أثر المراجعة بنجاح." };
   } catch (err: any) {
     console.error("editVoucher error:", err);
@@ -5349,6 +5564,18 @@ export const transferEnrollmentCredit = async (
 
       transferredAmount = Math.round(Number(finalTransferredSessions) * sessionPrice);
 
+      // Count held trailing absences to document if open-ended absences were transferred
+      const heldSessions = classifiedHistory.filter((h) => h.isHeld).length;
+      const unheldRemaining = Math.max(
+        0,
+        purchasedSessionsFrom + transferredInFrom - transferredOutFrom + offsetFrom - classifiedHistory.filter((h) => h.isConsumedCredit).length
+      );
+      const transferredHeldSessions = Math.min(heldSessions, Math.max(0, finalTransferredSessions - unheldRemaining));
+      const autoNote = transferredHeldSessions > 0
+        ? `[تحويل يشمل ${transferredHeldSessions} حصة غياب مفتوح قابلة للاسترجاع / Transfert incluant ${transferredHeldSessions} absence(s) ouverte(s)]`
+        : "";
+      const finalNotes = notes ? (autoNote ? `${notes} ${autoNote}` : notes) : (autoNote || null);
+
       // Record EnrollmentTransfer with amount and notes
       await tx.enrollmentTransfer.create({
         data: {
@@ -5356,7 +5583,7 @@ export const transferEnrollmentCredit = async (
           toEnrollmentId: toEnrollment.id,
           transferredSessions: Number(finalTransferredSessions),
           amount: transferredAmount,
-          notes: notes || null,
+          notes: finalNotes,
           transferredAt: new Date(),
           transferredBy: session.userId || "admin",
         },
@@ -5372,12 +5599,17 @@ export const transferEnrollmentCredit = async (
     });
 
     try {
-      safeRevalidatePath(`/list/payments/class/${fromEnrollment.classId}`);
-      safeRevalidatePath(`/list/payments/class/${toClassId}`);
-      safeRevalidatePath(`/list/students`);
-      safeRevalidatePath(`/list/students/${studentId}`);
-      safeRevalidatePath(`/list/finance`);
-      safeRevalidatePath(`/list/daily-ledger`);
+      await revalidateFinancialRoutes({
+        classId: toClassId,
+        studentId,
+        branchId: toClass.branchId,
+      });
+      if (fromEnrollment.classId) {
+        await revalidateFinancialRoutes({
+          classId: fromEnrollment.classId,
+          branchId: fromEnrollment.class.branchId,
+        });
+      }
       safeRevalidatePath("/list/attendance");
       safeRevalidatePath(`/list/attendance/class/${fromEnrollment.classId}`);
       safeRevalidatePath(`/list/attendance/class/${toClassId}`);
@@ -5401,101 +5633,6 @@ export const transferEnrollmentCredit = async (
   } catch (err: any) {
     console.error("transferEnrollmentCredit error:", err);
     return { success: false, error: true, message: err?.message || "فشل في تحويل رصيد الحصص." };
-  }
-};
-
-// FAMILY & SIBLING DISCOUNT ACTIONS (§2.4)
-export const setFamilyPayerStudent = async (familyId: number, payerStudentId: string) => {
-  try {
-    const session = await getAuthSession();
-    if (!session.isOwnerOrAdmin) {
-      return { success: false, error: true, message: "غير مصرح لك بتحديد التلميذ المكلف بالدفع." };
-    }
-
-    await prisma.family.update({
-      where: { id: familyId },
-      data: { payerStudentId: payerStudentId },
-    });
-
-    safeRevalidatePath("/list/families");
-    safeRevalidatePath("/list/payments");
-    return { success: true, error: false, message: "تم تحديد التلميذ المكلف بالدفع للعائلة بنجاح." };
-  } catch (err: any) {
-    console.error("setFamilyPayerStudent error:", err);
-    return { success: false, error: true, message: "فشل في تحديد التلميذ المكلف بالدفع." };
-  }
-};
-
-export const createOrUpdateFamily = async (
-  currentState: CurrentState,
-  data: FamilySchema
-) => {
-  try {
-    const session = await getAuthSession();
-    if (!session.isOwnerOrAdmin) {
-      return { success: false, error: true, message: "غير مصرح لك بإدارة العائلات." };
-    }
-
-    let familyId = data.id;
-    const studentIds = (data.studentIds || []).filter(Boolean);
-    const discountPct =
-      data.discountPercentage != null && !isNaN(Number(data.discountPercentage))
-        ? Math.min(100, Math.max(0, Number(data.discountPercentage)))
-        : 50;
-
-    await prisma.$transaction(async (tx) => {
-      if (familyId) {
-        // Find existing students in this family and unlink removed ones
-        const currentStudents = await tx.student.findMany({
-          where: { familyId },
-          select: { id: true },
-        });
-        const currentIds = currentStudents.map((s) => s.id);
-        const toRemove = currentIds.filter((id) => !studentIds.includes(id));
-        if (toRemove.length > 0) {
-          await tx.student.updateMany({
-            where: { id: { in: toRemove } },
-            data: { familyId: null },
-          });
-        }
-
-        await tx.family.update({
-          where: { id: familyId },
-          data: {
-            name: data.name || null,
-            payerStudentId: data.payerStudentId || null,
-            discountPercentage: discountPct,
-          },
-        });
-      } else {
-        const newFam = await tx.family.create({
-          data: {
-            name: data.name || null,
-            payerStudentId: data.payerStudentId || null,
-            discountPercentage: discountPct,
-          },
-        });
-        familyId = newFam.id;
-      }
-
-      // Associate all students with this family
-      if (studentIds.length > 0) {
-        await tx.student.updateMany({
-          where: { id: { in: studentIds } },
-          data: { familyId: familyId },
-        });
-      }
-    });
-
-    safeRevalidatePath("/list/parents");
-    safeRevalidatePath("/list/families");
-    safeRevalidatePath("/list/students");
-    safeRevalidatePath("/list/payments");
-    safeRevalidatePath("/list/attendance");
-    return { success: true, error: false, message: "تم حفظ بيانات العائلة والإخوة بنجاح." };
-  } catch (err: any) {
-    console.error("createOrUpdateFamily error:", err);
-    return { success: false, error: true, message: "فشل في حفظ بيانات العائلة." };
   }
 };
 
@@ -5529,8 +5666,11 @@ export const overrideEnrollmentFee = async (
       },
     });
 
-    safeRevalidatePath(`/list/payments/class/${enrollment.classId}`);
-    safeRevalidatePath(`/list/students/${enrollment.studentId}`);
+    await revalidateFinancialRoutes({
+      classId: enrollment.classId,
+      studentId: enrollment.studentId,
+      branchId: enrollment.class.branchId,
+    });
     return { success: true, error: false, message: "تم تطبيق الاستثناء بنجاح." };
   } catch (err: any) {
     console.error("overrideEnrollmentFee error:", err);
@@ -5542,6 +5682,7 @@ export const createRefund = async (
   currentState: CurrentState,
   data: RefundSchema
 ) => {
+  // Triggers financial cache revalidation via revalidateFinancialRoutes (/list/daily-ledger, /list/revenue)
   try {
     const session = await getAuthSession();
     if (!session.isOwnerOrAdmin) {
@@ -5864,14 +6005,18 @@ export const createRefund = async (
       });
 
       try {
-        safeRevalidatePath(`/list/payments`);
-        safeRevalidatePath(`/list/payments/class/${destClassId}`);
-        safeRevalidatePath(`/list/payments/class/${transfer.fromEnrollment.classId}`);
-        safeRevalidatePath(`/list/students/${student.id}`);
+        await revalidateFinancialRoutes({
+          classId: destClassId,
+          studentId: student.id,
+          branchId: toBranchId,
+        });
+        if (transfer.fromEnrollment.classId && transfer.fromEnrollment.classId !== destClassId) {
+          await revalidateFinancialRoutes({
+            classId: transfer.fromEnrollment.classId,
+            branchId: fromBranchId,
+          });
+        }
         safeRevalidatePath(`/list/reports`);
-        safeRevalidatePath(`/list/finance`);
-        safeRevalidatePath(`/list/daily-ledger`);
-        safeRevalidatePath(`/admin`);
       } catch {
         // Ignore revalidatePath errors in non-HTTP request contexts
       }
@@ -6369,13 +6514,14 @@ export const createRefund = async (
     });
 
     try {
-      safeRevalidatePath(`/list/payments`);
-      safeRevalidatePath(`/list/payments/class/${voucher.classId}`);
-      safeRevalidatePath(`/list/students/${voucher.studentId}`);
+      await revalidateFinancialRoutes({
+        classId: voucher.classId,
+        studentId: voucher.studentId,
+        branchId: voucher.issuingBranchId,
+        workshopId: voucher.workshopId,
+      });
       safeRevalidatePath(`/list/reports`);
-      safeRevalidatePath(`/list/finance`);
-      safeRevalidatePath(`/admin`);
-      if (voucher.class?.isFormation || voucher.paymentType === "FORMATION") {
+      if (voucher.classId && (voucher.class?.isFormation || voucher.paymentType === "FORMATION")) {
         safeRevalidatePath(`/list/formations/${voucher.classId}`);
         safeRevalidatePath(`/list/formations`);
       }
@@ -6509,6 +6655,7 @@ export const registerParticipant = async (
   currentState: CurrentState,
   data: RegisterParticipantSchema
 ) => {
+  // Triggers financial cache revalidation via revalidateFinancialRoutes (/list/daily-ledger, /list/revenue)
   try {
     const session = await getAuthSession();
     const activeBranchId = await getActiveBranchId();
@@ -6631,6 +6778,10 @@ export const registerParticipant = async (
     });
 
     try {
+      await revalidateFinancialRoutes({
+        workshopId: data.workshopId,
+        branchId: branchId,
+      });
       safeRevalidatePath(`/list/workshops/${data.workshopId}`);
     } catch (_) {}
     return { 
@@ -6822,6 +6973,11 @@ export const addWorkshopPayment = async (
       });
     });
 
+    await revalidateFinancialRoutes({
+      workshopId: workshop.id,
+      studentId: participant.studentId,
+      branchId: issuingBranchId,
+    });
     safeRevalidatePath(`/list/workshops/${data.workshopId}`);
     return { 
       success: true, 
@@ -6848,6 +7004,9 @@ export const updateWorkshopPayment = async (
       data: {
         totalPaid: data.amount,
       },
+    });
+    await revalidateFinancialRoutes({
+      workshopId: data.workshopId,
     });
     safeRevalidatePath(`/list/workshops/${data.workshopId}`);
     return { success: true, error: false, message: "تم تحديث عملية الدفع بنجاح." };
@@ -8709,6 +8868,49 @@ export async function generatePayrollRunAction(formData: {
   }
 }
 
+export async function calculateIndividualTeacherPayrollAction(formData: {
+  teacherId: string;
+  startDate: string;
+  endDate: string;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner && !session.can("manage", "payroll")) {
+      return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
+    }
+    const { calculateTeacherPayroll } = await import("./payroll");
+    const payroll = await calculateTeacherPayroll(
+      formData.teacherId,
+      new Date(formData.startDate),
+      new Date(formData.endDate)
+    );
+    return { success: true, error: false, payroll: serializeForClient(payroll) };
+  } catch (error: any) {
+    console.error("Error in calculateIndividualTeacherPayrollAction:", error);
+    return { success: false, error: true, message: error.message || "فشل حساب مستحقات الأستاذ" };
+  }
+}
+
+export async function generateIndividualTeacherPayrollAction(formData: {
+  teacherId: string;
+  startDate: string;
+  endDate: string;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner && !session.can("manage", "payroll")) {
+      return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
+    }
+    const run = await generatePayrollRun(formData.startDate, formData.endDate);
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+    return { success: true, error: false, payrollRunId: run.id };
+  } catch (error: any) {
+    console.error("Error in generateIndividualTeacherPayrollAction:", error);
+    return { success: false, error: true, message: error.message || "فشل حفظ دورة الرواتب" };
+  }
+}
+
 /**
  * Update the status of a PayrollRun (DRAFT | VALIDATED | PAID).
  */
@@ -9489,8 +9691,7 @@ export async function declareMissingMoneyAction(data: {
       },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId });
 
     return {
       success: true,
@@ -9544,8 +9745,7 @@ export async function confirmMissingMoneyAction(id: number): Promise<{
       },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId: missingRecord.branchId });
 
     return {
       success: true,
@@ -9578,7 +9778,7 @@ export async function rejectMissingMoneyAction(id: number): Promise<{
       };
     }
 
-    await prisma.missingMoney.update({
+    const rejected = await prisma.missingMoney.update({
       where: { id },
       data: {
         status: "REJECTED",
@@ -9587,8 +9787,7 @@ export async function rejectMissingMoneyAction(id: number): Promise<{
       },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId: rejected.branchId });
 
     return {
       success: true,
@@ -9621,7 +9820,7 @@ export async function resetMissingMoneyAction(id: number): Promise<{
       };
     }
 
-    await prisma.missingMoney.update({
+    const reset = await prisma.missingMoney.update({
       where: { id },
       data: {
         status: "PENDING",
@@ -9630,8 +9829,7 @@ export async function resetMissingMoneyAction(id: number): Promise<{
       },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId: reset.branchId });
 
     return {
       success: true,
@@ -9707,8 +9905,7 @@ export async function declareSurplusMoneyAction(data: {
       },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId });
 
     return {
       success: true,
@@ -9762,8 +9959,7 @@ export async function confirmSurplusMoneyAction(id: number): Promise<{
       },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId: surplusRecord.branchId });
 
     return {
       success: true,
@@ -9796,7 +9992,7 @@ export async function rejectSurplusMoneyAction(id: number): Promise<{
       };
     }
 
-    await prisma.surplusMoney.update({
+    const rejected = await prisma.surplusMoney.update({
       where: { id },
       data: {
         status: "REJECTED",
@@ -9805,8 +10001,7 @@ export async function rejectSurplusMoneyAction(id: number): Promise<{
       },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId: rejected.branchId });
 
     return {
       success: true,
@@ -9839,7 +10034,7 @@ export async function resetSurplusMoneyAction(id: number): Promise<{
       };
     }
 
-    await prisma.surplusMoney.update({
+    const reset = await prisma.surplusMoney.update({
       where: { id },
       data: {
         status: "PENDING",
@@ -9848,8 +10043,7 @@ export async function resetSurplusMoneyAction(id: number): Promise<{
       },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId: reset.branchId });
 
     return {
       success: true,
@@ -9881,12 +10075,11 @@ export async function deleteMissingMoneyAction(id: number): Promise<{
       };
     }
 
-    await prisma.missingMoney.delete({
+    const deleted = await prisma.missingMoney.delete({
       where: { id },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId: deleted.branchId });
 
     return {
       success: true,
@@ -9918,12 +10111,11 @@ export async function deleteSurplusMoneyAction(id: number): Promise<{
       };
     }
 
-    await prisma.surplusMoney.delete({
+    const deleted = await prisma.surplusMoney.delete({
       where: { id },
     });
 
-    safeRevalidatePath("/list/daily-ledger");
-    safeRevalidatePath("/list/finance");
+    await revalidateFinancialRoutes({ branchId: deleted.branchId });
 
     return {
       success: true,

@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import { getAuthSession } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
+import { revalidateFinancialRoutes } from "@/lib/revalidation";
 
 function safeRevalidate(path: string) {
   try {
@@ -48,7 +49,9 @@ export async function createDailyExpenseAction(data: {
       },
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes({
+      branchId: data.branchId ? Number(data.branchId) : null,
+    });
     return { success: true, error: false, message: "Dépense enregistrée avec succès / تم تسجيل النفقة بنجاح.", expense };
   } catch (err: any) {
     console.error("createDailyExpenseAction error:", err);
@@ -83,7 +86,9 @@ export async function updateDailyExpenseAction(
       },
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes({
+      branchId: data.branchId ? Number(data.branchId) : null,
+    });
     return { success: true, error: false, message: "Dépense mise à jour avec succès / تم تحديث النفقة بنجاح.", expense };
   } catch (err: any) {
     console.error("updateDailyExpenseAction error:", err);
@@ -98,9 +103,11 @@ export async function deleteDailyExpenseAction(id: number) {
       return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
     }
 
-    await prisma.dailyExpense.delete({ where: { id } });
+    const deleted = await prisma.dailyExpense.delete({ where: { id } });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes({
+      branchId: deleted.branchId ? Number(deleted.branchId) : null,
+    });
     return { success: true, error: false, message: "Dépense supprimée avec succès / تم حذف النفقة بنجاح." };
   } catch (err: any) {
     console.error("deleteDailyExpenseAction error:", err);
@@ -141,7 +148,7 @@ export async function createCaisseNoireTransactionAction(data: {
       },
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return {
       success: true,
       error: false,
@@ -186,7 +193,7 @@ export async function updateCaisseNoireTransactionAction(
       },
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return {
       success: true,
       error: false,
@@ -210,7 +217,7 @@ export async function deleteCaisseNoireTransactionAction(id: number) {
       where: { id },
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return {
       success: true,
       error: false,
@@ -425,7 +432,7 @@ export async function recordStaffPayrollAction(data: {
       });
     }
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return { success: true, error: false, message: "Salaire du personnel enregistré avec succès.", payroll };
   } catch (err: any) {
     console.error("recordStaffPayrollAction error:", err);
@@ -477,7 +484,7 @@ export async function updateStaffPayrollAction(
       });
     }
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return { success: true, error: false, message: "Règlement du salaire mis à jour avec succès.", payroll };
   } catch (err: any) {
     console.error("updateStaffPayrollAction error:", err);
@@ -496,7 +503,7 @@ export async function deleteStaffPayrollAction(id: number) {
       where: { id },
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return { success: true, error: false, message: "Règlement de salaire supprimé avec succès." };
   } catch (err: any) {
     console.error("deleteStaffPayrollAction error:", err);
@@ -545,7 +552,7 @@ export async function recordStaffAdvanceAction(data: {
       },
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return { success: true, error: false, message: "Avance sur salaire enregistrée avec succès.", advance };
   } catch (err: any) {
     console.error("recordStaffAdvanceAction error:", err);
@@ -583,7 +590,7 @@ export async function updateStaffAdvanceAction(
       data: updatePayload,
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return { success: true, error: false, message: "Avance mise à jour avec succès.", advance };
   } catch (err: any) {
     console.error("updateStaffAdvanceAction error:", err);
@@ -602,7 +609,7 @@ export async function deleteStaffAdvanceAction(id: number) {
       where: { id },
     });
 
-    safeRevalidate("/list/finance");
+    await revalidateFinancialRoutes();
     return { success: true, error: false, message: "Avance supprimée avec succès." };
   } catch (err: any) {
     console.error("deleteStaffAdvanceAction error:", err);

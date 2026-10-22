@@ -1,5 +1,6 @@
 import React from "react";
 import Image from "next/image";
+import { formatAlgiersDate, formatDZD as formatDZDLib } from "@/lib/algiersDate";
 
 export interface StaffPayslipPrintData {
   id: number;
@@ -41,17 +42,17 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
     backgroundColor: "#ffffff",
   };
 
-  const formatDZD = (num: number) => `${Number(num || 0).toLocaleString("fr-FR")} DZD`;
+  const formatDZD = (num: number) => formatDZDLib(num, "fr");
   const periodLabel = `${MONTH_NAMES_FR[data.month - 1] || data.month} ${data.year}`;
 
   const formatPaidDate = (d?: string | Date | null) => {
     if (!d) return "-";
     try {
-      return new Date(d).toLocaleDateString("fr-FR", {
+      return formatAlgiersDate(d, "fr-FR", {
         year: "numeric",
         month: "long",
         day: "numeric",
-      });
+      }) || String(d);
     } catch {
       return String(d);
     }
@@ -98,7 +99,7 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
             Date de règlement : <span className="font-semibold">{formatPaidDate(data.paidAt)}</span>
           </p>
           <p className="text-xs text-gray-500 mt-0.5">
-            Date d&apos;impression : {new Date().toLocaleDateString("fr-FR")}
+            Date d&apos;impression : {formatAlgiersDate(new Date(), "fr-FR")}
           </p>
         </div>
       </div>

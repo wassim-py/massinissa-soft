@@ -160,11 +160,12 @@ export default function WorkshopAttendanceGrid({
                           weekday: "short",
                           month: "short",
                           day: "numeric",
+                          timeZone: "Africa/Algiers",
                         })}
                       </span>
                       <span className="text-[10px] text-muted font-mono" dir="ltr">
-                        {sessionDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} -{" "}
-                        {sessionEndDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        {sessionDate.toLocaleTimeString(dateLocale, { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Algiers" })} -{" "}
+                        {sessionEndDate.toLocaleTimeString(dateLocale, { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Algiers" })}
                       </span>
 
                       {canManageAttendance && (

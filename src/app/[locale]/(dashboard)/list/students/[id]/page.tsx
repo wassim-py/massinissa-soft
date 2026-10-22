@@ -18,6 +18,7 @@ import { getTranslations, getLocale } from "next-intl/server";
 import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import StudentPayerStatusControl from "@/components/students/StudentPayerStatusControl";
 import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
+import { formatDZD, getAlgiersDateInfo } from "@/lib/algiersDate";
 import {
   Calendar,
   Building2,
@@ -41,6 +42,7 @@ function formatLessonDate(date: Date | string, locale: string) {
     day: "numeric",
     month: "long",
     year: "numeric",
+    timeZone: "Africa/Algiers",
   }).format(d);
 }
 
@@ -48,11 +50,14 @@ function formatLessonTime(start: Date | string, end: Date | string) {
   const s = new Date(start);
   const e = new Date(end);
   const fmt = (d: Date) =>
-    d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+    d.toLocaleTimeString("fr-DZ", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "Africa/Algiers",
+    });
   return `${fmt(s)} - ${fmt(e)}`;
 }
-
-const formatDZD = (num: number, locale: string) => `${Number(num || 0).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD`;
 
 const SingleStudentPage = async (
     props: {
@@ -136,7 +141,26 @@ const SingleStudentPage = async (
                   },
                 },
               },
-              students: true,
+              students: {
+                select: {
+                  id: true,
+                  name: true,
+                  sex: true,
+                  globalNumber: true,
+                  registeredBranchId: true,
+                  registeredBranch: { select: { id: true, name: true } },
+                  enrollments: {
+                    where: { status: "ACTIVE" },
+                    select: {
+                      id: true,
+                      classId: true,
+                      status: true,
+                      payerStatus: true,
+                      class: { select: { id: true, name: true } },
+                    },
+                  },
+                },
+              },
             },
           },
           enrollments: {
@@ -272,11 +296,21 @@ const SingleStudentPage = async (
     }
     const s = rawStudent[0];
 
-    // Sibling discount check (§2.4)
-    const isSiblingDiscount = Boolean(
+    // Sibling discount check (§2.4): applies if family has a designated payer who is actively enrolled and paid
+    const hasPayerSibling = Boolean(
       studentPaymentData?.family?.payerStudentId &&
       studentPaymentData.family.payerStudentId !== id
     );
+
+    let isPayerActiveAndPaid = false;
+    if (hasPayerSibling && studentPaymentData?.family?.payerStudent) {
+      const payerRes = resolvePayerCredit({
+        payerStudent: studentPaymentData.family.payerStudent,
+      });
+      isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+    }
+
+    const isSiblingDiscount = Boolean(hasPayerSibling && isPayerActiveAndPaid);
     const siblingDiscountPct = isSiblingDiscount
       ? Number((studentPaymentData?.family as any)?.discountPercentage ?? 50)
       : 0;
@@ -325,22 +359,6 @@ const SingleStudentPage = async (
         (cu: any) => cu.missedLesson?.classId === c.id
       );
 
-      let payerRemainingCredit: number | undefined = undefined;
-      const hasPayerSibling = Boolean(
-        studentPaymentData?.family?.payerStudentId &&
-        studentPaymentData.family.payerStudentId !== id
-      );
-
-      if (hasPayerSibling && studentPaymentData?.family?.payerStudent) {
-        const payerRes = resolvePayerCredit({
-          payerStudent: studentPaymentData.family.payerStudent,
-          classId: c.id,
-          classPricePerCycle: Number(c?.pricePerCycle || 0),
-          isFormation,
-        });
-        payerRemainingCredit = payerRes.netSessions;
-      }
-
       const teacherClassOverride = (c.teacherClassRates as any[])?.find(
         (tcr: any) => tcr.teacherId === c.teacherId
       )?.percentage;
@@ -356,7 +374,7 @@ const SingleStudentPage = async (
         payerStatus: enrStatus,
         siblingDiscountPercentage: siblingDiscountPct,
         isSiblingWaived: isSiblingWaived100,
-        payerRemainingCredit,
+        isPayerActiveAndPaid,
         tuitionVouchers,
         transfersIn: enr.transfersTo,
         transfersOut: enr.transfersFrom,
@@ -380,6 +398,8 @@ const SingleStudentPage = async (
         teacherPercentage,
         isSiblingWaived: isSiblingWaived100,
         siblingDiscountPercentage: siblingDiscountPct,
+        isFormation,
+        isPayerActiveAndPaid,
       });
 
       return {
@@ -400,7 +420,7 @@ const SingleStudentPage = async (
         teacherName: c.teacher?.name || null,
         netSessions,
         isSiblingWaived: isSiblingWaived100,
-        hasPayerSibling,
+        hasPayerSibling: isSiblingDiscount,
         isNonPayer: enrStatus === "NON_PAYER",
         payerStatus: enrStatus,
         status:
@@ -485,12 +505,11 @@ const SingleStudentPage = async (
     ];
 
     const lessons = rawLessons.map((r) => {
-      const d = new Date(r.startsAt);
-      const dayIndex = isNaN(d.getDay()) ? 0 : d.getDay();
+      const info = getAlgiersDateInfo(r.startsAt);
       return {
         id: r.id,
         name: r.className || (locale === "ar" ? "درس" : "Cours"),
-        day: dayNames[dayIndex],
+        day: info.weekday,
         startTime: r.startsAt,
         endTime: r.endsAt,
         startsAt: r.startsAt,
@@ -526,7 +545,13 @@ const SingleStudentPage = async (
       birthday: s.birthday ? new Date(s.birthday) : new Date(2008, 0, 1),
       sex: s.sex || "MALE",
       familyId: s.familyId,
-      parent: s.familyId ? { name: t("familyPrefix", { id: s.familyId }), surname: "" } : null,
+      familyName: studentPaymentData?.family?.name || (s.familyId ? t("familyPrefix", { id: s.familyId }) : null),
+      parent: s.familyId
+        ? {
+            name: studentPaymentData?.family?.name || t("familyPrefix", { id: s.familyId }),
+            surname: "",
+          }
+        : null,
       classes: sortedActiveGroupSummaries.map((g) => ({ id: g.classId, name: g.className })),
       gradeId: studentLevelId || undefined,
       registeredBranchId: s.registeredBranchId,

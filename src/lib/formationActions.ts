@@ -9,6 +9,7 @@ import { serializeForClient, getLessonDateTime } from "@/lib/utils";
 import { upsertDailyLedger } from "@/lib/ledger";
 import { checkForConflicts } from "@/lib/actions";
 import { getFormationInscriptionFeeAction } from "@/lib/configurationActions";
+import { revalidateFinancialRoutes } from "@/lib/revalidation";
 
 function safeRevalidatePath(path: string) {
   try {
@@ -505,8 +506,12 @@ export async function enrollStudentInFormationGroup(data: {
       },
     });
 
+    await revalidateFinancialRoutes({
+      classId: targetClass.id,
+      studentId: data.studentId,
+      branchId: targetClass.branchId,
+    });
     safeRevalidatePath("/list/formations");
-    safeRevalidatePath(`/list/payments/class/${targetClass.id}`);
     return {
       success: true,
       error: false,
@@ -1031,6 +1036,7 @@ export async function recordFormationLumpSumPayment(data: {
   notes?: string;
   isRetake?: boolean;
 }): Promise<ActionResponse> {
+  // Triggers financial cache revalidation via revalidateFinancialRoutes (/list/daily-ledger, /list/revenue)
   try {
     const session = await getAuthSession();
     const activeBranchId = await getActiveBranchId();
@@ -1183,6 +1189,11 @@ export async function recordFormationLumpSumPayment(data: {
       }
     });
 
+    await revalidateFinancialRoutes({
+      classId: data.classId,
+      studentId: data.studentId,
+      branchId: issuingBranchId,
+    });
     safeRevalidatePath("/list/formations");
     safeRevalidatePath(`/list/formations/${data.classId}`);
 

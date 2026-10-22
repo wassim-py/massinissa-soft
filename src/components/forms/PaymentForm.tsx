@@ -19,6 +19,7 @@ import PrintTicketButton from "../PrintTicketButton";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
+import { formatDZD } from "@/lib/algiersDate";
 import { computeStudentSessionFee } from "@/lib/studentBilling";
 import { CheckCircle2, AlertCircle, Info, Printer } from "lucide-react";
 
@@ -59,7 +60,8 @@ const PaymentForm = ({
   const tCommon = useTranslations("common");
   const locale = useLocale();
 
-  const isSiblingDiscount = Boolean(
+  const isFormation = Boolean((classData as any)?.isFormation || (classData as any)?.FormationLevel || (classData as any)?.formationLevelId);
+  const isSiblingDiscount = !isFormation && Boolean(
     student.family && student.family.payerStudentId && student.family.payerStudentId !== student.id
   );
   const siblingDiscountPct = isSiblingDiscount
@@ -79,7 +81,6 @@ const PaymentForm = ({
   const enrollment = (student.enrollments as any[])?.find((e) => e.classId === classData.id);
   const currentPayerStatus = enrollment?.payerStatus || (student as any).payerStatus || "NORMAL";
 
-  const isFormation = Boolean((classData as any)?.isFormation || (classData as any)?.FormationLevel || (classData as any)?.formationLevelId);
   const formationLevelPrice = Number(
     (classData as any)?.FormationLevel?.lumpSumPrice ?? classData.pricePerCycle ?? (classData as any)?.price ?? 0
   );
@@ -90,6 +91,7 @@ const PaymentForm = ({
     teacherPercentage,
     isSiblingWaived,
     siblingDiscountPercentage: siblingDiscountPct,
+    isFormation,
   });
 
   const initialConfiguredFee =
@@ -337,8 +339,8 @@ const PaymentForm = ({
             </h3>
             <p className="text-xs text-emerald-900">
               {locale === "ar"
-                ? `${student.name} • ${classData.name} • ${issuedBundle.totalAmount.toLocaleString()} دج`
-                : `${student.name} • ${classData.name} • ${issuedBundle.totalAmount.toLocaleString()} DZD`}
+                ? `${student.name} • ${classData.name} • ${formatDZD(issuedBundle.totalAmount, "ar")}`
+                : `${student.name} • ${classData.name} • ${formatDZD(issuedBundle.totalAmount, "fr")}`}
             </p>
           </div>
         </div>
@@ -355,7 +357,7 @@ const PaymentForm = ({
                   {locale === "ar" ? item.labelAr : item.labelFr}
                 </span>
                 <span className="font-bold font-mono text-gray-900">
-                  {Number(item.amount).toLocaleString()} DZD
+                  {formatDZD(item.amount, locale)}
                 </span>
               </div>
             ))}
@@ -363,7 +365,7 @@ const PaymentForm = ({
           <div className="flex justify-between pt-2 border-t-2 border-border font-bold text-sm">
             <span>{locale === "ar" ? "المجموع الكلي:" : "Total :"}</span>
             <span className="font-mono text-primary">
-              {issuedBundle.totalAmount.toLocaleString()} DZD
+              {formatDZD(issuedBundle.totalAmount, locale)}
             </span>
           </div>
         </div>
@@ -481,10 +483,10 @@ const PaymentForm = ({
             {locale === "ar"
               ? isSiblingWaived
                 ? "هذا التلميذ معفى بنسبة 100% من معاليم التدريس (0 دج) لوجود دافع رئيسي للعائلة."
-                : `يستفيد هذا التلميذ من تخفيض بنسبة ${siblingDiscountPct}% على معاليم الحصص الدراسية (المبلغ المطلوب: ${feeCalc.studentCycleFee.toLocaleString()} دج بدل ${feeCalc.baseCycleFee.toLocaleString()} دج). رسوم التسجيل والكتب تبقى كاملة.`
+                : `يستفيد هذا التلميذ من تخفيض بنسبة ${siblingDiscountPct}% على معاليم الحصص الدراسية (المبلغ المطلوب: ${formatDZD(feeCalc.studentCycleFee, "ar")} بدل ${formatDZD(feeCalc.baseCycleFee, "ar")}). رسوم التسجيل والكتب تبقى كاملة.`
               : isSiblingWaived
               ? "Cet élève bénéficie d'une exonération à 100% sur les cours (0 DZD)."
-              : `Cet élève bénéficie d'une réduction de ${siblingDiscountPct}% sur les cours (${feeCalc.studentCycleFee.toLocaleString()} DZD au lieu de ${feeCalc.baseCycleFee.toLocaleString()} DZD). Frais d'inscription et manuels plein tarif.`}
+              : `Cet élève bénéficie d'une réduction de ${siblingDiscountPct}% sur les cours (${formatDZD(feeCalc.studentCycleFee, "fr")} au lieu de ${formatDZD(feeCalc.baseCycleFee, "fr")}). Frais d'inscription et manuels plein tarif.`}
           </p>
         </div>
       )}
@@ -597,7 +599,7 @@ const PaymentForm = ({
               </Badge>
             ) : (
               <span className="text-xs font-mono font-semibold text-gray-600">
-                {Number(configuredFee || classData.inscriptionFee || 0).toLocaleString()} DZD
+                {formatDZD(configuredFee || classData.inscriptionFee || 0, locale)}
               </span>
             )}
           </div>
@@ -646,7 +648,7 @@ const PaymentForm = ({
                 </Badge>
               ) : (
                 <span className="text-xs font-mono font-semibold text-gray-600">
-                  {Number(classData.bookFee || 0).toLocaleString()} DZD
+                  {formatDZD(classData.bookFee || 0, locale)}
                 </span>
               )}
             </div>
@@ -686,7 +688,7 @@ const PaymentForm = ({
           {locale === "ar" ? "المجموع الكلي للدفع:" : "Total à encaisser :"}
         </span>
         <span className="text-lg font-bold font-mono text-primary">
-          {totalAmount.toLocaleString()} DZD
+          {formatDZD(totalAmount, locale)}
         </span>
       </div>
 
@@ -700,8 +702,8 @@ const PaymentForm = ({
         className="w-full"
       >
         {locale === "ar"
-          ? `تأكيد وإصدار الوصل (${totalAmount.toLocaleString()} دج)`
-          : `Confirmer et émettre le reçu (${totalAmount.toLocaleString()} DZD)`}
+          ? `تأكيد وإصدار الوصل (${formatDZD(totalAmount, "ar")})`
+          : `Confirmer et émettre le reçu (${formatDZD(totalAmount, "fr")})`}
       </Button>
     </form>
   );

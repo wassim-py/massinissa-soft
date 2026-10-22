@@ -61,43 +61,56 @@ export async function resolveOrCreateLessonForDate(
       targetDateStr
     );
 
-  const [tYear, tMonth, tDay] = targetDateStr.split("-").map(Number);
-  const targetDayStart = new Date(
-    Date.UTC(tYear, tMonth - 1, tDay, -1, 0, 0, 0)
-  );
-  const targetDayEnd = new Date(
-    Date.UTC(tYear, tMonth - 1, tDay, 22, 59, 59, 999)
-  );
-
-  // 1. Check if a recurring Lesson row for this class on targetDateStr at the same slot already exists
-  const candidatesOnDate = await prisma.lesson.findMany({
+  // Recurring rows are scoped to the base lesson's OWN branch. A lesson that runs in a
+  // different branch is a different session for the same group (e.g. 13:30–15:30 on branch A
+  // followed by 15:30–17:30 on branch B) and its dated rows must never be reused here.
+  const classRecurring = await prisma.lesson.findMany({
     where: {
       classId: baseLesson.classId,
+      branchId: baseLesson.branchId,
       isExtra: false,
       isCatchUp: false,
       isFree: false,
-      startsAt: {
-        gte: targetDayStart,
-        lte: targetDayEnd,
-      },
     },
     include: {
       _count: {
         select: {
           attendances: true,
+          missedByCatchUps: true,
+          catchUpVisitsHosted: true,
         },
       },
     },
     orderBy: { id: "desc" },
   });
 
-  const exactSlotMatch = candidatesOnDate.find(
-    (c) => getAlgiersDateInfo(c.startsAt).timeStr === baseInfo.timeStr
-  );
+  // 1. Check if a recurring Lesson row for this class AND branch on targetDateStr at the same slot already exists
+  const candidatesOnDate = classRecurring.filter((c) => {
+    const cInfo = getAlgiersDateInfo(c.startsAt);
+    return cInfo.dateStr === targetDateStr;
+  });
+
+  const exactSlotMatch = candidatesOnDate.find((c) => {
+    const cInfo = getAlgiersDateInfo(c.startsAt);
+    const cEndInfo = getAlgiersDateInfo(c.endsAt);
+    return (
+      cInfo.timeStr === baseInfo.timeStr && cEndInfo.timeStr === baseEndInfo.timeStr
+    );
+  });
   if (exactSlotMatch) {
     return exactSlotMatch.id;
   }
-  if (candidatesOnDate.length === 1) {
+
+  // A group that runs several distinct time slots must never inherit a dated row belonging to
+  // another slot — that is exactly what marks a student present at the wrong session.
+  const hasOtherSlots = classRecurring.some((c) => {
+    const cInfo = getAlgiersDateInfo(c.startsAt);
+    const cEndInfo = getAlgiersDateInfo(c.endsAt);
+    return cInfo.timeStr !== baseInfo.timeStr || cEndInfo.timeStr !== baseEndInfo.timeStr;
+  });
+
+  // Legacy / renamed slot: safe only when this is the group's single recurring slot in this branch.
+  if (candidatesOnDate.length === 1 && !hasOtherSlots) {
     return candidatesOnDate[0].id;
   }
 
@@ -124,28 +137,12 @@ export async function resolveOrCreateLessonForDate(
     return baseLesson.id;
   }
 
-  // 3. Check if there is any other unused recurring Lesson row for this exact slot (classId, weekday, timeStr)
+  // 3. Check if there is any other unused recurring Lesson row for this exact slot
+  // (classId, branchId, weekday, timeStr, endTimeStr)
   // only if that sibling is on or after targetDateStr (never steal an older date's record).
-  const allClassRecurring = await prisma.lesson.findMany({
-    where: {
-      classId: baseLesson.classId,
-      isExtra: false,
-      isCatchUp: false,
-      isFree: false,
-    },
-    include: {
-      _count: {
-        select: {
-          attendances: true,
-          missedByCatchUps: true,
-          catchUpVisitsHosted: true,
-        },
-      },
-    },
-    orderBy: { id: "desc" },
-  });
-
-  const unusedSibling = allClassRecurring.find((c) => {
+  // classRecurring is already scoped to this branch, so an unused row from another branch
+  // can never be picked ("stolen") for this session.
+  const unusedSibling = classRecurring.find((c) => {
     const cInfo = getAlgiersDateInfo(c.startsAt);
     const cEndInfo = getAlgiersDateInfo(c.endsAt);
     return (

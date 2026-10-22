@@ -5,7 +5,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { NextIntlClientProvider } from "next-intl";
-import { getMessages } from "next-intl/server";
+import { getMessages, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
 import { routing } from "@/i18n/routing";
@@ -89,6 +89,9 @@ export default async function LocaleLayout({
     notFound();
   }
 
+  // Enable static rendering & warm request locale cache
+  setRequestLocale(locale);
+
   const messages = await getMessages();
   const isRtl = locale === "ar";
   const fontClass = isRtl ? tajawal.className : inter.className;
@@ -111,7 +114,11 @@ export default async function LocaleLayout({
           <meta name="apple-mobile-web-app-title" content={isRtl ? "كلاستي" : "Classty"} />
         </head>
         <body className={`${fontClass} ${tajawal.variable} ${inter.variable}`}>
-          <NextIntlClientProvider messages={messages}>
+          <NextIntlClientProvider
+            locale={locale}
+            messages={messages}
+            timeZone="Africa/Algiers"
+          >
             <AnnouncementNotificationProvider>
               {children}
             </AnnouncementNotificationProvider>

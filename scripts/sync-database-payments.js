@@ -10,7 +10,9 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: proc
 
 function normalizeDateToStartOfDay(date) {
   const d = new Date(date);
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+  // Africa/Algiers is strictly UTC+1 (+3,600,000 ms) year-round with no Daylight Saving Time.
+  const algiersTime = new Date(d.getTime() + 3600000);
+  return new Date(Date.UTC(algiersTime.getUTCFullYear(), algiersTime.getUTCMonth(), algiersTime.getUTCDate(), 0, 0, 0, 0));
 }
 
 function resolveLedgerType(paymentType, isFormation = false) {

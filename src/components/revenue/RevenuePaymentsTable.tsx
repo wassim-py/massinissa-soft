@@ -23,8 +23,8 @@ import {
   Loader2,
   X,
 } from "lucide-react";
-import { format } from "date-fns";
-import { arDZ } from "date-fns/locale";
+import { formatVoucherDisplay, formatPaymentDate, formatPaymentTime } from "@/lib/voucherUtils";
+import { formatDZD } from "@/lib/algiersDate";
 import { editVoucher, voidVoucher } from "@/lib/actions";
 import { toast } from "react-toastify";
 
@@ -123,11 +123,6 @@ export default function RevenuePaymentsTable({ vouchers }: RevenuePaymentsTableP
       setIsActionLoading(false);
     }
   };
-
-  const formatDZD = (num: number) =>
-    locale === "ar"
-      ? `${num.toLocaleString("ar-DZ")} دج`
-      : `${num.toLocaleString("fr-DZ")} DZD`;
 
   // Extract unique branches
   const uniqueBranches = useMemo(() => {
@@ -369,9 +364,8 @@ export default function RevenuePaymentsTable({ vouchers }: RevenuePaymentsTableP
           <tbody className="divide-y divide-border/60 text-table-body text-gray-700">
             {paginatedVouchers.length > 0 ? (
               paginatedVouchers.map((v) => {
-                const dateObj = new Date(v.issuedAt);
-                const formattedDate = format(dateObj, "dd/MM/yyyy");
-                const formattedTime = format(dateObj, "HH:mm");
+                const formattedDate = formatPaymentDate(v.issuedAt);
+                const formattedTime = formatPaymentTime(v.issuedAt);
 
                 return (
                   <tr
@@ -379,8 +373,12 @@ export default function RevenuePaymentsTable({ vouchers }: RevenuePaymentsTableP
                     className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
                   >
                     {/* Voucher number */}
-                    <td className="p-3.5 font-mono font-bold text-primary text-xs" dir="ltr">
-                      #{v.number}
+                    <td className="p-3.5 font-mono font-bold text-primary text-xs whitespace-nowrap" dir="ltr">
+                      {v.voucherDisplay ||
+                        formatVoucherDisplay(v, {
+                          branchName: v.branchName,
+                          levelName: v.levelName || v.class?.level?.name,
+                        })}
                     </td>
 
                     {/* Date and time */}
@@ -429,7 +427,7 @@ export default function RevenuePaymentsTable({ vouchers }: RevenuePaymentsTableP
 
                     {/* Amount */}
                     <td className="p-3.5 text-end font-bold font-mono text-success-text whitespace-nowrap">
-                      +{formatDZD(v.amount)}
+                      +{formatDZD(v.amount, locale)}
                     </td>
 
                     {/* Status */}
@@ -622,7 +620,7 @@ export default function RevenuePaymentsTable({ vouchers }: RevenuePaymentsTableP
                   {locale === "ar" ? "إلغاء وحذف الوصل" : "Annuler et invalider le reçu"}
                 </h3>
                 <p className="text-xs text-muted font-mono">
-                  #{voucherToVoid.number} - {formatDZD(voucherToVoid.amount)}
+                  #{voucherToVoid.number} - {formatDZD(voucherToVoid.amount, locale)}
                 </p>
               </div>
             </div>

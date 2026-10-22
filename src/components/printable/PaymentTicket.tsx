@@ -1,7 +1,8 @@
 import React from 'react';
 import Image from 'next/image';
 import { Voucher, Student, Class } from "@prisma/client";
-import { formatVoucherDisplay, formatPaymentDateTime } from "@/lib/voucherUtils";
+import { formatVoucherDisplay } from "@/lib/voucherUtils";
+import { formatAlgiersDateTime, formatDZD, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 import { CLASSTY_LOGO_BASE64, MASSINISSA_LOGO_BASE64, MASSINISSA_QR_BASE64 } from "@/lib/receiptAssets";
 
 const PAYMENT_TYPE_LABELS_AR: Record<string, string> = {
@@ -96,7 +97,7 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
           </div>
           <div className="flex justify-between items-center">
             <span className="font-bold">{isAr ? "التاريخ:" : "Date :"}</span>
-            <span className="font-mono font-semibold" dir="ltr">{formatPaymentDateTime(voucher.issuedAt)}</span>
+            <span className="font-mono font-semibold" dir="ltr">{formatAlgiersDateTime(voucher.issuedAt, locale) || "—"}</span>
           </div>
           {voucher.issuingBranchId !== voucher.targetBranchId && (
             <div className="flex justify-between text-blue-700 font-bold text-[10px]">
@@ -130,14 +131,14 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
               return (
                 <div key={idx} className="flex justify-between mt-0.5 text-[10.5px]">
                   <span>{label}</span>
-                  <span className="font-mono font-bold">{amt.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}</span>
+                  <span className="font-mono font-bold">{formatDZD(amt, locale)}</span>
                 </div>
               );
             })
           ) : (
             <div className="flex justify-between mt-0.5 text-[11px]">
               <span>{typeLabel}</span>
-              <span className="font-mono font-bold">{amountNum.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}</span>
+              <span className="font-mono font-bold">{formatDZD(amountNum, locale)}</span>
             </div>
           )}
         </div>
@@ -154,7 +155,7 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
             {remainingBalance !== undefined && remainingBalance > 0 && (
               <div className="flex justify-between text-amber-800 font-bold">
                 <span>{isAr ? "المبلغ المتبقي:" : "Reste à payer :"}</span>
-                <span className="font-mono font-bold">{remainingBalance.toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')} {isAr ? 'دج' : 'DZD'}</span>
+                <span className="font-mono font-bold">{formatDZD(remainingBalance, locale)}</span>
               </div>
             )}
           </div>
@@ -164,8 +165,8 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
         <div className="border-t-2 border-black mt-1.5 pt-1 text-end">
           <p className="font-black text-base text-black">
             {isAr ? "المجموع:" : "Total :"} {
-              (voucher.totalAmount !== undefined ? Number(voucher.totalAmount) : amountNum).toLocaleString(isAr ? 'ar-DZ' : 'fr-DZ')
-            } {isAr ? 'دج' : 'DZD'}
+              formatDZD(voucher.totalAmount !== undefined ? Number(voucher.totalAmount) : amountNum, locale)
+            }
           </p>
         </div>
 

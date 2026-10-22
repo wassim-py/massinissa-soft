@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useTransition } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
+import { formatDZD } from "@/lib/algiersDate";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -57,6 +58,7 @@ export default function FormationLanguageSection({
 }: FormationLanguageSectionProps) {
   const t = useTranslations("configuration.formationLanguages");
   const tCommon = useTranslations("common");
+  const locale = useLocale();
   const [isPending, startTransition] = useTransition();
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -655,7 +657,7 @@ export default function FormationLanguageSection({
                           </div>
                           <div className="text-xs text-muted flex items-center gap-1.5 mt-0.5 font-mono font-semibold text-emerald-700">
                             <Coins className="w-3 h-3 text-emerald-600" />
-                            {lvl.lumpSumPrice.toLocaleString()} DZD
+                            {formatDZD(lvl.lumpSumPrice, locale)}
                           </div>
                         </div>
                       </div>

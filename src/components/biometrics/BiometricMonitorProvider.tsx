@@ -45,6 +45,7 @@ import {
   getBiometricPaymentDataAction,
 } from "@/lib/biometricActions";
 import PaymentForm from "@/components/forms/PaymentForm";
+import { formatDZD } from "@/lib/algiersDate";
 
 interface BiometricMonitorContextType {
   isEnabled: boolean;
@@ -2039,7 +2040,7 @@ export default function BiometricMonitorProvider({
                         {paymentData.availableClasses.map((cls: any) => (
                           <option key={cls.id} value={cls.id}>
                             {cls.name} ({cls.branch?.name || ""}) -{" "}
-                            {cls.pricePerCycle?.toLocaleString()} DZD
+                            {formatDZD(cls.pricePerCycle, locale)}
                           </option>
                         ))}
                       </select>

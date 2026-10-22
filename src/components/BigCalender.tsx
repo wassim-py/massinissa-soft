@@ -3,16 +3,35 @@
 import { Calendar, momentLocalizer, View, Views } from "react-big-calendar";
 import moment from "moment";
 import "react-big-calendar/lib/css/react-big-calendar.css";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { getAlgiersDateInfo } from "@/lib/algiersDate";
 
 const localizer = momentLocalizer(moment);
 
 const BigCalendar = ({
   data,
 }: {
-  data: { title: string; start: Date; end: Date }[];
+  data: { title: string; start: Date | string; end: Date | string; isFree?: boolean; isExtra?: boolean; isCatchUp?: boolean }[];
 }) => {
   const [view, setView] = useState<View>(Views.WORK_WEEK);
+
+  // Anchor calendar events strictly to Algiers time on ANY client browser without hydration mismatch
+  const normalizedEvents = useMemo(() => {
+    return (data || []).map((event) => {
+      const sInfo = getAlgiersDateInfo(event.start);
+      const eInfo = getAlgiersDateInfo(event.end);
+
+      // Construct Date with local fields matching Algiers time exactly
+      const localStart = new Date(sInfo.year, sInfo.month - 1, sInfo.day, sInfo.hour, sInfo.minute, sInfo.second || 0);
+      const localEnd = new Date(eInfo.year, eInfo.month - 1, eInfo.day, eInfo.hour, eInfo.minute, eInfo.second || 0);
+
+      return {
+        ...event,
+        start: localStart,
+        end: localEnd,
+      };
+    });
+  }, [data]);
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.innerWidth < 640) {
@@ -74,7 +93,7 @@ const BigCalendar = ({
   return (
     <Calendar
       localizer={localizer}
-      events={data}
+      events={normalizedEvents}
       startAccessor="start"
       endAccessor="end"
       views={["work_week", "day"]}

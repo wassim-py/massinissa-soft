@@ -41,12 +41,16 @@ export function computeStudentSessionFee({
   teacherPercentage,
   isSiblingWaived = false,
   siblingDiscountPercentage,
+  isFormation = false,
+  isPayerActiveAndPaid = true,
 }: {
   payerStatus?: string | null;
   pricePerCycle: number;
   teacherPercentage?: number | null;
   isSiblingWaived?: boolean;
   siblingDiscountPercentage?: number | null;
+  isFormation?: boolean | null;
+  isPayerActiveAndPaid?: boolean | null;
 }): SessionFeeCalculation {
   const normStatus = normalizePayerStatus(payerStatus);
   const baseCycleFee = Math.max(0, Number(pricePerCycle || 0));
@@ -79,12 +83,15 @@ export function computeStudentSessionFee({
   }
 
   // 2. Sibling discount (percentage discount, default 50% / half-price)
-  const effectiveDiscount =
-    siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
-      ? Number(siblingDiscountPercentage)
-      : isSiblingWaived
-      ? 50
-      : 0;
+  // Formations are excluded from sibling discounts, and payer must be active & paid
+  const isEligibleForSiblingDiscount = !isFormation && (isPayerActiveAndPaid ?? true);
+  const effectiveDiscount = isEligibleForSiblingDiscount
+    ? (siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
+        ? Number(siblingDiscountPercentage)
+        : isSiblingWaived
+        ? 50
+        : 0)
+    : 0;
 
   if (effectiveDiscount >= 100) {
     return {
@@ -592,6 +599,7 @@ export function computeStudentCycleConsumption({
   const remainingSessions = Math.max(0, totalPurchasedSessions - consumedSessions);
   // Held sessions (unresolved trailing absences where teacher was NOT paid) remain refund-eligible per Rule 5 & §7.22
   const refundableSessions = Math.min(totalPurchasedSessions, remainingSessions + heldSessions);
+  const transferableSessions = refundableSessions;
 
   return {
     totalPurchasedSessions,
@@ -600,6 +608,7 @@ export function computeStudentCycleConsumption({
     forfeitedSessions,
     remainingSessions,
     refundableSessions,
+    transferableSessions,
   };
 }
 
@@ -617,11 +626,13 @@ export function computeStudentRefundableSessions({
   const heldSessions = history.filter((h) => h.isHeld).length;
   const remainingSessions = Math.max(0, totalPurchasedSessions - consumedSessions);
   const refundableSessions = Math.min(totalPurchasedSessions, remainingSessions + heldSessions);
+  const transferableSessions = refundableSessions;
 
   return {
     remainingSessions,
     heldSessions,
     refundableSessions,
+    transferableSessions,
   };
 }
 
@@ -689,6 +700,7 @@ export interface ComputeStudentCreditParams {
   siblingDiscountPercentage?: number | null;
   isSiblingWaived?: boolean;
   isPayerSiblingPaid?: boolean;
+  isPayerActiveAndPaid?: boolean | null;
   teacherPercentage?: number | null;
   tuitionVouchers?: Array<{
     amount?: any;
@@ -729,6 +741,8 @@ export interface StudentCreditResult {
   totalPaidTuition: number;
   netRefundableSessions: number;
   refundableSessions: number;
+  transferableSessions: number;
+  openEndedHeldSessions: number;
   refundableAmount: number;
   isFormation: boolean;
   isNonPayer: boolean;
@@ -738,8 +752,8 @@ export interface StudentCreditResult {
 }
 
 /**
- * Resolves remaining credit for a student whose tuition is paid by a designated payer sibling.
- * Follows the payer sibling's remaining credit in the matching class, or across payer's active classes.
+ * Resolves remaining credit and active/paid status for a student whose sibling is designated payer.
+ * Checks whether the payer sibling has an active enrollment and at least one paid cycle (netSessions >= 1).
  */
 export function resolvePayerCredit({
   payerStudent,
@@ -752,162 +766,107 @@ export function resolvePayerCredit({
   classPricePerCycle?: number | null;
   isFormation?: boolean | null;
 }): {
+  isPayerActiveAndPaid: boolean;
   netSessions: number;
   status: "PAID" | "EXPIRING" | "UNPAID";
   hasMatchingClass: boolean;
 } {
   if (!payerStudent) {
-    return { netSessions: 0, status: "UNPAID", hasMatchingClass: false };
+    return { isPayerActiveAndPaid: false, netSessions: 0, status: "UNPAID", hasMatchingClass: false };
   }
 
-  // 1. Check if payer is enrolled in this class or has vouchers for this class
-  if (classId) {
-    const payerEnrollment = (payerStudent.enrollments || []).find(
-      (e: any) => e.classId === classId && (e.status === "ACTIVE" || !e.status)
-    );
-    const payerVouchers = (payerStudent.vouchers || []).filter(
-      (v: any) =>
-        (v.classId === classId || v.class?.id === classId || !v.classId) &&
-        v.paymentType === "TUITION_4SESSION" &&
-        !v.isVoided &&
-        !v.isRefund
-    );
-
-    if (payerEnrollment || payerVouchers.length > 0) {
-      const payerAtts = (payerStudent.attendances || []).filter((a: any) => {
-        if (!a.lesson || a.lesson.isFree) return false;
-        return (
-          a.lesson.classId === classId ||
-          a.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)
-        );
-      });
-      const payerCatchUps = (payerStudent.catchUpAttendances || []).filter((cu: any) => {
-        if (!cu.missedLesson) return false;
-        return (
-          cu.missedLesson.classId === classId ||
-          cu.missedLesson.lessonGroups?.some((lg: any) => lg.classId === classId)
-        );
-      });
-
-      const payerTeacherId = payerEnrollment?.class?.teacherId || payerEnrollment?.class?.teacher?.id;
-      const payerTeacherOverride = (payerEnrollment?.class as any)?.teacherClassRates?.find(
-        (tcr: any) => tcr.teacherId === payerTeacherId
-      )?.percentage;
-      const payerTeacherPercentage = payerTeacherOverride != null
-        ? Number(payerTeacherOverride)
-        : (payerEnrollment?.class?.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
-          ? Number((payerEnrollment?.class?.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
-          : null;
-
-      const metrics = computeStudentCreditAndSessions({
-        pricePerCycle: classPricePerCycle ?? Number(payerEnrollment?.class?.pricePerCycle || 0),
-        isFormation: isFormation ?? Boolean(payerEnrollment?.class?.isFormation),
-        payerStatus: payerEnrollment?.payerStatus || payerStudent.payerStatus || "NORMAL",
-        teacherPercentage: payerTeacherPercentage,
-        tuitionVouchers: payerVouchers,
-        transfersIn: payerEnrollment?.transfersTo || [],
-        transfersOut: payerEnrollment?.transfersFrom || [],
-        creditResetOffset: payerEnrollment?.creditResetOffset || 0,
-        attendances: payerAtts,
-        catchUps: payerCatchUps,
-      });
-
-      return {
-        netSessions: metrics.netSessions,
-        status: metrics.netSessions >= 2 ? "PAID" : metrics.netSessions === 1 ? "EXPIRING" : "UNPAID",
-        hasMatchingClass: true,
-      };
-    }
-  }
-
-  // 2. If payer is not enrolled in this specific class, check active enrollments across other classes
   const activeEnrs = (payerStudent.enrollments || []).filter(
     (e: any) => e.status === "ACTIVE" || !e.status
   );
 
-  if (activeEnrs.length > 0) {
-    let minSessions = Infinity;
-    for (const enr of activeEnrs) {
-      const cId = enr.classId;
-      const vouchers = (payerStudent.vouchers || []).filter(
-        (v: any) =>
-          (v.classId === cId || v.class?.id === cId || !v.classId) &&
-          v.paymentType === "TUITION_4SESSION" &&
-          !v.isVoided &&
-          !v.isRefund
+  let hasAnyPaidActiveEnrollment = false;
+  let matchingClassNetSessions = 0;
+  let hasMatchingClass = false;
+
+  for (const enr of activeEnrs) {
+    const cId = enr.classId;
+    const isEnrFormation = Boolean(enr.class?.isFormation || (enr.class as any)?.FormationLevel || (enr.class as any)?.formationLevelId);
+    const vouchers = (payerStudent.vouchers || []).filter(
+      (v: any) =>
+        (v.classId === cId || v.class?.id === cId || !v.classId) &&
+        !v.isVoided &&
+        !v.isRefund &&
+        (isEnrFormation ? v.paymentType === "FORMATION" : v.paymentType === "TUITION_4SESSION")
+    );
+
+    const atts = (payerStudent.attendances || []).filter((a: any) => {
+      if (!a.lesson || a.lesson.isFree) return false;
+      return (
+        a.lesson.classId === cId ||
+        a.lesson.lessonGroups?.some((lg: any) => lg.classId === cId)
       );
-      const atts = (payerStudent.attendances || []).filter((a: any) => {
-        if (!a.lesson || a.lesson.isFree) return false;
-        return (
-          a.lesson.classId === cId ||
-          a.lesson.lessonGroups?.some((lg: any) => lg.classId === cId)
-        );
-      });
-      const cus = (payerStudent.catchUpAttendances || []).filter((cu: any) => {
-        if (!cu.missedLesson) return false;
-        return (
-          cu.missedLesson.classId === cId ||
-          cu.missedLesson.lessonGroups?.some((lg: any) => lg.classId === cId)
-        );
-      });
+    });
 
-      const enrTeacherId = enr.class?.teacherId || enr.class?.teacher?.id;
-      const enrTeacherOverride = (enr.class as any)?.teacherClassRates?.find(
-        (tcr: any) => tcr.teacherId === enrTeacherId
-      )?.percentage;
-      const enrTeacherPercentage = enrTeacherOverride != null
-        ? Number(enrTeacherOverride)
-        : (enr.class?.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
-          ? Number((enr.class?.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
-          : null;
+    const cus = (payerStudent.catchUpAttendances || []).filter((cu: any) => {
+      if (!cu.missedLesson) return false;
+      return (
+        cu.missedLesson.classId === cId ||
+        cu.missedLesson.lessonGroups?.some((lg: any) => lg.classId === cId)
+      );
+    });
 
-      const metrics = computeStudentCreditAndSessions({
-        pricePerCycle: Number(enr.class?.pricePerCycle || 0),
-        isFormation: Boolean(enr.class?.isFormation),
-        payerStatus: enr.payerStatus || payerStudent.payerStatus || "NORMAL",
-        teacherPercentage: enrTeacherPercentage,
-        tuitionVouchers: vouchers,
-        transfersIn: enr.transfersTo || [],
-        transfersOut: enr.transfersFrom || [],
-        creditResetOffset: enr.creditResetOffset || 0,
-        attendances: atts,
-        catchUps: cus,
-      });
+    const enrTeacherId = enr.class?.teacherId || enr.class?.teacher?.id;
+    const enrTeacherOverride = (enr.class as any)?.teacherClassRates?.find(
+      (tcr: any) => tcr.teacherId === enrTeacherId
+    )?.percentage;
+    const enrTeacherPercentage = enrTeacherOverride != null
+      ? Number(enrTeacherOverride)
+      : (enr.class?.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee
+        ? Number((enr.class?.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+        : null;
 
-      if (metrics.netSessions < minSessions) {
-        minSessions = metrics.netSessions;
+    const metrics = computeStudentCreditAndSessions({
+      pricePerCycle: Number(enr.class?.pricePerCycle || 0),
+      isFormation: isEnrFormation,
+      payerStatus: enr.payerStatus || payerStudent.payerStatus || "NORMAL",
+      teacherPercentage: enrTeacherPercentage,
+      tuitionVouchers: vouchers,
+      transfersIn: enr.transfersTo || [],
+      transfersOut: enr.transfersFrom || [],
+      creditResetOffset: enr.creditResetOffset || 0,
+      attendances: atts,
+      catchUps: cus,
+    });
+
+    if (isEnrFormation) {
+      const lumpSum = Number((enr.class as any)?.FormationLevel?.lumpSumPrice ?? enr.class?.pricePerCycle ?? 0);
+      const paid = vouchers.reduce((sum: number, v: any) => sum + Number(v.amount || 0), 0);
+      if (paid >= lumpSum && lumpSum > 0) {
+        hasAnyPaidActiveEnrollment = true;
+      }
+    } else {
+      if (metrics.netSessions >= 1) {
+        hasAnyPaidActiveEnrollment = true;
       }
     }
-    const finalSessions = minSessions === Infinity ? 0 : minSessions;
-    return {
-      netSessions: finalSessions,
-      status: finalSessions >= 2 ? "PAID" : finalSessions === 1 ? "EXPIRING" : "UNPAID",
-      hasMatchingClass: false,
-    };
+
+    if (classId && cId === classId) {
+      hasMatchingClass = true;
+      matchingClassNetSessions = metrics.netSessions;
+    }
   }
 
-  // 3. Fallback: if no active enrollments, check if payer has any tuition vouchers at all
-  const allTuitionVouchers = (payerStudent.vouchers || []).filter(
-    (v: any) => v.paymentType === "TUITION_4SESSION" && !v.isVoided && !v.isRefund
-  );
-  if (allTuitionVouchers.length > 0) {
-    const allAtts = (payerStudent.attendances || []).filter(
-      (a: any) => a.lesson && !a.lesson.isFree
+  // Fallback: If no enrollments exist, check if payer has active vouchers with positive balance
+  if (!hasAnyPaidActiveEnrollment && activeEnrs.length === 0) {
+    const allTuitionVouchers = (payerStudent.vouchers || []).filter(
+      (v: any) => v.paymentType === "TUITION_4SESSION" && !v.isVoided && !v.isRefund
     );
-    const metrics = computeStudentCreditAndSessions({
-      pricePerCycle: classPricePerCycle ?? 0,
-      payerStatus: payerStudent.payerStatus || "NORMAL",
-      tuitionVouchers: allTuitionVouchers,
-      attendances: allAtts,
-    });
-    return {
-      netSessions: metrics.netSessions,
-      status: metrics.netSessions >= 2 ? "PAID" : metrics.netSessions === 1 ? "EXPIRING" : "UNPAID",
-      hasMatchingClass: false,
-    };
+    if (allTuitionVouchers.length > 0) {
+      hasAnyPaidActiveEnrollment = true;
+    }
   }
 
-  return { netSessions: 0, status: "UNPAID", hasMatchingClass: false };
+  return {
+    isPayerActiveAndPaid: hasAnyPaidActiveEnrollment,
+    netSessions: hasMatchingClass ? matchingClassNetSessions : (hasAnyPaidActiveEnrollment ? 1 : 0),
+    status: hasAnyPaidActiveEnrollment ? "PAID" : "UNPAID",
+    hasMatchingClass,
+  };
 }
 
 
@@ -923,6 +882,7 @@ export function computeStudentCreditAndSessions({
   siblingDiscountPercentage,
   isSiblingWaived = false,
   isPayerSiblingPaid = true,
+  isPayerActiveAndPaid = true,
   teacherPercentage,
   tuitionVouchers = [],
   transfersIn = 0,
@@ -938,12 +898,14 @@ export function computeStudentCreditAndSessions({
   const isNonPayer = normStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
   const isSchoolFeesOnly = normStatus === "SCHOOL_FEES_ONLY";
 
-  const siblingDiscountPct =
-    siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
-      ? Number(siblingDiscountPercentage)
-      : isSiblingWaived
-      ? 100
-      : 0;
+  const isEligibleForSiblingDiscount = !isForm && (isPayerActiveAndPaid ?? true);
+  const siblingDiscountPct = isEligibleForSiblingDiscount
+    ? (siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
+        ? Number(siblingDiscountPercentage)
+        : isSiblingWaived
+        ? 100
+        : 0)
+    : 0;
   const isSiblingWaived100 = siblingDiscountPct >= 100;
 
   const cyclePrice = Math.max(0, Number(pricePerCycle || 0));
@@ -1095,6 +1057,7 @@ export function computeStudentCreditAndSessions({
   });
 
   const attendedSessions = history.filter((h) => h.isConsumedCredit).length + extraCatchUpConsumed;
+  const heldSessions = history.filter((h) => h.isHeld).length;
   const settledConsumedSessions =
     history.filter(
       (h) =>
@@ -1104,11 +1067,19 @@ export function computeStudentCreditAndSessions({
           h.classification === "FORFEITED_DROPOUT")
     ).length + extraCatchUpConsumed;
 
-  let calculatedNetSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - attendedSessions + offset;
+  // Group transfer & refund alignment rule:
+  // Held sessions (open-ended trailing absences where teacher was NOT paid) are fully refundable AND transferable.
+  // When sessions are transferred out of this group (tOut > 0), they first draw from unheld remaining sessions,
+  // and any excess draws from held trailing absences. Absorbed held absences are neutralized so that the source group
+  // is not penalized with negative debt for sessions that were legitimately transferred to another group.
+  const unheldRemainingBeforeTransfer = Math.max(0, (purchasedSessions + tIn) - attendedSessions + offset);
+  const transferredExcess = Math.max(0, tOut - unheldRemainingBeforeTransfer);
+  const absorbedHeldSessions = Math.min(heldSessions, transferredExcess);
+  const effectiveAttendedSessions = attendedSessions - absorbedHeldSessions;
+
+  let calculatedNetSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - effectiveAttendedSessions + offset;
   if (isNonPayer) {
     calculatedNetSessions = 0;
-  } else if (payerRemainingCredit !== undefined && payerRemainingCredit !== null) {
-    calculatedNetSessions = payerRemainingCredit;
   } else if (isSiblingWaived100) {
     calculatedNetSessions = 0;
   }
@@ -1117,6 +1088,7 @@ export function computeStudentCreditAndSessions({
     ? 0
     : (purchasedSessions + tIn - tOut) - settledConsumedSessions + offset;
   const refundableSessions = Math.max(0, Math.min(4, netRefundableSessions));
+  const transferableSessions = isForm ? 0 : Math.max(0, netRefundableSessions);
 
   let refundableAmount = 0;
   if (!isForm && !isNonPayer && !isSiblingWaived100) {
@@ -1142,14 +1114,6 @@ export function computeStudentCreditAndSessions({
     status = "PAID";
   } else if (isNonPayer) {
     status = "NON_PAYER";
-  } else if (payerRemainingCredit !== undefined && payerRemainingCredit !== null) {
-    if (netSessions >= 2) {
-      status = "PAID";
-    } else if (netSessions === 1) {
-      status = "EXPIRING";
-    } else {
-      status = "UNPAID";
-    }
   } else if (isSiblingWaived100) {
     status = isPayerSiblingPaid ? "SIBLING_WAIVED" : "UNPAID";
   } else if (netSessions >= 2) {
@@ -1171,6 +1135,8 @@ export function computeStudentCreditAndSessions({
     totalPaidTuition,
     netRefundableSessions,
     refundableSessions,
+    transferableSessions,
+    openEndedHeldSessions: heldSessions,
     refundableAmount,
     isFormation: isForm,
     isNonPayer,

@@ -56,8 +56,8 @@ const WorkshopSchedule = ({ workshop, sessions, participants }: { workshop: Work
                     {sessions.map(session => (
                         <li key={session.id} className="text-sm flex items-center justify-between p-3 bg-gray-50 rounded-md">
                             <div>
-                                <p className="font-medium">{new Date(session.startsAt).toLocaleDateString(dateLocale, { weekday: 'long', month: 'short', day: 'numeric' })}</p>
-                                <p className="text-xs text-gray-500">{new Date(session.startsAt).toLocaleTimeString(dateLocale, { hour: 'numeric', minute: '2-digit' })} - {new Date(session.endsAt).toLocaleTimeString(dateLocale, { hour: 'numeric', minute: '2-digit' })}</p>
+                                <p className="font-medium">{new Date(session.startsAt).toLocaleDateString(dateLocale, { weekday: 'long', month: 'short', day: 'numeric', timeZone: "Africa/Algiers" })}</p>
+                                <p className="text-xs text-gray-500">{new Date(session.startsAt).toLocaleTimeString(dateLocale, { hour: 'numeric', minute: '2-digit', timeZone: "Africa/Algiers" })} - {new Date(session.endsAt).toLocaleTimeString(dateLocale, { hour: 'numeric', minute: '2-digit', timeZone: "Africa/Algiers" })}</p>
                             </div>
                             <button onClick={() => openAttendanceModal(session)} className="px-3 py-1 text-xs font-semibold bg-green-100 text-green-800 rounded-full hover:bg-green-200">
                                 {t("takeAttendance")}

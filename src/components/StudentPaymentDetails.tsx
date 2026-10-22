@@ -19,7 +19,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
-import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, ArrowRightLeft, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, ArrowRightLeft, ChevronDown, ChevronUp, Users } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
 export type ExtendedTransferItem = {
@@ -120,7 +120,28 @@ export type StudentPaymentRecordData = {
   payerStatus?: string;
   registeredBranchId?: number;
   registeredBranch?: { id: number; name: string } | null;
-  family?: { id: number; payerStudentId: string | null; discountPercentage?: any } | null;
+  family?: {
+    id: number;
+    name?: string | null;
+    payerStudentId: string | null;
+    discountPercentage?: any;
+    students?: Array<{
+      id: string;
+      name: string;
+      sex?: string | null;
+      globalNumber?: number;
+      registeredBranchId?: number;
+      registeredBranch?: { id: number; name: string } | null;
+      enrollments?: Array<{
+        id: number;
+        classId: number;
+        status?: string;
+        payerStatus?: string;
+        class?: { id: number; name: string } | null;
+      }>;
+    }>;
+    payerStudent?: any;
+  } | null;
   enrollments: ExtendedEnrollmentItem[];
   vouchers: ExtendedVoucherItem[];
   attendances?: Array<{
@@ -203,6 +224,7 @@ export default function StudentPaymentDetails({
     isOpen: boolean;
     enrollment?: ExtendedEnrollmentItem;
     maxSessions: number;
+    openEndedHeldSessions?: number;
   }>({ isOpen: false, maxSessions: 0 });
 
   const [auditModal, setAuditModal] = useState<{
@@ -234,10 +256,20 @@ export default function StudentPaymentDetails({
   const [transferNotes, setTransferNotes] = useState<string>("");
   const [isTransferPending, startTransferTransition] = useTransition();
 
-  // Sibling discount check
-  const isSiblingDiscount = Boolean(
+  // Sibling discount check: applies if primary payer is active and has at least one paid cycle
+  const hasPayerSibling = Boolean(
     student.family && student.family.payerStudentId && student.family.payerStudentId !== student.id
   );
+
+  let isPayerActiveAndPaid = false;
+  if (hasPayerSibling && (student.family as any)?.payerStudent) {
+    const payerRes = resolvePayerCredit({
+      payerStudent: (student.family as any).payerStudent,
+    });
+    isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+  }
+
+  const isSiblingDiscount = Boolean(hasPayerSibling && isPayerActiveAndPaid);
   const siblingDiscountPct = isSiblingDiscount
     ? Number((student.family as any)?.discountPercentage ?? 50)
     : 0;
@@ -439,22 +471,6 @@ export default function StudentPaymentDetails({
         Boolean((c as any).lessons && (c as any).lessons.some((l: any) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId))
     );
 
-    let payerRemainingCredit: number | undefined = undefined;
-    const hasPayerSibling = Boolean(
-      student.family?.payerStudentId &&
-      student.family.payerStudentId !== student.id
-    );
-
-    if (hasPayerSibling && (student.family as any)?.payerStudent) {
-      const payerRes = resolvePayerCredit({
-        payerStudent: (student.family as any).payerStudent,
-        classId: c.id,
-        classPricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
-        isFormation,
-      });
-      payerRemainingCredit = payerRes.netSessions;
-    }
-
     const teacherId = (c as any).teacherId || c.teacher?.id;
     const teacherClassOverride = (c as any)?.teacherClassRates?.find(
       (tcr: any) => tcr.teacherId === teacherId
@@ -471,6 +487,8 @@ export default function StudentPaymentDetails({
       teacherPercentage,
       isSiblingWaived: isSiblingWaived100,
       siblingDiscountPercentage: siblingDiscountPct,
+      isFormation,
+      isPayerActiveAndPaid,
     });
 
     const creditMetrics = computeStudentCreditAndSessions({
@@ -479,7 +497,7 @@ export default function StudentPaymentDetails({
       payerStatus: enrPayerStatus,
       siblingDiscountPercentage: siblingDiscountPct,
       isSiblingWaived: isSiblingWaived100,
-      payerRemainingCredit,
+      isPayerActiveAndPaid,
       teacherPercentage,
       tuitionVouchers,
       transfersIn: enr.transfersTo,
@@ -573,12 +591,14 @@ export default function StudentPaymentDetails({
       netSessions,
       unconsumedInCycle,
       netRefundableSessions,
+      transferableSessions: creditMetrics.transferableSessions,
+      openEndedHeldSessions: creditMetrics.openEndedHeldSessions,
       refundableAmount,
       effectiveLessonPrice,
       mostRecentActiveCycle,
       status,
       feeCalc,
-      hasPayerSibling,
+      hasPayerSibling: isSiblingDiscount,
     };
   });
 
@@ -609,13 +629,18 @@ export default function StudentPaymentDetails({
   });
 
   // Actions
-  const handleOpenTransfer = (enr: ExtendedEnrollmentItem, availableSessions: number) => {
+  const handleOpenTransfer = (
+    enr: ExtendedEnrollmentItem,
+    availableSessions: number,
+    openEndedHeldSessions: number = 0
+  ) => {
     setTransferModal({
       isOpen: true,
       enrollment: enr,
       maxSessions: Math.max(0, availableSessions),
+      openEndedHeldSessions,
     });
-    setSessionsToTransfer(Math.min(1, Math.max(1, availableSessions)));
+    setSessionsToTransfer(Math.max(1, availableSessions));
     setTargetClassId("");
     setTransferNotes("");
   };
@@ -827,6 +852,85 @@ export default function StudentPaymentDetails({
                   ? t("siblingWaiverDesc")
                   : `Cet élève bénéficie d'une réduction de ${siblingDiscountPct}% sur les cours (paie la moitié).`}
               </span>
+            </div>
+          )}
+
+          {/* Sibling discount suspended notice if payer is unpaid/inactive */}
+          {hasPayerSibling && !isPayerActiveAndPaid && (
+            <div className="mt-4 p-3 bg-amber-50 border border-amber-300 rounded-xl flex items-center gap-2 text-xs text-amber-950">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <div>
+                <span className="font-bold">
+                  {locale === "ar"
+                    ? "خصم الإخوة غير مفعل حالياً:"
+                    : "Remise fratrie suspendue :"}
+                </span>{" "}
+                <span>
+                  {locale === "ar"
+                    ? "التلميذ الدافع الرئيسي ليس لديه اشتراك مالي مدفوع أو غير مسجل في أي فوج نشط. يدفع هذا التلميذ السعر الكامل حتى تجديد اشتراك الدافع."
+                    : "L'élève payeur principal n'a aucun abonnement actif payé. Cet élève paie plein tarif tant que le payeur n'a pas renouvelé."}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* COMPACT SIBLING DISPLAY CARD (Decision #5) */}
+          {student.family && student.family.students && student.family.students.length > 1 && (
+            <div className="mt-3.5 p-3.5 bg-surface-subtle/80 border border-border/80 rounded-xl">
+              <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-border/60">
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-primary shrink-0" />
+                  <span className="text-xs font-bold text-gray-900">
+                    {student.family.name || t("familyPrefix", { id: student.family.id })}
+                  </span>
+                  <span className="text-[11px] text-muted">
+                    ({student.family.students.length} {locale === "ar" ? "إخوة مسجلين" : "frères/sœurs"})
+                  </span>
+                </div>
+                {student.family.discountPercentage != null && (
+                  <Badge variant="warning" size="sm" className="font-mono text-[10px]">
+                    {locale === "ar"
+                      ? `تخفيض إخوة: ${student.family.discountPercentage}%`
+                      : `Remise fratrie : ${student.family.discountPercentage}%`}
+                  </Badge>
+                )}
+              </div>
+
+              {/* Compact badge / pill list of siblings */}
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                {student.family.students.map((sib: any) => {
+                  const isCurrent = sib.id === student.id;
+                  const isPayer = sib.id === student.family?.payerStudentId;
+                  const activeGroupsCount = sib.enrollments?.length ?? 0;
+
+                  return (
+                    <Link
+                      key={sib.id}
+                      href={`/list/students/${sib.id}`}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-all ${
+                        isCurrent
+                          ? "bg-primary-subtle text-primary border-primary/40 font-bold ring-1 ring-primary/30"
+                          : "bg-surface text-gray-800 border-border hover:border-primary/50 hover:bg-surface-subtle"
+                      }`}
+                    >
+                      <span className="truncate max-w-[140px]">{sib.name}</span>
+                      {isCurrent && (
+                        <span className="text-[9px] px-1 py-0.2 rounded bg-primary/20 text-primary uppercase font-bold">
+                          {locale === "ar" ? "أنت" : "actuel"}
+                        </span>
+                      )}
+                      {isPayer && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold">
+                          {locale === "ar" ? "الدافع" : "Payeur"}
+                        </span>
+                      )}
+                      <span className="text-[10px] text-muted font-mono">
+                        ({activeGroupsCount} {locale === "ar" ? "أفواج" : "gr."})
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -1191,16 +1295,11 @@ export default function StudentPaymentDetails({
                             <Badge variant="danger" size="sm" withDot>
                               {t("unpaidBadge", { count: cm.netSessions })}
                             </Badge>
-                          ) : isSibling ? (
+                          ) : isSibling || cm.hasPayerSibling ? (
                             <Badge variant="neutral" size="sm" withDot>
                               {t("siblingBadge")}
                             </Badge>
                           ) : null}
-                          {cm.hasPayerSibling && !isSibling && (
-                            <Badge variant="neutral" size="sm" withDot>
-                              {t("siblingBadge")}
-                            </Badge>
-                          )}
                         </div>
                       </div>
 
@@ -1223,6 +1322,18 @@ export default function StudentPaymentDetails({
                               ? (locale === "ar" ? "معفى" : "Exonéré")
                               : cm.netSessions}
                           </span>
+                          {cm.transferableSessions > cm.netSessions && (
+                            <span
+                              className="block text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded font-medium mt-1 mx-auto max-w-fit"
+                              title={
+                                locale === "ar"
+                                  ? `${cm.transferableSessions} حصص قابلة للتحويل (تشمل حصص الغياب المفتوح)`
+                                  : `${cm.transferableSessions} séances transférables (inclut les absences ouvertes)`
+                              }
+                            >
+                              {cm.transferableSessions} {locale === "ar" ? "قابلة للتحويل" : "transférables"}
+                            </span>
+                          )}
                         </div>
                         <div>
                           <span className="text-[10px] text-muted block">{t("sessionsConsumed")}</span>
@@ -1300,11 +1411,17 @@ export default function StudentPaymentDetails({
                           >
                             {isExpiring ? t("issueVoucherNow") : t("issueVoucher")}
                           </Button>
-                          {(cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions) > 0 && (
+                          {(cm.transferableSessions ?? cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions) > 0 && (
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => handleOpenTransfer(cm.enrollment, cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions)}
+                              onClick={() =>
+                                handleOpenTransfer(
+                                  cm.enrollment,
+                                  cm.transferableSessions ?? cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions,
+                                  cm.openEndedHeldSessions || 0
+                                )
+                              }
                             >
                               {t("transferCredit")}
                             </Button>
@@ -1837,8 +1954,17 @@ export default function StudentPaymentDetails({
             </p>
 
             <div className="mt-4 space-y-3 text-xs">
-              <div className="bg-blue-50 p-2.5 rounded border border-blue-200 text-blue-900">
-                {t("modalTransferAvailable")} <strong>{transferModal.maxSessions} {t("sessionsUnit")}</strong>
+              <div className="bg-blue-50 p-2.5 rounded border border-blue-200 text-blue-900 flex flex-col gap-1">
+                <div>
+                  {t("modalTransferAvailable")} <strong>{transferModal.maxSessions} {t("sessionsUnit")}</strong>
+                </div>
+                {Boolean(transferModal.openEndedHeldSessions && transferModal.openEndedHeldSessions > 0) && (
+                  <p className="text-[11px] text-blue-800 bg-white/80 p-1.5 rounded border border-blue-100 font-medium leading-relaxed">
+                    {locale === "ar"
+                      ? `يشمل الرصيد المتاح ${transferModal.openEndedHeldSessions} حصة غياب في نهاية المسار قابلة للاسترجاع والتحويل دون خصم من رصيد التلميذ.`
+                      : `Inclut ${transferModal.openEndedHeldSessions} séance(s) d'absence ouverte de fin de parcours, remboursable(s) et transférable(s) sans pénalité.`}
+                  </p>
+                )}
               </div>
 
               <div>

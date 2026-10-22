@@ -126,6 +126,8 @@ export default function PaymentGrid({
     isOpen: boolean;
     enrollment?: ExtendedEnrollment;
     maxSessions: number;
+    openEndedHeldSessions?: number;
+    netSessions?: number;
   }>({ isOpen: false, maxSessions: 0 });
 
   const [modificationModal, setModificationModal] = useState<{
@@ -331,19 +333,15 @@ export default function PaymentGrid({
         (!activeTrimester?.id || v.trimesterId === activeTrimester.id)
     );
 
-    // Sibling discount
-    const isSiblingDiscount = Boolean(
+    // Sibling discount: applies if primary payer is active and paid
+    const hasPayerSibling = Boolean(
       student.family &&
       student.family.payerStudentId &&
       student.family.payerStudentId !== student.id
     );
-    const siblingDiscountPct = isSiblingDiscount
-      ? Number((student.family as any)?.discountPercentage ?? 50)
-      : 0;
-    const isSiblingWaived100 = siblingDiscountPct >= 100;
 
-    let payerRemainingCredit: number | undefined = undefined;
-    if (isSiblingDiscount) {
+    let isPayerActiveAndPaid = false;
+    if (hasPayerSibling) {
       const payerId = student.family!.payerStudentId!;
       // First check if payer is in the same class
       const payerEnrollmentInClass = classData.enrollments.find(
@@ -376,9 +374,15 @@ export default function PaymentGrid({
           classPricePerCycle: Number(classData.pricePerCycle || 0),
           isFormation: Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId),
         });
-        payerRemainingCredit = payerRes.netSessions;
+        isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
       }
     }
+
+    const isSiblingDiscount = Boolean(hasPayerSibling && isPayerActiveAndPaid);
+    const siblingDiscountPct = isSiblingDiscount
+      ? Number((student.family as any)?.discountPercentage ?? 50)
+      : 0;
+    const isSiblingWaived100 = siblingDiscountPct >= 100;
 
     // Tuition cycles & sessions
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
@@ -427,7 +431,7 @@ export default function PaymentGrid({
       payerStatus: enrPayerStatus,
       siblingDiscountPercentage: siblingDiscountPct,
       isSiblingWaived: isSiblingWaived100,
-      payerRemainingCredit,
+      isPayerActiveAndPaid,
       tuitionVouchers,
       transfersIn: enrollment.transfersTo,
       transfersOut: enrollment.transfersFrom,
@@ -528,6 +532,8 @@ export default function PaymentGrid({
       netSessions,
       refundableSessions,
       netRefundableSessions,
+      transferableSessions: creditMetrics.transferableSessions,
+      openEndedHeldSessions: creditMetrics.openEndedHeldSessions,
       refundableAmount,
       effectiveLessonPrice,
       status: computedStatus,
@@ -592,13 +598,15 @@ export default function PaymentGrid({
   const siblingWaivedCount = activeStudentsList.filter((s) => s.status === "SIBLING_WAIVED").length;
 
   const handleOpenTransfer = (item: any) => {
-    const availableBalance = Math.max(0, item.netRefundableSessions ?? item.refundableSessions ?? item.netSessions);
+    const availableBalance = Math.max(0, item.transferableSessions ?? item.netRefundableSessions ?? item.refundableSessions ?? item.netSessions);
     setTransferModal({
       isOpen: true,
       enrollment: item.enrollment,
       maxSessions: availableBalance,
+      openEndedHeldSessions: item.openEndedHeldSessions || 0,
+      netSessions: item.netSessions,
     });
-    setSessionsToTransfer(Math.min(1, availableBalance));
+    setSessionsToTransfer(Math.max(1, availableBalance));
     setTargetClassId("");
     setTransferNotes("");
   };
@@ -1094,6 +1102,18 @@ export default function PaymentGrid({
                   count: item.netSessions,
                 })}
               </Badge>
+              {item.transferableSessions > item.netSessions && (
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded font-medium mt-0.5"
+                  title={
+                    locale === "ar"
+                      ? `${item.transferableSessions} حصص قابلة للتحويل (تشمل حصص الغياب المفتوح)`
+                      : `${item.transferableSessions} séances transférables (inclut les absences ouvertes)`
+                  }
+                >
+                  {item.transferableSessions} {locale === "ar" ? "قابلة للتحويل" : "transférables"}
+                </span>
+              )}
               {item.isSchoolFeesOnly && (
                 <span className="text-[10px] text-amber-700 font-medium">
                   {locale === "ar" ? "حصة المدرسة" : "Part école"}
@@ -1170,7 +1190,7 @@ export default function PaymentGrid({
                 {t("voucherShort")}
               </Button>
             )}
-            {!isTransferred && (item.netRefundableSessions ?? item.netSessions) > 0 && (
+            {!isTransferred && (item.transferableSessions ?? item.netRefundableSessions ?? item.netSessions) > 0 && (
               <Button
                 variant="outline"
                 size="sm"
@@ -1506,7 +1526,7 @@ export default function PaymentGrid({
                         {t("voucherShort")}
                       </Button>
                     )}
-                    {!isTransferred && item.netSessions > 0 && (
+                    {!isTransferred && (item.transferableSessions ?? item.netRefundableSessions ?? item.netSessions) > 0 && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1618,11 +1638,20 @@ export default function PaymentGrid({
               }}
               className="p-6 flex flex-col gap-4"
             >
-              <div className="bg-primary-light/50 p-3 rounded-lg border border-primary-soft text-xs flex items-center justify-between">
-                <span className="text-muted">{t("transferAvailableBalance")}</span>
-                <strong className="text-primary font-bold font-mono text-sm">
-                  {t("sessionsCount", { count: transferModal.maxSessions })}
-                </strong>
+              <div className="bg-primary-light/50 p-3 rounded-lg border border-primary-soft text-xs flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted">{t("transferAvailableBalance")}</span>
+                  <strong className="text-primary font-bold font-mono text-sm">
+                    {t("sessionsCount", { count: transferModal.maxSessions })}
+                  </strong>
+                </div>
+                {Boolean(transferModal.openEndedHeldSessions && transferModal.openEndedHeldSessions > 0) && (
+                  <p className="text-[11px] text-blue-800 bg-blue-100/60 p-2 rounded border border-blue-200 leading-relaxed font-medium">
+                    {locale === "ar"
+                      ? `يشمل الرصيد المتاح ${transferModal.openEndedHeldSessions} حصة غياب في نهاية المسار قابلة للاسترجاع والتحويل دون خصم من رصيد التلميذ.`
+                      : `Inclut ${transferModal.openEndedHeldSessions} séance(s) d'absence ouverte de fin de parcours, remboursable(s) et transférable(s) sans pénalité.`}
+                  </p>
+                )}
               </div>
 
               <FormField label={t("targetClassLabel")} required>

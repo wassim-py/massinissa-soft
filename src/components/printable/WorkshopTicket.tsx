@@ -1,5 +1,6 @@
 import React from 'react';
 import Image from 'next/image';
+import { formatAlgiersDateTime, formatDZD, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 
 export type WorkshopTicketPayment = {
   id: number | string;
@@ -51,7 +52,7 @@ export class WorkshopTicket extends React.Component<TicketProps> {
           </div>
           <div className="flex justify-between">
             <span>{isAr ? "التاريخ:" : "Date :"}</span>
-            <span>{new Date(payment.date).toLocaleString(isAr ? "ar-DZ" : "fr-DZ")}</span>
+            <span>{formatAlgiersDateTime(payment.date, locale) || "—"}</span>
           </div>
         </div>
 
@@ -72,7 +73,7 @@ export class WorkshopTicket extends React.Component<TicketProps> {
           </div>
           <div className="flex justify-between mt-1 text-sm">
             <span>{isAr ? "رسوم التسجيل في الدورة" : "Frais d'inscription"}</span>
-            <span className="font-mono">{Number(payment.amount).toLocaleString(isAr ? "ar-DZ" : "fr-DZ")} {isAr ? "دج" : "DZD"}</span>
+            <span className="font-mono">{formatDZD(payment.amount, locale)}</span>
           </div>
         </div>
         
@@ -80,14 +81,14 @@ export class WorkshopTicket extends React.Component<TicketProps> {
         <div className="border-t border-dashed border-black mt-2 pt-2 text-xs">
           <div className="flex justify-between">
             <span>{isAr ? "المبلغ المتبقي:" : "Reste à payer :"}</span>
-            <span className="font-bold font-mono">{amountOwedByParticipant.toLocaleString(isAr ? "ar-DZ" : "fr-DZ")} {isAr ? "دج" : "DZD"}</span>
+            <span className="font-bold font-mono">{formatDZD(amountOwedByParticipant, locale)}</span>
           </div>
         </div>
 
         {/* Total */}
         <div className="border-t-2 border-black mt-2 pt-2 text-end">
           <p className="font-bold text-base">
-            {isAr ? "المجموع:" : "Total :"} {Number(payment.amount).toLocaleString(isAr ? "ar-DZ" : "fr-DZ")} {isAr ? "دج" : "DZD"}
+            {isAr ? "المجموع:" : "Total :"} {formatDZD(payment.amount, locale)}
           </p>
         </div>
 
@@ -107,4 +108,3 @@ export class WorkshopTicket extends React.Component<TicketProps> {
     );
   }
 }
-

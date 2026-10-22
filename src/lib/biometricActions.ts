@@ -377,12 +377,16 @@ export async function processBiometricScan(input: {
     })
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
-  // Helper to test if a lesson matches the active scan branch
-  const isBranchMatch = (l: any) =>
-    !branchId ||
-    l.branchId === branchId ||
-    l.class?.branchId === branchId ||
-    (l.classroom as any)?.branchId === branchId;
+  // Helper to test if a lesson matches the active scan branch.
+  // The lesson's own branch is where the session physically happens and must take priority:
+  // lessons reached through e.class.lessonGroups carry the ENROLLED class's branch in `class`,
+  // so falling back to it would let a session running in another branch be matched here.
+  const isBranchMatch = (l: any) => {
+    if (!branchId) return true;
+    const lessonBranch =
+      l.branchId ?? l.class?.branchId ?? (l.classroom as any)?.branchId ?? null;
+    return lessonBranch === null || lessonBranch === branchId;
+  };
 
   // Match lesson: Priority to openLessonId, then today's lessons, then scan window
   let matchedLesson: (typeof studentLessons)[number] | null = null;

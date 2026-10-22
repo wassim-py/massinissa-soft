@@ -1,7 +1,13 @@
 import prisma from "./prisma";
-import { format, startOfWeek, endOfWeek, parseISO } from "date-fns";
-import { arDZ } from "date-fns/locale";
+import { startOfWeek, endOfWeek } from "date-fns";
 import { normalizeDateToStartOfDay, LedgerVoucherCategory } from "./ledger";
+import { formatVoucherDisplay } from "./voucherUtils";
+import {
+  getAlgiersDayBounds,
+  getAlgiersTodayDateString,
+  getAlgiersDateInfo,
+  formatAlgiersDate,
+} from "./algiersDate";
 
 export interface RevenueSummary {
   grossRevenue: number;
@@ -47,6 +53,23 @@ export interface RevenueDashboardVoucher {
   isVoided: boolean;
   isPartial: boolean;
   status: string | null;
+  levelName?: string | null;
+  series?: {
+    id: number;
+    scope: string;
+    prefix?: string | null;
+    level?: { id: number; name: string } | null;
+    issuingBranch?: { id: number; name: string } | null;
+    targetBranch?: { id: number; name: string } | null;
+  } | null;
+  class?: {
+    id: number;
+    name: string;
+    isFormation?: boolean | null;
+    level?: { id: number; name: string } | null;
+    branch?: { id: number; name: string } | null;
+  } | null;
+  voucherDisplay?: string;
 }
 
 export interface RevenueDashboardData {
@@ -70,24 +93,35 @@ export interface RevenueDashboardData {
 
 /**
  * Formats a period key into an Arabic / international readable label.
+ * Anchored strictly to Africa/Algiers timezone.
  */
 function formatBucketLabel(date: Date, mode: "daily" | "weekly" | "monthly"): string {
   try {
     if (mode === "daily") {
-      return format(date, "d MMMM yyyy", { locale: arDZ });
+      return formatAlgiersDate(date, "ar-DZ", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
     }
     if (mode === "weekly") {
-      const s = startOfWeek(date, { weekStartsOn: 6 }); // Algeria week starts Saturday
-      const e = endOfWeek(date, { weekStartsOn: 6 });
-      return `${format(s, "d MMM", { locale: arDZ })} - ${format(e, "d MMM yyyy", { locale: arDZ })}`;
+      const info = getAlgiersDateInfo(date);
+      const algiersMidnightUtc = new Date(Date.UTC(info.year, info.month - 1, info.day, 0, 0, 0));
+      const dayOfWeek = (algiersMidnightUtc.getUTCDay() + 1) % 7; // Algeria week starts Saturday
+      const startUtc = new Date(algiersMidnightUtc.getTime() - dayOfWeek * 86400000);
+      const endUtc = new Date(startUtc.getTime() + 6 * 86400000);
+      return `${formatAlgiersDate(startUtc, "ar-DZ", { day: "numeric", month: "short" })} - ${formatAlgiersDate(endUtc, "ar-DZ", { day: "numeric", month: "short", year: "numeric" })}`;
     }
     if (mode === "monthly") {
-      return format(date, "LLLL yyyy", { locale: arDZ });
+      return formatAlgiersDate(date, "ar-DZ", {
+        month: "long",
+        year: "numeric",
+      });
     }
   } catch {
     // fallback
   }
-  return date.toISOString().split("T")[0];
+  return getAlgiersDateInfo(date).dateStr;
 }
 
 /**
@@ -102,20 +136,19 @@ export async function getDailyRevenueDashboardData(options?: {
   const periodMode = options?.periodMode || "daily";
   const branchFilter = options?.branchId ?? "all";
 
-  // Compute default date range if missing (default: current month)
-  const today = new Date();
-  const defaultDateTo = today.toISOString().split("T")[0];
-  const firstDayOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-  const defaultDateFrom = firstDayOfMonth.toISOString().split("T")[0];
+  // Compute default date range if missing (default: current month in Africa/Algiers)
+  const algiersToday = getAlgiersDateInfo();
+  const defaultDateTo = getAlgiersTodayDateString();
+  const defaultDateFrom = `${algiersToday.year}-${String(algiersToday.month).padStart(2, "0")}-01`;
 
   const dateFromStr = options?.dateFrom || defaultDateFrom;
   const dateToStr = options?.dateTo || defaultDateTo;
 
-  const [fromY, fromM, fromD] = dateFromStr.split("T")[0].split("-").map(Number);
-  const startDate = new Date(Date.UTC(fromY, fromM - 1, fromD, 0, 0, 0, 0));
-
-  const [toY, toM, toD] = dateToStr.split("T")[0].split("-").map(Number);
-  const endDate = new Date(Date.UTC(toY, toM - 1, toD, 23, 59, 59, 999));
+  // Algiers business day window in UTC:
+  // startDate is previous day 23:00:00.000Z (start of dateFromStr in Algiers)
+  // endDate is current day 22:59:59.999Z (end of dateToStr in Algiers)
+  const startDate = getAlgiersDayBounds(dateFromStr).startUtc;
+  const endDate = getAlgiersDayBounds(dateToStr).endUtc;
 
   // Fetch branches
   const branches = await prisma.branch.findMany({
@@ -187,7 +220,24 @@ export async function getDailyRevenueDashboardData(options?: {
       },
       include: {
         student: { select: { id: true, name: true, phone: true } },
-        class: { select: { id: true, name: true } },
+        class: {
+          select: {
+            id: true,
+            name: true,
+            isFormation: true,
+            level: { select: { id: true, name: true } },
+            branch: { select: { id: true, name: true } },
+          },
+        },
+        series: {
+          select: {
+            id: true,
+            scope: true,
+            level: { select: { id: true, name: true } },
+            issuingBranch: { select: { id: true, name: true } },
+            targetBranch: { select: { id: true, name: true } },
+          },
+        },
         workshop: { select: { id: true, title: true } },
       },
       orderBy: { issuedAt: "desc" },
@@ -298,7 +348,7 @@ export async function getDailyRevenueDashboardData(options?: {
     let dateEndStr: string;
 
     if (periodMode === "daily") {
-      bucketKey = d.toISOString().split("T")[0];
+      bucketKey = getAlgiersDateInfo(d).dateStr;
       dateStartStr = bucketKey;
       dateEndStr = bucketKey;
     } else if (periodMode === "weekly") {
@@ -357,7 +407,7 @@ export async function getDailyRevenueDashboardData(options?: {
     let dateEndStr: string;
 
     if (periodMode === "daily") {
-      bucketKey = d.toISOString().split("T")[0];
+      bucketKey = getAlgiersDateInfo(d).dateStr;
       dateStartStr = bucketKey;
       dateEndStr = bucketKey;
     } else if (periodMode === "weekly") {
@@ -405,7 +455,7 @@ export async function getDailyRevenueDashboardData(options?: {
     let dateEndStr: string;
 
     if (periodMode === "daily") {
-      bucketKey = d.toISOString().split("T")[0];
+      bucketKey = getAlgiersDateInfo(d).dateStr;
       dateStartStr = bucketKey;
       dateEndStr = bucketKey;
     } else if (periodMode === "weekly") {
@@ -451,26 +501,37 @@ export async function getDailyRevenueDashboardData(options?: {
   const branchNameMap = new Map(branches.map((b) => [b.id, b.name]));
 
   // Format detailed vouchers for audit trail and day-level inspection
-  const formattedVouchers: RevenueDashboardVoucher[] = voucherRows.map((v) => ({
-    id: v.id,
-    number: v.number,
-    studentId: v.studentId,
-    studentName: v.student?.name || "—",
-    studentPhone: v.student?.phone || null,
-    classId: v.classId,
-    className: v.class?.name || v.workshop?.title || "—",
-    branchId: v.issuingBranchId,
-    branchName: branchNameMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`,
-    issuingBranchName: branchNameMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`,
-    targetBranchName: branchNameMap.get(v.targetBranchId) || `Branche #${v.targetBranchId}`,
-    paymentType: v.paymentType,
-    amount: Number(v.amount),
-    issuedAt: v.issuedAt.toISOString(),
-    issuedBy: v.issuedBy,
-    isVoided: v.isVoided,
-    isPartial: v.isPartial,
-    status: v.status,
-  }));
+  const formattedVouchers: RevenueDashboardVoucher[] = voucherRows.map((v) => {
+    const bName = branchNameMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`;
+    const lvlName = v.class?.level?.name || v.series?.level?.name || null;
+    return {
+      id: v.id,
+      number: v.number,
+      studentId: v.studentId,
+      studentName: v.student?.name || "—",
+      studentPhone: v.student?.phone || null,
+      classId: v.classId,
+      className: v.class?.name || v.workshop?.title || "—",
+      branchId: v.issuingBranchId,
+      branchName: bName,
+      issuingBranchName: bName,
+      targetBranchName: branchNameMap.get(v.targetBranchId) || `Branche #${v.targetBranchId}`,
+      paymentType: v.paymentType,
+      amount: Number(v.amount),
+      issuedAt: v.issuedAt.toISOString(),
+      issuedBy: v.issuedBy,
+      isVoided: v.isVoided,
+      isPartial: v.isPartial,
+      status: v.status,
+      levelName: lvlName,
+      series: v.series as any,
+      class: v.class as any,
+      voucherDisplay: formatVoucherDisplay(v as any, {
+        branchName: bName,
+        levelName: lvlName || undefined,
+      }),
+    };
+  });
 
   // Recent ledger entries for transparency
   const recentLedgerEntries = ledgerRows
@@ -588,9 +649,9 @@ export async function getDailyBranchLedgerData(
 
   if (!branch) return null;
 
-  const now = targetDate ? new Date(targetDate) : new Date();
-  const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
-  const endOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+  const dayBounds = getAlgiersDayBounds(targetDate || new Date());
+  const startOfDay = dayBounds.startUtc;
+  const endOfDay = dayBounds.endUtc;
 
   // Reads from the same ledger data as §1.1's revenue dashboard, just filtered to one day and one branch
   const [ledgerRows, missingRecords, surplusRecords, todayVouchers, todayTransfers] = await Promise.all([
@@ -623,8 +684,25 @@ export async function getDailyBranchLedgerData(
       },
       include: {
         student: { select: { id: true, name: true } },
-        class: { select: { name: true, branch: { select: { id: true, name: true } } } },
-        workshop: { select: { title: true, Branch: { select: { id: true, name: true } } } },
+        class: {
+          select: {
+            id: true,
+            name: true,
+            isFormation: true,
+            level: { select: { id: true, name: true } },
+            branch: { select: { id: true, name: true } },
+          },
+        },
+        series: {
+          select: {
+            id: true,
+            scope: true,
+            level: { select: { id: true, name: true } },
+            issuingBranch: { select: { id: true, name: true } },
+            targetBranch: { select: { id: true, name: true } },
+          },
+        },
+        workshop: { select: { id: true, title: true, Branch: { select: { id: true, name: true } } } },
       },
       orderBy: { issuedAt: "desc" },
     }),
@@ -704,8 +782,8 @@ export async function getDailyBranchLedgerData(
 
   return {
     branch,
-    date: now,
-    dateStr: now.toISOString().split("T")[0],
+    date: dayBounds.normalizedUtcMidnight,
+    dateStr: dayBounds.dateStr,
     summary,
     missingMoneyList: missingRecords.map((m) => ({
       id: m.id,
@@ -727,21 +805,30 @@ export async function getDailyBranchLedgerData(
       confirmedAt: s.confirmedAt,
       createdAt: s.createdAt,
     })),
-    todayVouchers: todayVouchers.map((v) => ({
-      id: v.id,
-      number: v.number,
-      studentId: v.student?.id || v.studentId || null,
-      studentName: v.student?.name || "—",
-      className: v.class?.name || v.workshop?.title || "—",
-      targetBranchId: v.targetBranchId,
-      targetBranchName: v.class?.branch?.name || v.workshop?.Branch?.name || null,
-      paymentType: v.paymentType,
-      amount: Number(v.amount),
-      issuedAt: v.issuedAt,
-      issuedBy: v.issuedBy,
-      isPartial: v.isPartial,
-      isRefund: v.isRefund,
-    })),
+    todayVouchers: todayVouchers.map((v) => {
+      const lvlName = v.class?.level?.name || v.series?.level?.name || null;
+      return {
+        id: v.id,
+        number: v.number,
+        studentId: v.student?.id || v.studentId || null,
+        studentName: v.student?.name || "—",
+        className: v.class?.name || v.workshop?.title || "—",
+        targetBranchId: v.targetBranchId,
+        targetBranchName: v.class?.branch?.name || v.workshop?.Branch?.name || null,
+        paymentType: v.paymentType,
+        amount: Number(v.amount),
+        issuedAt: v.issuedAt,
+        issuedBy: v.issuedBy,
+        isPartial: v.isPartial,
+        isRefund: v.isRefund,
+        series: v.series,
+        class: v.class,
+        voucherDisplay: formatVoucherDisplay(v as any, {
+          branchName: branch.name,
+          levelName: lvlName || undefined,
+        }),
+      };
+    }),
     todayTransfers: (() => {
       let inTotal = 0;
       let outTotal = 0;

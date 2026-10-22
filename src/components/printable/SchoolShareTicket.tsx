@@ -1,5 +1,6 @@
 import React from 'react';
 import Image from 'next/image';
+import { formatAlgiersDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 
 export interface SchoolShareSessionItem {
   lessonId: number;
@@ -78,11 +79,11 @@ export function SchoolShareTicket({ data }: SchoolShareTicketProps) {
 
   const formatDate = (d: string | Date) => {
     try {
-      return new Date(d).toLocaleDateString('fr-FR', {
+      return formatAlgiersDate(d, 'fr-FR', {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
-      });
+      }) || String(d);
     } catch {
       return String(d);
     }
@@ -90,21 +91,21 @@ export function SchoolShareTicket({ data }: SchoolShareTicketProps) {
 
   const formatDateTime = (d: string | Date) => {
     try {
-      const dateObj = new Date(d);
-      return `${dateObj.toLocaleDateString('fr-FR', {
+      const dateObj = typeof d === 'string' ? new Date(d) : d;
+      return new Intl.DateTimeFormat('fr-FR', {
+        timeZone: ALGIERS_TIMEZONE,
         weekday: 'short',
         day: 'numeric',
         month: 'short',
-      })} ${dateObj.toLocaleTimeString('fr-FR', {
         hour: '2-digit',
         minute: '2-digit',
-      })}`;
+      }).format(dateObj);
     } catch {
       return String(d);
     }
   };
 
-  const formatDZD = (num: number) => `${Number(num || 0).toLocaleString('fr-FR')} DZD`;
+  const formatDZD = (num: number) => formatDZDLib(num, 'fr');
 
   const isIndividualTeacher = Boolean(data.teacher);
   const allSessions = data.sessions || [];
@@ -158,7 +159,7 @@ export function SchoolShareTicket({ data }: SchoolShareTicketProps) {
             Du {formatDate(data.periodStart)} au {formatDate(data.periodEnd)}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            Date d&apos;impression : {new Date().toLocaleDateString('fr-FR')}
+            Date d&apos;impression : {formatAlgiersDate(new Date(), 'fr-FR')}
           </p>
         </div>
       </div>

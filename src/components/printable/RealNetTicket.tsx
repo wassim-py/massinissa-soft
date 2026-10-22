@@ -1,5 +1,6 @@
 import React from 'react';
 import Image from 'next/image';
+import { formatAlgiersDate, formatDZD as formatDZDLib } from "@/lib/algiersDate";
 
 export interface RealNetPrintData {
   payrollRunId?: number;
@@ -69,17 +70,17 @@ export function RealNetTicket({ data }: RealNetTicketProps) {
 
   const formatDate = (d: string | Date) => {
     try {
-      return new Date(d).toLocaleDateString('fr-FR', {
+      return formatAlgiersDate(d, 'fr-FR', {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
-      });
+      }) || String(d);
     } catch {
       return String(d);
     }
   };
 
-  const formatDZD = (num: number) => `${Number(num || 0).toLocaleString('fr-FR')} DZD`;
+  const formatDZD = (num: number) => formatDZDLib(num, 'fr');
 
   const totalCharges = data.totalOutcomes + data.totalTeacherPayroll + data.totalStaffPayroll;
   const isProfitable = data.realNet >= 0;
@@ -120,7 +121,7 @@ export function RealNetTicket({ data }: RealNetTicketProps) {
         </div>
         <div className="text-right">
           <p className="text-gray-500 text-xs">Date d&apos;émission :</p>
-          <p className="font-semibold text-gray-800">{new Date().toLocaleDateString('fr-FR')}</p>
+          <p className="font-semibold text-gray-800">{formatAlgiersDate(new Date(), 'fr-FR')}</p>
           <p className="text-xs text-gray-500 mt-0.5">Document comptable de clôture</p>
         </div>
       </div>

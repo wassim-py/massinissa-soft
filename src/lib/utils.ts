@@ -2,41 +2,42 @@
 // FOR THIS REASON WE'LL GET THE LAST WEEK AS THE REFERENCE WEEK.
 // IN THE TUTORIAL WE'RE TAKING THE NEXT WEEK AS THE REFERENCE WEEK.
 
-const getLatestMonday = (): Date => {
-  const today = new Date();
-  const dayOfWeek = today.getDay();
-  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-  const latestMonday = today;
-  latestMonday.setDate(today.getDate() - daysSinceMonday);
-  return latestMonday;
-};
-
 export const adjustScheduleToCurrentWeek = (
-  lessons: { title: string; start: Date; end: Date }[]
-): { title: string; start: Date; end: Date }[] => {
-  const latestMonday = getLatestMonday();
+  lessons: { title: string; start: Date; end: Date; [key: string]: any }[]
+): { title: string; start: Date; end: Date; [key: string]: any }[] => {
+  const todayInfo = getAlgiersDateInfo();
+  // In Algiers time, determine days since Monday (0 for Monday, ..., 6 for Sunday)
+  const todayUtcDate = new Date(Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day));
+  const todayDayOfWeek = todayUtcDate.getUTCDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+  const daysSinceMonday = todayDayOfWeek === 0 ? 6 : todayDayOfWeek - 1;
+
+  // Monday of the current Algiers reference week
+  const mondayUtc = new Date(Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day - daysSinceMonday));
+  const monYear = mondayUtc.getUTCFullYear();
+  const monMonth = mondayUtc.getUTCMonth();
+  const monDate = mondayUtc.getUTCDate();
 
   return lessons.map((lesson) => {
-    const lessonDayOfWeek = lesson.start.getDay();
+    const sInfo = getAlgiersDateInfo(lesson.start);
+    const eInfo = getAlgiersDateInfo(lesson.end);
 
+    const lessonUtc = new Date(Date.UTC(sInfo.year, sInfo.month - 1, sInfo.day));
+    const lessonDayOfWeek = lessonUtc.getUTCDay();
     const daysFromMonday = lessonDayOfWeek === 0 ? 6 : lessonDayOfWeek - 1;
 
-    const adjustedStartDate = new Date(latestMonday);
+    // Build target Algiers date for this week
+    const targetDateUtc = new Date(Date.UTC(monYear, monMonth, monDate + daysFromMonday));
+    const targetY = targetDateUtc.getUTCFullYear();
+    const targetM = targetDateUtc.getUTCMonth();
+    const targetD = targetDateUtc.getUTCDate();
 
-    adjustedStartDate.setDate(latestMonday.getDate() + daysFromMonday);
-    adjustedStartDate.setHours(
-      lesson.start.getHours(),
-      lesson.start.getMinutes(),
-      lesson.start.getSeconds()
-    );
-    const adjustedEndDate = new Date(adjustedStartDate);
-    adjustedEndDate.setHours(
-      lesson.end.getHours(),
-      lesson.end.getMinutes(),
-      lesson.end.getSeconds()
-    );
+    // In Algiers (UTC+1), hour H corresponds to UTC H - 1
+    const adjustedStartDate = new Date(Date.UTC(targetY, targetM, targetD, sInfo.hour - 1, sInfo.minute, sInfo.second || 0));
+    const durationMs = Math.max(0, new Date(lesson.end).getTime() - new Date(lesson.start).getTime());
+    const adjustedEndDate = new Date(adjustedStartDate.getTime() + durationMs);
 
     return {
+      ...lesson,
       title: lesson.title,
       start: adjustedStartDate,
       end: adjustedEndDate,
@@ -165,45 +166,16 @@ export function getLessonDateTime(day: string, time: string, dateStr?: string | 
   return new Date(Date.UTC(year, month, dayNum, (hours || 0) - 1, minutes || 0, 0, 0));
 }
 
-export interface AlgiersDateInfo {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  weekday: "SATURDAY" | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY";
-  dateStr: string; // YYYY-MM-DD in Africa/Algiers
-  timeStr: string; // HH:mm in Africa/Algiers
-}
+import {
+  getAlgiersDateInfo,
+  type AlgiersDateInfo,
+} from "./algiersDate";
 
-export function getAlgiersDateInfo(date: Date | string = new Date()): AlgiersDateInfo {
-  const d = date instanceof Date ? date : new Date(date);
-  const safeDate = isNaN(d.getTime()) ? new Date() : d;
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Africa/Algiers",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    weekday: "long",
-  }).formatToParts(safeDate);
-  const m: Record<string, string> = {};
-  for (const p of parts) {
-    m[p.type] = p.value;
-  }
-  const rawHour = parseInt(m.hour || "0", 10);
-  const hour = rawHour === 24 ? 0 : rawHour;
-  const minute = parseInt(m.minute || "0", 10);
-  const year = parseInt(m.year || "2026", 10);
-  const month = parseInt(m.month || "1", 10);
-  const day = parseInt(m.day || "1", 10);
-  const weekday = (m.weekday || "SATURDAY").toUpperCase() as AlgiersDateInfo["weekday"];
-  const dateStr = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  const timeStr = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-  return { year, month, day, hour, minute, weekday, dateStr, timeStr };
-}
+export {
+  getAlgiersDateInfo,
+  type AlgiersDateInfo,
+};
+
 
 export interface AlgiersWeekBounds {
   startOfWeek: Date;

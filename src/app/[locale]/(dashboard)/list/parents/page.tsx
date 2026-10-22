@@ -128,7 +128,23 @@ const ParentListPage = async (
           <span className="text-muted text-xs">-</span>
         )}
       </td>
-      <td className="hidden md:table-cell text-muted-dark">{item.phone}</td>
+      <td className="hidden md:table-cell text-muted-dark">
+        {item.phone && item.phone !== "-" ? (
+          <div className="flex flex-wrap gap-1 font-mono text-xs" dir="ltr">
+            {item.phone.split(", ").map((ph, idx) => (
+              <a
+                key={idx}
+                href={`tel:${ph}`}
+                className="hover:underline hover:text-primary bg-surface-subtle px-1.5 py-0.5 rounded border border-border"
+              >
+                {ph}
+              </a>
+            ))}
+          </div>
+        ) : (
+          <span className="text-muted text-xs">-</span>
+        )}
+      </td>
       <td className="text-end pe-3.5">
         <div className="flex items-center justify-end gap-2">
           <FormContainer table="parent" type="update" data={item} />
@@ -163,7 +179,12 @@ const ParentListPage = async (
         where: whereClause,
         include: {
           students: {
-            select: { id: true, name: true, phone: true },
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              parentPhoneNumbers: { select: { phone: true } },
+            },
           },
         },
         orderBy: { id: "asc" },
@@ -178,14 +199,25 @@ const ParentListPage = async (
     count = totalCount;
     data = families.map((f) => {
       const familyName = f.name || t("familyNumber", { number: f.id });
-      const primaryPhone = f.students.find((s) => s.phone)?.phone || "-";
+      // Aggregate all registered parent phone numbers across the family's students (Decision #7)
+      const allParentPhones = Array.from(
+        new Set(
+          f.students.flatMap((s: any) =>
+            (s.parentPhoneNumbers || []).map((p: any) => p.phone?.trim()).filter(Boolean)
+          )
+        )
+      );
+      const displayPhone =
+        allParentPhones.length > 0
+          ? allParentPhones.join(", ")
+          : f.students.find((s) => s.phone)?.phone || "-";
       return {
         id: String(f.id),
         name: familyName,
         surname: "",
         username: `family_${f.id}`,
         email: "-",
-        phone: primaryPhone,
+        phone: displayPhone,
         address: "-",
         payerStudentId: f.payerStudentId,
         discountPercentage: Number(f.discountPercentage ?? 50),
