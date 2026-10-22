@@ -222,10 +222,18 @@ export function formatAlgiersDateTime(
 }
 
 /**
+ * No-break space (U+00A0). Used as the thousands separator instead of a plain ASCII
+ * space so the digit groups stay in one European-number run: a plain space is neutral
+ * whitespace, and under an RTL paragraph direction the Unicode bidi algorithm splits
+ * the number at each separator and reverses the groups ("1 500" renders as "500 1").
+ */
+const NUM_GROUP_SEPARATOR = " ";
+
+/**
  * Deterministically formats any number, numeric string, or Prisma.Decimal into
  * a standard grouped number string without SSR hydration divergence.
  *
- * Separator: ASCII space (' ', U+0020)
+ * Separator: no-break space (' ', U+00A0) — keeps digit groups together in RTL layouts
  * Decimal separator: comma (',', U+002C) for fractional Dinars, omitted for whole numbers
  * Edge cases: null, undefined, '', NaN, +/-Infinity -> '0'
  */
@@ -266,7 +274,7 @@ export function formatNumber(
     return "0";
   }
   const parts = rounded.toString().split(".");
-  const integerPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  const integerPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, NUM_GROUP_SEPARATOR);
   const decimalPart = parts[1];
 
   let result = (isNegative ? "-" : "") + integerPart;
@@ -279,9 +287,12 @@ export function formatNumber(
 /**
  * Deterministically formats an amount into Algerian Dinars (DZD) with localized currency symbol.
  * Guarantees zero SSR hydration mismatches across Node.js and client browsers:
- * - Uses ASCII space (' ', U+0020) as thousands separator.
+ * - Uses no-break space (' ', U+00A0) as thousands separator and before the currency symbol.
  * - Arabic (locale starts with "ar"): " د.ج"
  * - French / Default: " DZD"
+ * The output is wrapped in an LRM marker-free no-break space separator so that in an RTL
+ * context the number, the separators, and the trailing currency symbol stay in logical order
+ * instead of having the digit groups mirror to "500 1".
  */
 export function formatDZD(
   amount: number | string | Prisma.Decimal | null | undefined,
@@ -289,5 +300,6 @@ export function formatDZD(
 ): string {
   const isAr = typeof locale === "string" && locale.startsWith("ar");
   const formatted = formatNumber(amount);
-  return isAr ? `${formatted} د.ج` : `${formatted} DZD`;
+  const suffix = isAr ? `${NUM_GROUP_SEPARATOR}د.ج` : `${NUM_GROUP_SEPARATOR}DZD`;
+  return `${formatted}${suffix}`;
 }

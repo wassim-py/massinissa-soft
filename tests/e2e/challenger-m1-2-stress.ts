@@ -186,22 +186,24 @@ export async function runChallengerStressTests() {
       }
     });
 
-    test("STRESS-14: Thousands separator is strictly ASCII space (0x20 / 32)", () => {
+    test("STRESS-14: Thousands separator is no-break space (0xA0 / 160) for RTL stability", () => {
       const formatted = formatNumber(1234567);
-      expect(formatted).toBe("1 234 567");
-      // Check spaces explicitly:
-      expect(formatted.charCodeAt(1)).toBe(32); // ' '
-      expect(formatted.charCodeAt(5)).toBe(32); // ' '
+      expect(formatted).toBe("1 234 567");
+      // NBSP keeps digit groups in one European-number run: a plain ASCII space is
+      // neutral whitespace and gets mirror-reversed under an RTL paragraph direction.
+      expect(formatted.charCodeAt(1)).toBe(0xa0);
+      expect(formatted.charCodeAt(5)).toBe(0xa0);
+      expect(formatted).not.toContain(" ");
     });
 
     test("STRESS-15: Arabic currency suffix code point verification", () => {
       const arDzd = formatDZD(1000, "ar");
-      expect(arDzd).toBe("1 000 د.ج");
-      const suffix = arDzd.slice(5); // " د.ج"
-      expect(suffix.charCodeAt(0)).toBe(0x0020); // ASCII space
-      expect(suffix.charCodeAt(1)).toBe(0x062F); // DAL (د)
-      expect(suffix.charCodeAt(2)).toBe(0x002E); // PERIOD (.)
-      expect(suffix.charCodeAt(3)).toBe(0x062C); // JEEM (ج)
+      expect(arDzd).toBe("1 000 د.ج");
+      const suffix = arDzd.slice(6); // " د.ج"
+      expect(suffix.charCodeAt(0)).toBe(0x00a0); // no-break space
+      expect(suffix.charCodeAt(1)).toBe(0x062f); // DAL (د)
+      expect(suffix.charCodeAt(2)).toBe(0x002e); // PERIOD (.)
+      expect(suffix.charCodeAt(3)).toBe(0x062c); // JEEM (ج)
       expect(suffix.length).toBe(4);
     });
 
@@ -315,16 +317,20 @@ export async function runChallengerStressTests() {
         if (formatted.includes("NaN") || formatted.includes("undefined")) {
           throw new Error(`Random iteration ${i} produced invalid token: ${formatted} from ${raw}`);
         }
-        // 2. Must only contain valid characters: digits, ASCII space (0x20), minus (-), comma (,)
+        // 2. Must only contain valid characters: digits, no-break space (0xA0), minus (-), comma (,)
         for (let j = 0; j < formatted.length; j++) {
           const code = formatted.charCodeAt(j);
           const isDigit = code >= 48 && code <= 57;
-          const isSpace = code === 32;
+          const isSpace = code === 0xa0;
           const isMinus = code === 45 && j === 0;
           const isComma = code === 44;
           if (!isDigit && !isSpace && !isMinus && !isComma) {
             throw new Error(`Random iteration ${i} produced illegal character '${formatted[j]}' (code ${code}) in: ${formatted}`);
           }
+        }
+        // 2b. Never a plain splittable ASCII space: it would mirror groups under RTL
+        if (formatted.includes(" ")) {
+          throw new Error(`Random iteration ${i} used a plain ASCII space separator: "${formatted}"`);
         }
         // 3. SSR determinism: compare UTC vs Tokyo client
         const ssr = evaluateWithTimezone("UTC", () => formatDZD(raw, "fr"));
