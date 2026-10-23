@@ -430,8 +430,16 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
         });
     }, [students, searchQuery]);
 
+    const formatDayName = (dateString: string) => {
+        const date = new Date(`${dateString}T12:00:00Z`);
+        return date.toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
+            weekday: "long",
+            timeZone: "Africa/Algiers",
+        });
+    };
+
     const formatDateHeader = (dateString: string) => {
-        const date = new Date(`${dateString}T00:00:00`);
+        const date = new Date(`${dateString}T12:00:00Z`);
         return date.toLocaleDateString(locale === "ar" ? "ar-DZ" : "fr-DZ", {
             month: "short",
             day: "numeric",
@@ -567,6 +575,9 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                         >
                                             <span className={`font-bold group-hover/col:text-primary group-hover/col:underline ${isFree ? "text-amber-950" : "text-gray-800"}`}>
                                                 {instance.lessonName}
+                                            </span>
+                                            <span className={`text-[11px] font-semibold capitalize group-hover/col:text-primary/90 ${isFree ? "text-amber-900" : "text-gray-700"}`}>
+                                                {formatDayName(instance.date)}
                                             </span>
                                             <span className={`font-normal text-form-helper group-hover/col:text-primary/80 ${isFree ? "text-amber-900/80" : "text-muted"}`}>
                                                 {formatDateHeader(instance.date)}

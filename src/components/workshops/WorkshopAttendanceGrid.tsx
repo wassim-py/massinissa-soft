@@ -157,7 +157,7 @@ export default function WorkshopAttendanceGrid({
                       </span>
                       <span className="text-[11px] text-muted font-normal">
                         {sessionDate.toLocaleDateString(dateLocale, {
-                          weekday: "short",
+                          weekday: "long",
                           month: "short",
                           day: "numeric",
                           timeZone: "Africa/Algiers",

@@ -2,12 +2,22 @@
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { Calendar } from "lucide-react";
+
+function formatToDDMMYYYY(isoDate: string): string {
+  if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return "dd/mm/yyyy";
+  const [year, month, day] = isoDate.split("-");
+  return `${day}/${month}/${year}`;
+}
 
 const AttendanceGridFilters = () => {
   const t = useTranslations("attendance");
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { replace } = useRouter();
+
+  const startDate = searchParams.get("startDate") || "";
+  const endDate = searchParams.get("endDate") || "";
 
   // This function handles changes from either date input
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -37,25 +47,47 @@ const AttendanceGridFilters = () => {
     <div className="flex flex-wrap items-center gap-4 p-4 bg-gray-50 rounded-lg border mb-6 font-sans">
       <div className="flex items-center gap-2">
         <label htmlFor="startDate" className="text-sm font-medium text-gray-700">{t("filterFrom")}</label>
-        <input
-          type="date"
-          id="startDate"
-          name="startDate"
-          value={searchParams.get("startDate") || ""}
-          onChange={handleDateChange}
-          className="p-2 border rounded-md text-sm"
-        />
+        <div className="relative flex items-center gap-2 px-3 py-2 bg-white border rounded-md text-sm cursor-pointer hover:border-blue-500 transition-colors">
+          <Calendar className="w-4 h-4 text-gray-500 shrink-0" />
+          <span className={`font-mono text-sm select-none ${startDate ? "text-gray-800" : "text-gray-400"}`} dir="ltr">
+            {formatToDDMMYYYY(startDate)}
+          </span>
+          <input
+            type="date"
+            id="startDate"
+            name="startDate"
+            value={startDate}
+            onChange={handleDateChange}
+            onClick={(e) => {
+              try {
+                e.currentTarget.showPicker?.();
+              } catch {}
+            }}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+        </div>
       </div>
       <div className="flex items-center gap-2">
         <label htmlFor="endDate" className="text-sm font-medium text-gray-700">{t("filterTo")}</label>
-        <input
-          type="date"
-          id="endDate"
-          name="endDate"
-          defaultValue={searchParams.get("endDate") || ""}
-          onChange={handleDateChange}
-          className="p-2 border rounded-md text-sm"
-        />
+        <div className="relative flex items-center gap-2 px-3 py-2 bg-white border rounded-md text-sm cursor-pointer hover:border-blue-500 transition-colors">
+          <Calendar className="w-4 h-4 text-gray-500 shrink-0" />
+          <span className={`font-mono text-sm select-none ${endDate ? "text-gray-800" : "text-gray-400"}`} dir="ltr">
+            {formatToDDMMYYYY(endDate)}
+          </span>
+          <input
+            type="date"
+            id="endDate"
+            name="endDate"
+            value={endDate}
+            onChange={handleDateChange}
+            onClick={(e) => {
+              try {
+                e.currentTarget.showPicker?.();
+              } catch {}
+            }}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+        </div>
       </div>
       <button
         onClick={handleReset}
