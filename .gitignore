@@ -38,6 +38,7 @@ next-env.d.ts
 
 # local agents & scratch
 .agents/
+.claude/
 scratch/
 backups/
 ORIGINAL_REQUEST.md
