@@ -90,7 +90,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
   }
 
   const targetDateStr =
-    searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
+    isOwner && searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
       ? searchParams.date
       : getAlgiersTodayDateString();
 
@@ -164,7 +164,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
               <Calendar className="w-4 h-4 text-primary shrink-0" />
               <span>{formattedSelectedDate}</span>
             </div>
-            <DailyLedgerDateFilter currentDate={targetDateStr} />
+            {isOwner && <DailyLedgerDateFilter currentDate={targetDateStr} />}
           </div>
         </div>
 

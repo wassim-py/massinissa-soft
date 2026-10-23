@@ -5,16 +5,20 @@ import Image from "next/image";
 import { Link } from "@/i18n/navigation";
 import { getTranslations } from "next-intl/server";
 import BiometricMonitorProvider from "@/components/biometrics/BiometricMonitorProvider";
+import { getActiveBranchId } from "@/lib/auth";
 
 export default async function DashboardLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const tFooter = await getTranslations("footer");
+  const [tFooter, activeBranchId] = await Promise.all([
+    getTranslations("footer"),
+    getActiveBranchId(),
+  ]);
 
   return (
-    <BiometricMonitorProvider>
+    <BiometricMonitorProvider initialBranchId={activeBranchId}>
       <div className="min-h-screen flex flex-col lg:flex-row bg-surface-muted">
         {/* DESKTOP SIDEBAR (visible only on lg and up: >= 1024px) */}
         <aside

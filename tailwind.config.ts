@@ -18,6 +18,21 @@ const config: Config = {
           "system-ui",
           "sans-serif",
         ],
+        // Digits/Latin stay in the monospace face; Arabic glyphs (the د.ج currency
+        // symbol) have no coverage in any of these faces, so per-glyph fallback
+        // lands on Tajawal — the same typeface as the surrounding Arabic text.
+        mono: [
+          "ui-monospace",
+          "SFMono-Regular",
+          "Menlo",
+          "Monaco",
+          "Consolas",
+          "Liberation Mono",
+          "Courier New",
+          "var(--font-tajawal)",
+          "Tajawal",
+          "monospace",
+        ],
       },
       backgroundImage: {
         "gradient-radial": "radial-gradient(var(--tw-gradient-stops))",

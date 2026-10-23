@@ -88,40 +88,37 @@ export async function invalidateBiometricFeedCacheAction(branchId?: number | nul
 }
 
 /**
- * Helper to determine if a lesson L falls inside the Continuous Scan Window at `scanTime`:
+ * Helper to determine if a lesson L falls inside the strict Biometric Scan Window at `scanTime`:
  * - Window starts: L.startsAt - 30 minutes
- * - Window stays open all along the lesson for late arrivals
- * - Window ends: Exact moment the next group's scan window begins
- *   (nextLessonStartsAt - 30 minutes, or L.endsAt - 30 minutes if lesson >= 90m, or L.endsAt)
+ * - Window ends: L.endsAt - 30 minutes (or nextLessonStartsAt - 30 minutes if an earlier next lesson's window begins before L.endsAt - 30m)
+ *   For example, if a lesson is 10:00 -> 12:00, attendance taking is strictly 09:30 -> 11:30.
  */
 function isLessonInContinuousScanWindow(
   lesson: { id: number; startsAt: Date; endsAt: Date },
   nextLessonStartsAt: Date | null,
-  scanTime: Date,
-  hasPrecedingLessonToday: boolean = false
+  scanTime: Date
 ): boolean {
-  const FORTYFIVE_MIN_MS = 45 * 60 * 1000;
-  const THREE_HOURS_MS = 180 * 60 * 1000;
+  const THIRTY_MIN_MS = 30 * 60 * 1000;
   const startsAtMs = new Date(lesson.startsAt).getTime();
   const endsAtMs = new Date(lesson.endsAt).getTime();
   const scanMs = scanTime.getTime();
 
-  // If the student has a preceding lesson earlier today, switch 45 minutes before this lesson starts.
-  // If this is the student's first/only lesson today, allow early check-in up to 3 hours before startsAt.
-  const preWindowMs = hasPrecedingLessonToday ? FORTYFIVE_MIN_MS : THREE_HOURS_MS;
-  const windowStartMs = startsAtMs - preWindowMs;
+  const windowStartMs = startsAtMs - THIRTY_MIN_MS;
+  let windowEndMs = endsAtMs - THIRTY_MIN_MS;
 
-  let windowEndMs: number;
-  if (nextLessonStartsAt) {
-    // End when the next lesson's 20-min pre-scan window begins
-    const nextScanStartMs = new Date(nextLessonStartsAt).getTime() - 20 * 60 * 1000;
-    windowEndMs = Math.max(startsAtMs + 15 * 60 * 1000, Math.min(endsAtMs + 15 * 60 * 1000, nextScanStartMs));
-  } else {
-    // Keep window open through the entire lesson duration plus 30 minutes grace buffer
-    windowEndMs = endsAtMs + 30 * 60 * 1000;
+  // Safeguard if a custom/test lesson has duration <= 30 minutes
+  if (windowEndMs < startsAtMs) {
+    windowEndMs = endsAtMs;
   }
 
-  return scanMs >= windowStartMs && scanMs < windowEndMs;
+  if (nextLessonStartsAt) {
+    const nextScanStartMs = new Date(nextLessonStartsAt).getTime() - THIRTY_MIN_MS;
+    if (nextScanStartMs > windowStartMs && nextScanStartMs <= windowEndMs) {
+      return scanMs >= windowStartMs && scanMs < nextScanStartMs;
+    }
+  }
+
+  return scanMs >= windowStartMs && scanMs <= windowEndMs;
 }
 
 /**
@@ -241,6 +238,7 @@ export async function processBiometricScan(input: {
                     select: {
                       id: true,
                       name: true,
+                      branchId: true,
                     },
                   },
                 },
@@ -268,6 +266,7 @@ export async function processBiometricScan(input: {
                         select: {
                           id: true,
                           name: true,
+                          branchId: true,
                         },
                       },
                     },
@@ -377,196 +376,87 @@ export async function processBiometricScan(input: {
     })
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
-  // Helper to test if a lesson matches the active scan branch.
-  // The lesson's own branch is where the session physically happens and must take priority:
-  // lessons reached through e.class.lessonGroups carry the ENROLLED class's branch in `class`,
-  // so falling back to it would let a session running in another branch be matched here.
+  // Helper to test if a lesson physically takes place at the active scan branch.
+  // Strictly enforces branch isolation: a scan at Branch A must NEVER match a group at Branch B.
   const isBranchMatch = (l: any) => {
     if (!branchId) return true;
     const lessonBranch =
-      l.branchId ?? l.class?.branchId ?? (l.classroom as any)?.branchId ?? null;
-    return lessonBranch === null || lessonBranch === branchId;
+      l.branchId ?? (l.classroom as any)?.branchId ?? l.class?.branchId ?? null;
+    return lessonBranch === branchId;
   };
 
-  // Match lesson: Priority to openLessonId, then today's lessons, then scan window
-  let matchedLesson: (typeof studentLessons)[number] | null = null;
+  // Strictly filter candidate lessons to ONLY those at the scanned branch
+  const branchLessons = studentLessons.filter(isBranchMatch);
 
-  // STEP 0: If admin/teacher currently has a specific lesson Attendance sheet open, match directly
-  if (openLessonIdNum) {
-    const directOpenMatch = studentLessons.find((l) => l.id === openLessonIdNum);
-    if (directOpenMatch) {
-      matchedLesson = directOpenMatch;
-    }
-  }
-
-  // STEP 1: Today's lessons (any lesson scheduled for today in Africa/Algiers)
-  if (!matchedLesson) {
-    const todayDateStr = scanDateInfo.dateStr;
-    const todayLessons = studentLessons.filter((l) => {
-      const lDateStr = l.instanceDate || getAlgiersDateInfo(l.startsAt).dateStr;
-      return lDateStr === todayDateStr;
+  // Find all branch lessons whose strict [startsAt - 30 min, endsAt - 30 min] window contains scanTime
+  const inWindowBranchLessons: typeof branchLessons = [];
+  for (let i = 0; i < branchLessons.length; i++) {
+    const lesson = branchLessons[i];
+    const nextLesson = branchLessons.slice(i + 1).find((nl) => {
+      const diffMs =
+        new Date(nl.startsAt).getTime() - new Date(lesson.startsAt).getTime();
+      return diffMs >= 30 * 60 * 1000 && diffMs <= 6 * 60 * 60 * 1000;
     });
 
-    const branchTodayLessons = todayLessons.filter(isBranchMatch);
-    const candidateTodayLessons =
-      branchTodayLessons.length > 0 ? branchTodayLessons : todayLessons;
-
-    if (candidateTodayLessons.length > 0) {
-      const presentLessonIds = new Set(
-        ((student as any).attendances || [])
-          .filter((a: any) => a.status === "PRESENT")
-          .map((a: any) => a.lessonId)
-      );
-
-      const scanMs = scanTime.getTime();
-
-      // 1A. Check for a lesson currently IN PROGRESS where student is NOT yet marked present
-      const inProgressNotPresent = candidateTodayLessons.find((l) => {
-        const sMs = new Date(l.startsAt).getTime();
-        const eMs = new Date(l.endsAt).getTime();
-        return (
-          scanMs >= sMs - 20 * 60 * 1000 &&
-          scanMs <= eMs + 20 * 60 * 1000 &&
-          !presentLessonIds.has(l.id)
-        );
-      });
-
-      if (inProgressNotPresent) {
-        matchedLesson = inProgressNotPresent;
-      }
-
-      // 1B. Check for UPCOMING lessons starting LATER TODAY where student is NOT yet marked present
-      if (!matchedLesson) {
-        const upcomingNotPresent = candidateTodayLessons
-          .filter((l) => {
-            const sMs = new Date(l.startsAt).getTime();
-            return sMs > scanMs && !presentLessonIds.has(l.id);
-          })
-          .sort(
-            (a, b) =>
-              new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
-          );
-
-        if (upcomingNotPresent.length > 0) {
-          matchedLesson = upcomingNotPresent[0];
-        }
-      }
-
-      // 1C. Check for any in-progress lesson (even if already present, to acknowledge "Déjà pointé")
-      const inProgressAny = candidateTodayLessons.find((l) => {
-        const sMs = new Date(l.startsAt).getTime();
-        const eMs = new Date(l.endsAt).getTime();
-        return (
-          scanMs >= sMs - 20 * 60 * 1000 && scanMs <= eMs + 20 * 60 * 1000
-        );
-      });
-
-      if (!matchedLesson && inProgressAny) {
-        matchedLesson = inProgressAny;
-      }
-
-      // 1D. Use Continuous Scan Window rule on today's candidate lessons
-      if (!matchedLesson) {
-        for (let i = 0; i < candidateTodayLessons.length; i++) {
-          const lesson = candidateTodayLessons[i];
-          const hasPrecedingLessonToday = candidateTodayLessons
-            .slice(0, i)
-            .some((pl) => {
-              const diffMs =
-                new Date(lesson.startsAt).getTime() -
-                new Date(pl.startsAt).getTime();
-              return (
-                diffMs >= 30 * 60 * 1000 && diffMs <= 8 * 60 * 60 * 1000
-              );
-            });
-          const nextLesson = candidateTodayLessons.slice(i + 1).find((nl) => {
-            const diffMs =
-              new Date(nl.startsAt).getTime() -
-              new Date(lesson.startsAt).getTime();
-            return (
-              diffMs >= 30 * 60 * 1000 && diffMs <= 6 * 60 * 60 * 1000
-            );
-          });
-
-          if (
-            isLessonInContinuousScanWindow(
-              lesson as any,
-              nextLesson ? nextLesson.startsAt : null,
-              scanTime,
-              hasPrecedingLessonToday
-            )
-          ) {
-            matchedLesson = lesson;
-            break;
-          }
-        }
-      }
-
-      // 1E. Check for late arrival or recently ended lesson today (ended within 45 min)
-      if (!matchedLesson) {
-        for (const lesson of candidateTodayLessons) {
-          const startsAtMs = new Date(lesson.startsAt).getTime();
-          const endsAtMs = new Date(lesson.endsAt).getTime();
-          if (
-            scanMs >= startsAtMs &&
-            scanMs <= endsAtMs + 45 * 60 * 1000
-          ) {
-            matchedLesson = lesson;
-            break;
-          }
-        }
-      }
-
-      // 1F. Any upcoming lesson today fallback (even if already present, to acknowledge scan)
-      if (!matchedLesson) {
-        const anyUpcomingToday = candidateTodayLessons.find(
-          (l) => new Date(l.startsAt).getTime() > scanMs
-        );
-        if (anyUpcomingToday) {
-          matchedLesson = anyUpcomingToday;
-        }
-      }
-
-      // 1G. Single lesson today fallback
-      if (!matchedLesson && candidateTodayLessons.length === 1) {
-        matchedLesson = candidateTodayLessons[0];
-      }
+    if (
+      isLessonInContinuousScanWindow(
+        lesson as any,
+        nextLesson ? nextLesson.startsAt : null,
+        scanTime
+      )
+    ) {
+      inWindowBranchLessons.push(lesson);
     }
   }
 
-  // STEP 2: General scan window on all studentLessons (across all branches / days in window)
-  if (!matchedLesson) {
-    const candidateLessons = studentLessons.filter(isBranchMatch);
-    const activeCandidates = candidateLessons.length > 0 ? candidateLessons : studentLessons;
+  let matchedLesson: (typeof studentLessons)[number] | null = null;
 
-    for (let i = 0; i < activeCandidates.length; i++) {
-      const lesson = activeCandidates[i];
-      const hasPrecedingLessonToday = activeCandidates.slice(0, i).some((pl) => {
-        const diffMs = new Date(lesson.startsAt).getTime() - new Date(pl.startsAt).getTime();
-        return diffMs >= 30 * 60 * 1000 && diffMs <= 8 * 60 * 60 * 1000;
-      });
-      const nextLesson = activeCandidates.slice(i + 1).find((nl) => {
-        const diffMs = new Date(nl.startsAt).getTime() - new Date(lesson.startsAt).getTime();
-        return diffMs >= 30 * 60 * 1000 && diffMs <= 6 * 60 * 60 * 1000;
-      });
+  if (inWindowBranchLessons.length > 0) {
+    const presentLessonIds = new Set(
+      ((student as any).attendances || [])
+        .filter((a: any) => a.status === "PRESENT")
+        .map((a: any) => a.lessonId)
+    );
 
-      if (
-        isLessonInContinuousScanWindow(
-          lesson as any,
-          nextLesson ? nextLesson.startsAt : null,
-          scanTime,
-          hasPrecedingLessonToday
-        )
-      ) {
-        matchedLesson = lesson;
-        break;
+    // 1. If admin/teacher currently has a specific lesson Attendance sheet open AND it is in-window at this branch
+    if (openLessonIdNum) {
+      const openInWindow = inWindowBranchLessons.find(
+        (l) => l.id === openLessonIdNum
+      );
+      if (openInWindow) {
+        matchedLesson = openInWindow;
       }
+    }
+
+    // 2. Prioritize an in-window lesson at this branch where the student is NOT yet marked PRESENT
+    if (!matchedLesson) {
+      const notPresentInWindow = inWindowBranchLessons
+        .filter((l) => !presentLessonIds.has(l.id))
+        .sort(
+          (a, b) =>
+            Math.abs(new Date(a.startsAt).getTime() - scanTime.getTime()) -
+            Math.abs(new Date(b.startsAt).getTime() - scanTime.getTime())
+        );
+      if (notPresentInWindow.length > 0) {
+        matchedLesson = notPresentInWindow[0];
+      }
+    }
+
+    // 3. Otherwise match the in-window lesson where the student is already marked PRESENT ("Déjà pointé")
+    if (!matchedLesson) {
+      matchedLesson = inWindowBranchLessons[0];
     }
   }
 
   // STATE 3: NO UPCOMING GROUP IN CURRENT SCAN WINDOW AT THIS BRANCH
   if (!matchedLesson) {
-    const nextFutureLesson = studentLessons.find((l: any) => new Date(l.startsAt).getTime() > scanTime.getTime());
+    const nextFutureLesson =
+      branchLessons.find(
+        (l: any) => new Date(l.startsAt).getTime() > scanTime.getTime()
+      ) ||
+      studentLessons.find(
+        (l: any) => new Date(l.startsAt).getTime() > scanTime.getTime()
+      );
     let nextLessonInfo: string | null = null;
     if (nextFutureLesson) {
       const timeStr = new Date(nextFutureLesson.startsAt).toLocaleTimeString("fr-DZ", {
@@ -612,11 +502,6 @@ export async function processBiometricScan(input: {
       success: true,
       scan: serializeScanLog(log),
     };
-  }
-
-  // Synchronize branchId if matched lesson belongs to a specific branch
-  if (matchedLesson && matchedLesson.branchId) {
-    branchId = matchedLesson.branchId;
   }
 
   // Ensure the matched lesson has a persisted, dated Lesson instance for today's date in Africa/Algiers
@@ -836,7 +721,7 @@ export async function processBiometricScan(input: {
       }),
       prisma.biometricScanLog.create({
         data: {
-          branchId: matchedLesson.branchId,
+          branchId,
           deviceId: input.deviceId ? Number(input.deviceId) : null,
           globalNumber: student.globalNumber,
           studentId: student.id,
@@ -946,7 +831,7 @@ export async function processBiometricScan(input: {
   writeOps.push(
     prisma.biometricScanLog.create({
       data: {
-        branchId: matchedLesson.branchId,
+        branchId,
         deviceId: input.deviceId ? Number(input.deviceId) : null,
         globalNumber: student.globalNumber,
         studentId: student.id,
@@ -1067,7 +952,11 @@ export async function getBiometricLiveFeedAction(params?: {
   sinceId?: number;
 }) {
   try {
-    const activeBranchId = params?.branchId || (await getActiveBranchId()) || 1;
+    const session = await getAuthSession();
+    const activeBranchId =
+      session.userId && !session.isOwner && session.branchIds.length > 0
+        ? session.branchIds[0]
+        : params?.branchId || (await getActiveBranchId()) || 1;
     const now = Date.now();
     const sinceId = params?.sinceId ? Number(params.sinceId) : 0;
 

@@ -51,6 +51,7 @@ const EVENT_MASK = 0x0000ffff;
 
 export interface K50EnrollmentSession {
   active: boolean;
+  deviceIp: string | null; // Only THIS reader enters record mode; the others keep taking attendance
   globalNumber: number;
   studentId: string | null;
   studentName: string;
@@ -97,6 +98,7 @@ const globalForZk = globalThis as unknown as {
 function getInitialEnrollment(): K50EnrollmentSession {
   return {
     active: false,
+    deviceIp: null,
     globalNumber: 0,
     studentId: null,
     studentName: "",
@@ -429,7 +431,10 @@ async function touchDeviceHeartbeat(isOnline: boolean) {
 /**
  * Schedules a State 4 (Unrecognized Finger) scan if no EF_ATTLOG arrives within `delayMs`
  */
-function scheduleUnrecognizedFingerCheck(delayMs: number = 550) {
+function scheduleUnrecognizedFingerCheck(
+  delayMs: number = 550,
+  deviceIp?: string
+) {
   const st = getState();
   if (st.verifyFailTimer) {
     clearTimeout(st.verifyFailTimer);
@@ -441,7 +446,15 @@ function scheduleUnrecognizedFingerCheck(delayMs: number = 550) {
     if (now - st.lastAttLogAt < 900 || now - st.lastUnrecognizedAt < 1500) {
       return;
     }
-    if (st.enrollment.active) return;
+    // Finger taps on the reader currently recording a fingerprint are
+    // tap-counting, not attendance attempts — skip only for that reader.
+    // Touches on every other reader are genuine scans and must be processed.
+    if (
+      st.enrollment.active &&
+      (!st.enrollment.deviceIp || !deviceIp || deviceIp === st.enrollment.deviceIp)
+    ) {
+      return;
+    }
 
     st.lastUnrecognizedAt = now;
     console.log(
@@ -457,14 +470,23 @@ function scheduleUnrecognizedFingerCheck(delayMs: number = 550) {
 /**
  * Handles real-time events (CMD_REG_EVENT = 500) sent by the physical K50 Pro
  */
-async function handleK50RealTimeEvent(eventType: number, payload: Buffer) {
+async function handleK50RealTimeEvent(
+  eventType: number,
+  payload: Buffer,
+  deviceIp: string
+) {
   const st = getState();
   st.lastHeartbeatAt = Date.now();
 
   // ---------------------------------------------------------------------------
   // 1. IF ENROLLMENT IS ACTIVE: Track 1/3 -> 2/3 -> 3/3 finger taps on K50 Pro
+  // Only the reader that was put into record mode counts its taps. Every other
+  // reader in the branch keeps taking attendance as usual.
   // ---------------------------------------------------------------------------
-  if (st.enrollment.active) {
+  if (
+    st.enrollment.active &&
+    (!st.enrollment.deviceIp || st.enrollment.deviceIp === deviceIp)
+  ) {
     if (
       eventType === EF_VERIFY ||
       eventType === EF_FPFTR ||
@@ -498,9 +520,12 @@ async function handleK50RealTimeEvent(eventType: number, payload: Buffer) {
       if (enrollRes === 0) {
         st.enrollment.step = 3;
         st.enrollment.active = false;
+        st.enrollment.deviceIp = null;
         st.enrollment.status = "SUCCESS";
         st.enrollment.message = `Empreinte enregistrée sur le lecteur K50 Pro (#${enrolledGlobalNumber}) !`;
         st.enrollment.updatedAt = Date.now();
+        // Sibling readers were kept in attendance mode; re-assert verify on them.
+        forceAuxiliaryDevicesToVerify();
         console.log(
           `[K50 Enroll] ✓ SUCCESS for Student #${enrolledGlobalNumber}`
         );
@@ -514,10 +539,12 @@ async function handleK50RealTimeEvent(eventType: number, payload: Buffer) {
         }
       } else {
         st.enrollment.active = false;
+        st.enrollment.deviceIp = null;
         st.enrollment.status = "FAILED";
         st.enrollment.message =
           "Échec de lecture sur l'appareil K50 (doigt déjà utilisé ou mal posé). Réessayez.";
         st.enrollment.updatedAt = Date.now();
+        forceAuxiliaryDevicesToVerify();
         console.warn(
           `[K50 Enroll] ✗ FAILED on K50 (code=${enrollRes}) for #${enrolledGlobalNumber}`
         );
@@ -589,7 +616,7 @@ async function handleK50RealTimeEvent(eventType: number, payload: Buffer) {
     // If EF_ATTLOG (1) does not arrive within 200ms, immediately trigger State 4 (Unrecognized Finger)!
     st.lastFingerTouchAt = Date.now();
     const delayMs = eventType === EF_ALARM ? 150 : 450;
-    scheduleUnrecognizedFingerCheck(delayMs);
+    scheduleUnrecognizedFingerCheck(delayMs, deviceIp);
     return;
   }
 }
@@ -677,7 +704,7 @@ function handleSocketData(chunk: Buffer) {
         const ackPkt = buildZkTcpPacket(CMD_ACK_OK, st.sessionId, 0);
         st.socket.write(ackPkt);
       }
-      handleK50RealTimeEvent(eventType, payload);
+      handleK50RealTimeEvent(eventType, payload, st.deviceIp);
     }
   }
 }
@@ -694,6 +721,34 @@ const auxSockets = new Map<
     isConnecting: boolean;
   }
 >();
+
+/**
+ * Forces every auxiliary reader in the branch back into attendance mode.
+ * Called around enrollment so a record session on one K50 Pro never
+ * interrupts the ongoing attendance function of the sibling readers.
+ */
+function forceAuxiliaryDevicesToVerify() {
+  if (CONFIGURED_DEVICE_IPS.length <= 1) return;
+  let forced = 0;
+  for (const ip of CONFIGURED_DEVICE_IPS.slice(1)) {
+    const aux = auxSockets.get(ip);
+    if (!aux || !aux.socket || aux.socket.destroyed) continue;
+    const sendAux = (cmd: number) => {
+      if (!aux.socket || aux.socket.destroyed) return;
+      aux.replyId = (aux.replyId + 1) % 65530;
+      aux.socket.write(buildZkTcpPacket(cmd, aux.sessionId, aux.replyId));
+    };
+    sendAux(CMD_CANCELCAPTURE);
+    sendAux(CMD_STARTVERIFY);
+    sendAux(CMD_ENABLEDEVICE);
+    forced++;
+  }
+  if (forced > 0) {
+    console.log(
+      `[K50 Pro Manager] ${forced} auxiliary reader(s) returned to attendance mode.`
+    );
+  }
+}
 
 function ensureAuxiliaryDevicesConnected() {
   if (CONFIGURED_DEVICE_IPS.length <= 1) return;
@@ -787,7 +842,7 @@ function ensureAuxiliaryDevicesConnected() {
           if (aux.socket && !aux.socket.destroyed) {
             aux.socket.write(buildZkTcpPacket(CMD_ACK_OK, aux.sessionId, 0));
           }
-          handleK50RealTimeEvent(sId, payload);
+          handleK50RealTimeEvent(sId, payload, ip);
         }
       }
     });
@@ -1033,6 +1088,7 @@ export async function startK50HardwareEnrollment(params: {
 
   st.enrollment = {
     active: true,
+    deviceIp: st.deviceIp,
     globalNumber,
     studentId: params.studentId || null,
     studentName,
@@ -1044,8 +1100,12 @@ export async function startK50HardwareEnrollment(params: {
     updatedAt: Date.now(),
   };
 
+  // Put every OTHER reader of the branch back into attendance mode so
+  // enrollment on this one does not interrupt their scanning.
+  forceAuxiliaryDevicesToVerify();
+
   console.log(
-    `[K50 Enroll] Started hardware enrollment on K50 Pro for #${globalNumber} (${studentName})`
+    `[K50 Enroll] Started hardware enrollment on K50 Pro #${st.deviceIp} for #${globalNumber} (${studentName})`
   );
 
   return {
@@ -1060,6 +1120,7 @@ export async function cancelK50HardwareEnrollment(): Promise<{
 }> {
   const st = getState();
   st.enrollment.active = false;
+  st.enrollment.deviceIp = null;
   st.enrollment.status = "CANCELLED";
   st.enrollment.updatedAt = Date.now();
 
@@ -1068,6 +1129,7 @@ export async function cancelK50HardwareEnrollment(): Promise<{
     sendZkCommand(CMD_STARTVERIFY);
     sendZkCommand(CMD_ENABLEDEVICE);
   }
+  forceAuxiliaryDevicesToVerify();
   return { success: true };
 }
 

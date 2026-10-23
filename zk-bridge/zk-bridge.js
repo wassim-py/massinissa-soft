@@ -81,10 +81,30 @@ const HEARTBEAT_INTERVAL_MS = 8000;
 const ZOMBIE_TIMEOUT_MS = 14000;
 const RECONNECT_LOOP_MS = 2500;
 const SYNC_CACHE_FILE = path.join(__dirname, "synced_templates.json");
+const BRIDGE_CONFIG_FILE = path.join(__dirname, "bridge_config.json");
+
+function loadBridgeConfig() {
+  try {
+    if (fs.existsSync(BRIDGE_CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(BRIDGE_CONFIG_FILE, "utf8")) || {};
+    }
+  } catch {}
+  return {};
+}
+
+function saveBridgeConfig(partial) {
+  try {
+    const current = loadBridgeConfig();
+    const updated = { ...current, ...partial, updatedAt: new Date().toISOString() };
+    fs.writeFileSync(BRIDGE_CONFIG_FILE, JSON.stringify(updated, null, 2), "utf8");
+  } catch {}
+}
+
+const persistedConfig = loadBridgeConfig();
 
 const state = {
-  appUrl: process.env.CLOUD_APP_URL || "",
-  branchId: Number(process.env.BRANCH_ID || 1),
+  appUrl: process.env.CLOUD_APP_URL || persistedConfig.appUrl || "",
+  branchId: Number(process.env.BRANCH_ID || persistedConfig.branchId || 1),
   openLessonId: null,
   lastAttLogAt: 0,
   lastUnrecognizedAt: 0,
@@ -1330,14 +1350,21 @@ const server = http.createServer((req, res) => {
     if (appUrlParam && appUrlParam.startsWith("http")) {
       const wasEmpty = !state.appUrl;
       state.appUrl = appUrlParam;
+      saveBridgeConfig({ appUrl: state.appUrl });
       // Auto-trigger sync with cloud if appUrl was just provided and reader is connected
       if (wasEmpty && isAnyDeviceConnected() && !state.hasInitialSynced) {
         state.hasInitialSynced = true;
         setTimeout(() => syncTemplatesWithCloud(false), 2000);
       }
     }
-    if (branchIdParam > 0) {
+    if (branchIdParam > 0 && !process.env.BRANCH_ID) {
+      if (state.branchId !== branchIdParam) {
+        state.branchId = branchIdParam;
+        saveBridgeConfig({ branchId: state.branchId });
+      }
+    } else if (branchIdParam > 0) {
       state.branchId = branchIdParam;
+      saveBridgeConfig({ branchId: state.branchId });
     }
     state.openLessonId = openLessonParam > 0 ? openLessonParam : null;
 

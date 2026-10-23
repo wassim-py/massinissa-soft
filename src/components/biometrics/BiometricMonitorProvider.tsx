@@ -207,8 +207,10 @@ function playBiometricTone(
 
 export default function BiometricMonitorProvider({
   children,
+  initialBranchId,
 }: {
   children: React.ReactNode;
+  initialBranchId?: number;
 }) {
   const locale = useLocale();
   const isAr = locale === "ar";
@@ -281,10 +283,24 @@ export default function BiometricMonitorProvider({
   const [selectedPaymentClassId, setSelectedPaymentClassId] = useState<string>("");
 
   const lastSeenIdRef = useRef<number>(0);
-  const currentBranchIdRef = useRef<number | null>(null);
+  const currentBranchIdRef = useRef<number | null>(
+    initialBranchId && !isNaN(Number(initialBranchId))
+      ? Number(initialBranchId)
+      : null
+  );
   const isInitializedRef = useRef<boolean>(false);
   const liveCardTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMutedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (
+      initialBranchId &&
+      !isNaN(Number(initialBranchId)) &&
+      currentBranchIdRef.current !== Number(initialBranchId)
+    ) {
+      currentBranchIdRef.current = Number(initialBranchId);
+    }
+  }, [initialBranchId]);
 
   useEffect(() => {
     try {
@@ -454,6 +470,21 @@ export default function BiometricMonitorProvider({
         es.onopen = () => {
           localSseConnectedRef.current = true;
           lastLocalBridgeFailAtRef.current = 0;
+          const activeBranch =
+            currentBranchIdRef.current ||
+            (initialBranchId && !isNaN(Number(initialBranchId))
+              ? Number(initialBranchId)
+              : null);
+          if (activeBranch) {
+            fetch(
+              `http://127.0.0.1:4375/status?appUrl=${encodeURIComponent(
+                window.location.origin
+              )}&branchId=${activeBranch}&openLessonId=${
+                openLessonIdRef.current || ""
+              }`,
+              { cache: "no-store" }
+            ).catch(() => {});
+          }
         };
 
         es.onmessage = async (event) => {
@@ -470,14 +501,18 @@ export default function BiometricMonitorProvider({
             if (msg.type === "scan") {
               // Instant scan event received in <2ms from K50 Pro via Local Bridge!
               // Post directly to /api/biometrics/scan and render the popup immediately from the response
-              const branchId = currentBranchIdRef.current || 1;
+              const branchId =
+                currentBranchIdRef.current ||
+                (initialBranchId && !isNaN(Number(initialBranchId))
+                  ? Number(initialBranchId)
+                  : undefined);
               const res = await fetch("/api/biometrics/scan", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   globalNumber: msg.globalNumber ?? null,
                   isUnrecognizedFinger: Boolean(msg.isUnrecognizedFinger),
-                  branchId,
+                  ...(branchId ? { branchId } : {}),
                   openLessonId: openLessonIdRef.current || null,
                 }),
               });

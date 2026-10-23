@@ -10,6 +10,19 @@
   }
 }
 
+@layer utilities {
+  /* The DZD / Arabic currency symbol "د.ج" must share the same typeface and weight as
+     the surrounding Arabic text. Tailwind's default `font-mono` stack has no Arabic
+     glyph coverage, so the symbol falls back to an unrelated system Arabic font and
+     looks out of place inside amounts. In RTL, resolve `font-mono` to the Arabic stack
+     first so the digits and the currency symbol share one typeface.
+     Specificity (0,2,0) deliberately beats Tailwind's own `.font-mono` (0,1,0). */
+  [dir="rtl"] .font-mono {
+    font-family: var(--font-tajawal), "Tajawal", ui-monospace, SFMono-Regular, Menlo,
+      Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+}
+
 .react-calendar {
   width: 100% !important;
   border: none !important;

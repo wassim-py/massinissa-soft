@@ -32,14 +32,14 @@ export async function runChallengerStressTests() {
       // In JS, 1000.005 * 100 is 100000.49999999999, which rounds to 100000 or 100001
       // Ensure it produces a clean formatted string without NaN, infinite loop, or float artifacts
       expect(typeof formatted).toBe("string");
-      expect(formatted).toMatch(/^1 000(,0[01])?$/);
+      expect(formatted).toMatch(/^1 000(,0[01])?$/);
     });
 
     test("STRESS-03: Extreme large precision number 999999999999.99 (nearly 1 Trillion DZD)", () => {
       const formatted = formatNumber(999999999999.99);
-      expect(formatted).toBe("999 999 999 999,99");
+      expect(formatted).toBe("999 999 999 999,99");
       const dzd = formatDZD(999999999999.99, "fr");
-      expect(dzd).toBe("999 999 999 999,99 DZD");
+      expect(dzd).toBe("999 999 999 999,99 DZD");
     });
 
     test("STRESS-04: Sub-cent rounding (0.004 -> 0, 0.005 -> 0,01)", () => {
@@ -48,10 +48,10 @@ export async function runChallengerStressTests() {
       expect(formatNumber(0.0000001)).toBe("0");
     });
 
-    test("STRESS-05: Single decimal digit amounts (0.1 -> 0,1, 1000.5 -> 1 000,5)", () => {
+    test("STRESS-05: Single decimal digit amounts (0.1 -> 0,1, 1000.5 -> 1 000,5)", () => {
       expect(formatNumber(0.1)).toBe("0,1");
-      expect(formatNumber(1000.5)).toBe("1 000,5");
-      expect(formatNumber(1000.05)).toBe("1 000,05");
+      expect(formatNumber(1000.5)).toBe("1 000,5");
+      expect(formatNumber(1000.05)).toBe("1 000,05");
     });
 
     // -------------------------------------------------------------------------
@@ -89,12 +89,12 @@ export async function runChallengerStressTests() {
     });
 
     test("STRESS-08: Large negative amounts & safe integers", () => {
-      expect(formatNumber(-1234567.89)).toBe("-1 234 567,89");
-      expect(formatDZD(-1234567.89, "fr")).toBe("-1 234 567,89 DZD");
-      expect(formatDZD(-1234567.89, "ar")).toBe("-1 234 567,89 د.ج");
+      expect(formatNumber(-1234567.89)).toBe("-1 234 567,89");
+      expect(formatDZD(-1234567.89, "fr")).toBe("-1 234 567,89 DZD");
+      expect(formatDZD(-1234567.89, "ar")).toBe("-1 234 567,89 د.ج");
 
-      expect(formatNumber(Number.MAX_SAFE_INTEGER)).toBe("9 007 199 254 740 991");
-      expect(formatNumber(Number.MIN_SAFE_INTEGER)).toBe("-9 007 199 254 740 991");
+      expect(formatNumber(Number.MAX_SAFE_INTEGER)).toBe("9 007 199 254 740 991");
+      expect(formatNumber(Number.MIN_SAFE_INTEGER)).toBe("-9 007 199 254 740 991");
     });
 
     // -------------------------------------------------------------------------
@@ -121,8 +121,8 @@ export async function runChallengerStressTests() {
     test("STRESS-11: Strings with whitespace, valid and invalid numbers", () => {
       expect(formatNumber("   ")).toBe("0");
       expect(formatNumber("\t\n ")).toBe("0");
-      expect(formatNumber("  12345.67  ")).toBe("12 345,67");
-      expect(formatNumber("  -9876.50  ")).toBe("-9 876,5");
+      expect(formatNumber("  12345.67  ")).toBe("12 345,67");
+      expect(formatNumber("  -9876.50  ")).toBe("-9 876,5");
       expect(formatNumber("invalid-text")).toBe("0");
       expect(formatNumber("12,345")).toBe("0"); // comma is not standard numeric string
     });
@@ -133,13 +133,13 @@ export async function runChallengerStressTests() {
       expect(formatNumber(new Date() as any)).notToBe("NaN");
 
       const pDec1 = new Prisma.Decimal("1234567.89");
-      expect(formatNumber(pDec1)).toBe("1 234 567,89");
-      expect(formatDZD(pDec1, "fr")).toBe("1 234 567,89 DZD");
-      expect(formatDZD(pDec1, "ar")).toBe("1 234 567,89 د.ج");
+      expect(formatNumber(pDec1)).toBe("1 234 567,89");
+      expect(formatDZD(pDec1, "fr")).toBe("1 234 567,89 DZD");
+      expect(formatDZD(pDec1, "ar")).toBe("1 234 567,89 د.ج");
 
       const pDec2 = new Prisma.Decimal("-45000.5");
-      expect(formatNumber(pDec2)).toBe("-45 000,5");
-      expect(formatDZD(pDec2, "fr")).toBe("-45 000,5 DZD");
+      expect(formatNumber(pDec2)).toBe("-45 000,5");
+      expect(formatDZD(pDec2, "fr")).toBe("-45 000,5 DZD");
 
       const pDecZero = new Prisma.Decimal("0.00");
       expect(formatNumber(pDecZero)).toBe("0");
@@ -148,7 +148,7 @@ export async function runChallengerStressTests() {
     // -------------------------------------------------------------------------
     // 4. UNICODE CODEPOINT & BYTECODE VERIFICATION
     // -------------------------------------------------------------------------
-    test("STRESS-13: Bytecode inspection — zero U+202F, zero U+00A0, zero U+200E", () => {
+    test("STRESS-13: Bytecode inspection — U+00A0 separator, zero U+202F / bidi marks", () => {
       const testCases = [
         formatNumber(1000),
         formatNumber(1500000.75),
@@ -164,24 +164,31 @@ export async function runChallengerStressTests() {
       for (const str of testCases) {
         for (let i = 0; i < str.length; i++) {
           const code = str.charCodeAt(i);
-          // Forbidden characters:
+          // A plain ASCII space (0x20) is the defect: it is neutral whitespace, so under
+          // an RTL paragraph direction the bidi algorithm splits the digit run at each
+          // separator and mirrors the groups ("1 500" renders as "500 1").
+          if (code === 32) {
+            throw new Error(`Splittable ASCII space U+0020 found at index ${i} in "${str}" — digit groups will mirror in RTL, use U+00A0`);
+          }
           // 0x202F = NARROW NO-BREAK SPACE
-          // 0x00A0 = NO-BREAK SPACE
-          // 0x200E = LEFT-TO-RIGHT MARK
-          // 0x200F = RIGHT-TO-LEFT MARK
+          // 0x200E / 0x200F = LEFT/RIGHT-TO-LEFT MARK
           // 0xFEFF = ZERO WIDTH NO-BREAK SPACE
-          if (code === 0x202F) {
+          if (code === 0x202f) {
             throw new Error(`Forbidden U+202F found at index ${i} in "${str}"`);
           }
-          if (code === 0x00A0) {
-            throw new Error(`Forbidden U+00A0 found at index ${i} in "${str}"`);
-          }
-          if (code === 0x200E || code === 0x200F) {
+          if (code === 0x200e || code === 0x200f) {
             throw new Error(`Forbidden bidi mark U+${code.toString(16)} found at index ${i} in "${str}"`);
           }
-          if (code === 0xFEFF) {
+          if (code === 0xfeff) {
             throw new Error(`Forbidden U+FEFF found at index ${i} in "${str}"`);
           }
+        }
+      }
+
+      // Every grouped value must actually use the U+00A0 separator.
+      for (const str of testCases) {
+        if (/\d \d/.test(str)) {
+          throw new Error(`Grouped value still uses an ASCII space separator: "${str}"`);
         }
       }
     });
@@ -193,7 +200,7 @@ export async function runChallengerStressTests() {
       // neutral whitespace and gets mirror-reversed under an RTL paragraph direction.
       expect(formatted.charCodeAt(1)).toBe(0xa0);
       expect(formatted.charCodeAt(5)).toBe(0xa0);
-      expect(formatted).not.toContain(" ");
+      expect(formatted.indexOf(String.fromCharCode(32))).toBe(-1);
     });
 
     test("STRESS-15: Arabic currency suffix code point verification", () => {

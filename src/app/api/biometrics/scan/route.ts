@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getActiveBranchId, getAuthSession } from "@/lib/auth";
 import {
   processBiometricScan,
   getBiometricLiveFeedAction,
@@ -80,7 +81,23 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     let deviceId = body.deviceId ? Number(body.deviceId) : null;
-    const branchId = body.branchId ? Number(body.branchId) : 1;
+    let branchId = body.branchId ? Number(body.branchId) : null;
+
+    // Enforce authenticated branch isolation so a Branch B admin session can never submit scans as Branch A
+    try {
+      const session = await getAuthSession();
+      if (session.userId) {
+        if (!session.isOwner && session.branchIds.length > 0) {
+          branchId = session.branchIds[0];
+        } else if (session.isOwner) {
+          const activeBranch = await getActiveBranchId();
+          branchId = activeBranch || branchId || 1;
+        }
+      }
+    } catch {
+      // Fallback to body.branchId for unauthenticated local bridge calls
+    }
+    if (!branchId || isNaN(branchId)) branchId = 1;
 
     // Auto-register or update heartbeat of the K50 device if deviceIp or serialNumber is sent by the bridge
     if (!deviceId && (body.deviceIp || body.serialNumber)) {
