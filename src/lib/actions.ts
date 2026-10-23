@@ -46,6 +46,7 @@ import { getTranslations } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "./studentBilling";
 import { getFixedInscriptionFeeAction, getFormationInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
 import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds, serializeForClient } from "./utils";
+import { formatAlgiersDate } from "./algiersDate";
 import {
   resolveOrCreateLessonForDate,
   findSiblingRecurringLessonIds,
@@ -8225,7 +8226,9 @@ export const exportToExcel = async (
         incomeSheet.getRow(1).fill = { type: 'pattern', pattern:'solid', fgColor:{argb:'FF2F85FC'} };
         
         const allIncome = incomeVouchers.map(v => ({
-          date: v.issuedAt.toLocaleDateString(),
+          // Explicit DD/MM/YYYY — a bare toLocaleDateString() falls back to the
+          // server's default locale (often en-US) and renders MM/DD/YYYY.
+          date: formatAlgiersDate(v.issuedAt),
           type: v.paymentType,
           source: v.class?.name || v.workshop?.title || "ورشة عمل / دورة",
           person: v.student.name,
@@ -8256,7 +8259,8 @@ export const exportToExcel = async (
         outcomeSheet.getRow(1).fill = { type: 'pattern', pattern:'solid', fgColor:{argb:'FFC00000'} };
 
         const allOutcomes = refunds.map(r => ({
-            date: r.refundedAt.toLocaleDateString(),
+          // Explicit DD/MM/YYYY — see the Income sheet note above.
+          date: formatAlgiersDate(r.refundedAt),
             type: `استرداد (${r.voucher.paymentType})`,
             source: r.voucher.class?.name || `وصل #${r.voucher.number}`,
             person: r.voucher.student?.name || `تلميذ #${r.voucher.studentId}`,

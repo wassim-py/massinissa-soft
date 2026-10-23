@@ -41,13 +41,17 @@ export default function DeleteFormationSessionModal({
     { weekday: "long" }
   );
 
-  const startTimeStr = new Date(session.startsAt).toLocaleTimeString([], {
+  // Explicit "en-GB" + hour12:false: a bare [] uses the host default locale and
+  // renders "2:35 PM" on en-US hosts instead of the 24-hour form used elsewhere.
+  const startTimeStr = new Date(session.startsAt).toLocaleTimeString("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
   });
-  const endTimeStr = new Date(session.endsAt).toLocaleTimeString([], {
+  const endTimeStr = new Date(session.endsAt).toLocaleTimeString("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
   });
 
   const attendancesCount = session.attendances?.length || 0;

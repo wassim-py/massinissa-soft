@@ -2,11 +2,19 @@
 
 import { Calendar, momentLocalizer, View, Views } from "react-big-calendar";
 import moment from "moment";
+// Import the French locale data so moment's "L" (DD/MM/YYYY) and "LT" (HH:mm,
+// 24-hour) token formats resolve deterministically instead of moment's built-in
+// "en" default, which renders MM/DD/YYYY and 12-hour AM/PM.
+import "moment/locale/fr";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import { useState, useEffect, useMemo } from "react";
 import { getAlgiersDateInfo } from "@/lib/algiersDate";
 
+// Pin the locale globally AND per-calendar (culture prop) so DD/MM/YYYY holds on
+// any browser/server regardless of the host default locale.
+moment.locale("fr");
 const localizer = momentLocalizer(moment);
+const CALENDAR_CULTURE = "fr";
 
 const BigCalendar = ({
   data,
@@ -101,6 +109,7 @@ const BigCalendar = ({
       style={{ height: "98%" }}
       onView={handleOnChangeView}
       eventPropGetter={eventPropGetter}
+      culture={CALENDAR_CULTURE}
       min={new Date(2025, 1, 0, 8, 0, 0)}
       max={new Date(2025, 1, 0, 17, 0, 0)}
     />

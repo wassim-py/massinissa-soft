@@ -102,8 +102,8 @@ export default function FormationAttendanceModal({
                   day: "numeric",
                   month: "short",
                 })}{" "}
-                • {new Date(lesson.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} -{" "}
-                {new Date(lesson.endsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                • {new Date(lesson.startsAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })} -{" "}
+                {new Date(lesson.endsAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}
               </p>
             </div>
           </div>

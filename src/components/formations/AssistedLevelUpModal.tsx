@@ -281,7 +281,9 @@ export default function AssistedLevelUpModal({
                           {lessons.map((les, idx) => {
                             const start = new Date(les.startsAt);
                             const end = new Date(les.endsAt);
-                            const timeStr = `${start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} - ${end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+                            // Explicit "en-GB" + hour12:false: a bare [] uses the
+                            // host default locale and renders "2:35 PM" on en-US.
+                            const timeStr = `${start.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })} - ${end.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
                             return (
                               <span
                                 key={idx}

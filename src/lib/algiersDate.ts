@@ -7,6 +7,18 @@ import { Prisma } from "@prisma/client";
 export const ALGIERS_TIMEZONE = "Africa/Algiers";
 
 /**
+ * Canonical locale for every user-facing date render.
+ * All displayed dates must read DD/MM/YYYY. "fr-DZ" guarantees day-before-month
+ * ordering regardless of the host machine's default locale (a bare server or an
+ * en-US browser falls back to MM/DD/YYYY through Intl's implicit default).
+ *
+ * RULE: never rely on the runtime default locale (omit the locale argument or
+ * pass "[]") when the output ORDER matters — route through formatAlgiersDate
+ * or an explicit "fr-DZ"/"ar-DZ" formatter instead.
+ */
+export const DMY_DATE_LOCALE = "fr-DZ";
+
+/**
  * Standard weekdays in the Algerian school calendar (school week begins Saturday).
  */
 export type AlgiersWeekday =
@@ -169,7 +181,11 @@ export function normalizeDateToAlgiersStartOfDay(dateInput: Date | string | numb
 /**
  * Formats a date anchored strictly to Africa/Algiers timezone.
  * Returns "" if input is null, undefined, empty, or invalid (no misleading fallbacks).
- * Default output: "DD/MM/YYYY" with ASCII digits.
+ *
+ * Call this WITHOUT options for the canonical display format: "DD/MM/YYYY".
+ * If you pass custom `options` (e.g. weekday/month names), you MUST pass an
+ * explicit DMY locale ("fr-DZ" / "ar-DZ") — otherwise Intl falls back to the
+ * runtime default and can render MM/DD/YYYY.
  */
 export function formatAlgiersDate(
   dateInput: Date | string | number | null | undefined,
@@ -180,7 +196,7 @@ export function formatAlgiersDate(
   if (!d) return "";
 
   if (options) {
-    return new Intl.DateTimeFormat(locale || "fr-DZ", {
+    return new Intl.DateTimeFormat(locale || DMY_DATE_LOCALE, {
       ...options,
       timeZone: ALGIERS_TIMEZONE,
     }).format(d);
