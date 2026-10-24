@@ -21,7 +21,9 @@ export interface PayslipSessionItem {
 export interface PayslipGroupLine {
   className: string;
   branchName?: string;
-  paidSessionsCount: number;
+  courseSessionsCount?: number;
+  payableLessonsCount?: number;
+  paidSessionsCount?: number;
   freeSessionsCount: number;
   totalSessionsCount: number;
   amount: number;
@@ -134,7 +136,11 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
   // Group breakdown aggregation
   const groupLines: PayslipGroupLine[] = React.useMemo(() => {
     if (data.groupLines && data.groupLines.length > 0) {
-      return data.groupLines;
+      return data.groupLines.map((g) => ({
+        ...g,
+        courseSessionsCount: g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount),
+        payableLessonsCount: g.payableLessonsCount ?? g.paidSessionsCount ?? 0,
+      }));
     }
     if (!allSessions || allSessions.length === 0) return [];
     const map = new Map<string, PayslipGroupLine>();
@@ -144,6 +150,8 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       const entry = map.get(key) || {
         className: s.className || "Sans groupe",
         branchName: s.branchName || "-",
+        courseSessionsCount: 0,
+        payableLessonsCount: 0,
         paidSessionsCount: 0,
         freeSessionsCount: 0,
         totalSessionsCount: 0,
@@ -153,13 +161,19 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       if (s.isFree) {
         entry.freeSessionsCount += 1;
       } else {
-        entry.paidSessionsCount += 1;
+        entry.courseSessionsCount = (entry.courseSessionsCount || 0) + 1;
+        const count = Number(s.payingCount ?? s.presentCount ?? 1);
+        entry.payableLessonsCount = (entry.payableLessonsCount || 0) + count;
+        entry.paidSessionsCount = entry.payableLessonsCount;
         entry.amount += Number(s.lessonAmount || 0);
       }
       map.set(key, entry);
     }
     return Array.from(map.values()).sort((a, b) => a.className.localeCompare(b.className));
   }, [allSessions, data.groupLines]);
+
+  const totalCourseSessions = groupLines.reduce((sum, g) => sum + (g.courseSessionsCount ?? 0), 0);
+  const totalPayableLessons = groupLines.reduce((sum, g) => sum + (g.payableLessonsCount ?? g.paidSessionsCount ?? 0), 0);
 
   return (
     <div style={containerStyle} className="payslip-container">
@@ -203,26 +217,26 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </div>
       </div>
 
-      {/* Key Metrics Banner: Total Paid Lessons, Gross, Net */}
+      {/* Key Metrics Banner: Total Payable Lessons, Course Sessions, Gross, Net */}
       <div className="grid grid-cols-4 gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center">
         <div className="bg-blue-50 border-2 border-blue-400 p-2.5 rounded-md">
           <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block">
-            Séances Rémunérées
+            Séances Payables
           </span>
           <span className="text-2xl font-black text-blue-950 font-mono block mt-0.5">
-            {totalPaidSessions}
+            {totalPayableLessons > 0 ? totalPayableLessons : totalPaidSessions}
           </span>
           <span className="text-[10px] text-blue-700 font-semibold block">
-            séance{totalPaidSessions > 1 ? "s" : ""} payée{totalPaidSessions > 1 ? "s" : ""}
+            présences + absences
           </span>
         </div>
 
         <div className="bg-white border border-gray-200 p-2.5 rounded-md">
           <span className="text-[11px] font-semibold text-gray-600 block">
-            Total Séances
+            Séances de Cours
           </span>
           <span className="text-2xl font-bold text-gray-900 font-mono block mt-0.5">
-            {data.sessionsCount}
+            {totalCourseSessions > 0 ? totalCourseSessions : totalPaidSessions}
           </span>
           <span className="text-[10px] text-gray-500 block">
             {totalFreeSessions > 0
@@ -266,7 +280,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
             </h2>
             <div className="flex items-center gap-2">
               <span className="text-xs text-blue-800 font-bold bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200">
-                Total séances payées : {totalPaidSessions}
+                Total séances payables : {totalPayableLessons}
               </span>
               <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded border border-gray-200 font-semibold">
                 {groupLines.length} groupe{groupLines.length > 1 ? "s" : ""}
@@ -279,55 +293,61 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
               <tr className="bg-gray-100 border border-gray-300 text-gray-700">
                 <th className="p-2 border border-gray-300 font-bold">Groupe / Classe</th>
                 <th className="p-2 border border-gray-300 font-bold">Succursale</th>
+                <th className="p-2 border border-gray-300 font-bold text-center">
+                  Séances de cours
+                </th>
                 <th className="p-2 border border-gray-300 font-bold text-center bg-blue-50/70 text-blue-950">
-                  Séances payées
+                  Séances payables
                 </th>
                 <th className="p-2 border border-gray-300 font-bold text-center text-orange-900 bg-orange-50/50">
                   Séances gratuites
                 </th>
-                <th className="p-2 border border-gray-300 font-bold text-center">Total séances</th>
                 <th className="p-2 border border-gray-300 font-bold text-right">Montant brut</th>
               </tr>
             </thead>
             <tbody>
-              {groupLines.map((g, idx) => (
-                <tr key={`${g.className}_${idx}`} className="border border-gray-200 hover:bg-gray-50/50">
-                  <td className="p-2 border border-gray-200 font-bold text-gray-900">{g.className}</td>
-                  <td className="p-2 border border-gray-200 text-gray-600">{g.branchName || "-"}</td>
-                  <td className="p-2 border border-gray-200 text-center font-mono font-bold text-blue-900 bg-blue-50/30 text-sm">
-                    {g.paidSessionsCount}
-                  </td>
-                  <td className="p-2 border border-gray-200 text-center font-mono bg-orange-50/20">
-                    {g.freeSessionsCount > 0 ? (
-                      <span className="inline-block bg-orange-100 text-orange-800 font-bold px-1.5 py-0.5 rounded text-[11px] border border-orange-200">
-                        {g.freeSessionsCount}
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">0</span>
-                    )}
-                  </td>
-                  <td className="p-2 border border-gray-200 text-center font-mono font-semibold text-gray-800">
-                    {g.totalSessionsCount}
-                  </td>
-                  <td className="p-2 border border-gray-200 font-mono font-bold text-right text-emerald-800">
-                    {formatDZD(Number(g.amount))}
-                  </td>
-                </tr>
-              ))}
+              {groupLines.map((g, idx) => {
+                const courseCount = g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount);
+                const payableCount = g.payableLessonsCount ?? g.paidSessionsCount ?? 0;
+                return (
+                  <tr key={`${g.className}_${idx}`} className="border border-gray-200 hover:bg-gray-50/50">
+                    <td className="p-2 border border-gray-200 font-bold text-gray-900">{g.className}</td>
+                    <td className="p-2 border border-gray-200 text-gray-600">{g.branchName || "-"}</td>
+                    <td className="p-2 border border-gray-200 text-center font-mono font-semibold text-gray-800">
+                      {courseCount}
+                    </td>
+                    <td className="p-2 border border-gray-200 text-center font-mono font-bold text-blue-900 bg-blue-50/30 text-sm">
+                      {payableCount}
+                    </td>
+                    <td className="p-2 border border-gray-200 text-center font-mono bg-orange-50/20">
+                      {g.freeSessionsCount > 0 ? (
+                        <span className="inline-block bg-orange-100 text-orange-800 font-bold px-1.5 py-0.5 rounded text-[11px] border border-orange-200">
+                          {g.freeSessionsCount}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">0</span>
+                      )}
+                    </td>
+                    <td className="p-2 border border-gray-200 font-mono font-bold text-right text-emerald-800">
+                      {formatDZD(Number(g.amount))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="bg-gray-50 font-bold border border-gray-300">
                 <td colSpan={2} className="p-2 border border-gray-300">
                   Total tous groupes
                 </td>
+                <td className="p-2 border border-gray-300 text-center font-mono text-gray-900 font-bold">
+                  {totalCourseSessions}
+                </td>
                 <td className="p-2 border border-gray-300 text-center font-mono text-blue-950 font-black text-sm bg-blue-50/70">
-                  {totalPaidSessions}
+                  {totalPayableLessons}
                 </td>
                 <td className="p-2 border border-gray-300 text-center font-mono text-orange-900 bg-orange-50/50 font-black">
                   {totalFreeSessions}
-                </td>
-                <td className="p-2 border border-gray-300 text-center font-mono">
-                  {data.sessionsCount}
                 </td>
                 <td className="p-2 border border-gray-300 font-mono text-emerald-900 text-right font-black">
                   {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}

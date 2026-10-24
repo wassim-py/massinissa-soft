@@ -437,18 +437,16 @@ export default function TeacherPayrollSection({
                   : "lg:grid-cols-4 xl:grid-cols-7"
               } gap-3.5`}
             >
-              {/* Paid Sessions count */}
+              {/* Payable Lessons count */}
               <div className="bg-blue-50/80 p-4 rounded-xl border-2 border-blue-200/80 flex flex-col justify-between shadow-xs">
                 <span className="text-xs text-blue-900 font-bold">
-                  {locale === "ar" ? "الحصص المدفوعة" : "Séances rémunérées"}
+                  {locale === "ar" ? "الحصص المستحقة (تلاميذ)" : "Séances payables"}
                 </span>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-black text-blue-950 font-mono">
-                    {currentPayroll.totalPaidSessions ?? (
-                      currentPayroll.sessionDetails
-                        ? currentPayroll.sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent).length
-                        : currentPayroll.totalSessions
-                    )}
+                    {currentPayroll.groupBreakdown
+                      ? currentPayroll.groupBreakdown.reduce((sum, g) => sum + (g.payableLessonsCount ?? g.paidSessionsCount ?? 0), 0)
+                      : (currentPayroll.totalPaidSessions ?? currentPayroll.totalSessions)}
                   </span>
                   <span className="text-xs text-blue-700 font-semibold">{t("sessionsUnit")}</span>
                 </div>
@@ -607,9 +605,9 @@ export default function TeacherPayrollSection({
                       <tr className="bg-surface-subtle border-b border-border/80 text-muted font-semibold">
                         <th className="p-2.5 text-start">{locale === "ar" ? "الفوج / القسم" : "Groupe / Classe"}</th>
                         <th className="p-2.5 text-start">{locale === "ar" ? "الفرع" : "Succursale"}</th>
-                        <th className="p-2.5 text-center text-blue-900 font-bold bg-blue-50/50">{locale === "ar" ? "حصص مدفوعة" : "Séances payées"}</th>
+                        <th className="p-2.5 text-center">{locale === "ar" ? "حصص التدريس" : "Séances de cours"}</th>
+                        <th className="p-2.5 text-center text-blue-900 font-bold bg-blue-50/50">{locale === "ar" ? "الحصص المستحقة" : "Séances payables"}</th>
                         <th className="p-2.5 text-center text-orange-900 bg-orange-50/40">{locale === "ar" ? "حصص مجانية" : "Séances gratuites"}</th>
-                        <th className="p-2.5 text-center">{locale === "ar" ? "المجموع" : "Total séances"}</th>
                         <th className="p-2.5 text-end font-bold">{locale === "ar" ? "المبلغ المستحق" : "Montant brut"}</th>
                       </tr>
                     </thead>
@@ -618,9 +616,9 @@ export default function TeacherPayrollSection({
                         <tr key={idx} className="border-b border-border/50 hover:bg-surface-subtle/60 transition-colors">
                           <td className="p-2.5 font-bold text-gray-900">{g.className}</td>
                           <td className="p-2.5 text-muted">{g.branchName}</td>
-                          <td className="p-2.5 text-center font-mono font-bold text-blue-900 bg-blue-50/20 text-sm">{g.paidSessionsCount}</td>
+                          <td className="p-2.5 text-center font-mono font-semibold">{g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount)}</td>
+                          <td className="p-2.5 text-center font-mono font-bold text-blue-900 bg-blue-50/20 text-sm">{g.payableLessonsCount ?? g.paidSessionsCount}</td>
                           <td className="p-2.5 text-center font-mono text-orange-800 bg-orange-50/20">{g.freeSessionsCount}</td>
-                          <td className="p-2.5 text-center font-mono font-semibold">{g.totalSessionsCount}</td>
                           <td className="p-2.5 text-end font-mono font-bold text-success-text">{formatDZD(g.amount)}</td>
                         </tr>
                       ))}

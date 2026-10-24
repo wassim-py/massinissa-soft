@@ -46,7 +46,9 @@ export interface TeacherPayrollCalculation {
   groupBreakdown?: Array<{
     className: string;
     branchName: string;
-    paidSessionsCount: number;
+    courseSessionsCount: number;
+    payableLessonsCount: number;
+    paidSessionsCount?: number;
     freeSessionsCount: number;
     totalSessionsCount: number;
     amount: number;
@@ -789,6 +791,8 @@ export async function calculateTeacherPayroll(
     {
       className: string;
       branchName: string;
+      courseSessionsCount: number;
+      payableLessonsCount: number;
       paidSessionsCount: number;
       freeSessionsCount: number;
       totalSessionsCount: number;
@@ -802,6 +806,8 @@ export async function calculateTeacherPayroll(
     const g = groupBreakdownMap.get(key) || {
       className: s.className,
       branchName: s.branchName,
+      courseSessionsCount: 0,
+      payableLessonsCount: 0,
       paidSessionsCount: 0,
       freeSessionsCount: 0,
       totalSessionsCount: 0,
@@ -811,15 +817,20 @@ export async function calculateTeacherPayroll(
     if (s.isFree) {
       g.freeSessionsCount += 1;
     } else {
-      g.paidSessionsCount += 1;
+      g.courseSessionsCount += 1;
+      const payingCountForLesson = Number(s.payingCount ?? s.presentCount ?? 1);
+      g.payableLessonsCount += payingCountForLesson;
+      g.paidSessionsCount = g.payableLessonsCount;
       g.amount += Number(s.lessonAmount || 0);
     }
     groupBreakdownMap.set(key, g);
   });
 
-  const groupBreakdown = Array.from(groupBreakdownMap.values()).sort((a, b) =>
-    a.className.localeCompare(b.className)
-  );
+  const groupBreakdown = Array.from(groupBreakdownMap.values()).map((g) => ({
+    ...g,
+    payableLessonsCount: Math.round(g.payableLessonsCount * 100) / 100,
+    paidSessionsCount: Math.round(g.payableLessonsCount * 100) / 100,
+  })).sort((a, b) => a.className.localeCompare(b.className));
 
   const branchSchoolBreakdown: NonNullable<TeacherPayrollCalculation["branchSchoolBreakdown"]> = branchBreakdown.map((b) => ({
     branchId: b.branchId,
