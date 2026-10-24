@@ -693,6 +693,9 @@ const SingleTeacherPage = async (
             relatedDataForForms={serializeForClient(relatedDataForForms)}
             userRole={session.role}
             dayDates={currentWeekBounds.dayDates}
+            userBranchIds={session.branchIds}
+            isOwner={session.isOwner}
+            currentUserId={session.userId || undefined}
           />
         </CardContent>
       </Card>

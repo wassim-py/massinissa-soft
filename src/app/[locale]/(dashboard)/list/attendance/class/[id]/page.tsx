@@ -100,12 +100,11 @@ const ClassAttendancePage = async (
         notFound();
     }
 
-    // Branch access control: owner and admins have cross-branch access to class attendance records
+    // Branch access control: group attendance register is accessible only to owner, teacher of class, or admin of that branch
     const hasBranchAccess =
       session.isOwner ||
-      session.isOwnerOrAdmin ||
-      canUserAccessBranch(session.rawRole, session.branchIds, classHeader.branchId) ||
-      allClassLessons.some((l) => canUserAccessBranch(session.rawRole, session.branchIds, l.branchId));
+      (session.rawRole === "teacher" && classHeader.teacherId === session.userId) ||
+      canUserAccessBranch(session.rawRole, session.branchIds, classHeader.branchId);
     if (!hasBranchAccess) {
         return (
             <Card className="p-8 text-center max-w-md mx-auto my-8 border-border shadow-xs font-sans">

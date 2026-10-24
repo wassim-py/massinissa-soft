@@ -114,6 +114,9 @@ const Timetable = ({
   isCurrentWeek = true,
   currentWeekRange,
   dayDates,
+  userBranchIds,
+  isOwner,
+  currentUserId,
 }: {
   lessons: TimetableLesson[];
   actions: { [key: number]: React.JSX.Element };
@@ -122,6 +125,9 @@ const Timetable = ({
   isCurrentWeek?: boolean;
   currentWeekRange?: { start: Date; end: Date; offset: number };
   dayDates?: Record<string, string>;
+  userBranchIds?: number[];
+  isOwner?: boolean;
+  currentUserId?: string;
 }) => {
   const t = useTranslations("lessons");
   const locale = useLocale();
@@ -258,6 +264,19 @@ const Timetable = ({
       }
     }
 
+    return false;
+  };
+
+  const canUserTakeAttendance = (lesson: TimetableLesson): boolean => {
+    if (isOwner) return true;
+    if (userRole === "teacher") {
+      return Boolean(currentUserId && lesson.teacherId === currentUserId);
+    }
+    const lessonBranchId = lesson.branchId || (lesson.classroom as any)?.branchId;
+    if (!lessonBranchId) return false;
+    if (userBranchIds && userBranchIds.length > 0) {
+      return userBranchIds.includes(lessonBranchId);
+    }
     return false;
   };
 
@@ -565,8 +584,8 @@ const Timetable = ({
                       </span>
                     </div>
 
-                    {/* Take Attendance button ONLY on today's lesson cards */}
-                    {isLessonToday(lesson) && (
+                    {/* Take Attendance button ONLY on today's lesson cards where user has branch permission */}
+                    {isLessonToday(lesson) && canUserTakeAttendance(lesson) && (
                       <div className="pt-1.5">
                         <Link
                           href={getTakeAttendanceHref(lesson)}
@@ -748,8 +767,8 @@ const Timetable = ({
                               </div>
                             </div>
 
-                            {/* Take Attendance button ONLY on lesson cards for lessons happening TODAY */}
-                            {isLessonToday(lesson) && (
+                            {/* Take Attendance button ONLY on lesson cards for lessons happening TODAY where user has branch permission */}
+                            {isLessonToday(lesson) && canUserTakeAttendance(lesson) && (
                               <div className="mt-2 pt-1 border-t border-gray-200/60">
                                 <Link
                                   href={getTakeAttendanceHref(lesson)}
@@ -789,6 +808,7 @@ const Timetable = ({
           relatedData={relatedDataForForms}
           isToday={isLessonToday(selectedLesson)}
           canManage={userRole === "admin" || userRole === "owner"}
+          canTakeAttendance={canUserTakeAttendance(selectedLesson)}
           onLessonUpdated={handleLessonUpdated}
         />
       )}

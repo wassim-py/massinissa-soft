@@ -5,7 +5,7 @@ import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations, useLocale } from "next-intl";
-import { ClipboardList, UserX, AlertTriangle } from "lucide-react";
+import { ClipboardList, UserX, AlertTriangle, Lock } from "lucide-react";
 import { toast } from "react-toastify";
 import { toggleTeacherLessonAbsenceAction } from "@/lib/actions";
 
@@ -55,6 +55,7 @@ const LessonDetailModal = ({
   relatedData,
   isToday = false,
   canManage = true,
+  canTakeAttendance = true,
   onLessonUpdated,
 }: {
   lesson: TimetableLesson;
@@ -63,6 +64,7 @@ const LessonDetailModal = ({
   relatedData: any;
   isToday?: boolean;
   canManage?: boolean;
+  canTakeAttendance?: boolean;
   onLessonUpdated?: (lessonId: number, isTeacherAbsent: boolean, dateStr?: string) => void;
 }) => {
   const t = useTranslations("lessons");
@@ -318,13 +320,24 @@ const LessonDetailModal = ({
 
         <div className="mt-6 pt-4 border-t border-border flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col gap-1">
-            <Link
-              href={getTakeAttendanceHref()}
-              className="inline-flex items-center gap-1.5 bg-primary hover:bg-primary-hover text-white text-xs font-bold py-2 px-3.5 rounded-lg shadow-xs transition-colors"
-            >
-              <ClipboardList className="w-4 h-4" />
-              <span>{isToday ? t("takeAttendanceToday") : t("takeAttendance")}</span>
-            </Link>
+            {canTakeAttendance ? (
+              <Link
+                href={getTakeAttendanceHref()}
+                className="inline-flex items-center gap-1.5 bg-primary hover:bg-primary-hover text-white text-xs font-bold py-2 px-3.5 rounded-lg shadow-xs transition-colors"
+              >
+                <ClipboardList className="w-4 h-4" />
+                <span>{isToday ? t("takeAttendanceToday") : t("takeAttendance")}</span>
+              </Link>
+            ) : (
+              <div className="inline-flex items-center gap-1.5 text-xs text-muted bg-surface-subtle border border-border/80 px-2.5 py-1.5 rounded-lg font-medium">
+                <Lock className="w-3.5 h-3.5 text-muted-dark" />
+                <span>
+                  {locale === "ar"
+                    ? `تسجيل الحضور متاح فقط لـ ${lesson.branchName || "فرع الحصة"}`
+                    : `Prise de présence réservée à ${lesson.branchName || "ce siège"}`}
+                </span>
+              </div>
+            )}
             {isTeacherAbsent && (
               <span className="text-[11px] text-rose-600 font-medium">
                 {locale === "ar" ? "الأستاذ غائب - رصيد التلاميذ لن يُمس" : "Prof absent - crédits non débités"}

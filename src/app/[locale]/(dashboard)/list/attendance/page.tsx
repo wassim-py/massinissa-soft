@@ -64,31 +64,34 @@ const AttendanceListPage = async (
   });
 
   // Branch Scoping Logic:
-  // Admins and Owner can filter across any branch or view their own branch by default
-  const canFilterBranches = isOwner || session.isOwnerOrAdmin;
+  // ONLY Owner can view all branches or filter across any branch in attendance
+  // Branch admins are strictly restricted to their assigned branch
+  const canFilterBranches = isOwner || session.can("view_all_branches", "attendance");
   let selectedBranchId: number | "all" = "all";
   let branchName = "";
 
   const defaultAdminBranchId =
     session.branchIds.length > 0 ? session.branchIds[0] : activeBranchId;
 
-  if (searchParams.branchId === "all") {
-    selectedBranchId = "all";
-  } else if (searchParams.branchId) {
-    const parsed = parseInt(searchParams.branchId, 10);
-    if (!isNaN(parsed) && branches.some((b) => b.id === parsed)) {
-      selectedBranchId = parsed;
-      const currentBranch = branches.find((b) => b.id === parsed);
-      branchName = currentBranch ? currentBranch.name : (locale === "ar" ? `الفرع #${parsed}` : `Siège #${parsed}`);
+  if (canFilterBranches) {
+    if (searchParams.branchId === "all") {
+      selectedBranchId = "all";
+    } else if (searchParams.branchId) {
+      const parsed = parseInt(searchParams.branchId, 10);
+      if (!isNaN(parsed) && branches.some((b) => b.id === parsed)) {
+        selectedBranchId = parsed;
+        const currentBranch = branches.find((b) => b.id === parsed);
+        branchName = currentBranch ? currentBranch.name : (locale === "ar" ? `الفرع #${parsed}` : `Siège #${parsed}`);
+      } else {
+        selectedBranchId = "all";
+      }
     } else {
-      selectedBranchId = isOwner ? "all" : (defaultAdminBranchId || "all");
+      selectedBranchId = "all";
     }
   } else {
-    selectedBranchId = isOwner ? "all" : (defaultAdminBranchId || "all");
-    if (selectedBranchId !== "all") {
-      const currentBranch = branches.find((b) => b.id === selectedBranchId);
-      branchName = currentBranch ? currentBranch.name : (locale === "ar" ? `الفرع #${selectedBranchId}` : `Siège #${selectedBranchId}`);
-    }
+    selectedBranchId = defaultAdminBranchId || 1;
+    const currentBranch = branches.find((b) => b.id === selectedBranchId);
+    branchName = currentBranch ? currentBranch.name : (locale === "ar" ? `الفرع #${selectedBranchId}` : `Siège #${selectedBranchId}`);
   }
 
   const pageTitle =
@@ -117,10 +120,7 @@ const AttendanceListPage = async (
     const workshopWhere: any = {};
 
     if (selectedBranchId !== "all") {
-      classWhere.OR = [
-        { branchId: selectedBranchId },
-        { lessons: { some: { branchId: selectedBranchId } } },
-      ];
+      classWhere.branchId = selectedBranchId;
       workshopWhere.branchId = selectedBranchId;
     }
 

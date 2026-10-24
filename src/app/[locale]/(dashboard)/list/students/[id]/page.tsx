@@ -1005,6 +1005,9 @@ const SingleStudentPage = async (
             actions={lessonActions}
             relatedDataForForms={relatedDataForForms}
             userRole={role!}
+            userBranchIds={session.branchIds}
+            isOwner={session.isOwner}
+            currentUserId={session.userId || undefined}
           />
         </Card>
       </div>

@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { notFound } from "next/navigation";
 import { getAuthRole, getAuthSession, getActiveBranchId } from "@/lib/auth";
+import { canUserAccessBranch } from "@/lib/settings";
 import { serializeForClient } from "@/lib/utils";
 import AttendanceRoster from "@/components/forms/AttendanceRoster";
 import BackButton from "@/components/BackButton";
@@ -69,16 +70,18 @@ const TakeAttendancePage = async (
 
   const l = rawLesson[0];
 
-  // Enforce branch-scoped attendance taking: allowed if owner or admin, or if matching lesson's branch, classroom's branch, or group's branch!
+  // Enforce branch-scoped attendance taking:
+  // Must be accessible ONLY to the branch where the group will attend (the host branch of the lesson).
+  // Branch A admin cannot take attendance for lessons where the group studies on Branch B.
+  const attendanceBranchId = l.branchId || l.classroomBranchId;
+  const isTeacherOfLesson =
+    session.rawRole === "teacher" &&
+    (l.teacherId === session.userId || l.classTeacherId === session.userId);
+
   const hasBranchAccess =
     session.isOwner ||
-    session.isOwnerOrAdmin ||
-    l.branchId === activeBranchId ||
-    (session.branchIds && session.branchIds.includes(l.branchId)) ||
-    l.classBranchId === activeBranchId ||
-    (session.branchIds && session.branchIds.includes(l.classBranchId)) ||
-    l.classroomBranchId === activeBranchId ||
-    (session.branchIds && session.branchIds.includes(l.classroomBranchId));
+    isTeacherOfLesson ||
+    canUserAccessBranch(session.rawRole, session.branchIds, attendanceBranchId);
 
   if (!hasBranchAccess) {
     return (

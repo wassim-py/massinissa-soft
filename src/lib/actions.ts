@@ -1966,7 +1966,8 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
       select: {
         id: true,
         branchId: true,
-        class: { select: { branchId: true } },
+        classroomId: true,
+        classroom: { select: { branchId: true } },
       },
     });
 
@@ -1974,11 +1975,10 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
       return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
     }
 
+    const hostBranchId = baseCheck.branchId || baseCheck.classroom?.branchId;
     const hasAbsenceBranchPerm =
       session.isOwner ||
-      session.isOwnerOrAdmin ||
-      canUserAccessBranch(session.rawRole, session.branchIds, baseCheck.branchId) ||
-      (baseCheck.class?.branchId && canUserAccessBranch(session.rawRole, session.branchIds, baseCheck.class.branchId));
+      canUserAccessBranch(session.rawRole, session.branchIds, hostBranchId);
 
     if (!hasAbsenceBranchPerm) {
       return {
@@ -2104,10 +2104,33 @@ export const saveAttendance = async (
     const lessonInfo = await prisma.lesson.findUnique({
       where: { id: lessonId },
       select: {
+        branchId: true,
+        classroomId: true,
+        teacherId: true,
         classId: true,
+        classroom: { select: { branchId: true } },
         lessonGroups: { select: { classId: true } },
       },
     });
+
+    if (!lessonInfo) {
+      return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
+    }
+
+    const attendanceBranchId = lessonInfo.branchId || lessonInfo.classroom?.branchId;
+    const isTeacherOfLesson = session.rawRole === "teacher" && lessonInfo.teacherId === session.userId;
+    const hasBranchPermission =
+      session.isOwner ||
+      isTeacherOfLesson ||
+      canUserAccessBranch(session.rawRole, session.branchIds, attendanceBranchId);
+
+    if (!hasBranchPermission) {
+      return {
+        success: false,
+        error: true,
+        message: "Accès non autorisé pour ce siège / غير مصرح لك بتسجيل الحضور لهذا الفرع.",
+      };
+    }
 
     await prisma.$transaction(
       async (tx) => {
@@ -2401,6 +2424,37 @@ export const markSingleAttendanceAction = async (input: {
       return { success: false, error: true, message: "Non autorisé / غير مصرح" };
     }
 
+    const lessonInfo = await prisma.lesson.findUnique({
+      where: { id: input.lessonId },
+      select: {
+        branchId: true,
+        classroomId: true,
+        teacherId: true,
+        classId: true,
+        classroom: { select: { branchId: true } },
+        lessonGroups: { select: { classId: true } },
+      },
+    });
+
+    if (!lessonInfo) {
+      return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
+    }
+
+    const attendanceBranchId = lessonInfo.branchId || lessonInfo.classroom?.branchId;
+    const isTeacherOfLesson = session.rawRole === "teacher" && lessonInfo.teacherId === session.userId;
+    const hasBranchPermission =
+      session.isOwner ||
+      isTeacherOfLesson ||
+      canUserAccessBranch(session.rawRole, session.branchIds, attendanceBranchId);
+
+    if (!hasBranchPermission) {
+      return {
+        success: false,
+        error: true,
+        message: "Accès non autorisé pour ce siège / غير مصرح لك بتسجيل الحضور لهذا الفرع.",
+      };
+    }
+
     if (input.status === "NOT_DEFINED" && !input.justification?.trim()) {
       return {
         success: false,
@@ -2451,14 +2505,6 @@ export const markSingleAttendanceAction = async (input: {
           }),
         },
       });
-    });
-
-    const lessonInfo = await prisma.lesson.findUnique({
-      where: { id: input.lessonId },
-      select: {
-        classId: true,
-        lessonGroups: { select: { classId: true } },
-      },
     });
 
     if (lessonInfo?.classId) {
@@ -2636,6 +2682,37 @@ export const deleteSingleAttendanceAction = async (input: {
       return { success: false, error: true, message: "Non autorisé / غير مصرح" };
     }
 
+    const lessonInfo = await prisma.lesson.findUnique({
+      where: { id: input.lessonId },
+      select: {
+        branchId: true,
+        classroomId: true,
+        teacherId: true,
+        classId: true,
+        classroom: { select: { branchId: true } },
+        lessonGroups: { select: { classId: true } },
+      },
+    });
+
+    if (!lessonInfo) {
+      return { success: false, error: true, message: "Séance introuvable / الحصة غير موجودة." };
+    }
+
+    const attendanceBranchId = lessonInfo.branchId || lessonInfo.classroom?.branchId;
+    const isTeacherOfLesson = session.rawRole === "teacher" && lessonInfo.teacherId === session.userId;
+    const hasBranchPermission =
+      session.isOwner ||
+      isTeacherOfLesson ||
+      canUserAccessBranch(session.rawRole, session.branchIds, attendanceBranchId);
+
+    if (!hasBranchPermission) {
+      return {
+        success: false,
+        error: true,
+        message: "Accès non autorisé pour ce siège / غير مصرح لك بتسجيل الحضور لهذا الفرع.",
+      };
+    }
+
     const adminId = session.userId || session.rawRole || "admin";
 
     await prisma.$transaction(async (tx) => {
@@ -2658,14 +2735,6 @@ export const deleteSingleAttendanceAction = async (input: {
           }),
         },
       });
-    });
-
-    const lessonInfo = await prisma.lesson.findUnique({
-      where: { id: input.lessonId },
-      select: {
-        classId: true,
-        lessonGroups: { select: { classId: true } },
-      },
     });
 
     if (lessonInfo) {
@@ -7032,9 +7101,21 @@ export const saveWorkshopAttendance = async (
     return { success: false, error: true, message: "لم يتم إرسال بيانات الحضور." };
   }
 
-  const workshopSession = await prisma.workshopSession.findUnique({ where: { id: sessionId }});
+  const workshopSession = await prisma.workshopSession.findUnique({
+    where: { id: sessionId },
+    include: { workshop: { select: { branchId: true } } },
+  });
   if (!workshopSession) {
     return { success: false, error: true, message: "لم يتم العثور على حصص الدورة." };
+  }
+
+  const session = await getAuthSession();
+  if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, workshopSession.workshop.branchId)) {
+    return {
+      success: false,
+      error: true,
+      message: "Accès non autorisé pour ce siège / غير مصرح لك بتسجيل الحضور لهذه الورشة.",
+    };
   }
 
   try {

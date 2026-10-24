@@ -557,6 +557,9 @@ const LessonListPage = async (props: {
               offset: validOffset,
             }}
             dayDates={weekBounds.dayDates}
+            userBranchIds={session.branchIds}
+            isOwner={session.isOwner}
+            currentUserId={session.userId || undefined}
           />
         </div>
       </CardContent>

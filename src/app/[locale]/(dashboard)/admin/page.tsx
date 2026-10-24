@@ -11,6 +11,7 @@ import TodayAttendanceChart, {
   TodayLessonAttendanceData,
 } from "@/components/dashboard/TodayAttendanceChart";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
+import { canUserAccessBranch } from "@/lib/settings";
 import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
 import {
   serializeForClient,
@@ -162,7 +163,7 @@ const AdminPage = async () => {
 
   // Today's lessons strictly for THIS branch (hosted in this branch or group belonging to this branch)
   const thisBranchTodaysLessons = allTodaysLessons.filter(
-    (l) => l.branchId === activeBranchId || (l.classroom as any)?.branchId === activeBranchId || l.class.branchId === activeBranchId
+    (l) => l.branchId === activeBranchId || (l.classroom as any)?.branchId === activeBranchId
   );
 
   // 1. Process Upcoming Lessons data (strictly today's lessons across branches)
@@ -180,14 +181,10 @@ const AdminPage = async () => {
         }
       });
 
+      const lessonHostBranchId = l.branchId || (l.classroom as any)?.branchId;
       const canTakeAttendance =
         session.isOwner ||
-        l.branchId === activeBranchId ||
-        (session.branchIds && session.branchIds.includes(l.branchId)) ||
-        l.class.branchId === activeBranchId ||
-        (session.branchIds && session.branchIds.includes(l.class.branchId)) ||
-        ((l.classroom as any)?.branchId === activeBranchId) ||
-        (session.branchIds && (l.classroom as any)?.branchId && session.branchIds.includes((l.classroom as any).branchId));
+        canUserAccessBranch(session.rawRole, session.branchIds, lessonHostBranchId);
 
       const isVisitingGroup = Boolean(
         l.class.branchId &&
