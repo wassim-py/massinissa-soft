@@ -498,8 +498,17 @@ export default function BiometricMonitorProvider({
               return;
             }
 
+            if (msg.type === "scan_resolved" && msg.scan) {
+              ingestDirectScanResult(msg.scan);
+              return;
+            }
+
             if (msg.type === "scan") {
-              // Instant scan event received in <2ms from K50 Pro via Local Bridge!
+              if (msg.scan) {
+                ingestDirectScanResult(msg.scan);
+                return;
+              }
+              // Instant scan event received from K50 Pro via Local Bridge!
               // Post directly to /api/biometrics/scan and render the popup immediately from the response
               const branchId =
                 currentBranchIdRef.current ||
@@ -582,7 +591,7 @@ export default function BiometricMonitorProvider({
 
       try {
         const lessonQuery = openLessonId ? `&openLessonId=${openLessonId}` : "";
-        const bridgeQuery = localSseConnectedRef.current ? "&bridgeActive=1" : "";
+        const bridgeQuery = "&bridgeActive=1";
         const res = await fetch(
           `/api/biometrics/scan?sinceId=${lastSeenIdRef.current}${lessonQuery}${bridgeQuery}`,
           { cache: "no-store" }

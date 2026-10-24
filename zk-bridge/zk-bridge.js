@@ -461,7 +461,9 @@ function sendZkCommandWithAck(dev, cmd, data = Buffer.alloc(0), timeoutMs = 2000
     const timer = setTimeout(() => {
       if (dev.pendingAcks) {
         dev.pendingAcks.delete(reqReplyId);
-        dev.pendingAcks.delete("any");
+        if (dev.pendingAcks.get("any") === onAck) {
+          dev.pendingAcks.delete("any");
+        }
       }
       resolve({ success: false, error: "timeout" });
     }, timeoutMs);
@@ -470,7 +472,9 @@ function sendZkCommandWithAck(dev, cmd, data = Buffer.alloc(0), timeoutMs = 2000
       clearTimeout(timer);
       if (dev.pendingAcks) {
         dev.pendingAcks.delete(reqReplyId);
-        dev.pendingAcks.delete("any");
+        if (dev.pendingAcks.get("any") === onAck) {
+          dev.pendingAcks.delete("any");
+        }
       }
       resolve(res);
     };
@@ -821,36 +825,47 @@ async function syncTemplatesWithCloud(force = false) {
 }
 
 async function dispatchScanEvent(scanPayload) {
-  if (sseClients.size > 0) {
-    const delivered = broadcastSse({
-      type: "scan",
-      ...scanPayload,
-      timestamp: Date.now(),
-    });
-    if (delivered) {
-      return;
-    }
-  }
+  // 1. Instantly broadcast to open browser SSE clients for 0ms audio and visual feedback
+  broadcastSse({
+    type: "scan",
+    ...scanPayload,
+    timestamp: Date.now(),
+  });
 
+  // 2. ALWAYS persist directly to backend database so presence is NEVER lost,
+  // even if browser tabs are asleep, navigating, or closed!
   if (state.appUrl) {
-    const cloudRes = await postToCloud("/api/biometrics/scan", {
-      branchId: state.branchId,
-      openLessonId: state.openLessonId,
-      ...scanPayload,
-    });
-    if (cloudRes && cloudRes.success) {
-      if (
-        cloudRes.scan?.status === "UNRECOGNIZED" &&
-        scanPayload.globalNumber > 0
-      ) {
-        deleteHardwareUserOnAllDevices(scanPayload.globalNumber);
+    try {
+      const cloudRes = await postToCloud("/api/biometrics/scan", {
+        branchId: state.branchId,
+        openLessonId: state.openLessonId,
+        ...scanPayload,
+      });
+      if (cloudRes && cloudRes.success) {
+        if (
+          cloudRes.scan?.status === "UNRECOGNIZED" &&
+          scanPayload.globalNumber > 0
+        ) {
+          deleteHardwareUserOnAllDevices(scanPayload.globalNumber);
+        }
+        // Broadcast the fully resolved scan object (with student name, lesson, status) to all UIs
+        if (cloudRes.scan) {
+          broadcastSse({
+            type: "scan_resolved",
+            scan: cloudRes.scan,
+            timestamp: Date.now(),
+          });
+        }
+        return;
       }
-      return;
+    } catch (err) {
+      console.error("[K50 Bridge] Error posting scan to app:", err.message);
     }
   }
 
+  // 3. Fallback queue if appUrl is unreachable (persisted so it retries on next poll)
   state.pendingScans.push(scanPayload);
-  if (state.pendingScans.length > 25) {
+  if (state.pendingScans.length > 50) {
     state.pendingScans.shift();
   }
 }
@@ -1151,8 +1166,8 @@ function connectDevice(ip, force = false) {
           const maskBuf = Buffer.alloc(4);
           maskBuf.writeUInt32LE(EVENT_MASK, 0);
           sendToDevice(dev, CMD_REG_EVENT, maskBuf);
-          sendToDevice(dev, CMD_ENABLEDEVICE);
-          sendToDevice(dev, CMD_STARTVERIFY);
+          setTimeout(() => sendToDevice(dev, CMD_ENABLEDEVICE), 60);
+          setTimeout(() => sendToDevice(dev, CMD_STARTVERIFY), 120);
           broadcastSse({
             type: "status",
             connected: true,
@@ -1235,7 +1250,9 @@ setInterval(() => {
   }
 }, RECONNECT_LOOP_MS);
 
-// 2. Active ZKTeco Protocol Heartbeat Loop every 8 seconds
+// 2. Active ZKTeco Protocol Heartbeat Loop every 8 seconds (CMD_GET_TIME keepalive)
+// Keeps TCP tunnel open, keeps Realtek Ethernet awake, and verifies device responsiveness
+// WITHOUT resetting the real-time event listener or flooding the K50 firmware!
 setInterval(() => {
   for (const dev of devices.values()) {
     if (!dev.isConnected) continue;
@@ -1244,12 +1261,12 @@ setInterval(() => {
       connectDevice(dev.ip, false);
       continue;
     }
-    if (!state.enrollment.active && !state.isSyncing) {
-      const maskBuf = Buffer.alloc(4);
-      maskBuf.writeUInt32LE(EVENT_MASK, 0);
-      sendToDevice(dev, CMD_REG_EVENT, maskBuf);
-      sendToDevice(dev, CMD_ENABLEDEVICE);
-    } else {
+    // Only send keepalive when no complex transaction (enrollment/sync/pending ACK) is active
+    if (
+      !state.enrollment.active &&
+      !state.isSyncing &&
+      (!dev.pendingAcks || dev.pendingAcks.size === 0)
+    ) {
       sendToDevice(dev, CMD_GET_TIME);
     }
   }

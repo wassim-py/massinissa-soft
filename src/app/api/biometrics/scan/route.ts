@@ -6,7 +6,7 @@ import {
   getBiometricLiveFeedAction,
   invalidateBiometricFeedCacheAction,
 } from "@/lib/biometricActions";
-import { ensureK50Connected } from "@/lib/zkK50Manager";
+import { ensureK50Connected, stopK50Connection } from "@/lib/zkK50Manager";
 
 export const dynamic = "force-dynamic";
 
@@ -28,13 +28,20 @@ export async function GET(request: NextRequest) {
       sinceId: sinceIdParam ? Number(sinceIdParam) : undefined,
     });
 
-    // Only attempt direct server-to-K50 TCP socket when running locally AND the standalone zk-bridge (127.0.0.1:4375) is NOT active
+    // Next.js must NEVER open raw TCP sockets to K50 Pro when running with zk-bridge (the standard architecture)
+    const isDirectConnect = process.env.ZK_DIRECT_CONNECT === "true";
     const isCloudOrBridge = Boolean(
       bridgeActive ||
+        !isDirectConnect ||
         process.env.VERCEL ||
         process.env.RAILWAY_ENVIRONMENT ||
         process.env.RENDER
     );
+
+    if (isCloudOrBridge) {
+      stopK50Connection();
+    }
+
     const k50 = isCloudOrBridge
       ? {
           connected: false,

@@ -870,6 +870,10 @@ function destroyMainSocket() {
   st.isConnected = false;
   st.isConnecting = false;
   st.sessionId = 0;
+  if (st.reconnectTimer) {
+    clearTimeout(st.reconnectTimer);
+    st.reconnectTimer = null;
+  }
   if (st.socket) {
     try {
       st.socket.removeAllListeners();
@@ -879,6 +883,31 @@ function destroyMainSocket() {
     }
     st.socket = null;
   }
+}
+
+export function stopK50Connection() {
+  const st = getState();
+  if (st.reconnectTimer) {
+    clearTimeout(st.reconnectTimer);
+    st.reconnectTimer = null;
+  }
+  if (st.verifyFailTimer) {
+    clearTimeout(st.verifyFailTimer);
+    st.verifyFailTimer = null;
+  }
+  destroyMainSocket();
+  for (const aux of auxSockets.values()) {
+    if (aux.socket) {
+      try {
+        aux.socket.removeAllListeners();
+        aux.socket.destroy();
+      } catch {}
+      aux.socket = null;
+    }
+    aux.isConnected = false;
+    aux.isConnecting = false;
+  }
+  auxSockets.clear();
 }
 
 /**
@@ -895,6 +924,17 @@ export function ensureK50Connected(
   devicePort: number;
 } {
   const st = getState();
+
+  // If running alongside zk-bridge (default architecture), Next.js must NEVER open raw TCP sockets
+  if (process.env.ZK_DIRECT_CONNECT !== "true") {
+    stopK50Connection();
+    return {
+      connected: false,
+      deviceIp: st.deviceIp,
+      devicePort: st.devicePort,
+    };
+  }
+
   if (branchId && branchId > 0) {
     st.branchId = branchId;
   }
@@ -995,7 +1035,7 @@ export function ensureK50Connected(
         if (wasConnected) {
           touchDeviceHeartbeat(false);
         }
-        if (!st.reconnectTimer) {
+        if (!st.reconnectTimer && process.env.ZK_DIRECT_CONNECT === "true") {
           st.reconnectTimer = setTimeout(() => {
             st.reconnectTimer = null;
             ensureK50Connected();
