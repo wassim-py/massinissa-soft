@@ -8982,7 +8982,11 @@ export async function generateIndividualTeacherPayrollAction(formData: {
     if (!session.isOwner && !session.can("manage", "payroll")) {
       return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
     }
-    const run = await generatePayrollRun(formData.startDate, formData.endDate);
+    const run = await generatePayrollRun(
+      formData.startDate,
+      formData.endDate,
+      formData.teacherId
+    );
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
     return { success: true, error: false, payrollRunId: run.id };

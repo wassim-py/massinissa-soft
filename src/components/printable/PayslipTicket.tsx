@@ -18,6 +18,15 @@ export interface PayslipSessionItem {
   isTeacherAbsent?: boolean;
 }
 
+export interface PayslipGroupLine {
+  className: string;
+  branchName?: string;
+  paidSessionsCount: number;
+  freeSessionsCount: number;
+  totalSessionsCount: number;
+  amount: number;
+}
+
 export interface PayslipPrintData {
   id: number;
   periodStart: string | Date;
@@ -29,6 +38,7 @@ export interface PayslipPrintData {
     phone?: string | null;
   };
   sessionsCount: number;
+  paidSessionsCount?: number;
   freeSessionsCount?: number;
   teacherAbsencesCount?: number;
   grossAmount: number;
@@ -51,6 +61,7 @@ export interface PayslipPrintData {
     freeSessionsCount?: number;
     amount: number;
   }>;
+  groupLines?: PayslipGroupLine[];
   sessions?: PayslipSessionItem[];
   photocopyDetails?: Array<{
     branchName: string;
@@ -114,7 +125,41 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
   const freeLessons = allSessions.filter((s) => s.isFree && !s.isTeacherAbsent);
   const paidLessons = allSessions.filter((s) => !s.isFree && !s.isTeacherAbsent);
   const totalFreeSessions = data.freeSessionsCount ?? freeLessons.length;
-  const totalPaidSessions = Math.max(0, data.sessionsCount - totalFreeSessions);
+  const totalPaidSessions = data.paidSessionsCount ?? (
+    allSessions.length > 0
+      ? paidLessons.length
+      : Math.max(0, data.sessionsCount - totalFreeSessions)
+  );
+
+  // Group breakdown aggregation
+  const groupLines: PayslipGroupLine[] = React.useMemo(() => {
+    if (data.groupLines && data.groupLines.length > 0) {
+      return data.groupLines;
+    }
+    if (!allSessions || allSessions.length === 0) return [];
+    const map = new Map<string, PayslipGroupLine>();
+    for (const s of allSessions) {
+      if (s.isTeacherAbsent) continue;
+      const key = `${s.className || "Sans groupe"}___${s.branchName || ""}`;
+      const entry = map.get(key) || {
+        className: s.className || "Sans groupe",
+        branchName: s.branchName || "-",
+        paidSessionsCount: 0,
+        freeSessionsCount: 0,
+        totalSessionsCount: 0,
+        amount: 0,
+      };
+      entry.totalSessionsCount += 1;
+      if (s.isFree) {
+        entry.freeSessionsCount += 1;
+      } else {
+        entry.paidSessionsCount += 1;
+        entry.amount += Number(s.lessonAmount || 0);
+      }
+      map.set(key, entry);
+    }
+    return Array.from(map.values()).sort((a, b) => a.className.localeCompare(b.className));
+  }, [allSessions, data.groupLines]);
 
   return (
     <div style={containerStyle} className="payslip-container">
@@ -157,6 +202,141 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           </p>
         </div>
       </div>
+
+      {/* Key Metrics Banner: Total Paid Lessons, Gross, Net */}
+      <div className="grid grid-cols-4 gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center">
+        <div className="bg-blue-50 border-2 border-blue-400 p-2.5 rounded-md">
+          <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block">
+            Séances Rémunérées
+          </span>
+          <span className="text-2xl font-black text-blue-950 font-mono block mt-0.5">
+            {totalPaidSessions}
+          </span>
+          <span className="text-[10px] text-blue-700 font-semibold block">
+            séance{totalPaidSessions > 1 ? "s" : ""} payée{totalPaidSessions > 1 ? "s" : ""}
+          </span>
+        </div>
+
+        <div className="bg-white border border-gray-200 p-2.5 rounded-md">
+          <span className="text-[11px] font-semibold text-gray-600 block">
+            Total Séances
+          </span>
+          <span className="text-2xl font-bold text-gray-900 font-mono block mt-0.5">
+            {data.sessionsCount}
+          </span>
+          <span className="text-[10px] text-gray-500 block">
+            {totalFreeSessions > 0
+              ? `dont ${totalFreeSessions} gratuite${totalFreeSessions > 1 ? "s" : ""}`
+              : "dispensées"}
+          </span>
+        </div>
+
+        <div className="bg-white border border-gray-200 p-2.5 rounded-md">
+          <span className="text-[11px] font-semibold text-gray-600 block">
+            Rémunération Cours
+          </span>
+          <span className="text-base font-bold text-gray-900 font-mono block mt-1">
+            {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}
+          </span>
+          <span className="text-[10px] text-gray-500 block">
+            brut des séances
+          </span>
+        </div>
+
+        <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950">
+          <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block">
+            Net à Payer
+          </span>
+          <span className="text-base font-black text-white font-mono block mt-1">
+            {formatDZD(Number(data.netAmount))}
+          </span>
+          <span className="text-[10px] text-blue-200 block">
+            net de déductions
+          </span>
+        </div>
+      </div>
+
+      {/* Section 1a: Per-Group Breakdown (Classes / Groupes) */}
+      {groupLines.length > 0 && (
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+              <span>Répartition des séances par groupe / classe</span>
+              <span className="text-xs font-normal text-gray-500">(Détail par groupe pédagogique)</span>
+            </h2>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-blue-800 font-bold bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200">
+                Total séances payées : {totalPaidSessions}
+              </span>
+              <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded border border-gray-200 font-semibold">
+                {groupLines.length} groupe{groupLines.length > 1 ? "s" : ""}
+              </span>
+            </div>
+          </div>
+
+          <table className="w-full border-collapse text-xs text-left">
+            <thead>
+              <tr className="bg-gray-100 border border-gray-300 text-gray-700">
+                <th className="p-2 border border-gray-300 font-bold">Groupe / Classe</th>
+                <th className="p-2 border border-gray-300 font-bold">Succursale</th>
+                <th className="p-2 border border-gray-300 font-bold text-center bg-blue-50/70 text-blue-950">
+                  Séances payées
+                </th>
+                <th className="p-2 border border-gray-300 font-bold text-center text-orange-900 bg-orange-50/50">
+                  Séances gratuites
+                </th>
+                <th className="p-2 border border-gray-300 font-bold text-center">Total séances</th>
+                <th className="p-2 border border-gray-300 font-bold text-right">Montant brut</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groupLines.map((g, idx) => (
+                <tr key={`${g.className}_${idx}`} className="border border-gray-200 hover:bg-gray-50/50">
+                  <td className="p-2 border border-gray-200 font-bold text-gray-900">{g.className}</td>
+                  <td className="p-2 border border-gray-200 text-gray-600">{g.branchName || "-"}</td>
+                  <td className="p-2 border border-gray-200 text-center font-mono font-bold text-blue-900 bg-blue-50/30 text-sm">
+                    {g.paidSessionsCount}
+                  </td>
+                  <td className="p-2 border border-gray-200 text-center font-mono bg-orange-50/20">
+                    {g.freeSessionsCount > 0 ? (
+                      <span className="inline-block bg-orange-100 text-orange-800 font-bold px-1.5 py-0.5 rounded text-[11px] border border-orange-200">
+                        {g.freeSessionsCount}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">0</span>
+                    )}
+                  </td>
+                  <td className="p-2 border border-gray-200 text-center font-mono font-semibold text-gray-800">
+                    {g.totalSessionsCount}
+                  </td>
+                  <td className="p-2 border border-gray-200 font-mono font-bold text-right text-emerald-800">
+                    {formatDZD(Number(g.amount))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-50 font-bold border border-gray-300">
+                <td colSpan={2} className="p-2 border border-gray-300">
+                  Total tous groupes
+                </td>
+                <td className="p-2 border border-gray-300 text-center font-mono text-blue-950 font-black text-sm bg-blue-50/70">
+                  {totalPaidSessions}
+                </td>
+                <td className="p-2 border border-gray-300 text-center font-mono text-orange-900 bg-orange-50/50 font-black">
+                  {totalFreeSessions}
+                </td>
+                <td className="p-2 border border-gray-300 text-center font-mono">
+                  {data.sessionsCount}
+                </td>
+                <td className="p-2 border border-gray-300 font-mono text-emerald-900 text-right font-black">
+                  {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
 
       {/* Section 1: Per-Branch Breakdown */}
       <div className="mb-6">

@@ -164,6 +164,7 @@ export default async function PayslipDetailPage(props: PageProps) {
       phone: (teacher as any)?.phone || null,
     },
     sessionsCount: payslip.sessionsCount || sessionItems.filter((s) => !s.isTeacherAbsent).length,
+    paidSessionsCount: payrollCalc?.totalPaidSessions ?? sessionItems.filter((s) => !s.isFree && !s.isTeacherAbsent).length,
     freeSessionsCount,
     teacherAbsencesCount,
     grossAmount: Number(payslip.grossAmount),
@@ -183,6 +184,7 @@ export default async function PayslipDetailPage(props: PageProps) {
         amount: Number(bl.amount),
       };
     }),
+    groupLines: payrollCalc?.groupBreakdown,
     sessions: sessionItems,
     photocopyDetails: photocopyCharges.map((pc) => ({
       branchName: pc.Branch.name,

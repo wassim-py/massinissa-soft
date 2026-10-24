@@ -7,6 +7,8 @@ export interface TeacherPayrollCalculation {
   teacherId: string;
   teacherName: string;
   totalSessions: number;
+  totalPaidSessions?: number;
+  totalFreeSessions?: number;
   teacherAbsencesCount?: number;
   absentSessions?: Array<{
     lessonId: number;
@@ -40,6 +42,14 @@ export interface TeacherPayrollCalculation {
     tuitionAmount: number;
     teacherAmount: number;
     schoolAmount: number;
+  }>;
+  groupBreakdown?: Array<{
+    className: string;
+    branchName: string;
+    paidSessionsCount: number;
+    freeSessionsCount: number;
+    totalSessionsCount: number;
+    amount: number;
   }>;
   sessionDetails?: Array<{
     lessonId: number;
@@ -771,6 +781,46 @@ export async function calculateTeacherPayroll(
   const netAmount = Math.max(0, grossAmount - totalAdvances - totalPhotocopyDeductions);
   const schoolNetAmount = Math.round((schoolGrossAmount + totalPhotocopyDeductions) * 100) / 100;
 
+  const totalFreeSessions = sessionDetails.filter((s) => s.isFree && !s.isTeacherAbsent).length;
+  const totalPaidSessions = sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent).length;
+
+  const groupBreakdownMap = new Map<
+    string,
+    {
+      className: string;
+      branchName: string;
+      paidSessionsCount: number;
+      freeSessionsCount: number;
+      totalSessionsCount: number;
+      amount: number;
+    }
+  >();
+
+  sessionDetails.forEach((s) => {
+    if (s.isTeacherAbsent) return;
+    const key = `${s.className}___${s.branchName}`;
+    const g = groupBreakdownMap.get(key) || {
+      className: s.className,
+      branchName: s.branchName,
+      paidSessionsCount: 0,
+      freeSessionsCount: 0,
+      totalSessionsCount: 0,
+      amount: 0,
+    };
+    g.totalSessionsCount += 1;
+    if (s.isFree) {
+      g.freeSessionsCount += 1;
+    } else {
+      g.paidSessionsCount += 1;
+      g.amount += Number(s.lessonAmount || 0);
+    }
+    groupBreakdownMap.set(key, g);
+  });
+
+  const groupBreakdown = Array.from(groupBreakdownMap.values()).sort((a, b) =>
+    a.className.localeCompare(b.className)
+  );
+
   const branchSchoolBreakdown: NonNullable<TeacherPayrollCalculation["branchSchoolBreakdown"]> = branchBreakdown.map((b) => ({
     branchId: b.branchId,
     branchName: b.branchName,
@@ -784,6 +834,9 @@ export async function calculateTeacherPayroll(
     teacherId: teacher.id,
     teacherName: teacher.name,
     totalSessions,
+    totalPaidSessions,
+    totalFreeSessions,
+    groupBreakdown,
     teacherAbsencesCount,
     absentSessions,
     totalPresentAttendances,
@@ -824,13 +877,15 @@ export async function calculateTeacherPayroll(
  */
 export async function generatePayrollRun(
   periodStart: Date | string,
-  periodEnd: Date | string
+  periodEnd: Date | string,
+  targetTeacherId?: string
 ) {
   const startDate = normalizeDateToStartOfDay(periodStart);
   const endDate = normalizeDateToEndOfDay(periodEnd);
 
-  // Get all teachers
+  // Get teachers (filtered if single teacher targeted)
   const teachers = await prisma.teacher.findMany({
+    where: targetTeacherId ? { id: targetTeacherId } : undefined,
     select: { id: true, name: true },
   });
 
@@ -839,9 +894,11 @@ export async function generatePayrollRun(
   for (const t of teachers) {
     const calc = await calculateTeacherPayroll(t.id, startDate, endDate);
     // Only include teachers who taught lessons, had absences, have fixed salary, or have deductions
+    // If targetTeacherId is provided, always include the calculation
     if (
       calc &&
-      (calc.totalSessions > 0 ||
+      (targetTeacherId ||
+        calc.totalSessions > 0 ||
         (calc.teacherAbsencesCount && calc.teacherAbsencesCount > 0) ||
         calc.grossAmount > 0 ||
         calc.salaryAdvances > 0 ||
@@ -851,167 +908,190 @@ export async function generatePayrollRun(
     }
   }
 
-  // Pre-calculate Real Net elements for the period [startDate, endDate]
-  // 1. Revenue
-  const revenueEntries = await prisma.dailyLedger.findMany({
-    where: {
-      date: { gte: startDate, lte: endDate },
-      type: { not: "PAYROLL_OUT" },
-    },
-    include: { Branch: true },
-  });
-  const totalRevenue = revenueEntries.reduce((sum, e) => sum + Number(e.amount), 0);
+  // Pre-calculate Real Net elements only for global runs (when !targetTeacherId)
+  let totalRevenue = 0;
+  let totalDailyExpenses = 0;
+  let totalTeacherGrossPayroll = 0;
+  let totalStaffPayroll = 0;
+  let realNet = 0;
+  let revenueEntries: any[] = [];
+  let dailyExpenses: any[] = [];
+  let staffPayrolls: any[] = [];
+  let branches: { id: number }[] = [];
 
-  // 2. Outcomes / Daily Expenses
-  const dailyExpenses = await prisma.dailyExpense.findMany({
-    where: {
-      date: { gte: startDate, lte: endDate },
-    },
-    include: { branch: true },
-  });
-  const totalDailyExpenses = dailyExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
+  if (!targetTeacherId) {
+    // 1. Revenue
+    revenueEntries = await prisma.dailyLedger.findMany({
+      where: {
+        date: { gte: startDate, lte: endDate },
+        type: { not: "PAYROLL_OUT" },
+      },
+      include: { Branch: true },
+    });
+    totalRevenue = revenueEntries.reduce((sum, e) => sum + Number(e.amount), 0);
 
-  // 3. Teachers Payroll Total Gross
-  const totalTeacherGrossPayroll = teacherCalculations.reduce((sum, c) => sum + c.grossAmount, 0);
+    // 2. Outcomes / Daily Expenses
+    dailyExpenses = await prisma.dailyExpense.findMany({
+      where: {
+        date: { gte: startDate, lte: endDate },
+      },
+      include: { branch: true },
+    });
+    totalDailyExpenses = dailyExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
 
-  // 4. Staffs Payroll
-  const staffPayrolls = await prisma.staffPayroll.findMany({
-    where: {
-      paidAt: { gte: startDate, lte: endDate },
-      status: "PAID",
-    },
-    include: { staffMember: { include: { branch: true } } },
-  });
-  const totalStaffPayroll = staffPayrolls.reduce(
-    (sum, s) => sum + Number(s.amount) + Number((s as any).bonus || 0),
-    0
-  );
+    // 3. Teachers Payroll Total Gross
+    totalTeacherGrossPayroll = teacherCalculations.reduce((sum, c) => sum + c.grossAmount, 0);
 
-  // 5. Real Net = Revenue - Outcomes - Teachers Payroll - Staffs Payrolls
-  const realNet = totalRevenue - totalDailyExpenses - totalTeacherGrossPayroll - totalStaffPayroll;
+    // 4. Staffs Payroll
+    staffPayrolls = await prisma.staffPayroll.findMany({
+      where: {
+        paidAt: { gte: startDate, lte: endDate },
+        status: "PAID",
+      },
+      include: { staffMember: { include: { branch: true } } },
+    });
+    totalStaffPayroll = staffPayrolls.reduce(
+      (sum, s) => sum + Number(s.amount) + Number((s as any).bonus || 0),
+      0
+    );
 
-  // Atomically create the PayrollRun and all 3 generated payroll parts:
+    // 5. Real Net = Revenue - Outcomes - Teachers Payroll - Staffs Payrolls
+    realNet = totalRevenue - totalDailyExpenses - totalTeacherGrossPayroll - totalStaffPayroll;
+
+    // Branches pre-fetched outside transaction
+    branches = await prisma.branch.findMany({ select: { id: true } });
+  }
+
+  // Atomically create the PayrollRun and all generated payroll parts:
   // Part 1: Teachers Payroll (personType: "TEACHER")
   // Part 2: School Part with Teachers Payroll (personType: "SCHOOL_SHARE")
-  // Part 3: Real Net Payroll (personType: "REAL_NET")
-  return await prisma.$transaction(async (tx) => {
-    const payrollRun = await tx.payrollRun.create({
-      data: {
-        periodStart: startDate,
-        periodEnd: endDate,
-        status: "DRAFT",
-      },
-    });
-
-    // --- PART 1: TEACHERS PAYROLL ---
-    for (const calc of teacherCalculations) {
-      const payslip = await tx.payslip.create({
+  // Part 3: Real Net Payroll (personType: "REAL_NET") - only when !targetTeacherId
+  return await prisma.$transaction(
+    async (tx) => {
+      const payrollRun = await tx.payrollRun.create({
         data: {
-          payrollRunId: payrollRun.id,
-          personId: calc.teacherId,
-          personType: "TEACHER",
-          sessionsCount: calc.totalSessions,
-          grossAmount: new Prisma.Decimal(calc.grossAmount),
-          advances: new Prisma.Decimal(calc.salaryAdvances),
-          photocopyDeductions: new Prisma.Decimal(calc.photocopyDeductions),
-          netAmount: new Prisma.Decimal(calc.netAmount),
+          periodStart: startDate,
+          periodEnd: endDate,
+          status: "DRAFT",
         },
       });
 
-      // Create informational branch lines
-      for (const line of calc.branchBreakdown) {
-        if (line.sessionsCount > 0 || line.amount > 0) {
-          await tx.payslipBranchLine.create({
-            data: {
-              payslipId: payslip.id,
-              branchId: line.branchId,
-              sessionsCount: line.sessionsCount,
-              amount: new Prisma.Decimal(line.amount),
-            },
-          });
-        }
+      // --- PART 1: TEACHERS PAYROLL ---
+      for (const calc of teacherCalculations) {
+        const branchLinesData = calc.branchBreakdown
+          .filter((line) => line.sessionsCount > 0 || line.amount > 0)
+          .map((line) => ({
+            branchId: line.branchId,
+            sessionsCount: line.sessionsCount,
+            amount: new Prisma.Decimal(line.amount),
+          }));
+
+        await tx.payslip.create({
+          data: {
+            payrollRunId: payrollRun.id,
+            personId: calc.teacherId,
+            personType: "TEACHER",
+            sessionsCount: calc.totalSessions,
+            grossAmount: new Prisma.Decimal(calc.grossAmount),
+            advances: new Prisma.Decimal(calc.salaryAdvances),
+            photocopyDeductions: new Prisma.Decimal(calc.photocopyDeductions),
+            netAmount: new Prisma.Decimal(calc.netAmount),
+            ...(branchLinesData.length > 0 && {
+              PayslipBranchLine: {
+                create: branchLinesData,
+              },
+            }),
+          },
+        });
       }
-    }
 
-    // --- PART 2: SCHOOL PART WITH TEACHERS PAYROLL ---
-    for (const calc of teacherCalculations) {
-      const schoolGross = calc.schoolGrossAmount ?? Math.max(0, (calc.totalTuitionGross ?? 0) - calc.grossAmount);
-      const schoolNet = calc.schoolNetAmount ?? (schoolGross + calc.photocopyDeductions);
+      // --- PART 2: SCHOOL PART WITH TEACHERS PAYROLL ---
+      for (const calc of teacherCalculations) {
+        const schoolGross = calc.schoolGrossAmount ?? Math.max(0, (calc.totalTuitionGross ?? 0) - calc.grossAmount);
+        const schoolNet = calc.schoolNetAmount ?? (schoolGross + calc.photocopyDeductions);
 
-      const schoolPayslip = await tx.payslip.create({
-        data: {
-          payrollRunId: payrollRun.id,
-          personId: calc.teacherId,
-          personType: "SCHOOL_SHARE",
-          sessionsCount: calc.totalSessions,
-          grossAmount: new Prisma.Decimal(schoolGross),
-          advances: new Prisma.Decimal(0),
-          photocopyDeductions: new Prisma.Decimal(calc.photocopyDeductions),
-          netAmount: new Prisma.Decimal(schoolNet),
-        },
-      });
+        const schoolBranchLines = calc.branchSchoolBreakdown || calc.branchBreakdown.map((b) => ({
+          branchId: b.branchId,
+          sessionsCount: b.sessionsCount,
+          schoolAmount: b.schoolAmount ?? Math.max(0, (b.tuitionAmount ?? 0) - b.amount),
+        }));
 
-      const schoolBranchLines = calc.branchSchoolBreakdown || calc.branchBreakdown.map((b) => ({
-        branchId: b.branchId,
-        sessionsCount: b.sessionsCount,
-        schoolAmount: b.schoolAmount ?? Math.max(0, (b.tuitionAmount ?? 0) - b.amount),
-      }));
+        const schoolBranchLinesData = schoolBranchLines
+          .filter((bLine) => bLine.sessionsCount > 0 || (bLine.schoolAmount && bLine.schoolAmount > 0))
+          .map((bLine) => ({
+            branchId: bLine.branchId,
+            sessionsCount: bLine.sessionsCount,
+            amount: new Prisma.Decimal(bLine.schoolAmount || 0),
+          }));
 
-      for (const bLine of schoolBranchLines) {
-        if (bLine.sessionsCount > 0 || (bLine.schoolAmount && bLine.schoolAmount > 0)) {
-          await tx.payslipBranchLine.create({
-            data: {
-              payslipId: schoolPayslip.id,
-              branchId: bLine.branchId,
-              sessionsCount: bLine.sessionsCount,
-              amount: new Prisma.Decimal(bLine.schoolAmount || 0),
-            },
-          });
-        }
+        await tx.payslip.create({
+          data: {
+            payrollRunId: payrollRun.id,
+            personId: calc.teacherId,
+            personType: "SCHOOL_SHARE",
+            sessionsCount: calc.totalSessions,
+            grossAmount: new Prisma.Decimal(schoolGross),
+            advances: new Prisma.Decimal(0),
+            photocopyDeductions: new Prisma.Decimal(calc.photocopyDeductions),
+            netAmount: new Prisma.Decimal(schoolNet),
+            ...(schoolBranchLinesData.length > 0 && {
+              PayslipBranchLine: {
+                create: schoolBranchLinesData,
+              },
+            }),
+          },
+        });
       }
+
+      // --- PART 3: REAL NET PAYROLL (ONLY FOR GLOBAL SCHOOL-WIDE RUNS) ---
+      if (!targetTeacherId) {
+        const realNetBranchLinesData = branches.map((b) => {
+          const bRev = revenueEntries.filter((e) => e.branchId === b.id).reduce((s, e) => s + Number(e.amount), 0);
+          const bOut = dailyExpenses.filter((e) => e.branchId === b.id).reduce((s, e) => s + Number(e.amount), 0);
+          let bTeacher = 0;
+          teacherCalculations.forEach((calc) => {
+            const line = calc.branchBreakdown.find((bl) => bl.branchId === b.id);
+            if (line) bTeacher += line.amount;
+          });
+          const bStaff = staffPayrolls
+            .filter((s) => s.staffMember.branchId === b.id)
+            .reduce((sum, s) => sum + Number(s.amount) + Number((s as any).bonus || 0), 0);
+
+          const bMargin = bRev - bOut - bTeacher - bStaff;
+
+          return {
+            branchId: b.id,
+            sessionsCount: 0,
+            amount: new Prisma.Decimal(bMargin),
+          };
+        });
+
+        await tx.payslip.create({
+          data: {
+            payrollRunId: payrollRun.id,
+            personId: "REAL_NET",
+            personType: "REAL_NET",
+            sessionsCount: teacherCalculations.reduce((s, c) => s + c.totalSessions, 0),
+            grossAmount: new Prisma.Decimal(totalRevenue),
+            advances: new Prisma.Decimal(totalDailyExpenses),
+            photocopyDeductions: new Prisma.Decimal(totalStaffPayroll),
+            netAmount: new Prisma.Decimal(realNet),
+            ...(realNetBranchLinesData.length > 0 && {
+              PayslipBranchLine: {
+                create: realNetBranchLinesData,
+              },
+            }),
+          },
+        });
+      }
+
+      return payrollRun;
+    },
+    {
+      maxWait: 15000,
+      timeout: 60000,
     }
-
-    // --- PART 3: REAL NET PAYROLL ---
-    const realNetSlip = await tx.payslip.create({
-      data: {
-        payrollRunId: payrollRun.id,
-        personId: "REAL_NET",
-        personType: "REAL_NET",
-        sessionsCount: teacherCalculations.reduce((s, c) => s + c.totalSessions, 0),
-        grossAmount: new Prisma.Decimal(totalRevenue),
-        advances: new Prisma.Decimal(totalDailyExpenses),
-        photocopyDeductions: new Prisma.Decimal(totalStaffPayroll),
-        netAmount: new Prisma.Decimal(realNet),
-      },
-    });
-
-    const branches = await prisma.branch.findMany({ select: { id: true } });
-    for (const b of branches) {
-      const bRev = revenueEntries.filter((e) => e.branchId === b.id).reduce((s, e) => s + Number(e.amount), 0);
-      const bOut = dailyExpenses.filter((e) => e.branchId === b.id).reduce((s, e) => s + Number(e.amount), 0);
-      let bTeacher = 0;
-      teacherCalculations.forEach((calc) => {
-        const line = calc.branchBreakdown.find((bl) => bl.branchId === b.id);
-        if (line) bTeacher += line.amount;
-      });
-      const bStaff = staffPayrolls
-        .filter((s) => s.staffMember.branchId === b.id)
-        .reduce((sum, s) => sum + Number(s.amount) + Number((s as any).bonus || 0), 0);
-
-      const bMargin = bRev - bOut - bTeacher - bStaff;
-
-      await tx.payslipBranchLine.create({
-        data: {
-          payslipId: realNetSlip.id,
-          branchId: b.id,
-          sessionsCount: 0,
-          amount: new Prisma.Decimal(bMargin),
-        },
-      });
-    }
-
-    return payrollRun;
-  });
+  );
 }
 
 /**
@@ -1022,7 +1102,8 @@ export async function updatePayrollRunStatus(
   payrollRunId: number,
   newStatus: "DRAFT" | "VALIDATED" | "PAID"
 ) {
-  return await prisma.$transaction(async (tx) => {
+  return await prisma.$transaction(
+    async (tx) => {
     const run = await tx.payrollRun.findUnique({
       where: { id: payrollRunId },
       include: {
@@ -1070,7 +1151,12 @@ export async function updatePayrollRunStatus(
     }
 
     return updated;
-  });
+    },
+    {
+      maxWait: 10000,
+      timeout: 30000,
+    }
+  );
 }
 
 /**
@@ -1081,7 +1167,8 @@ export async function updatePayrollRunStatus(
  * 4. The PayrollRun itself
  */
 export async function deletePayrollRun(payrollRunId: number) {
-  return await prisma.$transaction(async (tx) => {
+  return await prisma.$transaction(
+    async (tx) => {
     const run = await tx.payrollRun.findUnique({
       where: { id: payrollRunId },
       include: {
@@ -1117,7 +1204,12 @@ export async function deletePayrollRun(payrollRunId: number) {
     return await tx.payrollRun.delete({
       where: { id: payrollRunId },
     });
-  });
+    },
+    {
+      maxWait: 10000,
+      timeout: 30000,
+    }
+  );
 }
 
 /**

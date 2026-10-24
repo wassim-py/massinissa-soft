@@ -176,6 +176,12 @@ export default function TeacherPayrollSection({
           phone: teacherPhone || null,
         },
         sessionsCount: currentPayroll.totalSessions,
+        paidSessionsCount: currentPayroll.totalPaidSessions ?? (
+          currentPayroll.sessionDetails
+            ? currentPayroll.sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent).length
+            : currentPayroll.totalSessions - (currentPayroll.totalFreeSessions ?? 0)
+        ),
+        freeSessionsCount: currentPayroll.totalFreeSessions ?? currentPayroll.sessionDetails?.filter((s) => s.isFree && !s.isTeacherAbsent).length,
         teacherAbsencesCount: currentPayroll.teacherAbsencesCount,
         grossAmount: currentPayroll.grossAmount,
         bookRevenue: currentPayroll.bookRevenue,
@@ -190,6 +196,7 @@ export default function TeacherPayrollSection({
           freeSessionsCount: b.freeSessionsCount,
           amount: b.amount,
         })),
+        groupLines: currentPayroll.groupBreakdown,
         sessions: currentPayroll.sessionDetails?.map((s) => ({
           lessonId: s.lessonId,
           startsAt: s.startsAt,
@@ -430,6 +437,23 @@ export default function TeacherPayrollSection({
                   : "lg:grid-cols-4 xl:grid-cols-7"
               } gap-3.5`}
             >
+              {/* Paid Sessions count */}
+              <div className="bg-blue-50/80 p-4 rounded-xl border-2 border-blue-200/80 flex flex-col justify-between shadow-xs">
+                <span className="text-xs text-blue-900 font-bold">
+                  {locale === "ar" ? "الحصص المدفوعة" : "Séances rémunérées"}
+                </span>
+                <div className="mt-2 flex items-baseline gap-1">
+                  <span className="text-2xl font-black text-blue-950 font-mono">
+                    {currentPayroll.totalPaidSessions ?? (
+                      currentPayroll.sessionDetails
+                        ? currentPayroll.sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent).length
+                        : currentPayroll.totalSessions
+                    )}
+                  </span>
+                  <span className="text-xs text-blue-700 font-semibold">{t("sessionsUnit")}</span>
+                </div>
+              </div>
+
               {/* Sessions count */}
               <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
                 <span className="text-xs text-muted font-medium">{t("completedSessions")}</span>
@@ -561,6 +585,50 @@ export default function TeacherPayrollSection({
                 </div>
               </div>
             </div>
+
+            {/* Group Breakdown Card */}
+            {currentPayroll.groupBreakdown && currentPayroll.groupBreakdown.length > 0 && (
+              <div className="bg-surface-subtle/40 p-4 rounded-xl border border-border/80 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4 text-primary" />
+                    <span>{locale === "ar" ? "توزيع الحصص حسب الأفواج" : "Répartition par groupe / classe"}</span>
+                  </h4>
+                  <Badge variant="primary" size="sm">
+                    {locale === "ar"
+                      ? `${currentPayroll.groupBreakdown.length} فوج`
+                      : `${currentPayroll.groupBreakdown.length} groupe(s)`}
+                  </Badge>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-start border-collapse">
+                    <thead>
+                      <tr className="bg-surface-subtle border-b border-border/80 text-muted font-semibold">
+                        <th className="p-2.5 text-start">{locale === "ar" ? "الفوج / القسم" : "Groupe / Classe"}</th>
+                        <th className="p-2.5 text-start">{locale === "ar" ? "الفرع" : "Succursale"}</th>
+                        <th className="p-2.5 text-center text-blue-900 font-bold bg-blue-50/50">{locale === "ar" ? "حصص مدفوعة" : "Séances payées"}</th>
+                        <th className="p-2.5 text-center text-orange-900 bg-orange-50/40">{locale === "ar" ? "حصص مجانية" : "Séances gratuites"}</th>
+                        <th className="p-2.5 text-center">{locale === "ar" ? "المجموع" : "Total séances"}</th>
+                        <th className="p-2.5 text-end font-bold">{locale === "ar" ? "المبلغ المستحق" : "Montant brut"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {currentPayroll.groupBreakdown.map((g, idx) => (
+                        <tr key={idx} className="border-b border-border/50 hover:bg-surface-subtle/60 transition-colors">
+                          <td className="p-2.5 font-bold text-gray-900">{g.className}</td>
+                          <td className="p-2.5 text-muted">{g.branchName}</td>
+                          <td className="p-2.5 text-center font-mono font-bold text-blue-900 bg-blue-50/20 text-sm">{g.paidSessionsCount}</td>
+                          <td className="p-2.5 text-center font-mono text-orange-800 bg-orange-50/20">{g.freeSessionsCount}</td>
+                          <td className="p-2.5 text-center font-mono font-semibold">{g.totalSessionsCount}</td>
+                          <td className="p-2.5 text-end font-mono font-bold text-success-text">{formatDZD(g.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Granular Session Breakdown Table using DataTable */}
             <div className="space-y-3">
