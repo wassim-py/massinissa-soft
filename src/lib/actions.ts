@@ -2195,6 +2195,7 @@ export const saveAttendance = async (
         if (toCreate.length > 0) {
           await tx.attendance.createMany({
             data: toCreate,
+            skipDuplicates: true,
           });
         }
 
@@ -2466,28 +2467,24 @@ export const markSingleAttendanceAction = async (input: {
     const adminId = session.userId || session.rawRole || "admin";
 
     await prisma.$transaction(async (tx) => {
-      const existing = await tx.attendance.findFirst({
-        where: { lessonId: input.lessonId, studentId: input.studentId },
-      });
-
-      if (existing) {
-        await tx.attendance.update({
-          where: { id: existing.id },
-          data: {
-            status: input.status,
-            justification: input.justification?.trim() || null,
-          },
-        });
-      } else {
-        await tx.attendance.create({
-          data: {
-            lessonId: input.lessonId,
+      await tx.attendance.upsert({
+        where: {
+          studentId_lessonId: {
             studentId: input.studentId,
-            status: input.status,
-            justification: input.justification?.trim() || null,
+            lessonId: input.lessonId,
           },
-        });
-      }
+        },
+        update: {
+          status: input.status,
+          justification: input.justification?.trim() || null,
+        },
+        create: {
+          lessonId: input.lessonId,
+          studentId: input.studentId,
+          status: input.status,
+          justification: input.justification?.trim() || null,
+        },
+      });
 
       await tx.auditLog.create({
         data: {

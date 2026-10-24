@@ -107,6 +107,66 @@ export function normalizeDateToEndOfDay(date: Date | string): Date {
 }
 
 /**
+ * Calculates the total number of paid sessions covered by vouchers/transfers for a student in a class as of a reference date.
+ */
+function computeAllowedPaidSessions(
+  studentId: string,
+  classInfo: any,
+  vouchers: any[],
+  referenceDate: Date
+): number {
+  const enrollment = classInfo?.enrollments?.find((e: any) => e.studentId === studentId);
+  if (!enrollment) return 0;
+  const payerStatus = enrollment.payerStatus || "NORMAL";
+  if (payerStatus === "NON_PAYER" || payerStatus === "SCHOOL_FEES_ONLY") return 0;
+
+  const cyclePrice = Number(classInfo?.pricePerCycle || 0);
+  const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+  if (baseLessonPrice <= 0) return 999;
+
+  const fam = enrollment.student?.family;
+  const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== studentId);
+  const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
+  if (siblingDiscountPct >= 100) return 0;
+
+  const effectiveLessonPrice = siblingDiscountPct > 0
+    ? baseLessonPrice * (1 - siblingDiscountPct / 100)
+    : baseLessonPrice;
+
+  // Filter valid vouchers matching this student and class (or general tuition) issued on or before referenceDate
+  const studentVouchers = vouchers.filter((v: any) => {
+    if (v.studentId !== studentId) return false;
+    if (v.classId && v.classId !== classInfo.id) return false;
+    return new Date(v.issuedAt) <= referenceDate;
+  });
+
+  let totalPaidTuition = 0;
+  studentVouchers.forEach((v: any) => {
+    const vAmount = Number(v.amount || 0);
+    const refundsSum = (v.refunds || [])
+      .filter((r: any) => new Date(r.createdAt || r.date || v.issuedAt) <= referenceDate)
+      .reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+    totalPaidTuition += Math.max(0, vAmount - refundsSum);
+  });
+
+  const purchasedSessions = effectiveLessonPrice > 0
+    ? Math.floor(totalPaidTuition / effectiveLessonPrice)
+    : 0;
+
+  const tIn = (enrollment.transfersTo || [])
+    .filter((t: any) => !t.transferredAt || new Date(t.transferredAt) <= referenceDate)
+    .reduce((s: number, t: any) => s + Number(t.transferredSessions || 0), 0);
+
+  const tOut = (enrollment.transfersFrom || [])
+    .filter((t: any) => !t.transferredAt || new Date(t.transferredAt) <= referenceDate)
+    .reduce((s: number, t: any) => s + Number(t.transferredSessions || 0), 0);
+
+  const offset = Number(enrollment.creditResetOffset || 0);
+
+  return Math.max(0, purchasedSessions + tIn - tOut + offset);
+}
+
+/**
  * Calculates payroll for a single teacher over a date range.
  * Consumes Attendance records to find lessons that ACTUALLY HAPPENED (including isFree = true).
  * Applies branch override rates if configured, otherwise falls back to active TeacherPayRate.
@@ -210,14 +270,16 @@ export async function calculateTeacherPayroll(
   const classHistoryMap = new Map<
     number,
     {
-      lessons: Array<{ id: number; startsAt: Date; isFree: boolean }>;
+      lessons: Array<{ id: number; startsAt: Date; isFree: boolean; isTeacherAbsent?: boolean }>;
       attendances: Array<{ lessonId: number; studentId: string; status: string }>;
       catchUps: Array<{ studentId: string; missedLessonId: number; recordedAt: Date }>;
+      classInfo: any;
+      vouchers: any[];
     }
   >();
 
   for (const cid of classIds) {
-    const [cLessons, cAttendances, cCatchUps] = await Promise.all([
+    const [cLessons, cAttendances, cCatchUps, cClass, cVouchers] = await Promise.all([
       prisma.lesson.findMany({
         where: {
           classId: cid,
@@ -243,26 +305,57 @@ export async function calculateTeacherPayroll(
         },
         select: { studentId: true, missedLessonId: true, recordedAt: true },
       }),
+      prisma.class.findUnique({
+        where: { id: cid },
+        select: {
+          id: true,
+          name: true,
+          pricePerCycle: true,
+          isFormation: true,
+          enrollments: {
+            include: {
+              transfersTo: true,
+              transfersFrom: true,
+              student: { select: { id: true, family: true } },
+            },
+          },
+        },
+      }),
+      prisma.voucher.findMany({
+        where: {
+          OR: [{ classId: cid }, { classId: null }],
+          isVoided: false,
+          isRefund: false,
+          status: { not: "REFUNDED" },
+          paymentType: { in: ["TUITION_4SESSION", "FORMATION"] },
+          issuedAt: { lte: endDate },
+        },
+        include: { refunds: true },
+      }),
     ]);
 
     classHistoryMap.set(cid, {
       lessons: cLessons,
       attendances: cAttendances,
       catchUps: cCatchUps,
+      classInfo: cClass,
+      vouchers: cVouchers,
     });
   }
 
-  // Pre-calculate classification for all students in all classes as of endDate and as of startDate
+  // Pre-calculate classification and voucher-payment status for all students in all classes as of endDate and startDate
   // studentClassStatusAtEnd: Map<`${studentId}_${lessonId}`, StudentAttendanceHistoryItem>
   const studentStatusAtEnd = new Map<string, any>();
   const studentStatusAtStart = new Map<string, any>();
+  const studentPaidSessionAtEnd = new Map<string, boolean>();
+  const studentPaidSessionAtStart = new Map<string, boolean>();
 
   for (const [cid, historyData] of classHistoryMap.entries()) {
-    const studentIds = Array.from(new Set(historyData.attendances.map((a) => a.studentId)));
+    const studentIds = Array.from(new Set(historyData.attendances.map((a: any) => a.studentId))) as string[];
 
     for (const sid of studentIds) {
-      const studentAtts = historyData.attendances.filter((a) => a.studentId === sid);
-      const studentCatchUps = historyData.catchUps.filter((c) => c.studentId === sid);
+      const studentAtts = historyData.attendances.filter((a: any) => a.studentId === sid);
+      const studentCatchUps = historyData.catchUps.filter((c: any) => c.studentId === sid);
 
       // Classification as of endDate
       const classifiedAtEnd = classifyStudentAttendanceHistory({
@@ -275,17 +368,36 @@ export async function calculateTeacherPayroll(
         studentStatusAtEnd.set(`${sid}_${item.lessonId}`, item);
       });
 
-      // Classification as of startDate (for prior lessons to identify trailing absences that got resolved in this month)
-      const priorLessons = historyData.lessons.filter((l) => new Date(l.startsAt) < startDate);
+      // Calculate paid session coverage as of endDate
+      const allowedAtEnd = computeAllowedPaidSessions(sid, historyData.classInfo, historyData.vouchers, endDate);
+      const consumingLessonsAtEnd = classifiedAtEnd
+        .filter((h) => h.classification === "PRESENT" || h.classification === "INTERLEAVED_ABSENCE")
+        .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+
+      consumingLessonsAtEnd.forEach((item, idx) => {
+        studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}`, idx + 1 <= allowedAtEnd);
+      });
+
+      // Classification & paid status as of startDate (for retroactive payouts)
+      const priorLessons = historyData.lessons.filter((l: any) => new Date(l.startsAt) < startDate);
       if (priorLessons.length > 0) {
         const classifiedAtStart = classifyStudentAttendanceHistory({
           lessons: priorLessons,
-          attendances: studentAtts.filter((a) => priorLessons.some((pl) => pl.id === a.lessonId)),
-          catchUps: studentCatchUps.filter((c) => priorLessons.some((pl) => pl.id === c.missedLessonId)),
+          attendances: studentAtts.filter((a: any) => priorLessons.some((pl: any) => pl.id === a.lessonId)),
+          catchUps: studentCatchUps.filter((c: any) => priorLessons.some((pl: any) => pl.id === c.missedLessonId)),
           referenceDate: startDate,
         });
         classifiedAtStart.forEach((item) => {
           studentStatusAtStart.set(`${sid}_${item.lessonId}`, item);
+        });
+
+        const allowedAtStart = computeAllowedPaidSessions(sid, historyData.classInfo, historyData.vouchers, startDate);
+        const consumingLessonsAtStart = classifiedAtStart
+          .filter((h) => h.classification === "PRESENT" || h.classification === "INTERLEAVED_ABSENCE")
+          .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+
+        consumingLessonsAtStart.forEach((item, idx) => {
+          studentPaidSessionAtStart.set(`${sid}_${item.lessonId}`, idx + 1 <= allowedAtStart);
         });
       }
     }
@@ -427,10 +539,12 @@ export async function calculateTeacherPayroll(
     const visitorsInLesson = catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id);
 
     // Regular present count excludes any student already counted as a catch-up visitor to prevent double counting
-    const presentAttendances = lesson.attendances.filter(
-      (a) => a.status === "PRESENT" && !visitorStudentIds.has(a.studentId)
+    const regularPresentStudentIds = new Set(
+      lesson.attendances
+        .filter((a) => a.status === "PRESENT" && !visitorStudentIds.has(a.studentId))
+        .map((a) => a.studentId)
     );
-    const regularPresentCount = presentAttendances.length;
+    const regularPresentCount = regularPresentStudentIds.size;
     const visitorCount = visitorsInLesson.length;
     const presentCount = regularPresentCount + visitorCount;
 
@@ -450,6 +564,8 @@ export async function calculateTeacherPayroll(
       lesson.attendances.forEach((att) => {
         // If this student is hosted as a visitor in this lesson, skip here (handled in visitorsInLesson)
         if (visitorStudentIds.has(att.studentId)) return;
+        // Skip duplicate student attendance records to guarantee accurate calculation
+        if (countedPayingStudentIds.has(att.studentId)) return;
 
         const enrollment = lesson.class?.enrollments?.find((e) => e.studentId === att.studentId);
         const payerStatus = enrollment?.payerStatus || "NORMAL";
@@ -457,6 +573,13 @@ export async function calculateTeacherPayroll(
 
         const classification = studentStatusAtEnd.get(`${att.studentId}_${lesson.id}`);
         if (classification && classification.isTeacherPayable) {
+          // Rule: Teacher is paid ONLY if student session is covered by paid tuition vouchers
+          const isSessionPaid = studentPaidSessionAtEnd.get(`${att.studentId}_${lesson.id}`) ?? false;
+          if (!isSessionPaid) {
+            // Unpaid by student (debt): teacher receives 0 DZD for this session until settled
+            return;
+          }
+
           countedPayingStudentIds.add(att.studentId);
           const fam = enrollment?.student?.family;
           const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== att.studentId);
@@ -608,23 +731,38 @@ export async function calculateTeacherPayroll(
         const atStart = studentStatusAtStart.get(`${att.studentId}_${pl.id}`);
         const atEnd = studentStatusAtEnd.get(`${att.studentId}_${pl.id}`);
 
-        // If it was held at the start of the period and became INTERLEAVED at the end of the period
-        if (
-          atStart &&
+        const wasPaidAtStart = studentPaidSessionAtStart.get(`${att.studentId}_${pl.id}`) ?? false;
+        const isPaidAtEnd = studentPaidSessionAtEnd.get(`${att.studentId}_${pl.id}`) ?? false;
+
+        // Condition A: Trailing absence held at start that became interleaved at end (and student has paid)
+        const isResolvedAbsence =
+          Boolean(atStart &&
           atStart.classification === "TRAILING_ABSENCE_HELD" &&
           atEnd &&
-          atEnd.classification === "INTERLEAVED_ABSENCE"
-        ) {
-          // Check that student attended at least one lesson in this period [startDate, endDate]
-          const attendedInPeriod = historyData.attendances.some((a) => {
-            if (a.studentId !== att.studentId || a.status !== "PRESENT") return false;
-            const l = historyData.lessons.find((les) => les.id === a.lessonId);
-            if (!l) return false;
-            const lDate = new Date(l.startsAt);
-            return lDate >= startDate && lDate <= endDate;
-          });
+          atEnd.classification === "INTERLEAVED_ABSENCE" &&
+          isPaidAtEnd);
 
-          if (attendedInPeriod) {
+        // Condition B: Attended session was held UNPAID at start, but student purchased voucher during [startDate, endDate]
+        const isLateTuitionSettlement =
+          Boolean(atEnd &&
+          (atEnd.classification === "PRESENT" || atEnd.classification === "INTERLEAVED_ABSENCE") &&
+          !wasPaidAtStart &&
+          isPaidAtEnd);
+
+        if (isResolvedAbsence || isLateTuitionSettlement) {
+          // Check eligibility
+          let isEligible = isLateTuitionSettlement;
+          if (isResolvedAbsence) {
+            isEligible = historyData.attendances.some((a: any) => {
+              if (a.studentId !== att.studentId || a.status !== "PRESENT") return false;
+              const l = historyData.lessons.find((les: any) => les.id === a.lessonId);
+              if (!l) return false;
+              const lDate = new Date(l.startsAt);
+              return lDate >= startDate && lDate <= endDate;
+            });
+          }
+
+          if (isEligible) {
             // Find lesson class and branch info
             const lessonRecord = await prisma.lesson.findUnique({
               where: { id: pl.id },
@@ -685,7 +823,9 @@ export async function calculateTeacherPayroll(
                     isExtra: false,
                     isCatchUp: false,
                     isRetroactive: true,
-                    retroactiveNote: "Rattrapage d'absence précédente validé par présence ce mois",
+                    retroactiveNote: isLateTuitionSettlement
+                      ? "تسوية متأخرة لمستحقات تلميذ تم تسديدها هذا الشهر"
+                      : "Rattrapage d'absence précédente validé par présence ce mois",
                   });
                 }
               }

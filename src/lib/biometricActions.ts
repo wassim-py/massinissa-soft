@@ -792,26 +792,23 @@ export async function processBiometricScan(input: {
     );
   }
 
-  if (primaryRow) {
-    if (primaryRow.status !== "PRESENT") {
-      writeOps.push(
-        prisma.attendance.update({
-          where: { id: primaryRow.id },
-          data: { status: "PRESENT", justification: null },
-        })
-      );
-    }
-  } else {
-    writeOps.push(
-      prisma.attendance.create({
-        data: {
+  // Atomic upsert via unique constraint (prevents rapid double-scan race conditions)
+  writeOps.push(
+    prisma.attendance.upsert({
+      where: {
+        studentId_lessonId: {
           studentId: student.id,
           lessonId: matchedLesson.id,
-          status: "PRESENT",
         },
-      })
-    );
-  }
+      },
+      update: { status: "PRESENT", justification: null },
+      create: {
+        studentId: student.id,
+        lessonId: matchedLesson.id,
+        status: "PRESENT",
+      },
+    })
+  );
 
   // Clear any prior unresolved NO_CREDITS alert or duplicate SUCCESS scan log in one deleteMany
   writeOps.push(
@@ -1148,26 +1145,20 @@ export async function resolveBiometricAlertAction(input: {
     }
 
     if ((input.mode === "ALLOW_PRESENT" || input.mode === "RESOLVED_BY_PAYMENT") && scanLog.studentId && scanLog.lessonId) {
-      const existing = await prisma.attendance.findFirst({
+      await prisma.attendance.upsert({
         where: {
-          studentId: scanLog.studentId,
-          lessonId: scanLog.lessonId,
-        },
-      });
-      if (existing) {
-        await prisma.attendance.update({
-          where: { id: existing.id },
-          data: { status: "PRESENT", justification: null },
-        });
-      } else {
-        await prisma.attendance.create({
-          data: {
+          studentId_lessonId: {
             studentId: scanLog.studentId,
             lessonId: scanLog.lessonId,
-            status: "PRESENT",
           },
-        });
-      }
+        },
+        update: { status: "PRESENT", justification: null },
+        create: {
+          studentId: scanLog.studentId,
+          lessonId: scanLog.lessonId,
+          status: "PRESENT",
+        },
+      });
       try {
         revalidatePath(`/list/attendance/take/${scanLog.lessonId}`);
       } catch {

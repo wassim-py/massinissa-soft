@@ -171,7 +171,7 @@ model Attendance {
   @@index([lessonId, status])
   @@index([studentId])
   @@index([lessonId])
-  @@index([studentId, lessonId])
+  @@unique([studentId, lessonId])
 }
 
 model LessonGroup {
