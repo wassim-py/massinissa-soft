@@ -718,14 +718,23 @@ export async function calculateTeacherPayroll(
   });
 
   // 2. Retroactive catch-up payouts: Prior trailing absences that were held back,
-  // but now validated because the student returned and attended during [startDate, endDate]
+  // but now validated because the student returned and attended during [startDate, endDate],
+  // or late tuition settlements for the immediately preceding month.
+  // Per requirement: Retroactive settlements are strictly limited to the last month only (e.g. for October payroll, September only).
+  const sDate = new Date(startDate);
+  const previousMonthStart = new Date(Date.UTC(sDate.getUTCFullYear(), sDate.getUTCMonth() - 1, 1, 0, 0, 0, 0));
+
   for (const [cid, historyData] of classHistoryMap.entries()) {
-    const priorLessons = historyData.lessons.filter(
-      (l) => new Date(l.startsAt) < startDate && !l.isFree
-    );
+    const priorLessons = historyData.lessons.filter((l) => {
+      const lDate = new Date(l.startsAt);
+      return lDate >= previousMonthStart && lDate < startDate && !l.isFree;
+    });
 
     for (const pl of priorLessons) {
       const plAttendances = historyData.attendances.filter((a) => a.lessonId === pl.id);
+      let eligiblePayingWeight = 0;
+      let lateTuitionSettlementCount = 0;
+      let resolvedAbsenceCount = 0;
 
       for (const att of plAttendances) {
         const atStart = studentStatusAtStart.get(`${att.studentId}_${pl.id}`);
@@ -763,73 +772,94 @@ export async function calculateTeacherPayroll(
           }
 
           if (isEligible) {
-            // Find lesson class and branch info
-            const lessonRecord = await prisma.lesson.findUnique({
-              where: { id: pl.id },
-              include: { branch: true, class: { include: { enrollments: true } } },
-            });
-            if (lessonRecord) {
-              const enrollment = lessonRecord.class?.enrollments?.find(
-                (e) => e.studentId === att.studentId
-              );
-              if (enrollment && (enrollment.payerStatus || "NORMAL") === "NORMAL") {
-                const pricePerCycle = lessonRecord.class?.pricePerCycle
-                  ? Number(lessonRecord.class.pricePerCycle)
-                  : 0;
-                const sessionPrice = pricePerCycle > 0 ? pricePerCycle / 4 : 0;
-                const retroGroupPercentage = classRateMap.has(lessonRecord.classId)
-                  ? classRateMap.get(lessonRecord.classId)!
-                  : (percentageOfSessionFee ?? null);
-
-                const teacherCut =
-                  retroGroupPercentage !== null && retroGroupPercentage > 0
-                    ? (sessionPrice * retroGroupPercentage) / 100
-                    : defaultSessionRate;
-
-                if (teacherCut > 0) {
-                  const retroTuition = sessionPrice;
-                  const retroSchoolCut = Math.max(0, retroTuition - teacherCut);
-                  totalTuitionGross += retroTuition;
-                  schoolGrossAmount += retroSchoolCut;
-                  calculatedGross += teacherCut;
-                  const bEntry = branchSessionsMap.get(lessonRecord.branchId) || {
-                    branchName: lessonRecord.branch.name,
-                    totalSessions: 0,
-                    freeSessions: 0,
-                    amount: 0,
-                    totalTuition: 0,
-                    schoolAmount: 0,
-                    totalPresentAttendances: 0,
-                  };
-                  bEntry.amount += teacherCut;
-                  bEntry.totalTuition = (bEntry.totalTuition || 0) + retroTuition;
-                  bEntry.schoolAmount = (bEntry.schoolAmount || 0) + retroSchoolCut;
-                  branchSessionsMap.set(lessonRecord.branchId, bEntry);
-
-                  sessionDetails.push({
-                    lessonId: pl.id,
-                    startsAt: new Date(pl.startsAt),
-                    className: lessonRecord.class?.name || "فوج",
-                    branchName: lessonRecord.branch.name,
-                    presentCount: 0,
-                    payingCount: 1,
-                    pricePerCycle,
-                    sessionPrice,
-                    teacherCut,
-                    schoolCut: retroSchoolCut,
-                    appliedPercentage: retroGroupPercentage !== null ? retroGroupPercentage : undefined,
-                    lessonAmount: teacherCut,
-                    isFree: false,
-                    isExtra: false,
-                    isCatchUp: false,
-                    isRetroactive: true,
-                    retroactiveNote: isLateTuitionSettlement
-                      ? "تسوية متأخرة لمستحقات تلميذ تم تسديدها هذا الشهر"
-                      : "Rattrapage d'absence précédente validé par présence ce mois",
-                  });
-                }
+            const enrollment = historyData.classInfo?.enrollments?.find(
+              (e: any) => e.studentId === att.studentId
+            );
+            const pStatus = enrollment?.payerStatus || "NORMAL";
+            if (pStatus !== "NON_PAYER" && pStatus !== "SCHOOL_FEES_ONLY") {
+              const fam = enrollment?.student?.family;
+              const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== att.studentId);
+              const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
+              if (siblingDiscountPct < 100) {
+                const weight = siblingDiscountPct > 0 ? (1 - siblingDiscountPct / 100) : 1;
+                eligiblePayingWeight += weight;
+                if (isLateTuitionSettlement) lateTuitionSettlementCount++;
+                if (isResolvedAbsence) resolvedAbsenceCount++;
               }
             }
+          }
+        }
+      }
+
+      if (eligiblePayingWeight > 0) {
+        const lessonRecord = await prisma.lesson.findUnique({
+          where: { id: pl.id },
+          include: { branch: true, class: true },
+        });
+        if (lessonRecord) {
+          const pricePerCycle = lessonRecord.class?.pricePerCycle
+            ? Number(lessonRecord.class.pricePerCycle)
+            : 0;
+          const sessionPrice = pricePerCycle > 0 ? pricePerCycle / 4 : 0;
+          const retroGroupPercentage = classRateMap.has(lessonRecord.classId)
+            ? classRateMap.get(lessonRecord.classId)!
+            : (percentageOfSessionFee ?? null);
+
+          const teacherRatePerStudent =
+            retroGroupPercentage !== null && retroGroupPercentage > 0
+              ? (sessionPrice * retroGroupPercentage) / 100
+              : defaultSessionRate;
+
+          const totalTeacherCut = Math.round(eligiblePayingWeight * teacherRatePerStudent * 100) / 100;
+          const totalRetroTuition = Math.round(eligiblePayingWeight * sessionPrice * 100) / 100;
+          const totalRetroSchoolCut = Math.max(0, totalRetroTuition - totalTeacherCut);
+
+          if (totalTeacherCut > 0) {
+            totalTuitionGross += totalRetroTuition;
+            schoolGrossAmount += totalRetroSchoolCut;
+            calculatedGross += totalTeacherCut;
+
+            const bEntry = branchSessionsMap.get(lessonRecord.branchId) || {
+              branchName: lessonRecord.branch.name,
+              totalSessions: 0,
+              freeSessions: 0,
+              amount: 0,
+              totalTuition: 0,
+              schoolAmount: 0,
+              totalPresentAttendances: 0,
+            };
+            bEntry.amount += totalTeacherCut;
+            bEntry.totalTuition = (bEntry.totalTuition || 0) + totalRetroTuition;
+            bEntry.schoolAmount = (bEntry.schoolAmount || 0) + totalRetroSchoolCut;
+            branchSessionsMap.set(lessonRecord.branchId, bEntry);
+
+            const noteParts: string[] = [];
+            if (lateTuitionSettlementCount > 0) {
+              noteParts.push(`تسوية متأخرة لمستحقات (${Math.round(eligiblePayingWeight * 100) / 100}) تلميذ لشهر سابق`);
+            }
+            if (resolvedAbsenceCount > 0) {
+              noteParts.push(`تسوية غياب سابق مؤكد (${resolvedAbsenceCount})`);
+            }
+
+            sessionDetails.push({
+              lessonId: pl.id,
+              startsAt: new Date(pl.startsAt),
+              className: lessonRecord.class?.name || "فوج",
+              branchName: lessonRecord.branch.name,
+              presentCount: 0,
+              payingCount: Math.round(eligiblePayingWeight * 100) / 100,
+              pricePerCycle,
+              sessionPrice,
+              teacherCut: teacherRatePerStudent,
+              schoolCut: totalRetroSchoolCut,
+              appliedPercentage: retroGroupPercentage !== null ? retroGroupPercentage : undefined,
+              lessonAmount: totalTeacherCut,
+              isFree: false,
+              isExtra: false,
+              isCatchUp: false,
+              isRetroactive: true,
+              retroactiveNote: noteParts.join(" + ") || "تسوية متأخرة لمستحقات سابقة",
+            });
           }
         }
       }
@@ -923,8 +953,8 @@ export async function calculateTeacherPayroll(
   const netAmount = Math.max(0, grossAmount - totalAdvances - totalPhotocopyDeductions);
   const schoolNetAmount = Math.round((schoolGrossAmount + totalPhotocopyDeductions) * 100) / 100;
 
-  const totalFreeSessions = sessionDetails.filter((s) => s.isFree && !s.isTeacherAbsent).length;
-  const totalPaidSessions = sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent).length;
+  const totalFreeSessions = sessionDetails.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length;
+  const totalPaidSessions = sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length;
 
   const groupBreakdownMap = new Map<
     string,
@@ -953,15 +983,24 @@ export async function calculateTeacherPayroll(
       totalSessionsCount: 0,
       amount: 0,
     };
-    g.totalSessionsCount += 1;
-    if (s.isFree) {
-      g.freeSessionsCount += 1;
-    } else {
-      g.courseSessionsCount += 1;
-      const payingCountForLesson = Number(s.payingCount ?? s.presentCount ?? 1);
+
+    if (s.isRetroactive) {
+      // Retroactive settlements are adjustments for prior periods; do NOT count them as separated lessons in this period
+      const payingCountForLesson = Number(s.payingCount ?? 1);
       g.payableLessonsCount += payingCountForLesson;
       g.paidSessionsCount = g.payableLessonsCount;
       g.amount += Number(s.lessonAmount || 0);
+    } else {
+      g.totalSessionsCount += 1;
+      if (s.isFree) {
+        g.freeSessionsCount += 1;
+      } else {
+        g.courseSessionsCount += 1;
+        const payingCountForLesson = Number(s.payingCount ?? s.presentCount ?? 1);
+        g.payableLessonsCount += payingCountForLesson;
+        g.paidSessionsCount = g.payableLessonsCount;
+        g.amount += Number(s.lessonAmount || 0);
+      }
     }
     groupBreakdownMap.set(key, g);
   });

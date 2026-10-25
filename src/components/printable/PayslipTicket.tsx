@@ -16,6 +16,8 @@ export interface PayslipSessionItem {
   isExtra?: boolean;
   isCatchUp?: boolean;
   isTeacherAbsent?: boolean;
+  isRetroactive?: boolean;
+  retroactiveNote?: string;
 }
 
 export interface PayslipGroupLine {
@@ -122,10 +124,11 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
 
   const formatDZD = (num: number) => formatDZDLib(num, 'fr');
 
-  const allSessions = data.sessions || [];
+  const allSessions = React.useMemo(() => data.sessions || [], [data.sessions]);
   const absentLessons = allSessions.filter((s) => s.isTeacherAbsent);
-  const freeLessons = allSessions.filter((s) => s.isFree && !s.isTeacherAbsent);
-  const paidLessons = allSessions.filter((s) => !s.isFree && !s.isTeacherAbsent);
+  const freeLessons = allSessions.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive);
+  const paidLessons = allSessions.filter((s) => !s.isFree && !s.isTeacherAbsent && !s.isRetroactive);
+  const retroactiveLessons = allSessions.filter((s) => s.isRetroactive);
   const totalFreeSessions = data.freeSessionsCount ?? freeLessons.length;
   const totalPaidSessions = data.paidSessionsCount ?? (
     allSessions.length > 0
@@ -157,15 +160,22 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         totalSessionsCount: 0,
         amount: 0,
       };
-      entry.totalSessionsCount += 1;
-      if (s.isFree) {
-        entry.freeSessionsCount += 1;
-      } else {
-        entry.courseSessionsCount = (entry.courseSessionsCount || 0) + 1;
-        const count = Number(s.payingCount ?? s.presentCount ?? 1);
+      if (s.isRetroactive) {
+        const count = Number(s.payingCount ?? 1);
         entry.payableLessonsCount = (entry.payableLessonsCount || 0) + count;
         entry.paidSessionsCount = entry.payableLessonsCount;
         entry.amount += Number(s.lessonAmount || 0);
+      } else {
+        entry.totalSessionsCount += 1;
+        if (s.isFree) {
+          entry.freeSessionsCount += 1;
+        } else {
+          entry.courseSessionsCount = (entry.courseSessionsCount || 0) + 1;
+          const count = Number(s.payingCount ?? s.presentCount ?? 1);
+          entry.payableLessonsCount = (entry.payableLessonsCount || 0) + count;
+          entry.paidSessionsCount = entry.payableLessonsCount;
+          entry.amount += Number(s.lessonAmount || 0);
+        }
       }
       map.set(key, entry);
     }

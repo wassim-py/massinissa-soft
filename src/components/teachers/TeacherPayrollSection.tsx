@@ -178,10 +178,10 @@ export default function TeacherPayrollSection({
         sessionsCount: currentPayroll.totalSessions,
         paidSessionsCount: currentPayroll.totalPaidSessions ?? (
           currentPayroll.sessionDetails
-            ? currentPayroll.sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent).length
+            ? currentPayroll.sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length
             : currentPayroll.totalSessions - (currentPayroll.totalFreeSessions ?? 0)
         ),
-        freeSessionsCount: currentPayroll.totalFreeSessions ?? currentPayroll.sessionDetails?.filter((s) => s.isFree && !s.isTeacherAbsent).length,
+        freeSessionsCount: currentPayroll.totalFreeSessions ?? currentPayroll.sessionDetails?.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length,
         teacherAbsencesCount: currentPayroll.teacherAbsencesCount,
         grossAmount: currentPayroll.grossAmount,
         bookRevenue: currentPayroll.bookRevenue,
@@ -211,6 +211,8 @@ export default function TeacherPayrollSection({
           isExtra: s.isExtra,
           isCatchUp: s.isCatchUp,
           isTeacherAbsent: s.isTeacherAbsent,
+          isRetroactive: s.isRetroactive,
+          retroactiveNote: s.retroactiveNote,
         })),
         photocopyDetails: currentPayroll.photocopyChargeDetails?.map((p) => ({
           branchName: p.branchName,
@@ -668,6 +670,10 @@ export default function TeacherPayrollSection({
                         <Badge size="sm" className="bg-rose-100 text-rose-800 border-rose-300 font-bold">
                           {locale === "ar" ? "غياب الأستاذ" : "Enseignant absent"}
                         </Badge>
+                      ) : s.isRetroactive ? (
+                        <Badge size="sm" className="bg-purple-100 text-purple-800 border-purple-300 font-bold">
+                          {locale === "ar" ? "تسوية متأخرة" : "Régularisation"}
+                        </Badge>
                       ) : s.isFree ? (
                         <Badge size="sm" className="bg-orange-100 text-orange-800 border-orange-300 font-bold">
                           {t("lessonTypeFree")}
@@ -685,6 +691,15 @@ export default function TeacherPayrollSection({
                         <span className="text-xs text-rose-700 font-medium">
                           {locale === "ar" ? "غياب مسجل" : "Absent"}
                         </span>
+                      ) : s.isRetroactive ? (
+                        <div className="flex flex-col items-center">
+                          <span className="font-bold text-purple-900">{s.payingCount} {locale === "ar" ? "مسوى" : "régul."}</span>
+                          {s.retroactiveNote && (
+                            <span className="text-[10px] text-purple-700 font-medium max-w-[150px] truncate" title={s.retroactiveNote}>
+                              {s.retroactiveNote}
+                            </span>
+                          )}
+                        </div>
                       ) : (
                         <div className="flex flex-col items-center">
                           <span className="font-bold text-primary">{s.presentCount} {t("presentUnit")}</span>
