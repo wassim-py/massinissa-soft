@@ -205,7 +205,8 @@ export type AttendanceClassification =
   | "INTERLEAVED_ABSENCE"
   | "TRAILING_ABSENCE_HELD"
   | "FORFEITED_DROPOUT"
-  | "TEACHER_ABSENT";
+  | "TEACHER_ABSENT"
+  | "SUSPENDED_ABSENCE";
 
 export interface StudentAttendanceHistoryItem {
   lessonId: number;
@@ -229,12 +230,14 @@ export interface StudentAttendanceHistoryItem {
  * 6. TRAILING_ABSENCE_HELD: Absence at the end with <60 calendar days elapsed (held pending, 0 teacher pay this month, refundable if student leaves).
  * 7. FORFEITED_DROPOUT: Student missed >=60 calendar days (2 months) without attending (money retained 100% by school, 0 teacher pay, non-refundable).
  * 8. TEACHER_ABSENT: Teacher marked absent for lesson (0 credit deducted, student credit untouched, 0 teacher pay).
+ * 9. SUSPENDED_ABSENCE: Absence during student suspension / debt clearance period (0 teacher pay, forgiven past debts).
  */
 export function classifyStudentAttendanceHistory({
   lessons,
   attendances,
   catchUps = [],
   referenceDate = new Date(),
+  creditResetOffset = 0,
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
@@ -246,6 +249,7 @@ export function classifyStudentAttendanceHistory({
     isTransferCatchUp?: boolean;
   }>;
   referenceDate?: Date;
+  creditResetOffset?: number;
 }): StudentAttendanceHistoryItem[] {
   // Sort lessons chronologically
   const sortedLessons = [...lessons]
@@ -309,6 +313,41 @@ export function classifyStudentAttendanceHistory({
 
   // Forfeited dropout is triggered strictly on 2 calendar months (60 calendar days) of absence since last presence:
   const isForfeitedDropout = lastPresenceDate !== null && daysSinceLastPresence >= 60;
+
+  // Identify non-paid suspension absences cleared by debt clearance / creditResetOffset:
+  // When an admin reinstates a student with debt clearance, creditResetOffset represents the count of
+  // past unexcused absences during the suspension period whose debt was effaced.
+  // Working backwards from the student's return presence (or the latest lesson if not yet returned),
+  // up to `creditResetOffset` unexcused absences that occurred after the student's first presence
+  // are identified as SUSPENDED_ABSENCE so that the teacher is not payable for them.
+  const suspendedLessonIdSet = new Set<number>();
+  if (creditResetOffset && creditResetOffset > 0) {
+    let scanStartIndex = sortedLessons.length - 1;
+    // If student returned after an absence gap, start scan immediately before the return presence
+    for (let i = sortedLessons.length - 1; i > firstPresenceIndex; i--) {
+      if (presenceArray[i] && !presenceArray[i - 1]) {
+        scanStartIndex = i - 1;
+        break;
+      }
+    }
+
+    let remaining = creditResetOffset;
+    for (let i = scanStartIndex; i >= 0 && remaining > 0; i--) {
+      const l = sortedLessons[i];
+      if (l.isTeacherAbsent) continue;
+      const rawStatus = attendanceMap.get(l.id);
+      const hasCatchUp = catchUpSet.has(l.id);
+      const isPresent = rawStatus === "PRESENT" || hasCatchUp;
+
+      // Only evaluate lessons on or after first presence
+      if (firstPresenceIndex !== -1 && i > firstPresenceIndex) {
+        if (!isPresent && rawStatus === "ABSENT") {
+          suspendedLessonIdSet.add(l.id);
+          remaining--;
+        }
+      }
+    }
+  }
 
   const history: StudentAttendanceHistoryItem[] = [];
 
@@ -476,7 +515,23 @@ export function classifyStudentAttendanceHistory({
       continue;
     }
 
-    // 2. Check if student attended any subsequent lesson (regular or catch-up)
+    // 2. Check if this absence is an unpaid absence during suspension cleared by creditResetOffset
+    if (suspendedLessonIdSet.has(lesson.id)) {
+      history.push({
+        lessonId: lesson.id,
+        startsAt,
+        status: (rawStatus as any) || "ABSENT",
+        isCatchUp: false,
+        classification: "SUSPENDED_ABSENCE",
+        isConsumedCredit: true, // Retained for student balance math (neutralized by creditResetOffset)
+        isTeacherPayable: false, // Non-paid absence during suspension is NEVER payable to teacher
+        isRefundable: false,
+        isHeld: false,
+      });
+      continue;
+    }
+
+    // 3. Check if student attended any subsequent lesson (regular or catch-up)
     const hasSubsequentPresence = presenceArray.slice(i + 1).some((p) => p === true);
 
     if (hasSubsequentPresence) {
@@ -495,7 +550,7 @@ export function classifyStudentAttendanceHistory({
       continue;
     }
 
-    // 3. Trailing absence: check if forfeited or held
+    // 4. Trailing absence: check if forfeited or held
     if (isForfeitedDropout) {
       history.push({
         lessonId: lesson.id,
@@ -1032,6 +1087,7 @@ export function computeStudentCreditAndSessions({
           lessons: relevantLessons,
           attendances: relevantAttendances,
           catchUps,
+          creditResetOffset: offset,
         })
       : [];
 
@@ -1064,7 +1120,8 @@ export function computeStudentCreditAndSessions({
         h.isConsumedCredit &&
         (h.classification === "PRESENT" ||
           h.classification === "INTERLEAVED_ABSENCE" ||
-          h.classification === "FORFEITED_DROPOUT")
+          h.classification === "FORFEITED_DROPOUT" ||
+          h.classification === "SUSPENDED_ABSENCE")
     ).length + extraCatchUpConsumed;
 
   // Group transfer & refund alignment rule:

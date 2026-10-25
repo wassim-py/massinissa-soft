@@ -1,0 +1,752 @@
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const htmlContent = `<!DOCTYPE html>
+<html lang="fr" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <title>Rapport d'Audit de Paie Mis à Jour - Enseignant Hamoui Abdessalam - Octobre 2026</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 10mm 12mm 12mm 12mm;
+    }
+    
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 10.5px;
+      line-height: 1.35;
+      color: #1e293b;
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+    }
+
+    .arabic-text {
+      font-family: "Segoe UI", "Cairo", "Amiri", "Traditional Arabic", Tahoma, sans-serif;
+      font-weight: 600;
+    }
+
+    .header-box {
+      border: 1.5px solid #1e3a8a;
+      border-radius: 6px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      background: #f8fafc;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header-title-block h1 {
+      margin: 0 0 2px 0;
+      font-size: 15px;
+      color: #1e3a8a;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .header-title-block h2 {
+      margin: 0 0 3px 0;
+      font-size: 12px;
+      color: #0284c7;
+      font-weight: 600;
+    }
+
+    .header-meta {
+      font-size: 9.5px;
+      color: #64748b;
+    }
+
+    .teacher-badge {
+      text-align: right;
+      border-left: 2px solid #cbd5e1;
+      padding-left: 14px;
+    }
+
+    .teacher-name {
+      font-size: 17px;
+      color: #0f172a;
+      font-weight: bold;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .stat-card {
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      border-radius: 6px;
+      padding: 7px 10px;
+      text-align: center;
+      border-top: 3px solid #0284c7;
+    }
+
+    .stat-card.emerald { border-top-color: #059669; }
+    .stat-card.amber { border-top-color: #d97706; }
+    .stat-card.indigo { border-top-color: #4f46e5; }
+
+    .stat-value {
+      font-size: 16px;
+      font-weight: bold;
+      color: #0f172a;
+    }
+
+    .stat-label {
+      font-size: 9px;
+      color: #64748b;
+      text-transform: uppercase;
+      font-weight: 600;
+      margin-top: 1px;
+    }
+
+    .explanation-callout {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-left: 4px solid #16a34a;
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 9.5px;
+      color: #166534;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: bold;
+      color: #0f172a;
+      margin: 12px 0 5px 0;
+      padding-bottom: 3px;
+      border-bottom: 2px solid #0284c7;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+
+    .section-title span.sub {
+      font-size: 9.5px;
+      color: #64748b;
+      font-weight: normal;
+    }
+
+    .group-subtitle {
+      font-size: 11px;
+      font-weight: 700;
+      color: #1e3a8a;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 4px;
+      padding: 3.5px 8px;
+      margin: 7px 0 4px 0;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 8px;
+      font-size: 9.5px;
+    }
+
+    thead {
+      display: table-header-group;
+    }
+
+    tr {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    th {
+      background: #f1f5f9;
+      color: #334155;
+      font-weight: 700;
+      text-align: left;
+      padding: 4px 6px;
+      border: 1px solid #cbd5e1;
+      font-size: 9px;
+    }
+
+    td {
+      padding: 3.5px 6px;
+      border: 1px solid #e2e8f0;
+      vertical-align: middle;
+    }
+
+    tr:nth-child(even) td {
+      background-color: #f8fafc;
+    }
+
+    .text-center { text-align: center; }
+    .text-right { text-align: right; }
+    
+    .badge-id {
+      display: inline-block;
+      background: #e0f2fe;
+      color: #0369a1;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid #bae6fd;
+      font-size: 9.5px;
+    }
+
+    .badge-status {
+      display: inline-block;
+      background: #fee2e2;
+      color: #b91c1c;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 8.5px;
+    }
+
+    .notice-box {
+      background: #fefce8;
+      border: 1px solid #fef08a;
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-size: 9px;
+      color: #854d0e;
+      margin-bottom: 6px;
+    }
+
+    .page-break {
+      page-break-before: always;
+      break-before: page;
+    }
+
+    .no-break {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    .signatures-block {
+      margin-top: 14px;
+      border-top: 1.5px dashed #cbd5e1;
+      padding-top: 10px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    .signature-card {
+      border: 1px solid #e2e8f0;
+      border-radius: 5px;
+      padding: 8px 10px;
+      min-height: 65px;
+      background: #fafafa;
+    }
+
+    .signature-card h4 {
+      margin: 0 0 30px 0;
+      font-size: 10px;
+      color: #475569;
+      text-transform: uppercase;
+    }
+
+    .footer-note {
+      text-align: center;
+      font-size: 8px;
+      color: #94a3b8;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- EN-TETE PRINCIPAL -->
+  <div class="header-box">
+    <div class="header-title-block">
+      <h1>École Massinissa &bull; Rapport d'Audit de Paie Mis à Jour</h1>
+      <h2>Régularisations Rétroactives & Absences Rémunérées &bull; تقرير تدقيق الأجور المحين</h2>
+      <div class="header-meta">
+        Période : <strong>Octobre 2026</strong> &bull; Réf : <strong>AUDIT-PAIE-2026-10-HAMOUI-REV2</strong> &bull; Date : 25/10/2026
+      </div>
+    </div>
+    <div class="teacher-badge">
+      <div style="font-size: 9.5px; color: #64748b;">Enseignant / الأستاذ :</div>
+      <div class="teacher-name arabic-text">حموي عبد السلام</div>
+      <div style="font-size: 9px; color: #475569;">Sciences de la Nature et de la Vie (SNV)</div>
+    </div>
+  </div>
+
+  <!-- STATISTIQUES RÉCAPITULATIVES -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-value">52 cas</div>
+      <div class="stat-label">Total Cas Particuliers</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-value">20 cas <span style="font-size: 11px; font-weight: normal; color: #78350f;">(19.5 séances)</span></div>
+      <div class="stat-label">Régularisations Septembre</div>
+    </div>
+    <div class="stat-card emerald">
+      <div class="stat-value">32 cas <span style="font-size: 11px; font-weight: normal; color: #064e3b;">(32 séances)</span></div>
+      <div class="stat-label">Absences Payées Octobre</div>
+    </div>
+    <div class="stat-card indigo">
+      <div class="stat-value">+51.5 séances</div>
+      <div class="stat-label">Impact Total sur Paie</div>
+    </div>
+  </div>
+
+  <div class="explanation-callout">
+    <strong>Audit après assainissement des transferts et exclusion des absences de suspension :</strong><br>
+    Ce rapport mis à jour détaille nominativement les <strong>52 cas individuels réels</strong> avec leur <strong>numéro d'inscription (ID matricule)</strong>.
+    Conformément aux règles de gestion de l'établissement, les <strong>4 absences non payées durant la période de suspension</strong> de l'élève #37 (bénéficiant d'un effacement de dettes antérieur par réinitialisation de crédit) ont été rigoureusement exclues de la rémunération de l'enseignant.
+    L'écart constaté s'établit avec exactitude à <strong>19.5 séances</strong> de régularisations légitimes de septembre (crédit encaissé en octobre) et <strong>32 séances</strong> d'absences intercalées rémunérées (§2.9).
+  </div>
+
+  <!-- 1. VUE D'ENSEMBLE PAR GROUPE -->
+  <div class="section-title">
+    <span>1. Synthèse Globale par Groupe / ملخص الحالات حسب الأفواج</span>
+    <span class="sub">Répartition des 52 cas nominatifs</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 25%;">Groupe / Classe (الفوج)</th>
+        <th style="width: 15%;">Succursale</th>
+        <th style="width: 20%;" class="text-center">Absences Payées (Octobre)</th>
+        <th style="width: 22%;" class="text-center">Régularisations (Septembre)</th>
+        <th style="width: 18%;" class="text-center">Total Cas Particuliers</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong class="arabic-text">حموي علمي 1</strong></td>
+        <td>AMPHI</td>
+        <td class="text-center">2</td>
+        <td class="text-center">7</td>
+        <td class="text-center font-bold">9 cas</td>
+      </tr>
+      <tr>
+        <td><strong class="arabic-text">حموي علمي 2</strong></td>
+        <td>AMPHI</td>
+        <td class="text-center">6</td>
+        <td class="text-center">6</td>
+        <td class="text-center font-bold">12 cas</td>
+      </tr>
+      <tr>
+        <td><strong class="arabic-text">حموي علمي 3</strong></td>
+        <td>AMPHI</td>
+        <td class="text-center">11</td>
+        <td class="text-center">0</td>
+        <td class="text-center font-bold">11 cas</td>
+      </tr>
+      <tr>
+        <td><strong class="arabic-text">حموي رياضي</strong></td>
+        <td>AMPHI</td>
+        <td class="text-center">5</td>
+        <td class="text-center">4</td>
+        <td class="text-center font-bold">9 cas</td>
+      </tr>
+      <tr>
+        <td><strong class="arabic-text">حموي 1 ثانوي</strong></td>
+        <td>AMPHI</td>
+        <td class="text-center">5</td>
+        <td class="text-center">0</td>
+        <td class="text-center font-bold">5 cas</td>
+      </tr>
+      <tr>
+        <td><strong class="arabic-text">حموي فوج خاص</strong></td>
+        <td>ANNEX</td>
+        <td class="text-center">3</td>
+        <td class="text-center">3 <span style="font-size: 8.5px; color: #475569;">(2.5 séances / 50% fratrie)</span></td>
+        <td class="text-center font-bold">6 cas</td>
+      </tr>
+      <tr style="color: #94a3b8;">
+        <td><span class="arabic-text">حموي 2 ثانوي</span></td>
+        <td>AMPHI</td>
+        <td class="text-center">0</td>
+        <td class="text-center">0</td>
+        <td class="text-center">0</td>
+      </tr>
+      <tr style="color: #94a3b8;">
+        <td><span class="arabic-text">حموي 2 ثانوي خاص</span></td>
+        <td>ECOLE</td>
+        <td class="text-center">0</td>
+        <td class="text-center">0</td>
+        <td class="text-center">0</td>
+      </tr>
+      <tr style="background: #e2e8f0; font-weight: bold; font-size: 10px;">
+        <td>TOTAL GÉNÉRAL</td>
+        <td>-</td>
+        <td class="text-center">32 séances</td>
+        <td class="text-center">20 (19.5 séances)</td>
+        <td class="text-center">52 cas (51.5 séances)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- 2. REGULARISATIONS RETROACTIVES DE SEPTEMBRE -->
+  <div class="section-title" style="margin-top: 14px;">
+    <span>2. Régularisations Rétroactives de Septembre (20 cas nominatifs / 19.5 séances)</span>
+    <span class="sub">Paiements encaissés en octobre pour des séances effectuées en septembre</span>
+  </div>
+  <div class="notice-box">
+    <strong>Règle de gestion :</strong> Séances dispensées au mois de septembre sans reçu actif à cette date. Le versement ayant été encaissé au cours d'octobre, la rémunération correspondante est débloquée et versée sur la paie d'octobre (strictement limitée au mois précédent).
+  </div>
+
+  <!-- A. حموي علمي 1 -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">أ. فوج حموي علمي 1 (7 تسويات رجعية)</span>
+      <span>Sous-total : 7 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 24%;">Règlement en Octobre</th>
+          <th style="width: 6%;" class="text-center">Poids</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#37</span></td><td><strong class="arabic-text">بوسنان اسماء</strong></td><td class="text-center">2026-09-11</td><td class="text-center">Séance #109</td><td>3 000 DZD le 16/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#44</span></td><td><strong class="arabic-text">دراجي عبد الرحمان</strong></td><td class="text-center">2026-09-18</td><td class="text-center">Séance #110</td><td>3 000 DZD le 10/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#48</span></td><td><strong class="arabic-text">بوالقرون مروة</strong></td><td class="text-center">2026-09-25</td><td class="text-center">Séance #111</td><td>3 000 DZD le 09/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">4</td><td class="text-center"><span class="badge-id">#47</span></td><td><strong class="arabic-text">بوشاشية أسامة</strong></td><td class="text-center">2026-09-25</td><td class="text-center">Séance #111</td><td>3 000 DZD le 23/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">5</td><td class="text-center"><span class="badge-id">#44</span></td><td><strong class="arabic-text">دراجي عبد الرحمان</strong></td><td class="text-center">2026-09-25</td><td class="text-center">Séance #111</td><td>3 000 DZD le 10/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">6</td><td class="text-center"><span class="badge-id">#58</span></td><td><strong class="arabic-text">رميشي لجين</strong></td><td class="text-center">2026-09-25</td><td class="text-center">Séance #111</td><td>3 000 DZD le 23/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">7</td><td class="text-center"><span class="badge-id">#2</span></td><td><strong class="arabic-text">غبولي لميس</strong></td><td class="text-center">2026-09-25</td><td class="text-center">Séance #111</td><td>3 000 DZD le 12/10/2026</td><td class="text-center">1.0</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="page-break"></div>
+
+  <!-- B. حموي علمي 2 -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">ب. فوج حموي علمي 2 (6 تسويات رجعية)</span>
+      <span>Sous-total : 6 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 24%;">Règlement en Octobre</th>
+          <th style="width: 6%;" class="text-center">Poids</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#87</span></td><td><strong class="arabic-text">مرابط غادة أمينة</strong></td><td class="text-center">2026-09-19</td><td class="text-center">Séance #118</td><td>3 000 DZD le 03/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#105</span></td><td><strong class="arabic-text">بلخميس محمد منجد</strong></td><td class="text-center">2026-09-21</td><td class="text-center">Séance #119</td><td>3 000 DZD le 10/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#106</span></td><td><strong class="arabic-text">بن معاوية محمد عبد الرؤوف</strong></td><td class="text-center">2026-09-21</td><td class="text-center">Séance #119</td><td>3 000 DZD le 14/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">4</td><td class="text-center"><span class="badge-id">#90</span></td><td><strong class="arabic-text">حجاج مرتضى عبد المولى</strong></td><td class="text-center">2026-09-21</td><td class="text-center">Séance #119</td><td>3 000 DZD le 17/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">5</td><td class="text-center"><span class="badge-id">#99</span></td><td><strong class="arabic-text">سعايدية زياد</strong></td><td class="text-center">2026-09-21</td><td class="text-center">Séance #119</td><td>3 000 DZD le 03/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">6</td><td class="text-center"><span class="badge-id">#87</span></td><td><strong class="arabic-text">مرابط غادة أمينة</strong></td><td class="text-center">2026-09-21</td><td class="text-center">Séance #119</td><td>3 000 DZD le 03/10/2026</td><td class="text-center">1.0</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- C. حموي رياضي & D. حموي فوج خاص -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">ج. فوج حموي رياضي (4 تسويات رجعية)</span>
+      <span>Sous-total : 4 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 24%;">Règlement en Octobre</th>
+          <th style="width: 6%;" class="text-center">Poids</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#136</span></td><td><strong class="arabic-text">سعدي محمد زكرياء</strong></td><td class="text-center">2026-09-23</td><td class="text-center">Séance #102</td><td>3 000 DZD le 13/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#137</span></td><td><strong class="arabic-text">نحال لينا</strong></td><td class="text-center">2026-09-23</td><td class="text-center">Séance #102</td><td>1 500 DZD le 08/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#136</span></td><td><strong class="arabic-text">سعدي محمد زكرياء</strong></td><td class="text-center">2026-09-29</td><td class="text-center">Séance #103</td><td>3 000 DZD le 13/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">4</td><td class="text-center"><span class="badge-id">#137</span></td><td><strong class="arabic-text">نحال لينا</strong></td><td class="text-center">2026-09-29</td><td class="text-center">Séance #103</td><td>1 500 DZD le 08/10/2026</td><td class="text-center">1.0</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">د. فوج حموي فوج خاص (3 تسويات رجعية)</span>
+      <span>Sous-total : 2.5 séances payables (Pondération 50% Fratrie)</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 24%;">Règlement en Octobre</th>
+          <th style="width: 6%;" class="text-center">Poids</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#529</span></td><td><strong class="arabic-text">بلخيري صفاء</strong></td><td class="text-center">2026-09-25</td><td class="text-center">Séance #172</td><td>10 000 DZD le 02/10/2026</td><td class="text-center">1.0</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#534</span></td><td><strong class="arabic-text">بلخيري مروة</strong></td><td class="text-center">2026-09-25</td><td class="text-center">Séance #172</td><td>5 000 DZD le 02/10/2026 <em>(Remise fratrie 50%)</em></td><td class="text-center font-bold" style="color: #0284c7;">0.5</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#208</span></td><td><strong class="arabic-text">عويدي سرين هديل</strong></td><td class="text-center">2026-09-25</td><td class="text-center">Séance #172</td><td>10 000 DZD le 02/10/2026</td><td class="text-center">1.0</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="page-break"></div>
+
+  <!-- 3. ABSENCES REMUNEREES EN OCTOBRE -->
+  <div class="section-title">
+    <span>3. Absences Rémunérées en Octobre (32 cas nominatifs / 32 séances)</span>
+    <span class="sub">Application de la règle des absences intercalées (غياب بيني)</span>
+  </div>
+  <div class="notice-box">
+    <strong>Règle de gestion (§2.9) :</strong> Toute absence d'un élève entourée d'une présence avant (séance N-1) et après (séance N+1) disposant d'un abonnement mensuel actif est comptabilisée comme payable à l'enseignant. Les absences survenues pendant une période de suspension/décrochage scolaire effacée sont formellement exclues.
+  </div>
+
+  <!-- A. حموي 1 ثانوي -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">أ. فوج حموي 1 ثانوي (5 غيابات بينية مدفوعة)</span>
+      <span>Sous-total : 5 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 10%;" class="text-center">Statut</th>
+          <th style="width: 20%;">Règle Appliquée</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#470</span></td><td><strong class="arabic-text">غبولي محمد</strong></td><td class="text-center">2026-10-09</td><td class="text-center">Séance #13</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#468</span></td><td><strong class="arabic-text">فراجة وصال</strong></td><td class="text-center">2026-10-09</td><td class="text-center">Séance #13</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#474</span></td><td><strong class="arabic-text">لكحل احمد</strong></td><td class="text-center">2026-10-09</td><td class="text-center">Séance #13</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">4</td><td class="text-center"><span class="badge-id">#465</span></td><td><strong class="arabic-text">مباركي هند</strong></td><td class="text-center">2026-10-09</td><td class="text-center">Séance #13</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">5</td><td class="text-center"><span class="badge-id">#465</span></td><td><strong class="arabic-text">مباركي هند</strong></td><td class="text-center">2026-10-16</td><td class="text-center">Séance #419</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- B. حموي رياضي -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">ب. فوج حموي رياضي (5 غيابات بينية مدفوعة)</span>
+      <span>Sous-total : 5 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 10%;" class="text-center">Statut</th>
+          <th style="width: 20%;">Règle Appliquée</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#158</span></td><td><strong class="arabic-text">بوشامة نورسين</strong></td><td class="text-center">2026-10-06</td><td class="text-center">Séance #104</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#168</span></td><td><strong class="arabic-text">بن المعدادي عبد الجليل</strong></td><td class="text-center">2026-10-07</td><td class="text-center">Séance #283</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#172</span></td><td><strong class="arabic-text">لعمارة محمد</strong></td><td class="text-center">2026-10-07</td><td class="text-center">Séance #283</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">4</td><td class="text-center"><span class="badge-id">#134</span></td><td><strong class="arabic-text">ليتيم مليسا</strong></td><td class="text-center">2026-10-07</td><td class="text-center">Séance #283</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">5</td><td class="text-center"><span class="badge-id">#135</span></td><td><strong class="arabic-text">زويد اسكندر وسيم</strong></td><td class="text-center">2026-10-13</td><td class="text-center">Séance #326</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- C. حموي علمي 1 -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">ج. فوج حموي علمي 1 (2 غيابات بينية مدفوعة)</span>
+      <span>Sous-total : 2 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 10%;" class="text-center">Statut</th>
+          <th style="width: 20%;">Règle Appliquée</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#48</span></td><td><strong class="arabic-text">بوالقرون مروة</strong></td><td class="text-center">2026-10-01</td><td class="text-center">Séance #112</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#44</span></td><td><strong class="arabic-text">دراجي عبد الرحمان</strong></td><td class="text-center">2026-10-01</td><td class="text-center">Séance #112</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- D. حموي علمي 2 -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">د. فوج حموي علمي 2 (6 غيابات بينية مدفوعة)</span>
+      <span>Sous-total : 6 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 10%;" class="text-center">Statut</th>
+          <th style="width: 20%;">Règle Appliquée</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#85</span></td><td><strong class="arabic-text">اوبيري مؤيد</strong></td><td class="text-center">2026-10-03</td><td class="text-center">Séance #120</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#86</span></td><td><strong class="arabic-text">براشن معتز</strong></td><td class="text-center">2026-10-03</td><td class="text-center">Séance #120</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#106</span></td><td><strong class="arabic-text">بن معاوية محمد عبد الرؤوف</strong></td><td class="text-center">2026-10-03</td><td class="text-center">Séance #120</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">4</td><td class="text-center"><span class="badge-id">#73</span></td><td><strong class="arabic-text">خلوف غصن البال</strong></td><td class="text-center">2026-10-03</td><td class="text-center">Séance #120</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">5</td><td class="text-center"><span class="badge-id">#109</span></td><td><strong class="arabic-text">شايب اية</strong></td><td class="text-center">2026-10-03</td><td class="text-center">Séance #120</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">6</td><td class="text-center"><span class="badge-id">#77</span></td><td><strong class="arabic-text">بروة يحي جاد</strong></td><td class="text-center">2026-10-10</td><td class="text-center">Séance #23</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="page-break"></div>
+
+  <!-- E. حموي علمي 3 -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">هـ. فوج حموي علمي 3 (11 غياب بيني مدفوع)</span>
+      <span>Sous-total : 11 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 10%;" class="text-center">Statut</th>
+          <th style="width: 20%;">Règle Appliquée</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#222</span></td><td><strong class="arabic-text">سوالمية سلسبيل</strong></td><td class="text-center">2026-10-02</td><td class="text-center">Séance #122</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#401</span></td><td><strong class="arabic-text">بزيان لينا زينب</strong></td><td class="text-center">2026-10-09</td><td class="text-center">Séance #15</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#406</span></td><td><strong class="arabic-text">ماط وليد</strong></td><td class="text-center">2026-10-16</td><td class="text-center">Séance #328</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">4</td><td class="text-center"><span class="badge-id">#894</span></td><td><strong class="arabic-text">بن داود جواد</strong></td><td class="text-center">2026-10-19</td><td class="text-center">Séance #355</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">5</td><td class="text-center"><span class="badge-id">#1309</span></td><td><strong class="arabic-text">بن سالم اياد</strong></td><td class="text-center">2026-10-19</td><td class="text-center">Séance #355</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">6</td><td class="text-center"><span class="badge-id">#382</span></td><td><strong class="arabic-text">بوطبزة معاذ</strong></td><td class="text-center">2026-10-19</td><td class="text-center">Séance #355</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">7</td><td class="text-center"><span class="badge-id">#1514</span></td><td><strong class="arabic-text">زنيزن ياسر</strong></td><td class="text-center">2026-10-19</td><td class="text-center">Séance #355</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">8</td><td class="text-center"><span class="badge-id">#380</span></td><td><strong class="arabic-text">سمان ولاء</strong></td><td class="text-center">2026-10-19</td><td class="text-center">Séance #355</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">9</td><td class="text-center"><span class="badge-id">#409</span></td><td><strong class="arabic-text">شعباني محمد اسلام</strong></td><td class="text-center">2026-10-19</td><td class="text-center">Séance #355</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">10</td><td class="text-center"><span class="badge-id">#373</span></td><td><strong class="arabic-text">مصباح مرام</strong></td><td class="text-center">2026-10-19</td><td class="text-center">Séance #355</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">11</td><td class="text-center"><span class="badge-id">#393</span></td><td><strong class="arabic-text">مصمودي شهد</strong></td><td class="text-center">2026-10-19</td><td class="text-center">Séance #355</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- F. حموي فوج خاص -->
+  <div class="no-break">
+    <div class="group-subtitle">
+      <span class="arabic-text">و. فوج حموي فوج خاص (3 غيابات بينية مدفوعة)</span>
+      <span>Sous-total : 3 séances payables</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 4%;" class="text-center">#</th>
+          <th style="width: 14%;" class="text-center">N° ID (Matricule)</th>
+          <th style="width: 28%;">Nom et Prénom de l'Élève</th>
+          <th style="width: 13%;" class="text-center">Date Séance</th>
+          <th style="width: 11%;" class="text-center">N° Séance</th>
+          <th style="width: 10%;" class="text-center">Statut</th>
+          <th style="width: 20%;">Règle Appliquée</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="text-center">1</td><td class="text-center"><span class="badge-id">#532</span></td><td><strong class="arabic-text">جباسي محمد يونس</strong></td><td class="text-center">2026-10-02</td><td class="text-center">Séance #173</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">2</td><td class="text-center"><span class="badge-id">#533</span></td><td><strong class="arabic-text">رحمون يقين</strong></td><td class="text-center">2026-10-03</td><td class="text-center">Séance #174</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+        <tr><td class="text-center">3</td><td class="text-center"><span class="badge-id">#530</span></td><td><strong class="arabic-text">بحشاشي عبد الرحمان</strong></td><td class="text-center">2026-10-16</td><td class="text-center">Séance #376</td><td class="text-center"><span class="badge-status">ABSENT</span></td><td>Absence intercalée rémunérée</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- BLOC SIGNATURES -->
+  <div class="signatures-block">
+    <div class="signature-card">
+      <h4>Visa de la Direction / إدارة المؤسسة</h4>
+      <div style="font-size: 8.5px; color: #64748b;">Date & Signature :</div>
+    </div>
+    <div class="signature-card">
+      <h4>Émargement de l'Enseignant / توقيع الأستاذ</h4>
+      <div style="font-size: 8.5px; color: #64748b;">Pr. Hamoui Abdessalam :</div>
+    </div>
+  </div>
+
+  <div class="footer-note">
+    Document officiel généré le 25/10/2026 par le Système de Gestion Intégrée Massinissa &bull; Conforme aux règles d'audit de paie 2026 (Version actualisée post-transferts)
+  </div>
+
+</body>
+</html>
+`;
+
+// Paths
+const publicReportsDir = path.join(__dirname, '..', 'public', 'reports');
+if (!fs.existsSync(publicReportsDir)) {
+  fs.mkdirSync(publicReportsDir, { recursive: true });
+}
+
+const htmlPath = path.join(publicReportsDir, 'Rapport_Audit_Paie_Hamoui_Octobre_2026.html');
+fs.writeFileSync(htmlPath, htmlContent, 'utf8');
+console.log('HTML written to:', htmlPath);
+
+// Target PDFs
+const pdfBureau = path.join('C:', 'Users', 'wassi', 'OneDrive', 'Bureau', 'Rapport_Audit_Paie_Hamoui_Octobre_2026.pdf');
+const pdfPublic = path.join(publicReportsDir, 'Rapport_Audit_Paie_Hamoui_Octobre_2026.pdf');
+const pdfArtifact = path.join('C:', 'Users', 'wassi', '.gemini', 'antigravity', 'brain', 'f6ac0365-f29f-4be0-90b8-49c048fdbcbe', 'Rapport_Audit_Paie_Hamoui_Octobre_2026.pdf');
+
+const edgeExe = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+
+const cmd = `"${edgeExe}" --headless --disable-gpu --no-pdf-header-footer --print-to-pdf="${pdfPublic}" "${htmlPath}"`;
+console.log('Running Edge command...');
+execSync(cmd);
+
+console.log('PDF generated at public reports:', fs.existsSync(pdfPublic), fs.statSync(pdfPublic).size, 'bytes');
+
+// Copy to Bureau and Artifact directory
+fs.copyFileSync(pdfPublic, pdfBureau);
+fs.copyFileSync(pdfPublic, pdfArtifact);
+
+console.log('PDF copied to Bureau:', fs.existsSync(pdfBureau));
+console.log('PDF copied to Brain Artifact:', fs.existsSync(pdfArtifact));

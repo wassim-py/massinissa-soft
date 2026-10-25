@@ -161,9 +161,9 @@ function computeAllowedPaidSessions(
     .filter((t: any) => !t.transferredAt || new Date(t.transferredAt) <= referenceDate)
     .reduce((s: number, t: any) => s + Number(t.transferredSessions || 0), 0);
 
-  const offset = Number(enrollment.creditResetOffset || 0);
-
-  return Math.max(0, purchasedSessions + tIn - tOut + offset);
+  // Note: creditResetOffset is student debt forgiveness/clearance, NOT tuition received by the school.
+  // Therefore, teacher payable sessions must strictly reflect paid tuition and transfers (no offset).
+  return Math.max(0, purchasedSessions + tIn - tOut);
 }
 
 /**
@@ -356,6 +356,8 @@ export async function calculateTeacherPayroll(
     for (const sid of studentIds) {
       const studentAtts = historyData.attendances.filter((a: any) => a.studentId === sid);
       const studentCatchUps = historyData.catchUps.filter((c: any) => c.studentId === sid);
+      const enrollment = historyData.classInfo?.enrollments?.find((e: any) => e.studentId === sid);
+      const creditResetOffset = Number(enrollment?.creditResetOffset || 0);
 
       // Classification as of endDate
       const classifiedAtEnd = classifyStudentAttendanceHistory({
@@ -363,6 +365,7 @@ export async function calculateTeacherPayroll(
         attendances: studentAtts,
         catchUps: studentCatchUps,
         referenceDate: endDate,
+        creditResetOffset,
       });
       classifiedAtEnd.forEach((item) => {
         studentStatusAtEnd.set(`${sid}_${item.lessonId}`, item);
@@ -386,6 +389,7 @@ export async function calculateTeacherPayroll(
           attendances: studentAtts.filter((a: any) => priorLessons.some((pl: any) => pl.id === a.lessonId)),
           catchUps: studentCatchUps.filter((c: any) => priorLessons.some((pl: any) => pl.id === c.missedLessonId)),
           referenceDate: startDate,
+          creditResetOffset,
         });
         classifiedAtStart.forEach((item) => {
           studentStatusAtStart.set(`${sid}_${item.lessonId}`, item);

@@ -5655,13 +5655,11 @@ export const transferEnrollmentCredit = async (
         },
       });
 
-      // Mark fromEnrollment as TRANSFERRED only if all available sessions were transferred
-      if (finalTransferredSessions >= availableSessionsFrom) {
-        await tx.enrollment.update({
-          where: { id: fromEnrollment.id },
-          data: { status: "TRANSFERRED" },
-        });
-      }
+      // Mark fromEnrollment as TRANSFERRED when transferring to avoid phantom attendances
+      await tx.enrollment.update({
+        where: { id: fromEnrollment.id },
+        data: { status: "TRANSFERRED" },
+      });
     });
 
     try {

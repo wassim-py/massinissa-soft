@@ -266,7 +266,6 @@ const StudentListPage = async (props: {
           where: {
             studentId: { in: studentIds },
             status: { notIn: ["TRANSFERRED", "UNENROLLED", "INACTIVE"] },
-            transfersFrom: { none: {} },
           },
           include: {
             class: {
@@ -285,8 +284,7 @@ const StudentListPage = async (props: {
       if (
         enr.status === "TRANSFERRED" ||
         enr.status === "UNENROLLED" ||
-        enr.status === "INACTIVE" ||
-        (enr.transfersFrom && enr.transfersFrom.length > 0)
+        enr.status === "INACTIVE"
       ) {
         continue;
       }
