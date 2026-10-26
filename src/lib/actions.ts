@@ -1,10 +1,12 @@
+"use server";
+
 import {
   handleAttendanceWhatsAppTrigger,
   handleCreditZeroInstantTrigger,
   handleSpecialLessonWhatsAppTrigger,
 } from "./whatsappTriggers";
 import { verifyCreditIsStillZeroJit } from "./whatsappUtils";
-"use server";
+
 
 import { revalidatePath } from "next/cache";
 import { revalidateFinancialRoutes } from "@/lib/revalidation";
@@ -7349,8 +7351,6 @@ export const exportToExcel = async (
         periodMode?: "daily" | "weekly" | "monthly";
     }
 ) => {
-  "use server";
-
   try {
     const session = await getAuthSession();
     // Branch admins can ONLY export attendance records. All other exports are owner-only.
