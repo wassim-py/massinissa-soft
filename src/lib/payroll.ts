@@ -52,6 +52,9 @@ export interface TeacherPayrollCalculation {
     freeSessionsCount: number;
     totalSessionsCount: number;
     amount: number;
+    tuitionGross?: number;
+    schoolAmount?: number;
+    appliedPercentage?: number;
   }>;
   sessionDetails?: Array<{
     lessonId: number;
@@ -914,7 +917,9 @@ export async function calculateTeacherPayroll(
       });
     }
   } else {
-    schoolGrossAmount = Math.max(0, totalTuitionGross - grossAmount);
+    // schoolGrossAmount was accumulated per-lesson respecting individual group percentage variants.
+    // If book sales occurred, grossAmount includes book revenue (100% teacher), which must NOT reduce tuition schoolGrossAmount.
+    schoolGrossAmount = Math.round(schoolGrossAmount * 100) / 100;
   }
 
   // Fetch Salary Advances within or up to this period
@@ -971,6 +976,9 @@ export async function calculateTeacherPayroll(
       freeSessionsCount: number;
       totalSessionsCount: number;
       amount: number;
+      tuitionGross: number;
+      schoolAmount: number;
+      appliedPercentage?: number;
     }
   >();
 
@@ -986,14 +994,27 @@ export async function calculateTeacherPayroll(
       freeSessionsCount: 0,
       totalSessionsCount: 0,
       amount: 0,
+      tuitionGross: 0,
+      schoolAmount: 0,
+      appliedPercentage: s.appliedPercentage,
     };
+
+    if (s.appliedPercentage !== undefined) {
+      g.appliedPercentage = s.appliedPercentage;
+    }
 
     if (s.isRetroactive) {
       // Retroactive settlements are adjustments for prior periods; do NOT count them as separated lessons in this period
       const payingCountForLesson = Number(s.payingCount ?? 1);
+      const retroTuition = Math.round(payingCountForLesson * s.sessionPrice * 100) / 100;
+      const retroTeacherCut = Number(s.lessonAmount || 0);
+      const retroSchoolCut = s.schoolCut ?? Math.max(0, retroTuition - retroTeacherCut);
+
       g.payableLessonsCount += payingCountForLesson;
       g.paidSessionsCount = g.payableLessonsCount;
-      g.amount += Number(s.lessonAmount || 0);
+      g.amount += retroTeacherCut;
+      g.tuitionGross += retroTuition;
+      g.schoolAmount += retroSchoolCut;
     } else {
       g.totalSessionsCount += 1;
       if (s.isFree) {
@@ -1001,9 +1022,15 @@ export async function calculateTeacherPayroll(
       } else {
         g.courseSessionsCount += 1;
         const payingCountForLesson = Number(s.payingCount ?? s.presentCount ?? 1);
+        const lessonTuition = Math.round(payingCountForLesson * s.sessionPrice * 100) / 100;
+        const lessonTeacherCut = Number(s.lessonAmount || 0);
+        const lessonSchoolCut = s.schoolCut ?? Math.max(0, lessonTuition - lessonTeacherCut);
+
         g.payableLessonsCount += payingCountForLesson;
         g.paidSessionsCount = g.payableLessonsCount;
-        g.amount += Number(s.lessonAmount || 0);
+        g.amount += lessonTeacherCut;
+        g.tuitionGross += lessonTuition;
+        g.schoolAmount += lessonSchoolCut;
       }
     }
     groupBreakdownMap.set(key, g);
@@ -1013,6 +1040,9 @@ export async function calculateTeacherPayroll(
     ...g,
     payableLessonsCount: Math.round(g.payableLessonsCount * 100) / 100,
     paidSessionsCount: Math.round(g.payableLessonsCount * 100) / 100,
+    amount: Math.round(g.amount * 100) / 100,
+    tuitionGross: Math.round(g.tuitionGross * 100) / 100,
+    schoolAmount: Math.round(g.schoolAmount * 100) / 100,
   })).sort((a, b) => a.className.localeCompare(b.className));
 
   const branchSchoolBreakdown: NonNullable<TeacherPayrollCalculation["branchSchoolBreakdown"]> = branchBreakdown.map((b) => ({
@@ -1201,7 +1231,7 @@ export async function generatePayrollRun(
 
       // --- PART 2: SCHOOL PART WITH TEACHERS PAYROLL ---
       for (const calc of teacherCalculations) {
-        const schoolGross = calc.schoolGrossAmount ?? Math.max(0, (calc.totalTuitionGross ?? 0) - calc.grossAmount);
+        const schoolGross = calc.schoolGrossAmount ?? Math.max(0, (calc.totalTuitionGross ?? 0) - (calc.grossAmount - (calc.bookRevenue || 0)));
         const schoolNet = calc.schoolNetAmount ?? (schoolGross + calc.photocopyDeductions);
 
         const schoolBranchLines = calc.branchSchoolBreakdown || calc.branchBreakdown.map((b) => ({
@@ -1738,7 +1768,8 @@ export async function getPayrollRunFinancialReport(
     const teacherRecord = teachers.find((t) => t.id === calc.teacherId);
     const tuition = calc.totalTuitionGross ?? 0;
     const teacherCut = calc.grossAmount;
-    const schoolCut = calc.schoolGrossAmount ?? Math.max(0, tuition - teacherCut);
+    const tuitionTeacherCut = calc.grossAmount - (calc.bookRevenue || 0);
+    const schoolCut = calc.schoolGrossAmount ?? Math.max(0, tuition - tuitionTeacherCut);
     const photoRecov = calc.photocopyDeductions;
     const netSchoolCut = calc.schoolNetAmount ?? (schoolCut + photoRecov);
 

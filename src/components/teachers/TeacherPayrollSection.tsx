@@ -226,13 +226,18 @@ export default function TeacherPayrollSection({
   const percentage = currentPayroll?.percentageOfSessionFee ?? 0;
   const sessions = currentPayroll?.sessionDetails || [];
 
-  const totalTuitionGross = sessions.reduce((acc, s) => {
+  const totalTuitionGross = currentPayroll?.totalTuitionGross ?? sessions.reduce((acc, s) => {
     const count = s.payingCount ?? s.presentCount ?? 0;
     return acc + count * s.sessionPrice;
   }, 0);
-  const schoolShareAmount = currentPayroll
-    ? Math.max(0, totalTuitionGross - currentPayroll.grossAmount)
-    : 0;
+  const schoolShareAmount = currentPayroll?.schoolGrossAmount ?? (
+    currentPayroll
+      ? Math.max(0, totalTuitionGross - (currentPayroll.grossAmount - (currentPayroll.bookRevenue || 0)))
+      : 0
+  );
+  const effectiveSchoolRate = totalTuitionGross > 0
+    ? Math.round((schoolShareAmount / totalTuitionGross) * 100)
+    : Math.max(0, 100 - percentage);
 
   const sessionColumns: Column[] = [
     { header: t("colDateTime"), accessor: "startsAt" },
@@ -545,8 +550,8 @@ export default function TeacherPayrollSection({
               <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200/80 flex flex-col justify-between shadow-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-blue-900 font-semibold">{t("schoolShareTitle")}</span>
-                  <Badge variant="primary" size="sm">
-                    {100 - percentage}%
+                  <Badge variant="primary" size="sm" title={`${formatDZD(schoolShareAmount)} / ${formatDZD(totalTuitionGross)}`}>
+                    {effectiveSchoolRate}%
                   </Badge>
                 </div>
                 <div className="mt-2 flex items-baseline gap-1">
@@ -610,21 +615,65 @@ export default function TeacherPayrollSection({
                         <th className="p-2.5 text-center">{locale === "ar" ? "حصص التدريس" : "Séances de cours"}</th>
                         <th className="p-2.5 text-center text-blue-900 font-bold bg-blue-50/50">{locale === "ar" ? "الحصص المستحقة" : "Séances payables"}</th>
                         <th className="p-2.5 text-center text-orange-900 bg-orange-50/40">{locale === "ar" ? "حصص مجانية" : "Séances gratuites"}</th>
-                        <th className="p-2.5 text-end font-bold">{locale === "ar" ? "المبلغ المستحق" : "Montant brut"}</th>
+                        <th className="p-2.5 text-center">{locale === "ar" ? "النسبة المطبقة" : "Taux appliqué"}</th>
+                        <th className="p-2.5 text-end font-bold text-success-text">{locale === "ar" ? "حصة الأستاذ" : "Part Enseignant"}</th>
+                        <th className="p-2.5 text-end font-bold text-blue-800">{locale === "ar" ? "حصة المدرسة" : "Part École"}</th>
+                        <th className="p-2.5 text-end font-bold text-gray-900">{locale === "ar" ? "إجمالي الرسوم" : "Total Scolarité"}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {currentPayroll.groupBreakdown.map((g, idx) => (
-                        <tr key={idx} className="border-b border-border/50 hover:bg-surface-subtle/60 transition-colors">
-                          <td className="p-2.5 font-bold text-gray-900">{g.className}</td>
-                          <td className="p-2.5 text-muted">{g.branchName}</td>
-                          <td className="p-2.5 text-center font-mono font-semibold">{g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount)}</td>
-                          <td className="p-2.5 text-center font-mono font-bold text-blue-900 bg-blue-50/20 text-sm">{g.payableLessonsCount ?? g.paidSessionsCount}</td>
-                          <td className="p-2.5 text-center font-mono text-orange-800 bg-orange-50/20">{g.freeSessionsCount}</td>
-                          <td className="p-2.5 text-end font-mono font-bold text-success-text">{formatDZD(g.amount)}</td>
-                        </tr>
-                      ))}
+                      {currentPayroll.groupBreakdown.map((g, idx) => {
+                        const gRate = g.appliedPercentage ?? percentage;
+                        const isCustom = g.appliedPercentage !== undefined && g.appliedPercentage !== percentage;
+                        return (
+                          <tr key={idx} className="border-b border-border/50 hover:bg-surface-subtle/60 transition-colors">
+                            <td className="p-2.5 font-bold text-gray-900">{g.className}</td>
+                            <td className="p-2.5 text-muted">{g.branchName}</td>
+                            <td className="p-2.5 text-center font-mono font-semibold">{g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount)}</td>
+                            <td className="p-2.5 text-center font-mono font-bold text-blue-900 bg-blue-50/20 text-sm">{g.payableLessonsCount ?? g.paidSessionsCount}</td>
+                            <td className="p-2.5 text-center font-mono text-orange-800 bg-orange-50/20">{g.freeSessionsCount}</td>
+                            <td className="p-2.5 text-center">
+                              <Badge variant={isCustom ? "success" : "neutral"} size="sm" className="font-mono font-semibold">
+                                {gRate}% / {100 - gRate}%
+                              </Badge>
+                            </td>
+                            <td className="p-2.5 text-end font-mono font-bold text-success-text">{formatDZD(g.amount)}</td>
+                            <td className="p-2.5 text-end font-mono font-bold text-blue-800">{formatDZD(g.schoolAmount || 0)}</td>
+                            <td className="p-2.5 text-end font-mono font-semibold text-gray-800">{formatDZD(g.tuitionGross || 0)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
+                    {currentPayroll.groupBreakdown.length > 1 && (
+                      <tfoot>
+                        <tr className="bg-surface-subtle font-bold border-t-2 border-border/80 text-gray-900">
+                          <td className="p-2.5" colSpan={2}>{locale === "ar" ? "المجموع الكلي" : "Total général"}</td>
+                          <td className="p-2.5 text-center font-mono">
+                            {currentPayroll.groupBreakdown.reduce((s, g) => s + (g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount)), 0)}
+                          </td>
+                          <td className="p-2.5 text-center font-mono text-blue-900 bg-blue-50/40 text-sm">
+                            {Math.round(currentPayroll.groupBreakdown.reduce((s, g) => s + (g.payableLessonsCount ?? g.paidSessionsCount ?? 0), 0) * 100) / 100}
+                          </td>
+                          <td className="p-2.5 text-center font-mono text-orange-800 bg-orange-50/30">
+                            {currentPayroll.groupBreakdown.reduce((s, g) => s + (g.freeSessionsCount ?? 0), 0)}
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <Badge variant="primary" size="sm" className="font-mono font-bold">
+                              {100 - effectiveSchoolRate}% / {effectiveSchoolRate}%
+                            </Badge>
+                          </td>
+                          <td className="p-2.5 text-end font-mono text-success-text font-bold">
+                            {formatDZD(currentPayroll.groupBreakdown.reduce((s, g) => s + (g.amount ?? 0), 0))}
+                          </td>
+                          <td className="p-2.5 text-end font-mono text-blue-800 font-bold">
+                            {formatDZD(currentPayroll.groupBreakdown.reduce((s, g) => s + (g.schoolAmount ?? 0), 0))}
+                          </td>
+                          <td className="p-2.5 text-end font-mono text-gray-900 font-bold">
+                            {formatDZD(currentPayroll.groupBreakdown.reduce((s, g) => s + (g.tuitionGross ?? 0), 0))}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
                   </table>
                 </div>
               </div>
