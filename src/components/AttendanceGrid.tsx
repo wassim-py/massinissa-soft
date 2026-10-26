@@ -138,9 +138,11 @@ function BalanceBadge({ balance, locale }: { balance: StudentBalanceInfo; locale
             size="sm"
             withDot
             className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
-            title={locale === "ar" ? `الرصيد المتبقي: ${net} حصة` : `Solde restant : ${net} séance`}
+            title={balance.hasPayerSibling ? (locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)") : locale === "ar" ? `الرصيد المتبقي: ${net} حصة` : `Solde restant : ${net} séance`}
         >
-            {net < 0
+            {balance.hasPayerSibling
+                ? (locale === "ar" ? "غير مدفوع (أخ)" : "Non payé (Fratrie)")
+                : net < 0
                 ? (locale === "ar" ? `${net} حصة (دين)` : `${net} séances (dette)`)
                 : (locale === "ar" ? "0 حصة" : "0 séance")}
         </Badge>

@@ -10,7 +10,12 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
 import { getActiveTrimester, getFixedInscriptionFeeAction, getFormationInscriptionFeeAction } from "@/lib/configurationActions";
-import { computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
+import {
+  computeStudentConsumedSessions,
+  computeStudentCreditAndSessions,
+  resolvePayerCredit,
+  computeEnrollmentInscriptionStatus,
+} from "@/lib/studentBilling";
 import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
 
 // This is the Server Component that fetches all the necessary data for taking attendance.
@@ -490,7 +495,13 @@ const TakeAttendancePage = async (
             where: { classId: { in: allClassIds } },
             include: {
               transfersFrom: true,
-              transfersTo: true,
+              transfersTo: {
+                include: {
+                  fromEnrollment: {
+                    include: { class: true },
+                  },
+                },
+              },
               class: { select: { id: true, pricePerCycle: true, isFormation: true } },
             },
           },
@@ -620,7 +631,13 @@ const TakeAttendancePage = async (
           enrollments: {
             include: {
               transfersFrom: true,
-              transfersTo: true,
+              transfersTo: {
+                include: {
+                  fromEnrollment: {
+                    include: { class: true },
+                  },
+                },
+              },
               class: { select: { id: true, pricePerCycle: true, isFormation: true } },
             },
           },
@@ -700,36 +717,37 @@ const TakeAttendancePage = async (
     }
 
     const isTargetFormation = Boolean(classesMap.get(studentClassId)?.isFormation);
-    const totalInscPaidThisClass = paidInscByClass.get(studentClassId) || 0;
-    const isInscriptionPaid = totalInscPaidThisClass > 0;
-    const hasPaidThreeInscriptions = isTargetFormation ? false : paidInscByClass.size >= 3;
-    const isOwnerWaived = Boolean(enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged);
-    const isAutoWaived = Boolean(
-      !isTargetFormation && (
-        (enrollment && !enrollment.inscriptionFeeCharged) ||
-        hasPaidThreeInscriptions ||
-        effectivePayerStatus === "NON_PAYER"
-      )
-    );
-    const inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" = isInscriptionPaid
+    const paidInscRegularClassIds = new Set<number>();
+    paidInscByClass.forEach((amount, cid) => {
+      if (amount > 0) paidInscRegularClassIds.add(cid);
+    });
+
+    const inscStatusRes = computeEnrollmentInscriptionStatus({
+      enrollment,
+      classData: { id: studentClassId, isFormation: isTargetFormation },
+      vouchers: details?.vouchers || [],
+      paidInscClassIds: paidInscRegularClassIds,
+    });
+
+    const inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" = inscStatusRes.isInscriptionPaid
       ? "PAID"
-      : isOwnerWaived || isAutoWaived
+      : inscStatusRes.isInscriptionWaived
       ? "WAIVED"
       : "UNPAID";
+
     const enrollmentStatus = enrollment?.status || "ACTIVE";
     const payerStudentId = details?.family?.payerStudentId;
     const hasPayerSibling = Boolean(payerStudentId && payerStudentId !== s.id);
+    let isPayerActiveAndPaid = false;
     let payerSessionsRemaining: number | undefined = undefined;
     if (hasPayerSibling && payerStudentId) {
       const payerObj = allRelevantStudentsMap.get(payerStudentId);
       if (payerObj) {
         const resolved = resolvePayerCredit({
           payerStudent: payerObj,
-          classId: studentClassId,
-          classPricePerCycle: Number(studentClass?.pricePerCycle || 0),
-          isFormation: Boolean(studentClass?.isFormation),
         });
         if (resolved) {
+          isPayerActiveAndPaid = resolved.isPayerActiveAndPaid;
           payerSessionsRemaining = resolved.netSessions;
         }
       }
@@ -792,6 +810,7 @@ const TakeAttendancePage = async (
       enrollmentStatus,
       isSuspended: isSuspendedOrInactive,
       isRefunded,
+      isPayerActiveAndPaid,
       payerSessionsRemaining,
       vouchers: details?.vouchers || [],
       attendances: sAttendances,

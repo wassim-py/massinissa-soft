@@ -3,13 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider = "postgresql"
 }
 
 model Branch {
-  id                                                  Int                 @id @default(autoincrement())
-  name                                                String              @unique
-  address                                             String              @default("")
+  id                                                  Int                    @id @default(autoincrement())
+  name                                                String                 @unique
+  address                                             String                 @default("")
   phone                                               String?
   manager                                             String?
   AuditLog                                            AuditLog[]
@@ -22,8 +22,8 @@ model Branch {
   students                                            Student[]
   TeacherBranch                                       TeacherBranch[]
   UserProfile                                         UserProfile[]
-  VoucherSeries_VoucherSeries_issuingBranchIdToBranch VoucherSeries[]     @relation("VoucherSeries_issuingBranchIdToBranch")
-  VoucherSeries_VoucherSeries_targetBranchIdToBranch  VoucherSeries[]     @relation("VoucherSeries_targetBranchIdToBranch")
+  VoucherSeries_VoucherSeries_issuingBranchIdToBranch VoucherSeries[]        @relation("VoucherSeries_issuingBranchIdToBranch")
+  VoucherSeries_VoucherSeries_targetBranchIdToBranch  VoucherSeries[]        @relation("VoucherSeries_targetBranchIdToBranch")
   Workshop                                            Workshop[]
   bookDrops                                           BookDrop[]
   missingMoney                                        MissingMoney[]
@@ -32,35 +32,37 @@ model Branch {
   staffMembers                                        StaffMember[]
   biometricDevices                                    BiometricDevice[]
   biometricScanLogs                                   BiometricScanLog[]
+  whatsAppNotifications                               WhatsAppNotification[]
 }
 
 model Student {
-  id                                    String                @id
-  globalNumber                          Int                   @unique
-  name                                  String
-  createdAt                             DateTime              @default(now())
-  familyId                              Int?
-  registeredBranchId                    Int
-  phone                                 String?
-  birthday                              DateTime?
-  address                               String?
-  sex                                   String?               @default("MALE")
-  payerStatus                           String                @default("NORMAL")
-  parentPhoneNumbers                    ParentPhoneNumber[]
-  attendances                           Attendance[]
-  enrollments                           Enrollment[]
-  payerOfFamily                         Family?               @relation("FamilyPayer")
-  LevelTest                             LevelTest[]
-  family                                Family?               @relation("FamilyStudents", fields: [familyId], references: [id])
-  registeredBranch                      Branch                @relation(fields: [registeredBranchId], references: [id])
-  vouchers                              Voucher[]
-  WorkshopAttendance                    WorkshopAttendance[]
-  WorkshopParticipant                   WorkshopParticipant[]
-  bookCopiesReceived                    BookCopyDistribution[]
-  bookReceipts                          BookReceipt[]
-  catchUpAttendances                    CatchUpAttendance[]
-  fingerprints                          StudentFingerprint[]
-  biometricScanLogs                     BiometricScanLog[]
+  id                    String                 @id
+  globalNumber          Int                    @unique
+  name                  String
+  createdAt             DateTime               @default(now())
+  familyId              Int?
+  registeredBranchId    Int
+  phone                 String?
+  birthday              DateTime?
+  address               String?
+  sex                   String?                @default("MALE")
+  payerStatus           String                 @default("NORMAL")
+  parentPhoneNumbers    ParentPhoneNumber[]
+  attendances           Attendance[]
+  enrollments           Enrollment[]
+  payerOfFamily         Family?                @relation("FamilyPayer")
+  LevelTest             LevelTest[]
+  family                Family?                @relation("FamilyStudents", fields: [familyId], references: [id])
+  registeredBranch      Branch                 @relation(fields: [registeredBranchId], references: [id])
+  vouchers              Voucher[]
+  WorkshopAttendance    WorkshopAttendance[]
+  WorkshopParticipant   WorkshopParticipant[]
+  bookCopiesReceived    BookCopyDistribution[]
+  bookReceipts          BookReceipt[]
+  catchUpAttendances    CatchUpAttendance[]
+  fingerprints          StudentFingerprint[]
+  biometricScanLogs     BiometricScanLog[]
+  whatsAppNotifications WhatsAppNotification[]
 
   @@index([registeredBranchId])
   @@index([familyId])
@@ -94,31 +96,32 @@ model Teacher {
 }
 
 model Class {
-  id                Int                @id @default(autoincrement())
-  name              String
-  ageGroup          String?
-  bookFee           Decimal?
-  branchId          Int
-  teacherId         String?
-  levelId           Int?
-  formationLevelId  Int?
-  hasBooks          Boolean            @default(false)
-  inscriptionFee    Decimal
-  isFormation       Boolean            @default(false)
-  pricePerCycle     Decimal?
-  isCompleted       Boolean            @default(false)
-  completedAt       DateTime?
-  branch            Branch             @relation(fields: [branchId], references: [id])
-  teacher           Teacher?           @relation(fields: [teacherId], references: [id])
-  level             Level?             @relation(fields: [levelId], references: [id])
-  FormationLevel    FormationLevel?    @relation(fields: [formationLevelId], references: [id])
-  enrollments       Enrollment[]
-  lessons           Lesson[]
-  LevelTest         LevelTest[]
-  vouchers          Voucher[]
-  photocopyCharges  PhotocopyCharge[]
-  teacherClassRates TeacherClassRate[]
-  lessonGroups      LessonGroup[]
+  id                    Int                    @id @default(autoincrement())
+  name                  String
+  ageGroup              String?
+  bookFee               Decimal?
+  branchId              Int
+  teacherId             String?
+  levelId               Int?
+  formationLevelId      Int?
+  hasBooks              Boolean                @default(false)
+  inscriptionFee        Decimal
+  isFormation           Boolean                @default(false)
+  pricePerCycle         Decimal?
+  isCompleted           Boolean                @default(false)
+  completedAt           DateTime?
+  branch                Branch                 @relation(fields: [branchId], references: [id])
+  teacher               Teacher?               @relation(fields: [teacherId], references: [id])
+  level                 Level?                 @relation(fields: [levelId], references: [id])
+  FormationLevel        FormationLevel?        @relation(fields: [formationLevelId], references: [id])
+  enrollments           Enrollment[]
+  lessons               Lesson[]
+  LevelTest             LevelTest[]
+  vouchers              Voucher[]
+  photocopyCharges      PhotocopyCharge[]
+  teacherClassRates     TeacherClassRate[]
+  lessonGroups          LessonGroup[]
+  whatsAppNotifications WhatsAppNotification[]
 
   @@index([branchId])
   @@index([teacherId])
@@ -129,26 +132,27 @@ model Class {
 }
 
 model Lesson {
-  id          Int          @id @default(autoincrement())
-  classId     Int
-  teacherId   String
-  classroomId Int
-  branchId    Int
-  endsAt      DateTime
-  extraFee    Decimal?
-  isCatchUp   Boolean      @default(false)
-  isExtra     Boolean      @default(false)
-  isFree      Boolean      @default(false)
-  isTeacherAbsent Boolean  @default(false)
-  startsAt    DateTime
-  attendances Attendance[]
-  lessonGroups LessonGroup[]
-  missedByCatchUps    CatchUpAttendance[] @relation("MissedLesson")
-  catchUpVisitsHosted CatchUpAttendance[] @relation("CatchUpLessonAttended")
-  branch      Branch       @relation(fields: [branchId], references: [id])
-  class       Class        @relation(fields: [classId], references: [id])
-  classroom   Classroom    @relation(fields: [classroomId], references: [id])
-  teacher     Teacher      @relation(fields: [teacherId], references: [id])
+  id                    Int                    @id @default(autoincrement())
+  classId               Int
+  teacherId             String
+  classroomId           Int
+  branchId              Int
+  endsAt                DateTime
+  extraFee              Decimal?
+  isCatchUp             Boolean                @default(false)
+  isExtra               Boolean                @default(false)
+  isFree                Boolean                @default(false)
+  isTeacherAbsent       Boolean                @default(false)
+  startsAt              DateTime
+  attendances           Attendance[]
+  lessonGroups          LessonGroup[]
+  missedByCatchUps      CatchUpAttendance[]    @relation("MissedLesson")
+  catchUpVisitsHosted   CatchUpAttendance[]    @relation("CatchUpLessonAttended")
+  branch                Branch                 @relation(fields: [branchId], references: [id])
+  class                 Class                  @relation(fields: [classId], references: [id])
+  classroom             Classroom              @relation(fields: [classroomId], references: [id])
+  teacher               Teacher                @relation(fields: [teacherId], references: [id])
+  whatsAppNotifications WhatsAppNotification[]
 
   @@index([branchId, startsAt])
   @@index([classId, startsAt])
@@ -168,18 +172,18 @@ model Attendance {
   lesson        Lesson  @relation(fields: [lessonId], references: [id])
   student       Student @relation(fields: [studentId], references: [id])
 
+  @@unique([studentId, lessonId])
   @@index([lessonId, status])
   @@index([studentId])
   @@index([lessonId])
-  @@unique([studentId, lessonId])
 }
 
 model LessonGroup {
-  id        Int    @id @default(autoincrement())
-  lessonId  Int
-  classId   Int
-  lesson    Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  class     Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
+  id       Int    @id @default(autoincrement())
+  lessonId Int
+  classId  Int
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  class    Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
 
   @@unique([lessonId, classId])
   @@index([classId])
@@ -377,14 +381,14 @@ model Family {
 }
 
 model FormationLevel {
-  id            Int         @id @default(autoincrement())
-  languageId    Int
-  levelNumber   Int
-  name          String
-  lumpSumPrice  Decimal
-  Class         Class[]
-  Language      Language    @relation(fields: [languageId], references: [id])
-  LevelTest     LevelTest[]
+  id           Int         @id @default(autoincrement())
+  languageId   Int
+  levelNumber  Int
+  name         String
+  lumpSumPrice Decimal
+  Class        Class[]
+  Language     Language    @relation(fields: [languageId], references: [id])
+  LevelTest    LevelTest[]
 }
 
 model Language {
@@ -568,13 +572,13 @@ model Voucher {
 }
 
 model Refund {
-  id          Int      @id @default(autoincrement())
-  voucherId   Int
-  amount      Decimal
-  reason      String
-  refundedBy  String
-  refundedAt  DateTime @default(now())
-  voucher     Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  id         Int      @id @default(autoincrement())
+  voucherId  Int
+  amount     Decimal
+  reason     String
+  refundedBy String
+  refundedAt DateTime @default(now())
+  voucher    Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
 
   @@index([voucherId])
   @@index([refundedAt])
@@ -595,16 +599,16 @@ model VoucherEdit {
 }
 
 model VoucherSeries {
-  id                                           Int       @id @default(autoincrement())
-  issuingBranchId                              Int
-  scope                                        String
-  levelId                                      Int?
-  targetBranchId                               Int?
-  currentNumber                                Int       @default(0)
-  vouchers                                     Voucher[]
-  issuingBranch                                Branch    @relation("VoucherSeries_issuingBranchIdToBranch", fields: [issuingBranchId], references: [id])
-  targetBranch                                 Branch?   @relation("VoucherSeries_targetBranchIdToBranch", fields: [targetBranchId], references: [id])
-  level                                        Level?    @relation(fields: [levelId], references: [id])
+  id              Int       @id @default(autoincrement())
+  issuingBranchId Int
+  scope           String
+  levelId         Int?
+  targetBranchId  Int?
+  currentNumber   Int       @default(0)
+  vouchers        Voucher[]
+  issuingBranch   Branch    @relation("VoucherSeries_issuingBranchIdToBranch", fields: [issuingBranchId], references: [id])
+  targetBranch    Branch?   @relation("VoucherSeries_targetBranchIdToBranch", fields: [targetBranchId], references: [id])
+  level           Level?    @relation(fields: [levelId], references: [id])
 }
 
 model Level {
@@ -703,7 +707,7 @@ model MissingMoney {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  branch      Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
   @@index([branchId, date])
   @@index([status])
@@ -722,7 +726,7 @@ model SurplusMoney {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  branch      Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
   @@index([branchId, date])
   @@index([status])
@@ -746,7 +750,7 @@ model DailyExpense {
 
 model CaisseNoireTransaction {
   id          Int      @id @default(autoincrement())
-  type        String   // "DEPOSIT" | "WITHDRAWAL"
+  type        String // "DEPOSIT" | "WITHDRAWAL"
   amount      Decimal
   description String
   date        DateTime @default(now())
@@ -779,9 +783,9 @@ model StaffMember {
 model StaffPayroll {
   id            Int         @id @default(autoincrement())
   staffMemberId Int
-  month         Int         // 1-12
-  year          Int         // e.g. 2026
-  amount        Decimal     // base salary
+  month         Int // 1-12
+  year          Int // e.g. 2026
+  amount        Decimal // base salary
   advance       Decimal     @default(0) // avances sur salaire
   bonus         Decimal     @default(0) // prime / bonus cash
   status        String      @default("PAID") // "PAID" | "PENDING"
@@ -800,8 +804,8 @@ model StaffAdvance {
   staffMemberId Int
   amount        Decimal
   date          DateTime    @default(now())
-  month         Int?        // target payroll month (1-12)
-  year          Int?        // target payroll year (e.g. 2026)
+  month         Int? // target payroll month (1-12)
+  year          Int? // target payroll year (e.g. 2026)
   notes         String?
   recordedBy    String
   createdAt     DateTime    @default(now())
@@ -860,7 +864,7 @@ model BiometricScanLog {
   classroomName    String?
   lessonStartsAt   DateTime?
   lessonEndsAt     DateTime?
-  status           String           // "SUCCESS" | "NO_CREDITS" | "NO_UPCOMING_GROUP" | "UNRECOGNIZED" | "DUPLICATE"
+  status           String // "SUCCESS" | "NO_CREDITS" | "NO_UPCOMING_GROUP" | "UNRECOGNIZED" | "DUPLICATE"
   remainingCredits Int?
   nextLessonInfo   String?
   isResolved       Boolean          @default(false)
@@ -874,3 +878,119 @@ model BiometricScanLog {
   @@index([studentId, lessonId])
 }
 
+// =================================================================
+// WHATSAPP INTEGRATION & CONFLICT PROTECTION MODELS
+// =================================================================
+
+enum WhatsAppMode {
+  OFF
+  MANUAL
+  AUTO
+}
+
+enum WhatsAppTriggerType {
+  ABSENCE
+  ABSENCE_CORRECTION
+  CREDIT_ZERO_INSTANT
+  CREDIT_ZERO_PRE_LESSON_24H
+  SPECIAL_LESSON_NEW
+  SPECIAL_LESSON_UPDATE
+  SPECIAL_LESSON_CANCELLED
+}
+
+enum WhatsAppRecipientType {
+  STUDENT_PRIMARY
+  PARENT_PHONE
+  FAMILY_PAYER
+}
+
+enum WhatsAppNotificationStatus {
+  PENDING_MANUAL
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  REVOKED_PAYMENT
+  REVOKED_CORRECTED
+  SUPERSEDED
+  FAILED_NO_WHATSAPP
+  FAILED_ERROR
+  DISMISSED
+}
+
+model WhatsAppConfig {
+  id                         String       @id @default("GLOBAL")
+  mode                       WhatsAppMode @default(OFF)
+  isConnected                Boolean      @default(false)
+  connectedPhone             String?
+  connectedName              String?
+  batteryLevel               Int?
+  lastConnectedAt            DateTime?
+  lastDisconnectedAt         DateTime?
+  enableAbsenceTrigger       Boolean      @default(true)
+  enableCreditZeroTrigger    Boolean      @default(true)
+  enablePreLesson24hTrigger  Boolean      @default(true)
+  enableSpecialLessonTrigger Boolean      @default(true)
+  templateAbsenceAr          String?      @db.Text
+  templateAbsenceFr          String?      @db.Text
+  templateAbsenceCorrectedAr String?      @db.Text
+  templateCreditZeroAr       String?      @db.Text
+  templateCreditZeroFr       String?      @db.Text
+  templatePreLesson24hAr     String?      @db.Text
+  templatePreLesson24hFr     String?      @db.Text
+  templateSpecialLessonNewAr String?      @db.Text
+  templateSpecialLessonUpdAr String?      @db.Text
+  templateSpecialLessonCanAr String?      @db.Text
+  minIntervalSeconds         Int          @default(4)
+  maxIntervalSeconds         Int          @default(8)
+  quietHoursEnabled          Boolean      @default(true)
+  quietHoursStart            String       @default("22:00")
+  quietHoursEnd              String       @default("08:00")
+  updatedAt                  DateTime     @updatedAt
+}
+
+model WhatsAppNotification {
+  id             String                     @id @default(uuid())
+  branchId       Int
+  studentId      String
+  lessonId       Int?
+  classId        Int?
+  revisionNumber Int                        @default(1)
+  triggerType    WhatsAppTriggerType
+  recipientType  WhatsAppRecipientType?
+  recipientPhone String?
+  recipientName  String?
+  messageContent String                     @db.Text
+  status         WhatsAppNotificationStatus @default(PENDING_MANUAL)
+  contextData    Json?
+  attemptCount   Int                        @default(0)
+  errorMessage   String?
+  checkedNumbers Json?
+  triggeredBy    String
+  approvedBy     String?
+  approvedAt     DateTime?
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  lesson  Lesson? @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  class   Class?  @relation(fields: [classId], references: [id], onDelete: SetNull)
+
+  @@index([branchId, status])
+  @@index([studentId, triggerType])
+  @@index([status, createdAt])
+  @@index([lessonId, revisionNumber])
+}
+
+model WhatsAppNumberCache {
+  phone         String   @id
+  hasWhatsApp   Boolean
+  jid           String?
+  lastCheckedAt DateTime @default(now())
+
+  @@index([lastCheckedAt])
+}

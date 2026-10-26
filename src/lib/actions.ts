@@ -1,3 +1,9 @@
+import {
+  handleAttendanceWhatsAppTrigger,
+  handleCreditZeroInstantTrigger,
+  handleSpecialLessonWhatsAppTrigger,
+} from "./whatsappTriggers";
+import { verifyCreditIsStillZeroJit } from "./whatsappUtils";
 "use server";
 
 import { revalidatePath } from "next/cache";
@@ -1554,6 +1560,18 @@ export const createLesson = async (
       }
     }
 
+    if (isSpecialLesson && newLesson?.id) {
+      try {
+        await handleSpecialLessonWhatsAppTrigger({
+          lessonId: newLesson.id,
+          actionType: "NEW",
+          adminId: session.userId || "admin",
+        });
+      } catch (waErr) {
+        console.error("[WA Trigger] Special lesson create trigger failed:", waErr);
+      }
+    }
+
     safeRevalidatePath("/list/lessons");
     for (const cid of allAssociatedClassIds) {
       safeRevalidatePath(`/list/attendance/class/${cid}`);
@@ -1581,7 +1599,7 @@ export const updateLesson = async (
 
     // 1. Check existing lesson and permission
     const existing = await prisma.$queryRaw<Array<{ branchId: number; classId: number; classroomId: number; classBranchId: number }>>`
-      SELECT l."branchId", l."classId", l."classroomId", c."branchId" as "classBranchId"
+      SELECT l."branchId", l."classId", l."classroomId", l."startsAt", l."endsAt", c."branchId" as "classBranchId"
       FROM "Lesson" l
       LEFT JOIN "Class" c ON c.id = l."classId"
       WHERE l.id = ${lessonId} LIMIT 1
@@ -1850,6 +1868,23 @@ export const updateLesson = async (
       console.warn("Could not sync announcement on lesson update:", annErr);
     }
 
+    if (isSpecialLesson && updatedLesson?.id) {
+      try {
+        await handleSpecialLessonWhatsAppTrigger({
+          lessonId: updatedLesson.id,
+          actionType: "UPDATE",
+          adminId: session.userId || "admin",
+          oldDetails: {
+            startsAt: (existing[0] as any).startsAt || startsAt,
+            endsAt: (existing[0] as any).endsAt || endsAt,
+            classroomId: existing[0].classroomId,
+          },
+        });
+      } catch (waErr) {
+        console.error("[WA Trigger] Special lesson update trigger failed:", waErr);
+      }
+    }
+
     safeRevalidatePath("/list/lessons");
     for (const cid of allAssociatedClassIds) {
       safeRevalidatePath(`/list/attendance/class/${cid}`);
@@ -1900,6 +1935,18 @@ export const deleteLesson = async (
       (existing.class?.branchId && canUserAccessBranch(session.rawRole, session.branchIds, existing.class.branchId));
     if (!hasBranchPerm) {
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بحذف حصة في هذا الفرع." };
+    }
+
+    if (existing.isExtra || existing.isCatchUp || existing.isFree) {
+      try {
+        await handleSpecialLessonWhatsAppTrigger({
+          lessonId: id,
+          actionType: "CANCEL",
+          adminId: session.userId || "admin",
+        });
+      } catch (waErr) {
+        console.error("[WA Trigger] Special lesson cancel trigger failed:", waErr);
+      }
     }
 
     const siblingIds =
@@ -2402,6 +2449,39 @@ export const saveAttendance = async (
     safeRevalidatePath("/list/formations");
   }
   safeRevalidatePath("/list/students");
+
+  try {
+    const absentStudentIds = attendanceEntries
+      .filter(([_, v]) => v === "ABSENT")
+      .map(([k]) => k.substring(k.indexOf("[") + 1, k.indexOf("]")));
+    const presentStudentIds = attendanceEntries
+      .filter(([_, v]) => v === "PRESENT")
+      .map(([k]) => k.substring(k.indexOf("[") + 1, k.indexOf("]")));
+
+    await handleAttendanceWhatsAppTrigger({
+      lessonId,
+      absentStudentIds,
+      presentStudentIds,
+      adminId,
+    });
+
+    if (attendanceBranchId && lessonInfo.classId) {
+      for (const sId of presentStudentIds) {
+        const isZero = await verifyCreditIsStillZeroJit(sId, lessonInfo.classId);
+        if (isZero) {
+          await handleCreditZeroInstantTrigger({
+            studentId: sId,
+            classId: lessonInfo.classId,
+            branchId: attendanceBranchId,
+            adminId,
+          });
+        }
+      }
+    }
+  } catch (waErr) {
+    console.error("[WA Trigger] Attendance save trigger failed:", waErr);
+  }
+
   return { success: true, error: false, message: "Présences et distribution des livres enregistrées avec succès / تم حفظ بيانات الحضور وتوزيع الكتب بنجاح." };
 
   } catch (err: any) {
@@ -2503,6 +2583,29 @@ export const markSingleAttendanceAction = async (input: {
         },
       });
     });
+
+    try {
+      await handleAttendanceWhatsAppTrigger({
+        lessonId: input.lessonId,
+        absentStudentIds: input.status === "ABSENT" ? [input.studentId] : [],
+        presentStudentIds: input.status === "PRESENT" ? [input.studentId] : [],
+        adminId,
+      });
+
+      if (input.status === "PRESENT" && attendanceBranchId && lessonInfo?.classId) {
+        const isZero = await verifyCreditIsStillZeroJit(input.studentId, lessonInfo.classId);
+        if (isZero) {
+          await handleCreditZeroInstantTrigger({
+            studentId: input.studentId,
+            classId: lessonInfo.classId,
+            branchId: attendanceBranchId,
+            adminId,
+          });
+        }
+      }
+    } catch (waErr) {
+      console.error("[WA Trigger] Single attendance trigger failed:", waErr);
+    }
 
     if (lessonInfo?.classId) {
       try {
@@ -4173,6 +4276,7 @@ export async function checkStudentInscriptionExemptionAction({
   success: boolean;
   isAlreadyPaidInThisClass: boolean;
   hasPaidThreeInscriptions: boolean;
+  isEnrollmentWaived?: boolean;
   paidGroupsCount: number;
   configuredInscriptionFee: number;
 }> {
@@ -4201,33 +4305,51 @@ export async function checkStudentInscriptionExemptionAction({
       studentId
     );
 
-    const totalPaidInThisClass = classPaymentsMap.get(classId) || 0;
-    const isAlreadyPaidInThisClass = totalPaidInThisClass > 0;
-    const paidGroupsCount = paidClassIds.size;
-
     const enrollment = await prisma.enrollment.findFirst({
       where: { studentId, classId },
       select: {
         inscriptionFeeCharged: true,
         feeOverriddenByOwner: true,
         payerStatus: true,
+        transfersTo: {
+          select: {
+            fromEnrollment: {
+              select: {
+                classId: true,
+              },
+            },
+          },
+        },
       },
     });
+
+    let isTransferredPayment = false;
+    if (enrollment?.transfersTo && enrollment.transfersTo.length > 0) {
+      isTransferredPayment = enrollment.transfersTo.some(
+        (t) => (classPaymentsMap.get(t.fromEnrollment.classId) || 0) > 0
+      );
+    }
+
+    const totalPaidInThisClass = classPaymentsMap.get(classId) || 0;
+    const isAlreadyPaidInThisClass = totalPaidInThisClass > 0 || isTransferredPayment;
+    const paidGroupsCount = paidClassIds.size;
 
     // Formations have their separated inscription fees and are NOT affected by waiving logic (more than 3 groups)
     const isEnrollmentWaived = Boolean(
       !isFormation &&
         enrollment &&
-        (!enrollment.inscriptionFeeCharged || enrollment.payerStatus === "NON_PAYER")
+        ((enrollment.feeOverriddenByOwner && !enrollment.inscriptionFeeCharged) ||
+          enrollment.payerStatus === "NON_PAYER")
     );
     const hasPaidThreeInscriptions = isFormation
       ? false
-      : paidGroupsCount >= 3 || isEnrollmentWaived;
+      : paidGroupsCount >= 3;
 
     return {
       success: true,
       isAlreadyPaidInThisClass,
       hasPaidThreeInscriptions,
+      isEnrollmentWaived,
       paidGroupsCount,
       configuredInscriptionFee: requiredFee,
     };
@@ -5498,7 +5620,7 @@ export const transferEnrollmentCredit = async (
             studentId: studentId,
             classId: toClassId,
             academicYearId: fromEnrollment.academicYearId,
-            inscriptionFeeCharged: false, // Inscription already paid/waived on earlier enrollment
+            inscriptionFeeCharged: true, // Keep true so that transfer-based status check handles payment accurately instead of phantom-waiving
             feeOverriddenByOwner: false,
             status: "ACTIVE",
           },
@@ -7471,14 +7593,16 @@ export const exportToExcel = async (
               (cu: any) => classTarget.lessons.some((l) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId)
             );
 
+            const isSiblingWaived100 = isWaivedSibling && siblingDiscountPct >= 100;
+
             const payerCredit = isWaivedSibling && family?.payerStudent
               ? resolvePayerCredit({
                   payerStudent: family.payerStudent,
-                  classId: classTarget.id,
-                  classPricePerCycle: Number(classTarget.pricePerCycle || 0),
-                  isFormation,
                 })
               : null;
+            const isPayerActiveAndPaid = isWaivedSibling
+              ? Boolean(payerCredit?.isPayerActiveAndPaid)
+              : true;
 
             const teacherClassOverride = (classTarget.teacherClassRates as any[])?.find(
               (tcr: any) => tcr.teacherId === classTarget.teacherId
@@ -7494,8 +7618,9 @@ export const exportToExcel = async (
               isFormation,
               payerStatus: enrPayerStatus,
               siblingDiscountPercentage: siblingDiscountPct,
-              isSiblingWaived: isWaivedSibling && siblingDiscountPct >= 100,
-              payerRemainingCredit: isWaivedSibling ? payerCredit?.netSessions : undefined,
+              isSiblingWaived: isSiblingWaived100,
+              isPayerSiblingPaid: isPayerActiveAndPaid,
+              payerRemainingCredit: isWaivedSibling && !isSiblingWaived100 ? payerCredit?.netSessions : undefined,
               tuitionVouchers,
               transfersIn: enrollment.transfersTo,
               transfersOut: enrollment.transfersFrom,
@@ -7507,12 +7632,18 @@ export const exportToExcel = async (
             });
 
             const consumed = creditMetrics.attendedSessions;
-            const remaining = isWaivedSibling && payerCredit ? payerCredit.netSessions : creditMetrics.netSessions;
+            const remaining = isSiblingWaived100
+              ? 0
+              : isWaivedSibling && payerCredit
+              ? payerCredit.netSessions
+              : creditMetrics.netSessions;
 
             // Status label
             let statusText = "غير دافع";
             if (creditMetrics.isNonPayer) {
               statusText = "معفى من الرسوم";
+            } else if (isSiblingWaived100) {
+              statusText = isPayerActiveAndPaid ? "معفى (أخ دافع)" : "غير دافع (أخ)";
             } else if (creditMetrics.isSchoolFeesOnly) {
               if (remaining >= 2) {
                 statusText = `دافع (${remaining} حصص - حصة المدرسة)`;
@@ -7523,9 +7654,7 @@ export const exportToExcel = async (
               }
             } else if (isWaivedSibling) {
               if (remaining >= 2) {
-                statusText = siblingDiscountPct >= 100
-                  ? "معفى (أخ دافع)"
-                  : `دافع (خصم إخوة ${siblingDiscountPct}%)`;
+                statusText = `دافع (خصم إخوة ${siblingDiscountPct}%)`;
               } else if (remaining === 1) {
                 statusText = `قريب الانتهاء (خصم إخوة ${siblingDiscountPct}%)`;
               } else {
@@ -7870,11 +7999,11 @@ export const exportToExcel = async (
             const payerCredit = isWaivedSibling && family?.payerStudent
                 ? resolvePayerCredit({
                     payerStudent: family.payerStudent,
-                    classId: classData.id,
-                    classPricePerCycle: Number(classData.pricePerCycle || 0),
-                    isFormation: Boolean(classData.isFormation),
                 })
                 : null;
+            const isPayerActiveAndPaid = isWaivedSibling
+                ? Boolean(payerCredit?.isPayerActiveAndPaid)
+                : true;
 
             // Determine row identity fill color
             let rowIdentityFill = C_WHITE;
@@ -7915,7 +8044,8 @@ export const exportToExcel = async (
                 payerStatus: enrPayerStatus,
                 siblingDiscountPercentage: siblingDiscountPct,
                 isSiblingWaived: isSiblingWaived100,
-                payerRemainingCredit: isWaivedSibling ? payerCredit?.netSessions : undefined,
+                isPayerSiblingPaid: isPayerActiveAndPaid,
+                payerRemainingCredit: isWaivedSibling && !isSiblingWaived100 ? payerCredit?.netSessions : undefined,
                 tuitionVouchers,
                 transfersIn: enrollment.transfersTo,
                 transfersOut: enrollment.transfersFrom,
@@ -7926,7 +8056,7 @@ export const exportToExcel = async (
                 teacherPercentage,
             });
 
-            const paidSessionsCount = isNonPayer
+            const paidSessionsCount = isNonPayer || isSiblingWaived100
                 ? 9999
                 : isWaivedSibling && payerCredit
                 ? Math.max(0, payerCredit.netSessions + creditMetrics.attendedSessions)

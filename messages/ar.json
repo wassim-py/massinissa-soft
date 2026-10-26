@@ -93,7 +93,8 @@
     "dailyLedger": "صندوق اليوم",
     "finance": "المالية والرواتب",
     "voucherSeries": "سلاسل الوصولات",
-    "configuration": "إعدادات النظام"
+    "configuration": "إعدادات النظام",
+    "whatsappQueue": "صندوق واتساب"
   },
   "roles": {
     "admin": "مدير",
@@ -1645,13 +1646,11 @@
     "searchVoucherPlaceholder": "بحث باسم التلميذ، رقم الوصل، الفوج...",
     "filterAllTypes": "جميع الأنواع",
     "voucherNumCol": "رقم الوصل",
-    "studentCol": "التلميذ",
     "classAndBranchCol": "الفوج والفرع",
     "paymentTypeCol": "نوع الدفع",
     "dateCol": "التاريخ والوقت",
     "amountCol": "المبلغ",
     "issuerCol": "صادر عن",
-    "statusCol": "الحالة",
     "noPaymentsFound": "لا توجد وصولات دفع لهذه الفترة.",
     "noPaymentsFoundDesc": "قم بتغيير الفترة أو الفلاتر لعرض الوصولات.",
     "filterDayBtn": "عرض هذا اليوم",

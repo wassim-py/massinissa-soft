@@ -27,6 +27,7 @@ const TrimesterSection = dynamic(() => import("./TrimesterSection"), { loading: 
 const LevelSection = dynamic(() => import("./LevelSection"), { loading: SectionLoading });
 const FormationLanguageSection = dynamic(() => import("./FormationLanguageSection"), { loading: SectionLoading });
 const InscriptionFeeSection = dynamic(() => import("./InscriptionFeeSection"), { loading: SectionLoading });
+const WhatsAppSection = dynamic(() => import("./WhatsAppSection"), { loading: SectionLoading });
 import {
   KeyRound,
   Building2,
@@ -36,6 +37,7 @@ import {
   GraduationCap,
   Languages,
   Tag,
+  MessageCircle,
 } from "lucide-react";
 
 interface ConfigurationClientProps {
@@ -74,7 +76,7 @@ export default function ConfigurationClient({
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const validTabs = ["accounts", "branches", "classrooms", "levels", "formationLanguages", "trimesters", "inscriptionFee"];
+  const validTabs = ["accounts", "branches", "classrooms", "levels", "formationLanguages", "trimesters", "inscriptionFee", "whatsapp"];
   const rawTab = searchParams.get("tab") || initialTab || "accounts";
   const currentTab = validTabs.includes(rawTab) ? rawTab : "accounts";
 
@@ -133,6 +135,13 @@ export default function ConfigurationClient({
       icon: Tag,
       count: `${fixedInscriptionFee} / ${formationInscriptionFee} DZD`,
       color: "text-blue-700 bg-blue-50",
+    },
+    {
+      key: "whatsapp",
+      label: "WhatsApp / الربط مع واتساب",
+      icon: MessageCircle,
+      count: "QR & Triggers",
+      color: "text-emerald-700 bg-emerald-50",
     },
   ];
 

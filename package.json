@@ -20,7 +20,8 @@
     "merge:student": "npx tsx scripts/merge-student.ts",
     "merge:scan": "npx tsx scripts/merge-student.ts --scan",
     "credits:manage": "python scripts/manage_student_credits.py",
-    "biometrics:bridge": "npx tsx scripts/zk-k50-bridge.ts"
+    "biometrics:bridge": "npx tsx scripts/zk-k50-bridge.ts",
+    "whatsapp:bridge": "npx tsx scripts/whatsapp-bridge.ts"
   },
   "prisma": {
     "seed": "ts-node --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed.ts"
@@ -31,8 +32,10 @@
     "@hookform/resolvers": "^5.9.1",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react-big-calendar": "^1.16.3",
     "@types/uuid": "^10.0.0",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
     "cloudinary": "^2.7.0",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
@@ -43,7 +46,9 @@
     "next-cloudinary": "^6.18.8",
     "next-intl": "^4.14.2",
     "pg": "^8.23.0",
+    "pino": "^10.4.0",
     "prisma": "^7.10.0",
+    "qrcode": "^1.5.4",
     "react": "19.2.8",
     "react-big-calendar": "^1.20.0",
     "react-calendar": "^6.0.1",

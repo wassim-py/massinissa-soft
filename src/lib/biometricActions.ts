@@ -44,6 +44,7 @@ export interface BiometricScanResult {
   isNonPayer?: boolean;
   isSiblingWaived?: boolean;
   hasPayerSibling?: boolean;
+  inscriptionStatus?: "PAID" | "WAIVED" | "UNPAID" | null;
 }
 
 interface BiometricFeedCacheEntry {
@@ -62,6 +63,7 @@ interface BiometricFeedCacheEntry {
 const globalForBiometricFeed = globalThis as unknown as {
   __biometricFeedCache?: Map<number, BiometricFeedCacheEntry>;
   __biometricLastCleanupAt?: number;
+  __biometricScanDedupCache?: Map<string, { result: { success: boolean; scan: BiometricScanResult }; expiresAt: number }>;
 };
 
 const BIOMETRIC_FEED_CACHE_TTL_MS = 30 * 1000; // 30s in-memory cache when idle (invalidated immediately on scan/action)
@@ -72,6 +74,13 @@ function getBiometricFeedCacheMap(): Map<number, BiometricFeedCacheEntry> {
     globalForBiometricFeed.__biometricFeedCache = new Map();
   }
   return globalForBiometricFeed.__biometricFeedCache;
+}
+
+function getBiometricScanDedupMap(): Map<string, { result: { success: boolean; scan: BiometricScanResult }; expiresAt: number }> {
+  if (!globalForBiometricFeed.__biometricScanDedupCache) {
+    globalForBiometricFeed.__biometricScanDedupCache = new Map();
+  }
+  return globalForBiometricFeed.__biometricScanDedupCache;
 }
 
 function invalidateBiometricFeedCache(branchId?: number | null) {
@@ -177,6 +186,13 @@ export async function processBiometricScan(input: {
   }
 
   const globalNumber = Number(input.globalNumber);
+  const dedupMap = getBiometricScanDedupMap();
+  const dedupKey = `${branchId}-${globalNumber}`;
+  const cachedScan = dedupMap.get(dedupKey);
+  if (cachedScan && Date.now() < cachedScan.expiresAt) {
+    return cachedScan.result;
+  }
+
   const openLessonIdNum = input.openLessonId && !isNaN(Number(input.openLessonId)) ? Number(input.openLessonId) : null;
   const scanDateInfo = getAlgiersDateInfo(scanTime);
   const [sYear, sMonth, sDay] = scanDateInfo.dateStr.split("-").map(Number);
@@ -350,30 +366,30 @@ export async function processBiometricScan(input: {
   const resolvedCurrentWeek = resolveRecurringLessonsForWeek(rawStudentLessons, currentWeekBounds);
   const resolvedNextWeek = resolveRecurringLessonsForWeek(rawStudentLessons, nextWeekBounds);
 
-  const allCandidateLessons = [...resolvedCurrentWeek, ...resolvedNextWeek];
+  // Use slot key (classId-date-time) to collapse recurring template lessons and real dated rows.
+  // CRITICAL: Any actual dated row stored in DB for date D and slot S overrides the recurring template projection!
+  const candidateLessonsBySlot = new Map<string, any>();
+  for (const l of [...resolvedCurrentWeek, ...resolvedNextWeek]) {
+    const dStr = l.instanceDate || getAlgiersDateInfo(l.startsAt).dateStr;
+    const tInfo = getAlgiersDateInfo(l.startsAt);
+    const key = `${l.class.id}-${dStr}-${tInfo.timeStr}`;
+    candidateLessonsBySlot.set(key, l);
+  }
 
-  // Also include any one-off or already-dated lesson instances falling in the range window
   for (const raw of rawStudentLessons) {
     const rawStart = new Date(raw.startsAt).getTime();
     if (rawStart >= rangeStart.getTime() && rawStart <= rangeEnd.getTime()) {
       const rawDateStr = getAlgiersDateInfo(raw.startsAt).dateStr;
-      const alreadyInList = allCandidateLessons.some(
-        (l) => l.id === raw.id && (l.instanceDate === rawDateStr || getAlgiersDateInfo(l.startsAt).dateStr === rawDateStr)
-      );
-      if (!alreadyInList) {
-        allCandidateLessons.push({
-          ...raw,
-          instanceDate: rawDateStr,
-        });
-      }
+      const tInfo = getAlgiersDateInfo(raw.startsAt);
+      const key = `${raw.class.id}-${rawDateStr}-${tInfo.timeStr}`;
+      candidateLessonsBySlot.set(key, {
+        ...raw,
+        instanceDate: rawDateStr,
+      });
     }
   }
 
-  const studentLessons = allCandidateLessons
-    .filter((lesson, index, self) => {
-      const key = `${lesson.id}-${lesson.instanceDate || getAlgiersDateInfo(lesson.startsAt).dateStr}`;
-      return index === self.findIndex((l) => `${l.id}-${l.instanceDate || getAlgiersDateInfo(l.startsAt).dateStr}` === key);
-    })
+  const studentLessons = Array.from(candidateLessonsBySlot.values())
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
   // Helper to test if a lesson physically takes place at the active scan branch.
@@ -425,26 +441,62 @@ export async function processBiometricScan(input: {
       );
       if (openInWindow) {
         matchedLesson = openInWindow;
+      } else {
+        // Also check if open lesson in DB matches one of the candidate classes on today's date
+        try {
+          const openLessonRow = await prisma.lesson.findUnique({
+            where: { id: openLessonIdNum },
+            select: { classId: true, startsAt: true },
+          });
+          if (openLessonRow) {
+            const openDateStr = getAlgiersDateInfo(openLessonRow.startsAt).dateStr;
+            const openMatch = inWindowBranchLessons.find((l) => {
+              const lDateStr = l.instanceDate || getAlgiersDateInfo(l.startsAt).dateStr;
+              return l.class.id === openLessonRow.classId && lDateStr === openDateStr;
+            });
+            if (openMatch) {
+              matchedLesson = openMatch;
+            }
+          }
+        } catch {
+          // fallback
+        }
       }
     }
 
-    // 2. Prioritize an in-window lesson at this branch where the student is NOT yet marked PRESENT
     if (!matchedLesson) {
-      const notPresentInWindow = inWindowBranchLessons
-        .filter((l) => !presentLessonIds.has(l.id))
-        .sort(
-          (a, b) =>
-            Math.abs(new Date(a.startsAt).getTime() - scanTime.getTime()) -
-            Math.abs(new Date(b.startsAt).getTime() - scanTime.getTime())
-        );
-      if (notPresentInWindow.length > 0) {
-        matchedLesson = notPresentInWindow[0];
-      }
-    }
+      // 2. If student is ALREADY marked PRESENT in an in-window lesson currently in session (startsAt <= scanTime <= endsAt),
+      // stick to that lesson! Never jump to a different overlapping group and double-register attendance!
+      const ongoingAlreadyPresent = inWindowBranchLessons.find((l) => {
+        if (!presentLessonIds.has(l.id)) return false;
+        const sTime = new Date(l.startsAt).getTime();
+        const eTime = new Date(l.endsAt).getTime();
+        return scanTime.getTime() >= sTime && scanTime.getTime() <= eTime;
+      });
 
-    // 3. Otherwise match the in-window lesson where the student is already marked PRESENT ("Déjà pointé")
-    if (!matchedLesson) {
-      matchedLesson = inWindowBranchLessons[0];
+      if (ongoingAlreadyPresent) {
+        matchedLesson = ongoingAlreadyPresent;
+      } else {
+        // 3. Otherwise prioritize in-window lesson where student is NOT yet marked present
+        const notPresentInWindow = inWindowBranchLessons
+          .filter((l) => !presentLessonIds.has(l.id))
+          .sort(
+            (a, b) =>
+              Math.abs(new Date(a.startsAt).getTime() - scanTime.getTime()) -
+              Math.abs(new Date(b.startsAt).getTime() - scanTime.getTime())
+          );
+        if (notPresentInWindow.length > 0) {
+          matchedLesson = notPresentInWindow[0];
+        } else {
+          // 4. Fallback to closest in-window lesson (already present / Déjà pointé)
+          const sortedInWindow = [...inWindowBranchLessons].sort(
+            (a, b) =>
+              Math.abs(new Date(a.startsAt).getTime() - scanTime.getTime()) -
+              Math.abs(new Date(b.startsAt).getTime() - scanTime.getTime())
+          );
+          matchedLesson = sortedInWindow[0];
+        }
+      }
     }
   }
 
@@ -474,6 +526,36 @@ export async function processBiometricScan(input: {
       nextLessonInfo = `${dateStr} à ${timeStr} (${nextFutureLesson.class.name})`;
     }
 
+    // Determine inscription status for State 3 card
+    let state3InscStatus: "PAID" | "WAIVED" | "UNPAID" = "UNPAID";
+    try {
+      const studentInscVouchers = await prisma.voucher.findMany({
+        where: {
+          studentId: student.id,
+          paymentType: "INSCRIPTION",
+          isVoided: false,
+          isRefund: false,
+        },
+        select: { amount: true, refunds: { select: { amount: true } } },
+      });
+      const hasPaidInsc = studentInscVouchers.some((v) => {
+        const refunded = (v.refunds || []).reduce((s, r) => s + Number(r.amount || 0), 0);
+        return Number(v.amount || 0) - refunded > 0;
+      });
+      const isAnyWaived = student.enrollments.some(
+        (e) => !e.inscriptionFeeCharged || e.payerStatus === "NON_PAYER"
+      );
+      if (hasPaidInsc) state3InscStatus = "PAID";
+      else if (isAnyWaived || student.payerStatus === "NON_PAYER") state3InscStatus = "WAIVED";
+    } catch {
+      // fallback
+    }
+
+    const inscTag = `INSC_${state3InscStatus}`;
+    const nextLessonInfoWithInsc = nextLessonInfo
+      ? `${nextLessonInfo}|${inscTag}`
+      : inscTag;
+
     const [, log] = await prisma.$transaction([
       prisma.biometricScanLog.deleteMany({
         where: {
@@ -491,17 +573,29 @@ export async function processBiometricScan(input: {
           studentId: student.id,
           studentName: student.name,
           status: "NO_UPCOMING_GROUP",
-          nextLessonInfo,
+          nextLessonInfo: nextLessonInfoWithInsc,
           isResolved: false,
           scannedAt: scanTime,
         },
       }),
     ]);
 
-    return {
+    const state3Result = {
       success: true,
-      scan: serializeScanLog(log),
+      scan: {
+        ...serializeScanLog(log),
+        inscriptionStatus: state3InscStatus,
+      },
     };
+
+    if (globalNumber && globalNumber > 0 && !input.isUnrecognizedFinger) {
+      dedupMap.set(dedupKey, {
+        result: state3Result,
+        expiresAt: Date.now() + 2500,
+      });
+    }
+
+    return state3Result;
   }
 
   // Ensure the matched lesson has a persisted, dated Lesson instance for today's date in Africa/Algiers
@@ -543,8 +637,12 @@ export async function processBiometricScan(input: {
       prisma.voucher.findMany({
         where: {
           studentId: student.id,
-          classId,
           isVoided: false,
+          isRefund: false,
+          OR: [
+            { classId },
+            { paymentType: "INSCRIPTION" },
+          ],
         },
         include: { refunds: true },
       }),
@@ -629,8 +727,50 @@ export async function processBiometricScan(input: {
   const isPayerSiblingPaid = payerRemainingCredit !== null ? payerRemainingCredit > 0 : true;
   const primaryRow = existingRows[0] || null;
 
+  // Determine Inscription Fee Status for this student
+  const paidInscByClass = new Map<number, number>();
+  let generalInscPaid = 0;
+  for (const v of vouchers) {
+    if (v.paymentType === "INSCRIPTION" && !v.isVoided && !v.isRefund) {
+      const vAmount = Number(v.amount || 0);
+      const vRefunded = (v.refunds || []).reduce(
+        (sum: number, r: any) => sum + Number(r.amount || 0),
+        0
+      );
+      const netPaid = Math.max(0, vAmount - vRefunded);
+      if (netPaid > 0) {
+        if (v.classId) {
+          paidInscByClass.set(v.classId, (paidInscByClass.get(v.classId) || 0) + netPaid);
+        } else {
+          generalInscPaid += netPaid;
+        }
+      }
+    }
+  }
+
+  const isTargetFormation = Boolean(matchedLesson.class.isFormation);
+  const totalInscPaidThisClass = (paidInscByClass.get(classId) || 0) + generalInscPaid;
+  const isInscriptionPaid = totalInscPaidThisClass > 0;
+  const hasPaidThreeInscriptions = isTargetFormation ? false : paidInscByClass.size >= 3;
+  const isOwnerWaived = Boolean(
+    enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged
+  );
+  const isAutoWaived = Boolean(
+    !isTargetFormation && (
+      (enrollment && !enrollment.inscriptionFeeCharged) ||
+      hasPaidThreeInscriptions ||
+      effectivePayerStatus === "NON_PAYER"
+    )
+  );
+
+  const inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" = isInscriptionPaid
+    ? "PAID"
+    : isOwnerWaived || isAutoWaived
+    ? "WAIVED"
+    : "UNPAID";
+
   const tuitionVouchers = vouchers.filter(
-    (v) => v.paymentType !== "INSCRIPTION" && v.paymentType !== "BOOK"
+    (v) => v.paymentType !== "INSCRIPTION" && v.paymentType !== "BOOK" && (v.classId === classId || !v.classId)
   );
 
   // Exclude the current lesson from prior attendances so we know exact credits available for THIS lesson
@@ -693,6 +833,8 @@ export async function processBiometricScan(input: {
     (student.family?.payerStudentId && student.family.payerStudentId !== student.id)
   );
 
+  const alreadyMarkedPresent = primaryRow?.status === "PRESENT";
+
   let hasAvailableCredit = false;
   if (matchedLesson.isFree || matchedLesson.isTeacherAbsent || isNonPayerStudent) {
     hasAvailableCredit = true;
@@ -705,11 +847,12 @@ export async function processBiometricScan(input: {
     }, 0);
     hasAvailableCredit = totalPaidFormation > 0;
   } else {
-    hasAvailableCredit = creditMetricsBefore.netSessions > 0;
+    // If student is already marked present, they already used their credit for this lesson
+    hasAvailableCredit = alreadyMarkedPresent || creditMetricsBefore.netSessions > 0;
   }
 
   // STATE 2: NO CREDITS LEFT (0 SESSIONS) — Single pipelined round-trip
-  if (!hasAvailableCredit && primaryRow?.status !== "PRESENT") {
+  if (!hasAvailableCredit && !alreadyMarkedPresent) {
     const [, log] = await prisma.$transaction([
       prisma.biometricScanLog.deleteMany({
         where: {
@@ -734,13 +877,14 @@ export async function processBiometricScan(input: {
           lessonEndsAt: matchedLesson.endsAt,
           status: "NO_CREDITS",
           remainingCredits: 0,
+          nextLessonInfo: `INSC_${inscriptionStatus}`,
           isResolved: false,
           scannedAt: scanTime,
         },
       }),
     ]);
 
-    return {
+    const state2Result = {
       success: true,
       scan: {
         ...serializeScanLog(log),
@@ -748,12 +892,22 @@ export async function processBiometricScan(input: {
         isNonPayer: isNonPayerStudent,
         isSiblingWaived: Boolean(isSiblingWaived || creditMetricsBefore.isSiblingWaived),
         hasPayerSibling: isSiblingStudent,
+        remainingCredits: 0,
+        inscriptionStatus,
       },
     };
+
+    if (globalNumber && globalNumber > 0 && !input.isUnrecognizedFinger) {
+      dedupMap.set(dedupKey, {
+        result: state2Result,
+        expiresAt: Date.now() + 2500,
+      });
+    }
+
+    return state2Result;
   }
 
   // ROUND-TRIP 3: STATE 1 SUCCESS — Single pipelined $transaction([...]) batch (Zero extra round-trips!)
-  const alreadyMarkedPresent = primaryRow?.status === "PRESENT";
   const consumesOneCredit =
     !matchedLesson.isFree &&
     !matchedLesson.isTeacherAbsent &&
@@ -761,6 +915,9 @@ export async function processBiometricScan(input: {
     !isSiblingStudent &&
     !matchedLesson.class.isFormation;
 
+  // Exact remaining credits after this lesson's presence:
+  // Since priorAttendances excludes this lesson, netSessions - 1 is ALWAYS the exact remaining credit
+  // whether scanned for the 1st, 2nd, or nth time!
   const remainingCreditsAfter = (isNonPayerStudent || isSiblingStudent)
     ? null
     : consumesOneCredit
@@ -776,9 +933,11 @@ export async function processBiometricScan(input: {
     scanMetadataTag = "SCHOOL_FEES_ONLY";
   }
 
+  const inscTag = `INSC_${inscriptionStatus}`;
+  const baseTag = scanMetadataTag ? `${scanMetadataTag}|${inscTag}` : inscTag;
   const nextInfo = alreadyMarkedPresent
-    ? (scanMetadataTag ? `ALREADY_PRESENT|${scanMetadataTag}` : "ALREADY_PRESENT")
-    : scanMetadataTag;
+    ? `ALREADY_PRESENT|${baseTag}`
+    : baseTag;
 
   const writeOps: any[] = [];
 
@@ -851,7 +1010,7 @@ export async function processBiometricScan(input: {
   const txResults = await prisma.$transaction(writeOps);
   const log = txResults[txResults.length - 1];
 
-  return {
+  const state1Result = {
     success: true,
     scan: {
       ...serializeScanLog(log),
@@ -860,8 +1019,19 @@ export async function processBiometricScan(input: {
       isSiblingWaived: Boolean(isSiblingWaived || creditMetricsBefore.isSiblingWaived),
       hasPayerSibling: isSiblingStudent,
       remainingCredits: remainingCreditsAfter,
+      alreadyPresent: alreadyMarkedPresent,
+      inscriptionStatus,
     },
   };
+
+  if (globalNumber && globalNumber > 0 && !input.isUnrecognizedFinger) {
+    dedupMap.set(dedupKey, {
+      result: state1Result,
+      expiresAt: Date.now() + 2500,
+    });
+  }
+
+  return state1Result;
 }
 
 function serializeScanLog(log: any, index?: number): BiometricScanResult {
@@ -876,7 +1046,7 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
   const hasPayerSiblingTag = rawNext.includes("PAYER_SIBLING");
   const hasSchoolFeesOnlyTag = rawNext.includes("SCHOOL_FEES_ONLY");
 
-  const enr = log.student?.enrollments?.find((e: any) => e.classId === log.classId);
+  const enr = log.student?.enrollments?.find((e: any) => e.classId === log.classId) || log.student?.enrollments?.[0];
   const payerStatus = hasSchoolFeesOnlyTag
     ? "SCHOOL_FEES_ONLY"
     : hasWaivedTag
@@ -905,12 +1075,45 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
 
   let cleanNextLessonInfo: string | null = null;
   if (!isAlreadyPresent && rawNext) {
-    if (!hasWaivedTag && !hasSiblingWaivedTag && !hasPayerSiblingTag && !hasSchoolFeesOnlyTag) {
-      cleanNextLessonInfo = rawNext;
-    }
+    const parts = rawNext
+      .split("|")
+      .filter((p: string) =>
+        !p.includes("WAIVED") &&
+        !p.includes("SIBLING") &&
+        !p.includes("SCHOOL_FEES") &&
+        !p.includes("ALREADY_PRESENT") &&
+        !p.startsWith("INSC_")
+      );
+    cleanNextLessonInfo = parts.join(" ").trim() || null;
   }
 
-  const remainingCredits = (isNonPayer || isSiblingWaived || hasPayerSibling)
+  // Parse inscription status
+  let inscriptionStatus: "PAID" | "WAIVED" | "UNPAID" | null = null;
+  if (log.inscriptionStatus) {
+    inscriptionStatus = log.inscriptionStatus;
+  } else if (rawNext.includes("INSC_PAID")) {
+    inscriptionStatus = "PAID";
+  } else if (rawNext.includes("INSC_WAIVED")) {
+    inscriptionStatus = "WAIVED";
+  } else if (rawNext.includes("INSC_UNPAID")) {
+    inscriptionStatus = "UNPAID";
+  } else if (log.student) {
+    const studentVouchers = log.student.vouchers || [];
+    const paidInsc = studentVouchers.some((v: any) => {
+      const vAmount = Number(v.amount || 0);
+      const vRefunded = (v.refunds || []).reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
+      return vAmount - vRefunded > 0;
+    });
+    const isWaived = Boolean(
+      isNonPayer ||
+      enr?.payerStatus === "NON_PAYER" ||
+      (enr && !enr.inscriptionFeeCharged) ||
+      enr?.feeOverriddenByOwner
+    );
+    inscriptionStatus = paidInsc ? "PAID" : isWaived ? "WAIVED" : "UNPAID";
+  }
+
+  const remainingCredits = (isNonPayer || isSiblingWaived)
     ? null
     : (log.remainingCredits ?? null);
 
@@ -937,6 +1140,7 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
     isNonPayer,
     isSiblingWaived,
     hasPayerSibling,
+    inscriptionStatus,
   };
 }
 
@@ -1018,6 +1222,24 @@ export async function getBiometricLiveFeedAction(params?: {
               classId: true,
               payerStatus: true,
               isSiblingWaived: true,
+              feeOverriddenByOwner: true,
+              inscriptionFeeCharged: true,
+            },
+          },
+          vouchers: {
+            where: {
+              paymentType: "INSCRIPTION",
+              isVoided: false,
+              isRefund: false,
+            },
+            select: {
+              classId: true,
+              amount: true,
+              refunds: {
+                select: {
+                  amount: true,
+                },
+              },
             },
           },
         },

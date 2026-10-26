@@ -35,6 +35,7 @@ import {
   Sparkles,
   Users,
   ShieldAlert,
+  AlertCircle,
 } from "lucide-react";
 import {
   BiometricScanResult,
@@ -138,6 +139,41 @@ function BiometricStatusDot({
 
   return (
     <span className={`relative inline-flex rounded-full ${dim} bg-gray-400 shrink-0`} />
+  );
+}
+
+/**
+ * Inscription Fees Status Badge for Biometric HUD Popups and Drawer
+ */
+function InscriptionStatusBadge({
+  status,
+  isAr,
+}: {
+  status?: "PAID" | "WAIVED" | "UNPAID" | null;
+  isAr: boolean;
+}) {
+  if (!status) return null;
+  if (status === "PAID") {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px] shrink-0">
+        <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+        <span>{isAr ? "حقوق التسجيل: مسددة" : "Inscr. : Payée"}</span>
+      </span>
+    );
+  }
+  if (status === "WAIVED") {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 font-semibold text-[11px] shrink-0">
+        <Sparkles className="w-3 h-3 text-purple-600 shrink-0" />
+        <span>{isAr ? "حقوق التسجيل: معفى" : "Inscr. : Exonérée"}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-bold text-[11px] shrink-0">
+      <AlertCircle className="w-3 h-3 text-rose-600 shrink-0" />
+      <span>{isAr ? "حقوق التسجيل: غير مسددة" : "Inscr. : Non payée"}</span>
+    </span>
   );
 }
 
@@ -1141,28 +1177,34 @@ export default function BiometricMonitorProvider({
                       </div>
 
                       <div className="space-y-1.5 text-xs">
-                        <div className="font-semibold text-sm text-gray-900 flex items-center gap-1.5">
-                          <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                          <span>{alert.studentName}</span>
-                          <span className="text-gray-500 font-mono text-xs">
-                            (#{alert.globalNumber})
-                          </span>
+                        <div className="font-semibold text-sm text-gray-900 flex items-center justify-between gap-2 min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0 truncate">
+                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            <span className="truncate">{alert.studentName}</span>
+                            <span className="text-gray-500 font-mono text-xs shrink-0">
+                              (#{alert.globalNumber})
+                            </span>
+                          </div>
+                          <InscriptionStatusBadge
+                            status={alert.inscriptionStatus}
+                            isAr={isAr}
+                          />
                         </div>
                         <div className="text-gray-600 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                          <span className="inline-flex items-center gap-1">
+                          <span className="inline-flex items-center gap-1 min-w-0">
                             <BookOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                            <span className="font-medium text-gray-800">
+                            <span className="font-medium text-gray-800 truncate">
                               {alert.className}
                             </span>
                           </span>
                           {alert.classroomName && (
-                            <span className="inline-flex items-center gap-1 text-gray-500">
+                            <span className="inline-flex items-center gap-1 text-gray-500 shrink-0">
                               <DoorOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                               <span>{alert.classroomName}</span>
                             </span>
                           )}
                           {alert.lessonStartsAt && (
-                            <span className="font-mono text-gray-500" dir="ltr">
+                            <span className="font-mono text-gray-500 shrink-0" dir="ltr">
                               ({formatShortTime(alert.lessonStartsAt)} -{" "}
                               {formatShortTime(alert.lessonEndsAt)})
                             </span>
@@ -1182,9 +1224,9 @@ export default function BiometricMonitorProvider({
                         <button
                           type="button"
                           onClick={() => openPaymentModalForScan(alert)}
-                          className="flex-1 py-1.5 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                          className="flex-1 py-1.5 px-3 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-colors whitespace-nowrap shrink-0"
                         >
-                          <CreditCard className="w-3.5 h-3.5" />
+                          <CreditCard className="w-3.5 h-3.5 shrink-0" />
                           <span>
                             {isAr ? "تسديد الآن" : "Encaisser maintenant"}
                           </span>
@@ -1194,9 +1236,9 @@ export default function BiometricMonitorProvider({
                           onClick={() =>
                             handleResolveAlert(alert.id, "ALLOW_PRESENT")
                           }
-                          className="py-1.5 px-3 rounded-md bg-white hover:bg-gray-50 text-gray-700 font-medium text-xs flex items-center justify-center gap-1.5 border border-gray-300 cursor-pointer transition-colors"
+                          className="py-1.5 px-3 rounded-md bg-white hover:bg-gray-50 text-gray-700 font-medium text-xs flex items-center justify-center gap-1.5 border border-gray-300 cursor-pointer transition-colors whitespace-nowrap shrink-0"
                         >
-                          <UserCheck className="w-3.5 h-3.5 text-gray-600" />
+                          <UserCheck className="w-3.5 h-3.5 text-gray-600 shrink-0" />
                           <span>
                             {isAr ? "سماح استثنائي" : "Autoriser présence"}
                           </span>
@@ -1207,10 +1249,10 @@ export default function BiometricMonitorProvider({
                             onClick={() =>
                               router.push(`/list/students/${alert.studentId}`)
                             }
-                            className="p-1.5 rounded-md bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-700 border border-gray-300 cursor-pointer transition-colors"
+                            className="p-1.5 rounded-md bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-700 border border-gray-300 cursor-pointer transition-colors shrink-0"
                             title={isAr ? "الملف الشخصي" : "Profil"}
                           >
-                            <ExternalLink className="w-3.5 h-3.5" />
+                            <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                           </button>
                         )}
                       </div>
@@ -1257,12 +1299,18 @@ export default function BiometricMonitorProvider({
                     </div>
 
                     <div className="space-y-1.5 text-xs">
-                      <div className="font-semibold text-sm text-gray-900 flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span>{alert.studentName}</span>
-                        <span className="text-emerald-600 font-mono text-xs">
-                          (#{alert.globalNumber})
-                        </span>
+                      <div className="font-semibold text-sm text-gray-900 flex items-center justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 truncate">
+                          <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          <span className="truncate">{alert.studentName}</span>
+                          <span className="text-emerald-600 font-mono text-xs shrink-0">
+                            (#{alert.globalNumber})
+                          </span>
+                        </div>
+                        <InscriptionStatusBadge
+                          status={alert.inscriptionStatus}
+                          isAr={isAr}
+                        />
                       </div>
                       <p className="text-gray-600">
                         {isAr
@@ -1284,9 +1332,9 @@ export default function BiometricMonitorProvider({
                       <button
                         type="button"
                         onClick={() => openCatchUpModalForScan(alert)}
-                        className="flex-1 py-1.5 px-3 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                        className="flex-1 py-1.5 px-3 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-colors whitespace-nowrap shrink-0"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" />
+                        <RefreshCw className="w-3.5 h-3.5 shrink-0" />
                         <span>
                           {isAr ? "تسجيل حصة تعويض" : "Marquer rattrapage"}
                         </span>
@@ -1297,9 +1345,9 @@ export default function BiometricMonitorProvider({
                           onClick={() =>
                             router.push(`/list/students/${alert.studentId}`)
                           }
-                          className="py-1.5 px-3 rounded-md bg-white hover:bg-gray-50 text-gray-700 font-medium text-xs flex items-center justify-center gap-1.5 border border-gray-300 cursor-pointer transition-colors"
+                          className="py-1.5 px-3 rounded-md bg-white hover:bg-gray-50 text-gray-700 font-medium text-xs flex items-center justify-center gap-1.5 border border-gray-300 cursor-pointer transition-colors whitespace-nowrap shrink-0"
                         >
-                          <ExternalLink className="w-3.5 h-3.5 text-gray-500" />
+                          <ExternalLink className="w-3.5 h-3.5 text-gray-500 shrink-0" />
                           <span>{isAr ? "الملف" : "Profil"}</span>
                         </button>
                       )}
@@ -1349,50 +1397,56 @@ export default function BiometricMonitorProvider({
                   </div>
 
                   <div className="space-y-1.5 text-xs">
-                    <div className="font-semibold text-sm text-gray-900 flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                      <span>{liveStreamCard.studentName}</span>
-                      <span className="text-emerald-600 font-mono text-xs">
-                        (#{liveStreamCard.globalNumber})
-                      </span>
+                    <div className="font-semibold text-sm text-gray-900 flex items-center justify-between gap-2 min-w-0">
+                      <div className="flex items-center gap-1.5 min-w-0 truncate">
+                        <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                        <span className="truncate">{liveStreamCard.studentName}</span>
+                        <span className="text-emerald-600 font-mono text-xs shrink-0">
+                          (#{liveStreamCard.globalNumber})
+                        </span>
+                      </div>
+                      <InscriptionStatusBadge
+                        status={liveStreamCard.inscriptionStatus}
+                        isAr={isAr}
+                      />
                     </div>
                     <div className="text-gray-600 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1 min-w-0">
                         <BookOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span className="font-medium text-gray-800">
+                        <span className="font-medium text-gray-800 truncate">
                           {liveStreamCard.className}
                         </span>
                       </span>
                       {liveStreamCard.classroomName && (
-                        <span className="inline-flex items-center gap-1 text-gray-500">
+                        <span className="inline-flex items-center gap-1 text-gray-500 shrink-0">
                           <DoorOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                           <span>{liveStreamCard.classroomName}</span>
                         </span>
                       )}
                       {liveStreamCard.lessonStartsAt && (
-                        <span className="font-mono text-gray-500" dir="ltr">
+                        <span className="font-mono text-gray-500 shrink-0" dir="ltr">
                           ({formatShortTime(liveStreamCard.lessonStartsAt)} -{" "}
                           {formatShortTime(liveStreamCard.lessonEndsAt)})
                         </span>
                       )}
                     </div>
-                    <div className="pt-1 flex items-center justify-between">
+                    <div className="pt-1 flex flex-wrap items-center justify-between gap-1.5">
                       {liveStreamCard.isNonPayer || liveStreamCard.payerStatus === "NON_PAYER" ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px]">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px] shrink-0">
                           <Sparkles className="w-3 h-3 shrink-0 text-emerald-600" />
                           <span>
                             {isAr ? "معفى من الرسوم" : "Non-payeur (Exonéré)"}
                           </span>
                         </span>
                       ) : liveStreamCard.hasPayerSibling || liveStreamCard.isSiblingWaived ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 font-semibold text-[11px]">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 font-semibold text-[11px] shrink-0">
                           <Users className="w-3 h-3 shrink-0 text-purple-600" />
                           <span>
                             {isAr ? "أخ دافع" : "Remise fratrie"}
                           </span>
                         </span>
                       ) : liveStreamCard.payerStatus === "SCHOOL_FEES_ONLY" ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-semibold text-[11px]">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-semibold text-[11px] shrink-0">
                           <ShieldAlert className="w-3 h-3 shrink-0 text-amber-600" />
                           <span>
                             {isAr
@@ -1401,7 +1455,7 @@ export default function BiometricMonitorProvider({
                           </span>
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px]">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px] shrink-0">
                           <CreditCard className="w-3 h-3 shrink-0" />
                           <span>
                             {isAr
@@ -1747,12 +1801,18 @@ export default function BiometricMonitorProvider({
                     </div>
 
                     {scan.studentName ? (
-                      <div className="font-semibold text-gray-900 flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span>{scan.studentName}</span>
-                        <span className="text-gray-500 font-mono text-[11px]">
-                          (#{scan.globalNumber})
-                        </span>
+                      <div className="font-semibold text-gray-900 flex items-center justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0 truncate">
+                          <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          <span className="truncate">{scan.studentName}</span>
+                          <span className="text-gray-500 font-mono text-[11px] shrink-0">
+                            (#{scan.globalNumber})
+                          </span>
+                        </div>
+                        <InscriptionStatusBadge
+                          status={scan.inscriptionStatus}
+                          isAr={isAr}
+                        />
                       </div>
                     ) : (
                       <div className="font-medium text-gray-500">

@@ -849,6 +849,10 @@ const SingleStudentPage = async (
                               <Badge variant="success" size="sm" withDot>
                                 {t("badgeNonPayer")}
                               </Badge>
+                            ) : g.isSiblingWaived ? (
+                              <Badge variant="secondary" size="sm" withDot className="font-bold">
+                                {locale === "ar" ? "معفى (خصم إخوة)" : "Exonéré (Fratrie)"}
+                              </Badge>
                             ) : isOne ? (
                               <Badge variant="warning" size="sm" withDot className="font-bold shadow-xs">
                                 {t("statusOneSessionLeft")}
@@ -862,7 +866,7 @@ const SingleStudentPage = async (
                                 {t("statusUnpaid", { count: g.netSessions })}
                               </Badge>
                             ) : null}
-                            {g.hasPayerSibling && (
+                            {g.hasPayerSibling && !g.isSiblingWaived && (
                               <Badge variant="neutral" size="sm">
                                 {t("statusSiblingWaived")}
                               </Badge>

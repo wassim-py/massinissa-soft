@@ -806,6 +806,167 @@ export interface StudentCreditResult {
   status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER";
 }
 
+export interface InscriptionStatusResult {
+  status: "PAID" | "WAIVED_3GROUPS" | "WAIVED_OWNER" | "WAIVED_NON_PAYER" | "UNPAID";
+  isInscriptionPaid: boolean;
+  isInscriptionWaived: boolean;
+  isTransferred: boolean;
+  fromClassName?: string;
+  totalPaid: number;
+}
+
+/**
+ * Computes enrollment inscription fee status with transfer awareness and 3-groups exemption verification.
+ * Prevents phantom waivers on transferred enrollments while honoring genuine 3-group exemptions.
+ */
+export function computeEnrollmentInscriptionStatus({
+  enrollment,
+  classData,
+  vouchers = [],
+  paidInscClassIds,
+  allEnrollments,
+}: {
+  enrollment?: any;
+  classData: { id: number; isFormation?: boolean; inscriptionFee?: any };
+  vouchers?: any[];
+  paidInscClassIds: Set<number>;
+  allEnrollments?: any[];
+}): InscriptionStatusResult {
+  const classId = classData.id;
+  const isFormation = Boolean(classData.isFormation);
+
+  // 1. Direct payment in this class
+  let totalPaidThisClass = 0;
+  const inscVouchersThisClass = (vouchers || []).filter(
+    (v: any) =>
+      v.paymentType === "INSCRIPTION" &&
+      !v.isVoided &&
+      !v.isRefund &&
+      (v.classId === classId || v.class?.id === classId)
+  );
+  inscVouchersThisClass.forEach((v: any) => {
+    const vAmount = Number(v.amount || 0);
+    const vRefunded = (v.refunds || []).reduce(
+      (sum: number, r: any) => sum + Number(r.amount || 0),
+      0
+    );
+    totalPaidThisClass += Math.max(0, vAmount - vRefunded);
+  });
+
+  if (totalPaidThisClass > 0) {
+    return {
+      status: "PAID",
+      isInscriptionPaid: true,
+      isInscriptionWaived: false,
+      isTransferred: false,
+      totalPaid: totalPaidThisClass,
+    };
+  }
+
+  // 2. Transferred payment from prior enrollment (Rule: Paid inscription transfers with seat)
+  const incomingTransfers = enrollment?.transfersTo || [];
+  for (const t of incomingTransfers) {
+    const fromClassId = t.fromEnrollment?.classId ?? t.fromEnrollment?.class?.id;
+    if (fromClassId && paidInscClassIds.has(fromClassId)) {
+      const fromVouchers = (vouchers || []).filter(
+        (v: any) =>
+          v.paymentType === "INSCRIPTION" &&
+          !v.isVoided &&
+          !v.isRefund &&
+          (v.classId === fromClassId || v.class?.id === fromClassId)
+      );
+      let fromPaid = 0;
+      fromVouchers.forEach((v: any) => {
+        const vAmt = Number(v.amount || 0);
+        const vRef = (v.refunds || []).reduce(
+          (sum: number, r: any) => sum + Number(r.amount || 0),
+          0
+        );
+        fromPaid += Math.max(0, vAmt - vRef);
+      });
+      return {
+        status: "PAID",
+        isInscriptionPaid: true,
+        isInscriptionWaived: false,
+        isTransferred: true,
+        fromClassName: t.fromEnrollment?.class?.name,
+        totalPaid: fromPaid > 0 ? fromPaid : 1000,
+      };
+    }
+
+    // Check recursive parent enrollment if allEnrollments provided
+    if (allEnrollments && t.fromEnrollmentId) {
+      const parentEnr = allEnrollments.find((e: any) => e.id === t.fromEnrollmentId);
+      if (parentEnr) {
+        const parentRes = computeEnrollmentInscriptionStatus({
+          enrollment: parentEnr,
+          classData: {
+            id: parentEnr.classId ?? parentEnr.class?.id,
+            isFormation: Boolean(parentEnr.class?.isFormation),
+          },
+          vouchers,
+          paidInscClassIds,
+          allEnrollments,
+        });
+        if (parentRes.isInscriptionPaid) {
+          return {
+            status: "PAID",
+            isInscriptionPaid: true,
+            isInscriptionWaived: false,
+            isTransferred: true,
+            fromClassName: parentRes.fromClassName || parentEnr.class?.name,
+            totalPaid: parentRes.totalPaid,
+          };
+        }
+      }
+    }
+  }
+
+  // 3. Explicit owner override exemption
+  if (enrollment?.feeOverriddenByOwner && !enrollment?.inscriptionFeeCharged) {
+    return {
+      status: "WAIVED_OWNER",
+      isInscriptionPaid: false,
+      isInscriptionWaived: true,
+      isTransferred: false,
+      totalPaid: 0,
+    };
+  }
+
+  // 4. Non-payer student exemption (§7.18)
+  const payerStatus = enrollment?.payerStatus || "NORMAL";
+  if (payerStatus === "NON_PAYER") {
+    return {
+      status: "WAIVED_NON_PAYER",
+      isInscriptionPaid: false,
+      isInscriptionWaived: true,
+      isTransferred: false,
+      totalPaid: 0,
+    };
+  }
+
+  // 5. 3-Group exemption rule (regular classes only)
+  // Strictly applies ONLY if student has actually paid inscription in 3 distinct regular groups!
+  if (!isFormation && paidInscClassIds.size >= 3) {
+    return {
+      status: "WAIVED_3GROUPS",
+      isInscriptionPaid: false,
+      isInscriptionWaived: true,
+      isTransferred: false,
+      totalPaid: 0,
+    };
+  }
+
+  // 6. Default: UNPAID (No phantom waivers!)
+  return {
+    status: "UNPAID",
+    isInscriptionPaid: false,
+    isInscriptionWaived: false,
+    isTransferred: false,
+    totalPaid: 0,
+  };
+}
+
 /**
  * Resolves remaining credit and active/paid status for a student whose sibling is designated payer.
  * Checks whether the payer sibling has an active enrollment and at least one paid cycle (netSessions >= 1).
@@ -998,12 +1159,8 @@ export function computeStudentCreditAndSessions({
 
   let purchasedSessions = 0;
   if (!isForm) {
-    if (isNonPayer) {
+    if (isNonPayer || isSiblingWaived100) {
       purchasedSessions = 0;
-    } else if (isSiblingWaived100) {
-      purchasedSessions = isPayerSiblingPaid && payerRemainingCredit !== undefined && payerRemainingCredit !== null
-        ? payerRemainingCredit
-        : 0;
     } else if (effectiveLessonPrice > 0) {
       purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
     } else {

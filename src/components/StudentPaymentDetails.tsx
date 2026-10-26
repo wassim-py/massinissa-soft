@@ -13,7 +13,13 @@ import {
   formatPaymentDateTime,
 } from "@/lib/voucherUtils";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
-import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
+import {
+  computeStudentSessionFee,
+  computeStudentConsumedSessions,
+  computeStudentCreditAndSessions,
+  resolvePayerCredit,
+  computeEnrollmentInscriptionStatus,
+} from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -402,7 +408,6 @@ export default function StudentPaymentDetails({
     const activeClassVouchers = classVouchers.filter((v) => !v.isVoided && !v.isRefund);
 
     const inscVouchers = activeClassVouchers.filter((v) => v.paymentType === "INSCRIPTION");
-    const totalInscPaid = paidInscByClass.get(c.id) || 0;
     const requiredInscFee = isFormation
       ? (Number(c?.inscriptionFee || 0) > 0
           ? Number(c?.inscriptionFee)
@@ -412,16 +417,24 @@ export default function StudentPaymentDetails({
           : Number(c?.inscriptionFee || 0) > 0
           ? Number(c?.inscriptionFee)
           : 1000);
-    const isInscriptionPaid = totalInscPaid > 0;
+
+    const inscStatusRes = computeEnrollmentInscriptionStatus({
+      enrollment: enr,
+      classData: c,
+      vouchers: allVouchers,
+      paidInscClassIds: paidInscRegularClassIds,
+      allEnrollments,
+    });
+
+    const isInscriptionPaid = inscStatusRes.isInscriptionPaid;
+    const isInscriptionTransferred = inscStatusRes.isTransferred;
+    const inscFromClassName = inscStatusRes.fromClassName;
+    const isOwnerWaived = inscStatusRes.status === "WAIVED_OWNER";
+    const isGroupWaived = inscStatusRes.status === "WAIVED_3GROUPS";
+    const isNonPayerInscWaived = inscStatusRes.status === "WAIVED_NON_PAYER";
+    const isInscriptionWaived = inscStatusRes.isInscriptionWaived;
+    const totalInscPaid = inscStatusRes.totalPaid > 0 ? inscStatusRes.totalPaid : (isInscriptionPaid ? requiredInscFee : 0);
     const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
-    const enrPayerStatusForInsc = (enr as any).payerStatus || student.payerStatus || "NORMAL";
-    const isOwnerWaived = Boolean(enr.feeOverriddenByOwner && !enr.inscriptionFeeCharged);
-    const isGroupWaived =
-      !isFormation &&
-      !isInscriptionPaid &&
-      !isOwnerWaived &&
-      (hasPaidThreeInscriptions || !enr.inscriptionFeeCharged || enrPayerStatusForInsc === "NON_PAYER");
-    const isInscriptionWaived = isOwnerWaived || isGroupWaived;
 
     // Books calculation
     const bookVouchers = activeClassVouchers.filter((v) => v.paymentType === "BOOK");
@@ -577,9 +590,13 @@ export default function StudentPaymentDetails({
       formationVouchers,
       inscVoucher,
       isInscriptionPaid,
+      isInscriptionTransferred,
+      inscFromClassName,
       isOwnerWaived,
       isGroupWaived,
+      isNonPayerInscWaived,
       isInscriptionWaived,
+      isSiblingWaived: isSiblingWaived100,
       totalInscPaid,
       requiredInscFee,
       bookVoucher,
@@ -1116,11 +1133,17 @@ export default function StudentPaymentDetails({
                             </span>
                             <span className="text-[10px] block mt-1">
                               {cm.isInscriptionPaid ? (
-                                <span className="text-emerald-700 font-bold">{t("inscriptionSettled")}</span>
+                                <span className="text-emerald-700 font-bold">
+                                  {cm.isInscriptionTransferred
+                                    ? (locale === "ar" ? `مسدد (محول${cm.inscFromClassName ? ` من ${cm.inscFromClassName}` : ""})` : `Payé (Transféré${cm.inscFromClassName ? ` de ${cm.inscFromClassName}` : ""})`)
+                                    : t("inscriptionSettled")}
+                                </span>
                               ) : cm.isOwnerWaived ? (
                                 <span className="text-amber-700 font-semibold">{t("inscriptionOwnerWaived")}</span>
                               ) : cm.isGroupWaived ? (
                                 <span className="text-blue-700 font-semibold">{t("inscriptionGroupWaived")}</span>
+                              ) : cm.isNonPayerInscWaived ? (
+                                <span className="text-emerald-700 font-semibold">{locale === "ar" ? "معفى (غير دافع)" : "Exonéré (Non-payeur)"}</span>
                               ) : (
                                 <span className="text-danger font-bold">{t("inscriptionDue")}</span>
                               )}
@@ -1283,6 +1306,14 @@ export default function StudentPaymentDetails({
                             <Badge variant="success" size="sm" withDot>
                               {locale === "ar" ? "معفى من الرسوم" : "Non-payeur (Exonéré)"}
                             </Badge>
+                          ) : cm.status === "SIBLING_WAIVED" ? (
+                            <Badge variant="secondary" size="sm" withDot className="font-bold">
+                              {locale === "ar" ? "معفى (خصم إخوة 100%)" : "Exonéré (Fratrie 100%)"}
+                            </Badge>
+                          ) : cm.hasPayerSibling && cm.status === "UNPAID" ? (
+                            <Badge variant="danger" size="sm" withDot className="font-bold">
+                              {locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)"}
+                            </Badge>
                           ) : isExpiring ? (
                             <Badge variant="warning" size="sm" withDot className="font-bold">
                               {t("expiringWarningBadge")}
@@ -1296,7 +1327,7 @@ export default function StudentPaymentDetails({
                               {t("unpaidBadge", { count: cm.netSessions })}
                             </Badge>
                           ) : isSibling || cm.hasPayerSibling ? (
-                            <Badge variant="neutral" size="sm" withDot>
+                            <Badge variant="secondary" size="sm" withDot>
                               {t("siblingBadge")}
                             </Badge>
                           ) : null}
@@ -1309,7 +1340,7 @@ export default function StudentPaymentDetails({
                           <span className="text-[10px] text-muted block">{t("sessionsRemaining")}</span>
                           <span
                             className={`font-mono font-bold text-sm ${
-                              (cm.enrollment as any).payerStatus === "NON_PAYER"
+                              (cm.enrollment as any).payerStatus === "NON_PAYER" || cm.isSiblingWaived
                                 ? "text-success-text"
                                 : cm.netSessions <= 0
                                 ? "text-danger"
@@ -1320,6 +1351,8 @@ export default function StudentPaymentDetails({
                           >
                             {(cm.enrollment as any).payerStatus === "NON_PAYER"
                               ? (locale === "ar" ? "معفى" : "Exonéré")
+                              : cm.isSiblingWaived
+                              ? (locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)")
                               : cm.netSessions}
                           </span>
                           {cm.transferableSessions > cm.netSessions && (
@@ -1345,11 +1378,17 @@ export default function StudentPaymentDetails({
                           <span className="text-[10px] text-muted block">{t("inscriptionFeeStatus")}</span>
                           <span className="text-xs font-semibold text-gray-800">
                             {cm.isInscriptionPaid ? (
-                              <span className="text-success-text font-bold">{t("inscriptionSettled")}</span>
+                              <span className="text-success-text font-bold">
+                                {cm.isInscriptionTransferred
+                                  ? (locale === "ar" ? `مسدد (محول${cm.inscFromClassName ? ` من ${cm.inscFromClassName}` : ""})` : `Payé (Transféré${cm.inscFromClassName ? ` de ${cm.inscFromClassName}` : ""})`)
+                                  : t("inscriptionSettled")}
+                              </span>
                             ) : cm.isOwnerWaived ? (
                               <span className="text-amber-700">{t("inscriptionOwnerWaived")}</span>
                             ) : cm.isGroupWaived ? (
                               <span className="text-blue-700">{t("inscriptionGroupWaived")}</span>
+                            ) : cm.isNonPayerInscWaived ? (
+                              <span className="text-emerald-700">{locale === "ar" ? "معفى (غير دافع)" : "Exonéré (Non-payeur)"}</span>
                             ) : (
                               <span className="text-danger font-bold">{t("inscriptionDue")}</span>
                             )}
@@ -1367,6 +1406,10 @@ export default function StudentPaymentDetails({
                             <span className="text-emerald-700 font-bold">
                               0 DZD ({locale === "ar" ? "معفى من رسوم الدروس" : "Exonéré de cours"})
                             </span>
+                          ) : cm.isSiblingWaived ? (
+                            <span className="text-emerald-700 font-bold">
+                              0 DZD ({locale === "ar" ? "معفى (خصم إخوة 100%)" : "Exonéré (Fratrie 100%)"})
+                            </span>
                           ) : (cm.enrollment as any).payerStatus === "SCHOOL_FEES_ONLY" ? (
                             <span className="text-amber-800 font-bold">
                               {cm.feeCalc.studentSessionFee.toLocaleString()} DZD / {locale === "ar" ? "حصة" : "séance"}
@@ -1381,7 +1424,7 @@ export default function StudentPaymentDetails({
                           )}
                         </div>
 
-                        {cm.netSessions < 0 && (cm.enrollment as any).payerStatus !== "NON_PAYER" && (
+                        {cm.netSessions < 0 && (cm.enrollment as any).payerStatus !== "NON_PAYER" && !cm.isSiblingWaived && (
                           <div className="w-full pt-1.5 mt-1 border-t border-border/60 flex items-center justify-between text-danger font-bold text-[11px]">
                             <span>
                               {locale === "ar"

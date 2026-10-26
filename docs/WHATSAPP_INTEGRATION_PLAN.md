@@ -1,22 +1,23 @@
 # Massinissa School Management System
-## WhatsApp Integration Engine — Comprehensive Architecture & Implementation Plan
+## WhatsApp Integration Engine — Comprehensive Architecture & Conflict-Proof Implementation Plan
 
-**Document Version:** 1.0.0  
-**Status:** Approved for Implementation  
+**Document Version:** 2.0.0  
+**Status:** Approved for Implementation (Updated with Oracle Cloud Architecture & Conflict Protections)  
 **Target Roles:** Owner (Device & Policy Management), Branch Admins (Operational Trigger Dispatch)  
 **Applicable Branches:** ECOLE, ANNEX, AMPHI  
+**Target Infrastructure:** Oracle Cloud Infrastructure (OCI Compute / Docker Stack)  
 
 ---
 
 ## Table of Contents
 1. [Executive Summary & Core Objectives](#1-executive-summary--core-objectives)
-2. [High-Level Architecture & Engine Selection](#2-high-level-architecture--engine-selection)
-   - 2.1 Technology Selection: Why Baileys Multi-Device Protocol
-   - 2.2 Deployment Topology (Next.js Serverless vs. Dedicated Gateway Service)
-   - 2.3 End-to-End System Architecture Diagram
+2. [Infrastructure Architecture: Oracle Cloud Infrastructure (OCI)](#2-infrastructure-architecture-oracle-cloud-infrastructure-oci)
+   - 2.1 Oracle Cloud Dedicated Stack vs. Serverless
+   - 2.2 Baileys Multi-Device Protocol & Persistent Session Storage
+   - 2.3 End-to-End System Architecture on OCI
 3. [Database Schema Enhancements (Prisma)](#3-database-schema-enhancements-prisma)
-   - 3.1 New Models: `WhatsAppDeviceSession`, `WhatsAppConfig`, `WhatsAppNotification`
-   - 3.2 Schema Additions & Relational Integrity
+   - 3.1 Updated Models: `WhatsAppConfig`, `WhatsAppNotification`, `WhatsAppNumberCache`, `LessonRevision`
+   - 3.2 Idempotency, Versioning & Audit Integrity
 4. [Phone Verification & Fallback Waterfall Algorithm](#4-phone-verification--fallback-waterfall-algorithm)
    - 4.1 Algerian Number Normalization Engine
    - 4.2 Waterfall Resolution Flow (Student Global Number → Parents → Family Payer)
@@ -26,23 +27,32 @@
    - 5.2 Operating Mode Matrix: `OFF`, `MANUAL`, and `AUTO`
 6. [Detailed Trigger Specifications & System Hooks](#6-detailed-trigger-specifications--system-hooks)
    - 6.1 Trigger 1: Student Absence Recorded
-   - 6.2 Trigger 2: Lesson Credits Depleted (0 Remaining Sessions)
-   - 6.3 Trigger 3: Special Lesson Scheduled (Extra, Catch-Up, Free)
-7. [UI/UX Wireframes & User Experience Flows](#7-uiux-wireframes--user-experience-flows)
-   - 7.1 Owner Experience: WhatsApp Control Center & Live QR Scanner
-   - 7.2 Branch Admin Experience: In-Context Triggers & Branch Outbox Queue
-8. [API Contracts & Internal Interface Specifications](#8-api-contracts--internal-interface-specifications)
-   - 8.1 Gateway Service Internal REST & WebSocket API
-   - 8.2 Next.js Server Actions & Background Dispatcher
-9. [Value-Added Architectural Suggestions for Massinissa School](#9-value-added-architectural-suggestions-for-massinissa-school)
-   - 9.1 Anti-Ban & Meta Compliance Engine (Rate Limiting & Jitter)
-   - 9.2 Biometric K50 Scan Zero-Credit Real-Time Hook
-   - 9.3 Inbound Message Webhook for Absence Justification Sync
-   - 9.4 Quiet Hours & Night-Time Delay Window
-   - 9.5 Cross-Branch GPS Location Pin Cards
-   - 9.6 Bilingual Intelligent Template Auto-Switching (Arabic / French)
-10. [Step-by-Step Phased Implementation Roadmap](#10-step-by-step-phased-implementation-roadmap)
-11. [Verification & Acceptance Testing Plan](#11-verification--acceptance-testing-plan)
+   - 6.2 Trigger 2: Lesson Credits Depleted (0 Remaining) & **24-Hour Pre-Lesson -1 Balance Warning**
+   - 6.3 Trigger 3: Special Lesson Scheduled & **Rescheduling / Update Confirmation**
+7. [Comprehensive Conflict Prevention & Misleading Information Protections](#7-comprehensive-conflict-prevention--misleading-information-protections)
+   - 7.1 Conflict 1: Special Lesson Edited / Rescheduled after Initial Announcement
+   - 7.2 Conflict 2: Special Lesson Cancelled / Deleted after Announcement
+   - 7.3 Conflict 3: Attendance Mistake (Marked Absent, then Corrected to Present / Late Arrival)
+   - 7.4 Conflict 4: Payment Settled at Desk while Reminder is Pending in Outbox
+   - 7.5 Conflict 5: Multiple Lessons on the Same Day / Back-to-Back Sessions
+   - 7.6 Conflict 6: Sibling / Family Disambiguation on Shared Parent Phones
+   - 7.7 Conflict 7: Group Transfers & Dropped Enrollments
+   - 7.8 Conflict 8: Anti-Spam Cooldown & Message Idempotency Locks
+8. [UI/UX Wireframes & User Experience Flows](#8-uiux-wireframes--user-experience-flows)
+   - 8.1 Owner Control Center & Live QR Scanner
+   - 8.2 Branch Admin Experience: Attendance Roster In-Context Bar & Branch Outbox
+9. [API Contracts & Internal Interface Specifications](#9-api-contracts--internal-interface-specifications)
+   - 9.1 OCI Internal REST & WebSocket Bridge API
+   - 9.2 Next.js Server Actions & 24-Hour Pre-Lesson Background Worker
+10. [Value-Added Architectural Suggestions for Massinissa School](#10-value-added-architectural-suggestions-for-massinissa-school)
+    - 10.1 Anti-Ban Compliance Engine (Token-Bucket Jitter)
+    - 10.2 Biometric K50 Scan Zero-Credit Real-Time Hook
+    - 10.3 Inbound Message Webhook for Absence Justification Sync
+    - 10.4 Quiet Hours & Night-Time Delay Window
+    - 10.5 Cross-Branch GPS Location Pin Cards
+    - 10.6 Bilingual Auto-Switching (Arabic / French)
+11. [Step-by-Step Phased Implementation Roadmap](#11-step-by-step-phased-implementation-roadmap)
+12. [Verification & Acceptance Testing Plan](#12-verification--acceptance-testing-plan)
 
 ---
 
@@ -50,110 +60,98 @@
 
 Massinissa School operates across three branches (ECOLE, ANNEX, AMPHI) with hundreds of active students enrolled in regular academic support classes and special formations. Communication between branch administrations and parents has traditionally relied on in-person interactions, manual phone calls, or printed vouchers. 
 
-This implementation plan delivers a **native, device-linked WhatsApp integration** designed to narrow the school-parent communication gap. The integration connects directly to the school's official Android/iOS mobile phone through a **QR code scan**, eliminating the prohibitive per-message fees of third-party SMS gateways and Meta Cloud API while maintaining a personal school identity.
+This updated specification incorporates the school's **migration to Oracle Cloud Infrastructure (OCI)** (eliminating serverless limitations) and implements **airtight conflict protections** against misleading notifications—such as rescheduled special lessons, attendance reversals, payment race conditions, and pre-lesson -1 balance warnings.
 
 ### Core Objectives:
 1. **Device-Linked Multi-Device Authentication:** Connect the school's WhatsApp account seamlessly by scanning a dynamically generated QR code directly from the Owner's dashboard.
-2. **Three Automated & Manual Triggers:**
-   - **Absence Alert:** Triggered when a student is recorded absent during attendance taking.
-   - **Zero Credit Exhaustion Alert:** Triggered when a student's remaining prepaid lesson credits reach zero.
-   - **Special Lesson Announcement:** Triggered when an administrator schedules an extra, catch-up, or free lesson for groups the student is enrolled in.
+2. **Three Core Triggers (Enhanced):**
+   - **Absence Alert:** Triggered when a student is recorded absent during attendance taking, with automatic reversal notices if corrected to present.
+   - **Zero Credit Exhaustion & 24-Hour Pre-Lesson Warning:** Triggered when credits hit 0, and dispatched **exactly 24 hours before the student's next scheduled lesson** to warn that attending without payment will result in a **negative balance (-1 balance)**.
+   - **Special Lesson Announcement & Update Confirmation:** Triggered upon lesson creation, and **re-triggered upon any schedule update** with an explicit confirmation message ensuring parents follow the revised schedule.
 3. **Smart Waterfall Contact Resolution:** Automatically verify WhatsApp availability on saved numbers, starting with the student's primary/global phone number; if unavailable, sequentially inspect parent contact numbers until an active WhatsApp account is identified.
 4. **Three Operating Modes:** Support `OFF` (dormant), `MANUAL` (branch admin reviews and triggers queued messages), and `AUTO` (real-time automated dispatch).
-5. **Strict Security Isolation:** Restrict device pairing, QR generation, system mode changes, and template configuration strictly to the **Owner role**, while providing branch admins with an intuitive manual outbox for day-to-day operations.
+5. **Conflict-Proof Design:** Zero false alarms, real-time balance re-verification before sending, and full revision tracking for modified sessions.
 
 ---
 
-## 2. High-Level Architecture & Engine Selection
+## 2. Infrastructure Architecture: Oracle Cloud Infrastructure (OCI)
 
-### 2.1 Technology Selection: Why Baileys Multi-Device Protocol
+### 2.1 Oracle Cloud Dedicated Stack vs. Serverless
 
-To connect an existing mobile WhatsApp number without requiring official Meta Business Cloud approval or per-conversation utility charges, web systems use WhatsApp Web protocols. We evaluate the two primary Node.js approaches:
+The application is hosted on **Oracle Cloud Infrastructure (OCI)** (e.g., Oracle Linux Compute Instance running Node.js / Docker Compose). This architectural environment provides significant advantages over serverless hosting:
 
-| Dimension | `@whiskeysockets/baileys` (Recommended) | `whatsapp-web.js` (Puppeteer) | Meta Cloud API (Official BSP) |
-| :--- | :--- | :--- | :--- |
-| **Underlying Mechanism** | Pure WebSocket client reverse-engineering the multi-device binary protocol | Headless Chromium browser instance (Puppeteer) | Hosted HTTP Webhook API directly with Meta |
-| **RAM Footprint** | **35 MB - 60 MB** | 450 MB - 800 MB per session | 0 MB (Remote API) |
-| **CPU Overhead** | Minimal (light cryptographic operations) | High (Chromium page rendering & DOM events) | Zero on local server |
-| **QR Code Pairing** | Direct event (`connection.update` with raw QR string) | Extracted from DOM element | N/A (Requires dedicated business number) |
-| **Phone Number Check** | Native `sock.onWhatsApp(jid)` method (instant batch lookup) | Browser evaluation script | Limited verification API |
-| **Stability on Linux/VPS** | Native Node.js, zero system binary dependencies | Requires `libasound2`, `libxss1`, Chromium binaries | Cloud dependent |
-| **Per-Message Cost** | **0.00 DZD (Free)** | **0.00 DZD (Free)** | ~0.05 to 0.08 USD per template message |
+| Dimension | Serverless (e.g. Vercel) | Dedicated OCI Stack (Current Architecture) |
+| :--- | :--- | :--- |
+| **Process Lifespan** | Ephemeral (spin-down after HTTP response) | **Continuous long-lived Node.js process / Docker daemon** |
+| **WebSocket Connection** | Disconnects on lambda termination | **Permanent, unbroken WebSocket to WhatsApp Multi-Device** |
+| **Session Authentication State** | Lost without remote redis/S3 synchronization | **Native persistent OCI Block Volume (`auth_info_baileys`)** |
+| **Cron / Background Scheduling** | Requires third-party cloud schedulers | **Native Node.js cron worker (`node-cron`) running 24/7 on VM** |
+| **Network Latency** | Webhook network hops across regions | **Zero-latency internal socket (`localhost:5001`)** |
+| **Operational Cost** | High tier-based invocations | **Fixed, low-cost OCI compute (Always Free / standard shape)** |
 
-**Conclusion:** `@whiskeysockets/baileys` is selected as the core WhatsApp engine. It is lightweight, executes directly in TypeScript/Node.js, has zero Chromium dependencies, and provides built-in methods for real-time connection state management and phone number verification.
+### 2.2 Baileys Multi-Device Protocol & Persistent Session Storage
 
-### 2.2 Deployment Topology (Next.js Serverless vs. Dedicated Gateway Service)
+`@whiskeysockets/baileys` runs natively inside the OCI VM as a dedicated system service (`systemd`) or companion container in `docker-compose.yml`.
+- **Session Persistence:** Credentials generated during the initial QR code scan are stored in `/opt/massinissa/data/wa-session` (mounted as a Docker volume).
+- **Auto-Recovery:** If the OCI VM or Docker container restarts, Baileys automatically restores the active WhatsApp session from disk within 3 seconds **without requiring a new QR scan**.
+- **Low Footprint:** Consumes only ~40MB of RAM, leaving full system resources available for Next.js and PostgreSQL.
 
-The Massinissa School software is built on Next.js 16 (App Router), deployed on Vercel with PostgreSQL hosted on Supabase, and utilizes local bridge utilities (such as `zk-bridge` for ZKTeco K50 biometric devices).
-
-> [!IMPORTANT]
-> **The Serverless Constraint:**
-> A persistent WhatsApp multi-device connection requires an open, uninterrupted WebSocket handshake (`wss://web.whatsapp.com/ws/chat`) to WhatsApp's servers, along with local multi-file cryptographic authentication state (`auth_info_baileys`). 
-> Serverless platforms (such as Vercel Lambdas) freeze or terminate execution after HTTP request completion. A WebSocket socket **cannot** live inside a Vercel serverless function.
-
-#### Selected Architecture: Decoupled WhatsApp Bridge Gateway
-We adopt a decoupled microservice pattern that mirrors the school's existing `zk-bridge` biometric architecture:
-1. **The Web Application (Next.js 16 on Vercel or Node.js):** Manages school business logic, permissions, attendance, schedules, UI dashboards, and queues notifications in PostgreSQL (`WhatsAppNotification`).
-2. **The WhatsApp Gateway Service (`whatsapp-bridge`):** A lightweight Node.js daemon running either:
-   - On the school's on-premise local server (alongside `zk-bridge` where internet is constant), OR
-   - On a lightweight persistent Docker container / VPS (Railway, Render, DigitalOcean, or Docker Compose).
-3. **Communication Channel:** Secured HTTP REST endpoints with shared secret authorization (`x-api-key: WHATSAPP_BRIDGE_SECRET`) and a Server-Sent Events (SSE) or WebSocket channel for streaming the live QR code to the Owner's browser.
-
-### 2.3 End-to-End System Architecture Diagram
+### 2.3 End-to-End System Architecture on OCI
 
 ```mermaid
 flowchart TD
-    subgraph OwnerDevice["School Mobile Device"]
-        WA["Official WhatsApp App"]
+    subgraph OwnerDevice["School Official Phone"]
+        WA["WhatsApp Mobile App"]
     end
 
-    subgraph SchoolApp["Massinissa Next.js Web App"]
-        OwnerUI["Owner Configuration Page (/admin/configuration?tab=whatsapp)"]
-        AdminUI["Branch Admin Queue (/list/whatsapp-queue & Attendance Roster)"]
-        PrismaDB[("PostgreSQL Database (Supabase)")]
-        ActionHooks["Action Triggers: saveAttendance, creditZero, createLesson"]
-        Dispatcher["Queue Dispatcher / Background Worker"]
+    subgraph OCI_Host["Oracle Cloud Infrastructure (OCI Compute Instance)"]
+        subgraph NextApp["Next.js 16 Web Application (Port 3000)"]
+            OwnerUI["Owner WhatsApp Control Center (/admin/configuration)"]
+            AdminUI["Branch Outbox Queue (/list/whatsapp-queue)"]
+            AttendanceHook["Attendance Roster Action Hooks"]
+            CronWorker["24-Hour Pre-Lesson Scheduled Worker"]
+        end
+
+        subgraph WAGateway["WhatsApp Bridge Daemon (Port 5001)"]
+            BaileysEngine["Baileys Multi-Device Socket"]
+            RateLimiter["Token-Bucket Anti-Ban Jitter (4-8s)"]
+            NumberVerifier["sock.onWhatsApp Verifier"]
+            ConflictEngine["Conflict & Revocation Filter"]
+        end
+
+        subgraph Storage["OCI Block Volume Storage"]
+            PrismaDB[("PostgreSQL Database")]
+            AuthStore[("Local Directory: /data/wa-session")]
+        end
     end
 
-    subgraph WAGateway["WhatsApp Gateway Service (Baileys Daemon)"]
-        SocketEngine["Baileys Socket Manager"]
-        AuthState[("Local / Mounted Auth State: auth_info_baileys")]
-        QRGen["QR Generator & SSE Stream"]
-        RateLimiter["Token Bucket Rate Limiter & Anti-Ban Jitter"]
-        Verifier["WhatsApp Number Verifier (sock.onWhatsApp)"]
-    end
-
-    subgraph Recipients["Target Recipients"]
-        StudentWA["Student WhatsApp"]
-        ParentWA["Parent WhatsApp"]
+    subgraph Target["Recipients (Waterfall Priority)"]
+        StudentPhone["1. Student Primary Phone"]
+        ParentPhone["2. Parent Phones (Parent 1, 2...)"]
+        FamilyPayer["3. Family Payer Phone"]
     end
 
     WA -.->|"Scans QR Code"| OwnerUI
-    OwnerUI <-->|"SSE / REST Stream"| QRGen
-    QRGen <--> SocketEngine
-    SocketEngine <--> AuthState
+    OwnerUI <-->|"Internal SSE Stream"| BaileysEngine
+    BaileysEngine <--> AuthStore
+    NextApp <-->|"Internal REST (x-api-key)"| WAGateway
+    CronWorker -->|"Query 24h Expiring Credits"| PrismaDB
 
-    ActionHooks -->|"Create Notification Record"| PrismaDB
-    AdminUI -->|"Manual Trigger Batch"| Dispatcher
-    Dispatcher -->|"POST /api/send-bulk (x-api-key)"| RateLimiter
-    RateLimiter --> Verifier
-    Verifier --> SocketEngine
-    SocketEngine -->|"Deliver Message"| StudentWA
-    SocketEngine -->|"Fallback Message"| ParentWA
-    SocketEngine -.->|"Delivery Ack & Status Updates"| PrismaDB
+    ConflictEngine --> RateLimiter
+    RateLimiter --> NumberVerifier
+    NumberVerifier --> BaileysEngine
+    BaileysEngine -->|"Deliver Confirmed Message"| Target
 ```
 
 ---
 
 ## 3. Database Schema Enhancements (Prisma)
 
-To support the three modes, QR connection persistence, message queuing, delivery logs, and auditability, we introduce dedicated models in `prisma/schema.prisma`.
-
 ### 3.1 New Prisma Models
 
 ```prisma
 // =================================================================
-// WHATSAPP INTEGRATION MODELS
+// WHATSAPP INTEGRATION & CONFLICT PROTECTION MODELS
 // =================================================================
 
 enum WhatsAppMode {
@@ -164,8 +162,12 @@ enum WhatsAppMode {
 
 enum WhatsAppTriggerType {
   ABSENCE
-  CREDIT_ZERO
-  SPECIAL_LESSON
+  ABSENCE_CORRECTION          // Reversal notice when marked present after absent
+  CREDIT_ZERO_INSTANT         // Triggered immediately when credit hits 0
+  CREDIT_ZERO_PRE_LESSON_24H  // Triggered 24 hours before next lesson (-1 debt warning)
+  SPECIAL_LESSON_NEW          // Initial announcement
+  SPECIAL_LESSON_UPDATE       // Schedule/room modified confirmation notice
+  SPECIAL_LESSON_CANCELLED    // Cancellation notice
 }
 
 enum WhatsAppRecipientType {
@@ -181,9 +183,12 @@ enum WhatsAppNotificationStatus {
   SENT              // Dispatched to WhatsApp network
   DELIVERED         // Received by recipient's device (double tick)
   READ              // Read by recipient (blue tick)
+  REVOKED_PAYMENT   // Auto-dismissed because student paid at desk before send
+  REVOKED_CORRECTED // Auto-dismissed because attendance was corrected to present
+  SUPERSEDED        // Draft replaced by an updated revision
   FAILED_NO_WHATSAPP// All checked numbers lack WhatsApp
   FAILED_ERROR      // Network or API failure
-  DISMISSED         // Dismissed/cancelled by branch admin
+  DISMISSED         // Manually dismissed by branch admin
 }
 
 model WhatsAppConfig {
@@ -199,15 +204,20 @@ model WhatsAppConfig {
   // Triggers Toggle
   enableAbsenceTrigger      Boolean      @default(true)
   enableCreditZeroTrigger   Boolean      @default(true)
+  enablePreLesson24hTrigger Boolean      @default(true)
   enableSpecialLessonTrigger Boolean     @default(true)
   
   // Message Templates (Supports placeholders: {student_name}, {class_name}, etc.)
   templateAbsenceAr         String       @db.Text
   templateAbsenceFr         String       @db.Text
+  templateAbsenceCorrectedAr String      @db.Text
   templateCreditZeroAr      String       @db.Text
   templateCreditZeroFr      String       @db.Text
-  templateSpecialLessonAr   String       @db.Text
-  templateSpecialLessonFr   String       @db.Text
+  templatePreLesson24hAr    String       @db.Text
+  templatePreLesson24hFr    String       @db.Text
+  templateSpecialLessonNewAr String      @db.Text
+  templateSpecialLessonUpdAr String      @db.Text // Confirmed update template
+  templateSpecialLessonCanAr String      @db.Text // Cancellation template
   
   // Anti-Ban & Quiet Hours settings
   minIntervalSeconds        Int          @default(4)   // Delay between messages
@@ -225,6 +235,7 @@ model WhatsAppNotification {
   studentId       String
   lessonId        Int?
   classId         Int?
+  revisionNumber  Int                        @default(1) // Tracks update iterations
   triggerType     WhatsAppTriggerType
   recipientType   WhatsAppRecipientType?
   recipientPhone  String?                    // Normalized e.g., "213550123456"
@@ -232,13 +243,17 @@ model WhatsAppNotification {
   messageContent  String                     @db.Text
   status          WhatsAppNotificationStatus @default(PENDING_MANUAL)
   
+  // Context metadata for conflict resolution (stored as JSON)
+  // e.g., { oldStartsAt, newStartsAt, oldRoom, newRoom, remainingCredits }
+  contextData     Json?                      
+  
   // Error and diagnostic tracking
   attemptCount    Int                        @default(0)
   errorMessage    String?
   checkedNumbers  Json?                      // Array of [{ phone, type, hasWA: boolean }]
   
   // Audit trail
-  triggeredBy     String                     // User ID or "SYSTEM_AUTO"
+  triggeredBy     String                     // User ID or "SYSTEM_AUTO" | "CRON_WORKER_24H"
   approvedBy      String?                    // Branch Admin ID who authorized send
   approvedAt      DateTime?
   sentAt          DateTime?
@@ -254,7 +269,7 @@ model WhatsAppNotification {
   @@index([branchId, status])
   @@index([studentId, triggerType])
   @@index([status, createdAt])
-  @@index([lessonId])
+  @@index([lessonId, revisionNumber])
 }
 
 model WhatsAppNumberCache {
@@ -267,65 +282,20 @@ model WhatsAppNumberCache {
 }
 ```
 
-### 3.2 Relations Added to Existing Models
-In `Branch`:
-```prisma
-whatsAppNotifications WhatsAppNotification[]
-```
-In `Student`:
-```prisma
-whatsAppNotifications WhatsAppNotification[]
-```
-In `Lesson`:
-```prisma
-whatsAppNotifications WhatsAppNotification[]
-```
-
 ---
 
 ## 4. Phone Verification & Fallback Waterfall Algorithm
 
-A critical requirement is testing WhatsApp availability across saved student records in a strict priority sequence:
-1. **Primary Global Phone Number:** Stored directly on the student record (`Student.phone`).
-2. **Parent Phone Numbers:** Stored in the child table `ParentPhoneNumber[]` linked to `Student.id`.
-3. **Family Payer Phone (Fallback):** If the student belongs to a `Family`, inspect the payer sibling or family guardian.
-
 ### 4.1 Algerian Number Normalization Engine
 
-In Algeria, numbers are entered in varied notations: `0550 12 34 56`, `+213 (0) 770 11 22 33`, `0661123456`, or `213550123456`. WhatsApp requires the strict international format: `213[5|6|7]XXXXXXXX@s.whatsapp.net`.
-
 ```typescript
-/**
- * Normalizes Algerian mobile numbers to WhatsApp JID format
- * @param rawInput Raw input string from student or parent records
- * @returns Clean international phone string or null if invalid
- */
 export function normalizeAlgerianPhone(rawInput?: string | null): string | null {
   if (!rawInput) return null;
-  
-  // 1. Strip all whitespace, dots, dashes, parentheses, and leading plus
   let cleaned = rawInput.replace(/[\s\.\-\(\)\+]/g, "").trim();
-  
-  // 2. Handle international prefix cases: "00213" -> "213"
-  if (cleaned.startsWith("00213")) {
-    cleaned = cleaned.substring(2);
-  }
-  
-  // 3. Handle local Algerian zero prefix: "05", "06", "07"
-  if (/^0[567]\d{8}$/.test(cleaned)) {
-    cleaned = "213" + cleaned.substring(1);
-  }
-  
-  // 4. Handle direct format: "213" + "5/6/7" + 8 digits
-  if (/^213[567]\d{8}$/.test(cleaned)) {
-    return cleaned;
-  }
-  
-  // 5. Fallback check for valid international numbers (8 to 15 digits)
-  if (/^\d{8,15}$/.test(cleaned)) {
-    return cleaned;
-  }
-  
+  if (cleaned.startsWith("00213")) cleaned = cleaned.substring(2);
+  if (/^0[567]\d{8}$/.test(cleaned)) cleaned = "213" + cleaned.substring(1);
+  if (/^213[567]\d{8}$/.test(cleaned)) return cleaned;
+  if (/^\d{8,15}$/.test(cleaned)) return cleaned;
   return null;
 }
 ```
@@ -334,15 +304,15 @@ export function normalizeAlgerianPhone(rawInput?: string | null): string | null 
 
 ```mermaid
 flowchart TD
-    Start(["Start Notification Generation"]) --> ExtractStudent["Extract Student & Associated Phone Numbers"]
+    Start(["Start Contact Resolution"]) --> GetStudent["Fetch Student & Associated Numbers"]
+    GetStudent --> CheckGlobal{"Student has primary phone?"}
     
-    ExtractStudent --> CheckGlobal{"Does Student have a primary phone?"}
     CheckGlobal -- Yes --> NormGlobal["Normalize student.phone"]
     CheckGlobal -- No --> CheckParents{"Any parent phones saved?"}
     
     NormGlobal --> QueryGlobal{"sock.onWhatsApp(studentPhone)"}
     QueryGlobal -- Active on WhatsApp --> FoundGlobal["Target: STUDENT_PRIMARY<br/>Set Recipient JID<br/>CHECK COMPLETED"]
-    QueryGlobal -- Not on WhatsApp / Invalid --> CheckParents
+    QueryGlobal -- Not on WhatsApp --> CheckParents
     
     CheckParents -- Yes --> LoopParents["Iterate parentPhoneNumbers (Parent 1, Parent 2...)"]
     CheckParents -- No --> CheckFamily{"Is Student in Family with Payer?"}
@@ -358,104 +328,11 @@ flowchart TD
     QueryFamilyPayer -- Not on WhatsApp --> NoWA
     CheckFamily -- No --> NoWA
     
-    NoWA["Mark Notification: FAILED_NO_WHATSAPP<br/>Record all checked numbers in JSON<br/>Alert Branch Admin on Dashboard"]
+    NoWA["Mark: FAILED_NO_WHATSAPP<br/>Alert Admin to collect phone"]
     
-    FoundGlobal --> SendOrQueue["Proceed to Mode Dispatch (AUTO / MANUAL)"]
-    FoundParent --> SendOrQueue
-    FoundFamily --> SendOrQueue
-```
-
-### 4.3 WhatsApp Verification & Caching Strategy
-
-Querying WhatsApp for every message introduces latency and potential query limits. We implement an intelligent cache with a **14-day Time-To-Live (TTL)** in `WhatsAppNumberCache`:
-
-```typescript
-export async function resolveStudentWhatsAppRecipient(studentId: string): Promise<{
-  recipientPhone: string | null;
-  recipientType: "STUDENT_PRIMARY" | "PARENT_PHONE" | "FAMILY_PAYER" | null;
-  recipientName: string | null;
-  checkedAudit: Array<{ phone: string; type: string; hasWhatsApp: boolean }>;
-}> {
-  const student = await prisma.student.findUnique({
-    where: { id: studentId },
-    include: {
-      parentPhoneNumbers: true,
-      family: {
-        include: {
-          payerStudent: {
-            include: { parentPhoneNumbers: true },
-          },
-        },
-      },
-    },
-  });
-
-  if (!student) throw new Error("Student not found");
-
-  const checkedAudit: Array<{ phone: string; type: string; hasWhatsApp: boolean }> = [];
-
-  // Step 1: Check Student's primary phone
-  if (student.phone) {
-    const norm = normalizeAlgerianPhone(student.phone);
-    if (norm) {
-      const hasWA = await checkWhatsAppWithCache(norm);
-      checkedAudit.push({ phone: norm, type: "STUDENT_PRIMARY", hasWhatsApp: hasWA });
-      if (hasWA) {
-        return {
-          recipientPhone: norm,
-          recipientType: "STUDENT_PRIMARY",
-          recipientName: student.name,
-          checkedAudit,
-        };
-      }
-    }
-  }
-
-  // Step 2: Check Parent Phone Numbers sequentially
-  for (const p of student.parentPhoneNumbers) {
-    const norm = normalizeAlgerianPhone(p.phone);
-    if (norm) {
-      const hasWA = await checkWhatsAppWithCache(norm);
-      checkedAudit.push({ phone: norm, type: "PARENT_PHONE", hasWhatsApp: hasWA });
-      if (hasWA) {
-        return {
-          recipientPhone: norm,
-          recipientType: "PARENT_PHONE",
-          recipientName: `ولي أمر ${student.name}`,
-          checkedAudit,
-        };
-      }
-    }
-  }
-
-  // Step 3: Check Family Payer Fallback
-  if (student.family?.payerStudent && student.family.payerStudent.id !== student.id) {
-    const payer = student.family.payerStudent;
-    if (payer.phone) {
-      const norm = normalizeAlgerianPhone(payer.phone);
-      if (norm) {
-        const hasWA = await checkWhatsAppWithCache(norm);
-        checkedAudit.push({ phone: norm, type: "FAMILY_PAYER", hasWhatsApp: hasWA });
-        if (hasWA) {
-          return {
-            recipientPhone: norm,
-            recipientType: "FAMILY_PAYER",
-            recipientName: `المسؤول العائلي (${payer.name})`,
-            checkedAudit,
-          };
-        }
-      }
-    }
-  }
-
-  // Step 4: No number has WhatsApp
-  return {
-    recipientPhone: null,
-    recipientType: null,
-    recipientName: null,
-    checkedAudit,
-  };
-}
+    FoundGlobal --> Outbox["Dispatch via Selected Mode (AUTO / MANUAL)"]
+    FoundParent --> Outbox
+    FoundFamily --> Outbox
 ```
 
 ---
@@ -464,549 +341,448 @@ export async function resolveStudentWhatsAppRecipient(studentId: string): Promis
 
 ### 5.1 Strict Role Governance (Owner vs. Branch Admin)
 
-In alignment with Massinissa School's central permissions framework (`src/lib/permissions.ts`), device configuration and financial-level communications must maintain ironclad boundaries:
-
 | Capability / Action | Owner Role | Branch Admin Role | Teacher Role |
 | :--- | :---: | :---: | :---: |
-| View WhatsApp Connection Status | ✅ Full | ❌ Hidden | ❌ Hidden |
+| View WhatsApp Device Connection Status | ✅ Full | ❌ Hidden | ❌ Hidden |
 | Generate & Scan WhatsApp QR Code | ✅ Full | ❌ Blocked | ❌ Blocked |
 | Disconnect / Unlink WhatsApp Session | ✅ Full | ❌ Blocked | ❌ Blocked |
 | Switch Mode (`OFF` / `MANUAL` / `AUTO`) | ✅ Full | ❌ Blocked | ❌ Blocked |
-| Edit Message Templates & Triggers | ✅ Full | ❌ Blocked | ❌ Blocked |
+| Configure Message Templates & Triggers | ✅ Full | ❌ Blocked | ❌ Blocked |
 | View Branch-Scoped Pending Trigger Queue | ✅ All Branches | ✅ Own Branch Only | ❌ Hidden |
 | Click "Send WhatsApp" in Manual Mode | ✅ Allowed | ✅ Own Branch Only | ❌ Blocked |
 | Edit Pending Message Draft in Manual Mode | ✅ Allowed | ✅ Own Branch Only | ❌ Blocked |
 | Dismiss / Cancel Pending Notification | ✅ Allowed | ✅ Own Branch Only | ❌ Blocked |
-| View Branch Delivery History & Audit Logs | ✅ All Branches | ✅ Own Branch Only | ❌ Hidden |
 
 ### 5.2 Operating Mode Matrix
 
-```mermaid
-stateDiagram-v2
-    [*] --> OFF: System Initialization
-
-    state OFF {
-        [*] --> Inactive
-        note right of Inactive: WhatsApp engine completely silent.<br/>Triggers produce no database rows or messages.
-    }
-
-    state MANUAL {
-        [*] --> AwaitingTrigger
-        AwaitingTrigger --> QueueCreated: Event Occurs (Absence / Credit / Special)
-        QueueCreated --> BranchAdminReview: Notification saved as PENDING_MANUAL
-        BranchAdminReview --> Dispatched: Branch Admin Clicks "Send" (Single / Bulk)
-        BranchAdminReview --> Cancelled: Branch Admin Clicks "Dismiss"
-        note right of BranchAdminReview: Appears on Attendance Roster<br/>and /list/whatsapp-queue
-    }
-
-    state AUTO {
-        [*] --> AutoListening
-        AutoListening --> RealTimeDispatch: Event Occurs
-        RealTimeDispatch --> AntiBanThrottle: Waterfall verification + Token bucket
-        AntiBanThrottle --> DeliveredToWhatsApp: Auto Dispatched
-        note right of RealTimeDispatch: Zero branch admin friction.<br/>Admins view real-time delivery badges.
-    }
-
-    OFF --> MANUAL: Owner enables Manual Mode
-    MANUAL --> AUTO: Owner enables Auto Mode
-    AUTO --> MANUAL: Owner switches to Manual Mode
-    MANUAL --> OFF: Owner disables feature
-    AUTO --> OFF: Owner disables feature
-```
-
-1. **`OFF` Mode:** The system ignores all triggers. No queued rows are inserted, eliminating unnecessary database operations and ensuring zero external network activity.
-2. **`MANUAL` Mode (Human-in-the-Loop):**
-   - When an absence is recorded, credits reach zero, or a special lesson is scheduled, the system builds the message using the Owner's template, performs the contact verification waterfall, and stores the record in `WhatsAppNotification` with status `PENDING_MANUAL`.
-   - **Branch Admin Visibility:** The notifications immediately populate in the branch admin's view:
-     - Directly on the **Attendance Taking page** (a banner showing: *"3 students absent. Click to send WhatsApp alerts"*).
-     - Directly in a dedicated **Branch WhatsApp Outbox** tab.
-   - The branch admin can inspect the text, optionally append a personal remark, and click **"Send"** (or **"Send All Pending"**).
-3. **`AUTO` Mode (Autonomous Dispatch):**
-   - Triggers immediately transition into the `QUEUED` state.
-   - The background queue worker batches messages through the rate-limiter (spacing them 4–8 seconds apart) and dispatches them directly to the student/parent without requiring human intervention.
+- **`OFF` Mode:** The system ignores all triggers. No queued rows are inserted, zero messages are transmitted.
+- **`MANUAL` Mode (Human-in-the-Loop):**
+  - Triggers format the message and save it in `WhatsAppNotification` as `PENDING_MANUAL`.
+  - Appears on the **Attendance Taking Roster** and the **Branch Outbox Queue** (`/list/whatsapp-queue`).
+  - Branch admins review the pre-formatted text, optionally edit, and click **"Send"** (or **"Send All Pending"**).
+- **`AUTO` Mode (Autonomous Dispatch):**
+  - Triggers immediately transition into the `QUEUED` state.
+  - The background queue worker batches messages through the rate-limiter (spacing them 4–8 seconds apart) and dispatches them directly without human intervention.
 
 ---
 
 ## 6. Detailed Trigger Specifications & System Hooks
 
 ### 6.1 Trigger 1: Student Absence Recorded
-
-- **System Hook Point:** `saveAttendance` and `markSingleAttendanceAction` in `src/lib/actions.ts`.
-- **Condition:** When an existing attendance record changes to `"ABSENT"` or a new record is created with `status: "ABSENT"`.
-- **Context Data Gathered:**
-  - Student Name, Global Number (`matricule`).
-  - Class Name (e.g., `4AM Math Groupe 1`).
-  - Teacher Name (`Teacher.name`).
-  - Lesson Start & End Time (`Lesson.startsAt`, `Lesson.endsAt`).
-  - Branch Name (`Branch.name`).
-
-#### Default Bilingual Message Template:
-**Arabic:**
-> السلام عليكم ورحمة الله وبركاته.  
-> نعلمكم بغياب التلميذ(ة): **{student_name}** عن حصة مادة **{class_name}** (الأستاذ: **{teacher_name}**) المقررة اليوم **{date}** على الساعة **{start_time}** بمقر المؤسسة (**{branch_name}**).  
-> يرجى تبرير الغياب لدى إدارة الفرع أو الرد على هذه الرسالة. شكراً لتعاونكم.  
-> — *مؤسسة ماسينيسا التعليمية*
-
-**French:**
-> Bonjour,  
-> Nous vous informons de l'absence de l'élève **{student_name}** au cours de **{class_name}** (Enseignant : **{teacher_name}**) prévu aujourd'hui **{date}** à **{start_time}** au siège **{branch_name}**.  
-> Merci de bien vouloir contacter l'administration pour justifier cette absence.  
-> — *École Massinissa*
+- **Hook Point:** `saveAttendance` and `markSingleAttendanceAction` in [`src/lib/actions.ts`](file:///c:/Users/wassi/OneDrive/Bureau/massinissa-school-software/src/lib/actions.ts).
+- **Condition:** An attendance record is created or updated with `status: "ABSENT"`.
+- **Payload:** Student Name, Matricule, Class Name, Teacher Name, Date, Time Slot, Branch Name.
 
 ---
 
-### 6.2 Trigger 2: Lesson Credits Depleted (0 Remaining Sessions)
+### 6.2 Trigger 2: Lesson Credits Depleted (0 Remaining) & 24-Hour Pre-Lesson -1 Balance Warning
 
-- **System Hook Point:** Evaluated post-attendance submission (`saveAttendance`), post-biometric scan resolution (`resolveBiometricScanAction`), or after subscription calculations in `computeStudentCreditAndSessions` (`src/lib/studentBilling.ts`).
-- **Condition:**
-  - The student is enrolled in a regular tuition group (`isFormation === false`).
-  - `netSessions` recalculation reaches `<= 0`.
-  - Anti-Spam Check: Ensure no credit-zero alert has already been dispatched for this student in this class within the last **7 days** (unless a new voucher was issued in between).
+This trigger handles the full credit exhaustion lifecycle to ensure parents understand why tuition must be paid:
 
-#### Default Bilingual Message Template:
+#### Part A: Instant Zero-Credit Alert (Post-Attendance / Scan)
+- **Condition:** Evaluated immediately after an attendance session or biometric scan consumes the student's last prepaid credit, leaving `netSessions === 0`.
+- **Message:** Informs parents that all prepaid sessions have been consumed and encourages renewal at the branch desk.
+
+#### Part B: The 24-Hour Pre-Lesson Warning (-1 Balance Alert)
+- **Schedule:** Run by an automated background worker (`node-cron` on OCI) every hour.
+- **Evaluation Window:** Scans for scheduled lessons starting between **23 and 25 hours from now** (`startsAt >= now + 23h AND startsAt <= now + 25h`).
+- **Target Condition:**
+  - Student is enrolled (`Enrollment.status === "ACTIVE"`).
+  - Student is in a paying category (`payerStatus === "NORMAL"`).
+  - Calculated `netSessions <= 0`.
+- **The Core Conflict Warning:** The message explicitly emphasizes that if the student attends tomorrow's lesson without bringing payment, **their account balance will drop into the negative (-1 balance / رصيد سالب)** and they may face suspension.
+
+#### Default 24-Hour Warning Message Template:
 **Arabic:**
+> ⚠️ **تنبيه هام بشأن حصة الغد وتجديد الاشتراك**  
 > السلام عليكم ورحمة الله وبركاته.  
-> نلفت انتباهكم الكريمة إلى أن رصيد حصص التلميذ(ة): **{student_name}** في فوج **{class_name}** قد استُنفد بالكامل (0 حصص متبقية).  
-> لضمان استمرار حضور التلميذ(ة) في الحصص القادمة دون انقطاع، يُرجى التقدم لتسديد اشتراك الدورة الجديدة لدى مكتب الاستقبال بفرع **{branch_name}**.  
-> — *مؤسسة ماسينيسا التعليمية*
-
-**French:**
-> Bonjour,  
-> Nous vous informons que le solde de séances de l'élève **{student_name}** pour le groupe **{class_name}** est désormais épuisé (0 séance restante).  
-> Afin d'assurer la continuité de ses cours sans interruption, nous vous prions de bien vouloir renouveler son abonnement auprès de l'administration du siège **{branch_name}**.  
-> — *École Massinissa*
+> نود تذكيركم بأن التلميذ(ة): **{student_name}** (فوج: **{class_name}**) لديه(ا) حصة مبرمجة يوم غد **{date}** على الساعة **{start_time}** بمقر **{branch_name}**.  
+> نلفت انتباهكم الكريمة إلى أن **رصيد الحصص المتبقية حالياً هو: (0 حصص)**.  
+> 🔴 **ملاحظة هامة:** في حال حضور التلميذ(ة) لحصة الغد دون تسوية الاشتراك، سيصبح الرصيد سالباً **(-1 حصة في ذمة الولي)**.  
+> لتفادي أي إحراج للتلميذ أو تعليق لحضوره، يُرجى تزويده بمبلغ الاشتراك لتسديده لدى مكتب الاستقبال قبل الدخول إلى القاعة. شكراً لتفهمكم وحرصكم الدائم.  
+> — *إدارة مؤسسة ماسينيسا التعليمية*
 
 ---
 
-### 6.3 Trigger 3: Special Lesson Scheduled (Extra, Catch-Up, Free)
+### 6.3 Trigger 3: Special Lesson Scheduled & Rescheduling Update Confirmation
 
-- **System Hook Point:** In `createLesson` action (`src/lib/actions.ts`), immediately after successful lesson creation when `isSpecialLesson` is true:
-  ```typescript
-  const isSpecialLesson = Boolean(isExtra || isCatchUp || isFree);
-  ```
-- **Target Audience:** All active enrolled students across `allAssociatedClassIds` (`[classId, ...validAdditionalClassIds]`).
-- **Context Data Gathered:**
-  - Lesson Type: Extra (حصة إضافية), Catch-up (حصة استدراكية), Free (حصة مجانية).
-  - Date, Start Time, and End Time.
-  - Classroom Name and Host Branch Name (crucial for cross-branch scheduled sessions!).
-  - Teacher Name.
+- **Hook Point:** `createLesson` and `updateLesson` in [`src/lib/actions.ts`](file:///c:/Users/wassi/OneDrive/Bureau/massinissa-school-software/src/lib/actions.ts).
+- **Target Audience:** All active enrolled students across `allAssociatedClassIds` (handles merged classes via [`LessonGroup`](file:///c:/Users/wassi/OneDrive/Bureau/massinissa-school-software/prisma/schema.prisma#L177-L187)).
 
-#### Default Bilingual Message Template:
+#### Sub-Scenario A: Initial Special Lesson Creation (`SPECIAL_LESSON_NEW`)
+- Dispatches the standard special lesson announcement (Date, Start/End time, Classroom, Branch, Teacher).
+
+#### Sub-Scenario B: Rescheduled / Updated Special Lesson (`SPECIAL_LESSON_UPDATE`)
+- If an admin edits a special lesson after notifications were already sent:
+- System increments `revisionNumber` (e.g., Revision 2).
+- Dispatches a high-priority confirmation message explicitly contrasting the old schedule with the new confirmed schedule.
+
+#### Default Confirmation Message Template:
 **Arabic:**
+> ⚠️ **تنبيه هام ومؤكد: تعديل موعد الحصة الإضافية**  
 > السلام عليكم ورحمة الله وبركاته.  
-> نعلن لتلاميذ وأولياء فوج **{class_name}** عن برمجة **{lesson_type}** خاصة مع الأستاذ **{teacher_name}**:  
-> 📅 **التاريخ:** {date}  
-> ⏰ **التوقيت:** من {start_time} إلى {end_time}  
-> 📍 **المكان:** {classroom_name} — فرع {branch_name}  
-> حضور التلميذ(ة) **{student_name}** ضروري وهام. بالتوفيق والنجاح.  
-> — *مؤسسة ماسينيسا التعليمية*
-
-**French:**
-> Bonjour,  
-> Nous vous informons de la programmation d'une **{lesson_type}** pour le groupe **{class_name}** avec l'enseignant **{teacher_name}** :  
-> 📅 **Date :** {date}  
-> ⏰ **Horaire :** de {start_time} à {end_time}  
-> 📍 **Lieu :** Salle {classroom_name} — Siège {branch_name}  
-> La présence de l'élève **{student_name}** est vivement recommandée.  
-> — *École Massinissa*
+> ننهي إلى علم تلاميذ وأولياء فوج: **{class_name}** (الأستاذ: **{teacher_name}**) أنه **قد تم رسمياً تعديل موعد الحصة المعلن عنها سابقاً**.  
+> ❌ **الموعد السابق الملغى:** {old_date} على الساعة {old_start_time}  
+> 🟢 **الموعد الجديد والمؤكد رسمياً:** **{new_date}** من الساعة **{new_start_time}** إلى **{new_end_time}**  
+> 📍 **المكان المؤكد:** قاعة **{classroom_name}** — فرع **{branch_name}**  
+> نرجو منكم اعتماد هذا الموعد المؤكد حصراً وإلغاء أي موعد سابق. نعتذر عن هذا التغيير الطارئ ونتمنى لأبنائنا دوام التوفيق.  
+> — *إدارة مؤسسة ماسينيسا التعليمية*
 
 ---
 
-## 7. UI/UX Wireframes & User Experience Flows
+## 7. Comprehensive Conflict Prevention & Misleading Information Protections
 
-### 7.1 Owner Experience: WhatsApp Control Center & Live QR Scanner
+To guarantee that parents never receive false alarms, conflicting schedules, or duplicate payment requests, the system implements 8 specialized conflict engines:
 
-Located under the Owner's portal at: `/admin/configuration?tab=whatsapp` (and `/admin/whatsapp`).
+```mermaid
+flowchart TD
+    subgraph TriggerEvent["Trigger Event Occurs"]
+        E1["Special Lesson Edited"]
+        E2["Special Lesson Deleted"]
+        E3["Attendance Changed Absent -> Present"]
+        E4["Payment Recorded at Reception"]
+    end
 
-#### Wireframe: Owner WhatsApp Control Center
+    subgraph ConflictEngine["Conflict & Integrity Engine"]
+        C1{"Was Previous Notification Sent?"}
+        C2{"Is Previous Draft Pending in Outbox?"}
+        C3{"Did Balance Turn > 0?"}
+    end
+
+    subgraph Resolution["Airtight Conflict Resolution"]
+        R1["Auto-Update Draft in Place (Zero Duplicates)"]
+        R2["Dispatch High-Visibility Update Notice (Old vs New)"]
+        R3["Dispatch Official Cancellation Notice"]
+        R4["Auto-Revoke Absence Draft / Send Reversal Notice"]
+        R5["Auto-Dismiss 24h Reminder (Status: REVOKED_PAYMENT)"]
+    end
+
+    E1 --> C1
+    C1 -- "No (Still Pending)" --> R1
+    C1 -- "Yes (Already Sent)" --> R2
+
+    E2 --> C2
+    C2 -- "Pending" --> R1
+    C2 -- "Sent" --> R3
+
+    E3 --> R4
+    E4 --> C3
+    C3 -- "netSessions > 0" --> R5
+```
+
+### 7.1 Conflict 1: Special Lesson Edited / Rescheduled after Initial Announcement
+- **The Risk:** Parents receive two different times and show up at the wrong time or call the school confused.
+- **Protection Logic:**
+  1. Detect changes in `startsAt`, `endsAt`, `classroomId`, or `branchId` in `updateLesson`.
+  2. If the previous notification for this `lessonId` is still `PENDING_MANUAL`:
+     - **Update the draft in-place** with new dates and revision counter. No extra messages generated.
+  3. If previous notifications were already `SENT`:
+     - Create a new batch with `triggerType = "SPECIAL_LESSON_UPDATE"` and `revisionNumber = 2`.
+     - Message template strictly lists: `[Old Cancelled Schedule]` vs `[New Confirmed Schedule]` with alert banners.
+
+### 7.2 Conflict 2: Special Lesson Cancelled / Deleted after Announcement
+- **The Risk:** Students arrive at a closed school or empty classroom.
+- **Protection Logic:**
+  1. Intercept `deleteLesson` in [`src/lib/actions.ts`](file:///c:/Users/wassi/OneDrive/Bureau/massinissa-school-software/src/lib/actions.ts).
+  2. Purge any `PENDING_MANUAL` records immediately.
+  3. If notifications were already `SENT`, stage or dispatch an urgent **Cancellation Notice** (`SPECIAL_LESSON_CANCELLED`) instructing students not to travel to the school.
+
+### 7.3 Conflict 3: Attendance Mistake (Marked Absent, then Corrected to Present / Late Arrival)
+- **The Risk:** Student arrives 10 minutes late. Teacher marked absent at 14:00, then corrects to present at 14:15. Parent receives an alarming message that their child skipped school.
+- **Protection Logic:**
+  1. In `AUTO` mode: A **10-minute dispatch delay buffer** holds absence alerts, allowing late arrivals to be recorded without dispatching false alarms.
+  2. If status is updated from `ABSENT` to `PRESENT`:
+     - If the notification is `PENDING_MANUAL` or held in buffer: **Delete it immediately** (`REVOKED_CORRECTED`).
+     - If already `SENT`: Automatically stage/send a reassuring **Attendance Correction Notice**:
+       - ✅ *"نحيطكم علماً بأن التلميذ(ة) [X] قد التحق بحصته (حاضر) وتم تصحيح حالة الحضور في النظام. نعتذر عن الإشعار السابق الناتج عن تسجيل أولي."*
+
+### 7.4 Conflict 4: Payment Settled at Desk while Reminder is Pending in Outbox
+- **The Risk:** 24h cron creates a payment reminder for a student with 0 credits. Parent arrives at 16:00 and pays. The branch admin clicks "Send All" at 17:00, sending an insulting payment demand to a parent who just paid.
+- **Protection Logic:**
+  - **Just-In-Time (JIT) Verification:** At the exact millisecond before any credit reminder is dispatched to WhatsApp (both in AUTO and MANUAL modes), the dispatcher executes a live balance check via `computeStudentCreditAndSessions`.
+  - If `netSessions > 0`: The notification is instantly marked `REVOKED_PAYMENT` and dropped. The parent receives nothing.
+
+### 7.5 Conflict 5: Multiple Lessons on the Same Day / Back-to-Back Sessions
+- **The Risk:** Student is absent from Math at 13:00 and Physics at 15:00. Parent gets two alerts and thinks it's a software glitch.
+- **Protection Logic:**
+  - Every notification payload includes distinct markers:
+    - Subject Name (`Class.name`)
+    - Teacher Name (`Teacher.name`)
+    - Time Slot (`13:00 - 15:00`)
+    - Branch Building (`AMPHI - Salle 2`)
+  - Unique composite index `@@unique([studentId, lessonId, triggerType, revisionNumber])` prevents any duplicate generation for the same session.
+
+### 7.6 Conflict 6: Sibling / Family Disambiguation on Shared Parent Phones
+- **The Risk:** Two brothers share the father's phone number. An alert says "Your child is absent" without specifying which child.
+- **Protection Logic:**
+  - Every message strictly begins with the student's full name and school matricule in bold:
+    - 👤 **التلميذ(ة):** أمين بن علي (رقم القيد: 1042)
+    - 📚 **الفوج:** 4AM رياضيات
+
+### 7.7 Conflict 7: Group Transfers & Dropped Enrollments
+- **The Risk:** Student moved from Group 1 to Group 2. Group 1 schedules a special lesson.
+- **Protection Logic:**
+  - Audience queries strictly filter by `Enrollment.status === "ACTIVE" AND Enrollment.classId === targetClassId`. Dropped or transferred students are automatically excluded.
+
+### 7.8 Conflict 8: Anti-Spam Cooldown & Message Idempotency Locks
+- **The Risk:** Rapid double-clicking by branch admins sending the same notification twice.
+- **Protection Logic:**
+  - Distributed database locking: When a branch admin clicks "Send", status flips from `PENDING_MANUAL` to `SENDING` in an atomic transaction. Any secondary click is rejected with: *"Notification already in transmission"*.
+
+---
+
+## 8. UI/UX Wireframes & User Experience Flows
+
+### 8.1 Owner Control Center & Live QR Scanner
+Located at `/admin/configuration?tab=whatsapp`. Strictly Owner-Only.
+
 ```
 +----------------------------------------------------------------------------------------------------+
-|  Configuration > WhatsApp Integration                                           [Owner Exclusive]  |
+|  Configuration > WhatsApp Integration [Oracle Cloud Deployment]                 [Owner Exclusive]  |
 +----------------------------------------------------------------------------------------------------+
 |                                                                                                    |
 |  [CONNECTION STATUS]                                                                               |
 |  +--------------------------------------------------+  +-----------------------------------------+ |
-|  |  Status: [● CONNECTED]                           |  |  Device Info:                           | |
-|  |  Phone:  +213 555 12 34 56 (Massinissa Official) |  |  Engine: Baileys Multi-Device v6.x      | |
-|  |  Linked: 25 Oct 2026, 09:30                      |  |  Battery: 88% (Charging)                | |
-|  |                                                  |  |  Latency: 42ms                          | |
-|  |  [ Disconnect WhatsApp Session ]                 |  |  [ Restart Bridge Gateway ]             | |
+|  |  Status: [● CONNECTED]                           |  |  OCI Daemon Health:                     | |
+|  |  Phone:  +213 555 12 34 56 (Massinissa Official) |  |  Process: Node.js Baileys Service       | |
+|  |  Storage: /opt/massinissa/data/wa-session        |  |  Memory: 44.2 MB / Uptime: 14d 6h       | |
+|  |  Linked: 25 Oct 2026, 09:30                      |  |  Cron Worker: Running (24h Pre-Lesson)  | |
+|  |                                                  |  |                                         | |
+|  |  [ Disconnect WhatsApp Session ]                 |  |  [ Restart Bridge Service ]             | |
 |  +--------------------------------------------------+  +-----------------------------------------+ |
 |                                                                                                    |
 |  [SYSTEM OPERATING MODE]                                                                           |
 |  +---------------------------+  +---------------------------+  +---------------------------------+ |
 |  |  ( ) OFF                  |  |  (*) MANUAL MODE          |  |  ( ) FULL AUTO                  | |
-|  |  Triggers disabled.       |  |  Triggers queue items.    |  |  Instant background dispatch.   | |
-|  |  Zero messages sent.      |  |  Branch admins click send.|  |  Autonomous parent alerts.      | |
+|  |  Triggers disabled.       |  |  Triggers queue items.    |  |  Autonomous background dispatch.| |
+|  |  Zero messages sent.      |  |  Branch admins click send.|  |  Anti-ban rate limiter active.  | |
 |  +---------------------------+  +---------------------------+  +---------------------------------+ |
 |                                                                                                    |
-|  [AUTOMATED TRIGGERS TOGGLE]                                                                       |
-|  [✓] Absence Alerts (Trigger 1)                                                                    |
-|  [✓] Zero Credit Alerts (Trigger 2)                                                                |
-|  [✓] Special Lesson Announcements (Trigger 3)                                                      |
-|                                                                                                    |
-|  [MESSAGE TEMPLATES & VARIABLES]                                                                   |
-|  Select Trigger: [ Absence Alert                    v ]   Language: [ Arabic (العربية) v ]         |
-|  +-----------------------------------------------------------------------------------------------+ |
-|  | السلام عليكم ورحمة الله وبركاته، نعلمكم بغياب التلميذ(ة): {student_name} عن حصة مادة...      | |
-|  +-----------------------------------------------------------------------------------------------+ |
-|  Dynamic Tags: [{student_name}] [{class_name}] [{teacher_name}] [{date}] [{start_time}] [{branch}] |
+|  [AUTOMATED TRIGGERS & CONFLICT SAFEGUARDS]                                                        |
+|  [✓] Absence Alerts & Instant Reversals                                                           |
+|  [✓] Zero-Credit Instant Alert                                                                     |
+|  [✓] 24-Hour Pre-Lesson -1 Balance Warning                                                         |
+|  [✓] Special Lesson Announcements & Revision Confirmations                                        |
 |                                                                                                    |
 |  [ Save Configuration Changes ]                                                                    |
 +----------------------------------------------------------------------------------------------------+
 ```
 
-#### Wireframe: Live QR Code Modal (When Disconnected)
-```
-+-------------------------------------------------------------+
-|  Link School Mobile Device to Massinissa System             |
-+-------------------------------------------------------------+
-|                                                             |
-|           +-------------------------------+                 |
-|           |       ■■■■■■■   ■   ■■■■■■■   |                 |
-|           |       ■     ■  ■■■  ■     ■   |                 |
-|           |       ■■■■■■■   ■   ■■■■■■■   |                 |
-|           |        ■■■  ■■■■■■■■■  ■■■    |                 |
-|           |       ■■■■■■■   ■   ■■■■■■■   |                 |
-|           |       ■     ■  ■■■  ■     ■   |                 |
-|           |       ■■■■■■■       ■■■■■■■   |                 |
-|           +-------------------------------+                 |
-|             Refreshing in 18s [ Refresh Now ]               |
-|                                                             |
-|  Instructions:                                              |
-|  1. Open WhatsApp on the school's phone                     |
-|  2. Go to Settings > Linked Devices > Link a Device         |
-|  3. Point your camera at this screen to scan the QR code    |
-|                                                             |
-|  Status: Waiting for QR scan from school phone...           |
-|                                                             |
-|                                                [ Cancel ]   |
-+-------------------------------------------------------------+
-```
-
 ---
 
-### 7.2 Branch Admin Experience: In-Context Triggers & Branch Outbox Queue
+### 8.2 Branch Admin Experience: Attendance Roster In-Context Bar & Branch Outbox
 
-In **MANUAL** mode, the system provides branch administrators with immediate, intuitive controls integrated right into their existing workflows.
-
-#### Placement 1: Directly on Attendance Roster (`AttendanceRoster.tsx`)
-When a branch admin or teacher finishes taking attendance and records one or more students as **ABSENT**:
+#### Placement 1: Inline on Attendance Taking Roster ([`AttendanceRoster.tsx`](file:///c:/Users/wassi/OneDrive/Bureau/massinissa-school-software/src/components/forms/AttendanceRoster.tsx))
+Immediately upon saving attendance with absences:
 ```
 +----------------------------------------------------------------------------------------------------+
-|  [!] 4 Absences Recorded in this Lesson!                                                            |
-|  WhatsApp notifications have been staged in your branch outbox queue.                               |
+|  [!] 3 Absences Recorded in this Lesson!                                                            |
+|  WhatsApp notifications staged in your branch outbox (Manual Mode active).                         |
 |                                                                                                    |
 |  Students:                                                                                         |
-|  • Amine Benali (0555-12-34-56 - Student)               [ Review & Send ] [ Dismiss ]               |
-|  • Sarah Kaci (0661-98-76-54 - Parent: Ahmed Kaci)     [ Review & Send ] [ Dismiss ]               |
-|  • Youcef Brahimi (0770-44-33-22 - Student)            [ Review & Send ] [ Dismiss ]               |
-|  • Meriem Touati (No WhatsApp on saved numbers)         [ Flag Contact ]                           |
+|  • Amine Benali (0555-12-34-56 - Student)               [ Send WhatsApp ] [ Edit ] [ Dismiss ]     |
+|  • Sarah Kaci (0661-98-76-54 - Parent: Ahmed Kaci)     [ Send WhatsApp ] [ Edit ] [ Dismiss ]     |
+|  • Youcef Brahimi (No WhatsApp on saved numbers)        [ Flag Contact ]                           |
 |                                                                                                    |
-|  [ Send All 3 WhatsApp Alerts Now ]                          [ Review in Outbox ]                  |
+|  [ Send All 2 WhatsApp Alerts Now ]                          [ Open Branch Outbox Queue ]          |
 +----------------------------------------------------------------------------------------------------+
 ```
 
-#### Placement 2: Dedicated Branch Communications Outbox (`/list/whatsapp-queue`)
-A centralized management view scoped strictly to the logged-in branch admin's branch (`session.branchIds`):
+#### Placement 2: Dedicated Branch Outbox Queue (`/list/whatsapp-queue`)
 ```
 +----------------------------------------------------------------------------------------------------+
-|  Branch Communications > WhatsApp Outbox [Siège: AMPHI]                             Filter: [All v] |
+|  Branch Communications > WhatsApp Outbox [Siège: ECOLE]                             Filter: [All v] |
 +----------------------------------------------------------------------------------------------------+
-|  [Search student...]   [Filter by Trigger: All v]   [Status: Pending v]   [ Refresh Queue ]        |
+|  [Search student...]   [Trigger: All v]   [Status: Pending v]   [ Refresh Queue ]                  |
 |                                                                                                    |
-|  [ Bulk Action: Send All Selected (6) ]   [ Dismiss Selected ]                                     |
+|  [ Bulk Action: Send All Selected (5) ]   [ Dismiss Selected ]                                     |
 |                                                                                                    |
 |  [✓]  STUDENT       TRIGGER       RECIPIENT & TYPE    MESSAGE PREVIEW        STATUS     ACTIONS    |
 |  +-----------------------------------------------------------------------------------------------+ |
 |  [✓]  Amine Benali  Absence       0555-12-34-56       "نعلمكم بغياب التلميذ  PENDING    [Send WA]  |
 |       Mat: 1042                   (Student Global)     أمين عن حصة الرياضيات"           [Edit] [X] |
 |                                                                                                    |
-|  [✓]  Lina Hadj     0 Credits     0661-88-99-00       "نلفت انتباهكم أن      PENDING    [Send WA]  |
-|       Mat: 1109     (Exhausted)   (Parent: Father)     رصيد حصص لينا انتهى"            [Edit] [X] |
+|  [✓]  Lina Hadj     24h Pre-Lesson 0661-88-99-00      "تنبيه: حصة الغد       PENDING    [Send WA]  |
+|       Mat: 1109     (-1 Debt Warn) (Parent: Father)    ورصيدكم 0 حصص..."                [Edit] [X] |
 |                                                                                                    |
-|  [✓]  Groupe 3AM-1  Special Lesson 0770-12-88-44      "برمجة حصة استدراكية   PENDING    [Send WA]  |
-|       Karim Sahli   (Catch-Up)    (Parent: Mother)     يوم السبت 14:00..."              [Edit] [X] |
+|  [✓]  Groupe 3AM-1  Special Lesson 0770-12-88-44      "⚠️ تعديل وتأكيد موعد   PENDING    [Send WA]  |
+|       Karim Sahli   (Revision 2)   (Parent: Mother)    الحصة الإضافية..."               [Edit] [X] |
 |                                                                                                    |
 |  [ ]  Yacine Ouali  Absence       No WhatsApp Found   "Tried 055011... and   NO_WA      [Update    |
 |       Mat: 1088                   (2 numbers checked)  066122... No WA"                 Number]    |
 |                                                                                                    |
-|  Page 1 of 3 (18 Pending Items)                                                                    |
+|  Page 1 of 2 (12 Pending Items)                                                                    |
 +----------------------------------------------------------------------------------------------------+
 ```
 
 ---
 
-## 8. API Contracts & Internal Interface Specifications
+## 9. API Contracts & Internal Interface Specifications
 
-### 8.1 Gateway Service Internal REST & WebSocket API
-
-The dedicated Node.js WhatsApp daemon (`whatsapp-bridge`) runs on a protected port (e.g., `http://localhost:5001` or private internal network URL `https://wa.massinissa.school`):
+### 9.1 OCI Internal REST & WebSocket Bridge API
+Executed locally between Next.js and the Baileys daemon (`http://127.0.0.1:5001`):
 
 #### 1. `GET /api/session/status`
-- **Headers:** `x-api-key: [SECRET]`
-- **Response:**
-  ```json
-  {
-    "success": true,
-    "isConnected": true,
-    "phone": "213555123456",
-    "name": "Massinissa School Office",
-    "battery": 88
-  }
-  ```
+Returns daemon health, connection state, phone number, and memory usage.
 
 #### 2. `GET /api/session/qr-stream` (Server-Sent Events)
-- **Headers:** `x-api-key: [SECRET]`
-- **Streams live QR code updates:**
-  ```
-  event: qr
-  data: {"qr": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...", "expiresIn": 20}
-  
-  event: connected
-  data: {"phone": "213555123456", "name": "Massinissa School"}
-  ```
+Streams real-time QR base64 strings and pairing events to the Owner's browser.
 
 #### 3. `POST /api/check-numbers`
-- **Headers:** `x-api-key: [SECRET]`
-- **Body:** `{ "phones": ["213550112233", "213661445566"] }`
-- **Response:**
-  ```json
-  {
-    "results": [
-      { "phone": "213550112233", "exists": true, "jid": "213550112233@s.whatsapp.net" },
-      { "phone": "213661445566", "exists": false, "jid": null }
-    ]
-  }
-  ```
+Validates array of normalized phone numbers against `sock.onWhatsApp()`.
 
 #### 4. `POST /api/send-message`
-- **Headers:** `x-api-key: [SECRET]`
-- **Body:**
-  ```json
-  {
-    "to": "213550112233@s.whatsapp.net",
-    "text": "السلام عليكم، نعلمكم بغياب التلميذ...",
-    "notificationId": "uuid-v4-notification-id"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "success": true,
-    "messageId": "WA_MSG_ID_ABC123",
-    "status": "SENT",
-    "sentAt": "2026-10-25T10:45:00.000Z"
-  }
-  ```
-
-### 8.2 Next.js Server Actions & Background Dispatcher
-
-Implemented in `src/lib/whatsappActions.ts`:
-
-```typescript
-"use server";
-
-import prisma from "@/lib/prisma";
-import { getAuthSession } from "@/lib/auth";
-import { revalidatePath } from "next/cache";
-
-/**
- * Dispatches a single staged notification (Manual Mode or Auto Retry)
- */
-export async function sendWhatsAppNotificationAction(notificationId: string) {
-  const session = await getAuthSession();
-  
-  const notification = await prisma.whatsappNotification.findUnique({
-    where: { id: notificationId },
-    include: { branch: true },
-  });
-
-  if (!notification) {
-    return { success: false, message: "Notification introuvable" };
-  }
-
-  // Branch Scope Check
-  if (!session.isOwner && !session.branchIds.includes(notification.branchId)) {
-    return { success: false, message: "Accès non autorisé pour ce siège" };
-  }
-
-  if (!notification.recipientPhone) {
-    return { success: false, message: "Aucun numéro WhatsApp valide associé" };
-  }
-
-  // Dispatch to WhatsApp Bridge Gateway
-  const res = await fetch(`${process.env.WHATSAPP_BRIDGE_URL}/api/send-message`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": process.env.WHATSAPP_BRIDGE_SECRET || "",
-    },
-    body: JSON.stringify({
-      to: `${notification.recipientPhone}@s.whatsapp.net`,
-      text: notification.messageContent,
-      notificationId: notification.id,
-    }),
-  });
-
-  const data = await res.json();
-  if (data.success) {
-    await prisma.whatsappNotification.update({
-      where: { id: notificationId },
-      data: {
-        status: "SENT",
-        sentAt: new Date(),
-        approvedBy: session.userId || "ADMIN",
-        approvedAt: new Date(),
-      },
-    });
-
-    revalidatePath("/list/whatsapp-queue");
-    return { success: true, message: "Message WhatsApp envoyé avec succès" };
-  } else {
-    await prisma.whatsappNotification.update({
-      where: { id: notificationId },
-      data: {
-        status: "FAILED_ERROR",
-        errorMessage: data.error || "Erreur de transmission",
-        attemptCount: { increment: 1 },
-      },
-    });
-
-    return { success: false, message: data.error || "Échec de l'envoi" };
-  }
+Body:
+```json
+{
+  "to": "213550112233@s.whatsapp.net",
+  "text": "السلام عليكم، نعلمكم بغياب...",
+  "notificationId": "uuid-v4-id",
+  "triggerType": "ABSENCE"
 }
 ```
 
 ---
 
-## 9. Value-Added Architectural Suggestions for Massinissa School
+### 9.2 Next.js 24-Hour Pre-Lesson Background Worker
 
-To ensure this WhatsApp integration is robust, durable, and beneficial to the daily administration of Massinissa School, the following 6 production-grade enhancements are integrated into the design:
+Implemented as a background cron job running on the OCI instance:
 
-### 9.1 Anti-Ban & Meta Compliance Engine (Rate Limiting & Jitter)
-> [!WARNING]
-> **Anti-Ban Protection:**
-> When scheduling a special lesson for 80 students across 3 merged groups, firing 80 WhatsApp messages in a single second will immediately flag the school's number for spam heuristics on WhatsApp's network, resulting in a temporary or permanent account ban.
+```typescript
+import cron from "node-cron";
+import prisma from "@/lib/prisma";
+import { computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { resolveStudentWhatsAppRecipient } from "@/lib/whatsappUtils";
 
-**Built-In Protection:**
-1. **Token-Bucket Queue with Jitter:** Messages are dispatched with randomized intervals between **4 to 8 seconds** (`minIntervalSeconds: 4`, `maxIntervalSeconds: 8`).
-2. **Dynamic Greeting Jitter:** Prepend dynamic variations to the opening greeting (e.g. alternating between *"السلام عليكم ورحمة الله"* and *"تحية طيبة وبعد"* / *"Bonjour"* and *"Chers parents"*) to prevent hash-identical bulk content flags.
-3. **Daily Quota Throttling:** Enforce a maximum cap of 450 automated messages per day per SIM.
+/**
+ * Executes every hour on OCI to identify lessons starting in 23-25 hours
+ * and stage the 24-hour Pre-Lesson -1 Balance Warning
+ */
+export function initPreLesson24hWorker() {
+  cron.schedule("0 * * * *", async () => {
+    const config = await prisma.whatsappConfig.findUnique({ where: { id: "GLOBAL" } });
+    if (!config || config.mode === "OFF" || !config.enablePreLesson24hTrigger) return;
 
-### 9.2 Biometric K50 Scan Zero-Credit Real-Time Hook
-The school has already deployed ZKTeco K50 biometric devices connected via `zk-bridge`. 
-When a student scans their fingerprint at the door:
-- The system runs `processBiometricScan` in `src/lib/biometricActions.ts`.
-- If the student has **0 remaining credits**, the scan log is tagged `status: "NO_CREDITS"`.
-- **Integrated Hook:** Rather than waiting for the lesson attendance roster to be saved hours later, the system can instantly stage a "Zero-Credit Arrival" alert to the parent's WhatsApp:
-  > *"نحيطكم علماً بأن التلميذ(ة) {student_name} قد سجل حضوره الآن عبر جهاز البصمة، ونذكركم بأن رصيده قد انتهى (0 حصص). يرجى التكرم بتجديد الاشتراك اليوم."*
+    const now = new Date();
+    const windowStart = new Date(now.getTime() + 23 * 60 * 60 * 1000);
+    const windowEnd = new Date(now.getTime() + 25 * 60 * 60 * 1000);
 
-### 9.3 Inbound Message Webhook for Absence Justification Sync
-When parents receive an absence notification, their immediate reflex is to reply directly on WhatsApp (e.g. *"Il est malade aujourd'hui"* or *"هو مريض وسيعود غداً"*).
-- The Baileys Gateway listens to `messages.upsert` events for incoming replies.
-- The reply is matched to the most recent `WhatsAppNotification` sent to that number within the last 24 hours.
-- The parent's reply is automatically recorded into `Attendance.justification` with the badge `[Via WhatsApp]` and updates the attendance status from `ABSENT` to `JUSTIFIED_ABSENCE` or alerts the branch admin for one-click approval.
+    // 1. Fetch upcoming regular lessons
+    const upcomingLessons = await prisma.lesson.findMany({
+      where: {
+        startsAt: { gte: windowStart, lte: windowEnd },
+        isFree: false,
+        class: { isFormation: false },
+      },
+      include: {
+        class: {
+          include: {
+            enrollments: {
+              where: { status: "ACTIVE", payerStatus: "NORMAL" },
+              include: { student: { include: { parentPhoneNumbers: true } } },
+            },
+          },
+        },
+        branch: true,
+        teacher: true,
+      },
+    });
 
-### 9.4 Quiet Hours & Night-Time Delay Window
-Administrators often enter schedules or complete class paperwork late in the evening (e.g., 22:30). Sending automated pings to parents late at night causes friction and annoyance.
-- System defines configurable **Quiet Hours** (default: `22:00` to `08:00`).
-- If a trigger is generated during quiet hours, it is saved with `scheduledFor: Next Morning at 08:15`.
-- At 08:15, the dispatcher automatically resumes processing.
+    for (const lesson of upcomingLessons) {
+      for (const enrollment of lesson.class.enrollments) {
+        // 2. Evaluate remaining credits
+        const creditResult = await computeStudentCreditAndSessions({
+          studentId: enrollment.studentId,
+          classId: lesson.classId,
+        });
 
-### 9.5 Cross-Branch GPS Location Pin Cards
-Under Massinissa School's multi-branch model, when a teacher holds a special catch-up session at a different branch (e.g., an ECOLE class hosted in an AMPHI classroom due to room availability), parents and students frequently get confused about the physical venue.
-- For Trigger 3 (Special Lessons), if the classroom branch differs from the student's registered branch, the system automatically appends a **Google Maps Location Link** for the destination building:
-  > 📍 *مقر الحصة: قاعة 3، فرع أمفي (شارع الشهداء): https://maps.google.com/?q=...*
+        // 3. Condition: Net sessions <= 0
+        if (creditResult.netSessions <= 0) {
+          // Check anti-spam: No reminder sent in last 48 hours for this class
+          const recentReminder = await prisma.whatsappNotification.findFirst({
+            where: {
+              studentId: enrollment.studentId,
+              classId: lesson.classId,
+              triggerType: "CREDIT_ZERO_PRE_LESSON_24H",
+              createdAt: { gte: new Date(now.getTime() - 48 * 60 * 60 * 1000) },
+            },
+          });
 
-### 9.6 Bilingual Intelligent Template Auto-Switching
-Some parents prefer Arabic (the default in Algerian schools), while others communicate in French.
-- Allow setting a `preferredLocale` ("ar" | "fr") in the `Student` or `Parent` profile.
-- The trigger automatically selects `templateAbsenceAr` or `templateAbsenceFr` according to the family's preferred language.
+          if (!recentReminder) {
+            const recipient = await resolveStudentWhatsAppRecipient(enrollment.studentId);
+            if (recipient.recipientPhone) {
+              const message = format24hPreLessonMessage({
+                studentName: enrollment.student.name,
+                className: lesson.class.name,
+                teacherName: lesson.teacher.name,
+                startsAt: lesson.startsAt,
+                branchName: lesson.branch.name,
+              });
 
----
-
-## 10. Step-by-Step Phased Implementation Roadmap
-
-```mermaid
-gantt
-    title WhatsApp Integration Implementation Timeline
-    dateFormat  YYYY-MM-DD
-    section Phase 1: Database & Engine
-    Prisma Schema Update & Migration      :p1_1, 2026-11-01, 2d
-    Baileys Gateway Daemon Service Build  :p1_2, after p1_1, 3d
-    Phone Normalizer & Waterfall Engine   :p1_3, after p1_2, 2d
-
-    section Phase 2: Owner Control Center
-    Owner Configuration UI & Tabs         :p2_1, after p1_3, 3d
-    Live QR Code Scanner via SSE          :p2_2, after p2_1, 2d
-    Template Editor & Mode Switcher       :p2_3, after p2_2, 2d
-
-    section Phase 3: Trigger Hooks
-    Trigger 1: Absence Hook in Actions    :p3_1, after p2_3, 2d
-    Trigger 2: Zero-Credit Billing Hook   :p3_2, after p3_1, 2d
-    Trigger 3: Special Lesson Scheduling  :p3_3, after p3_2, 2d
-
-    section Phase 4: Branch Admin UI
-    Branch Outbox View (/list/whatsapp)   :p4_1, after p3_3, 3d
-    Attendance Roster Staged Action Modal :p4_2, after p4_1, 2d
-    Bulk Dispatch & Single Send Actions   :p4_3, after p4_2, 2d
-
-    section Phase 5: Testing & Deployment
-    Anti-Ban Rate Limiter & Quiet Hours   :p5_1, after p4_3, 2d
-    Pilot Branch Testing (AMPHI)          :p5_2, after p5_1, 3d
-    Full Rollout across All 3 Branches    :p5_3, after p5_2, 2d
+              await prisma.whatsappNotification.create({
+                data: {
+                  branchId: lesson.branchId,
+                  studentId: enrollment.studentId,
+                  classId: lesson.classId,
+                  lessonId: lesson.id,
+                  triggerType: "CREDIT_ZERO_PRE_LESSON_24H",
+                  recipientPhone: recipient.recipientPhone,
+                  recipientType: recipient.recipientType,
+                  recipientName: recipient.recipientName,
+                  messageContent: message,
+                  status: config.mode === "AUTO" ? "QUEUED" : "PENDING_MANUAL",
+                  triggeredBy: "CRON_WORKER_24H",
+                },
+              });
+            }
+          }
+        }
+      }
+    }
+  });
+}
 ```
 
-### Detailed Phase Breakdown:
+---
 
-#### Phase 1: Database Models & Gateway Infrastructure (Days 1–5)
-1. Add `WhatsAppConfig`, `WhatsAppNotification`, and `WhatsAppNumberCache` to `prisma/schema.prisma`.
-2. Run Prisma migration: `npx prisma db push` or `prisma migrate dev --name add_whatsapp_models`.
-3. Create `whatsapp-bridge` daemon project directory with `@whiskeysockets/baileys`, `pino`, and `express`.
-4. Implement persistent socket authentication (`useMultiFileAuthState`) and QR code event broadcaster.
-5. Implement the Algerian phone normalization utility and `checkWhatsAppWithCache` function.
+## 10. Value-Added Architectural Suggestions for Massinissa School
 
-#### Phase 2: Owner Control Center & QR Scanner (Days 6–10)
-1. Add the new "WhatsApp" tab to `/admin/configuration/page.tsx` and `ConfigurationClient.tsx`.
-2. Build `WhatsAppControlSection.tsx` containing status badges, device info cards, and the 3-mode radio group (`OFF`, `MANUAL`, `AUTO`).
-3. Build the interactive live QR code modal with auto-refresh and SSE connection stream.
-4. Implement the template editor with live phone preview and dynamic chip insertions.
-
-#### Phase 3: Trigger System Hooks (Days 11–15)
-1. **Absence Hook:** In `src/lib/actions.ts` (`saveAttendance` and `markSingleAttendanceAction`), intercept `status === "ABSENT"` to generate notifications.
-2. **Zero-Credit Hook:** In `src/lib/studentBilling.ts` and post-attendance resolution, evaluate `netSessions <= 0` with 7-day cooldown prevention.
-3. **Special Lesson Hook:** In `createLesson`, trigger audience notification generation when `isExtra || isCatchUp || isFree`.
-
-#### Phase 4: Branch Admin Experience & Manual Outbox (Days 16–20)
-1. Build the dedicated Branch Outbox at `/list/whatsapp-queue/page.tsx` with filtering, search, and bulk selection.
-2. Enhance `AttendanceRoster.tsx` to display an inline staged notification alert banner upon saving absences.
-3. Implement Server Actions for `sendWhatsAppNotificationAction`, `sendAllPendingBranchAction`, and `dismissNotificationAction`.
-
-#### Phase 5: Anti-Ban Protection, Pilot Testing & Rollout (Days 21–25)
-1. Configure token-bucket rate limiter with 4–8 second delays and quiet-hours hold.
-2. Conduct a pilot test at the AMPHI branch with a test group.
-3. Verify receipt on student phone, parent phone fallback, and unverified number error handling.
-4. Deploy to production across all 3 branches.
+1. **Anti-Ban Compliance Engine:** Token-bucket rate limiter with randomized delays (4–8 seconds), greeting variations, and a 450 msg/day quota to safeguard the school's phone number against WhatsApp spam detection.
+2. **Biometric K50 Zero-Credit Alert:** Hook into `BiometricScanLog` (`status: "NO_CREDITS"`). Alerts parents when a student with 0 credits scans their fingerprint at the door.
+3. **Inbound Reply Auto-Justification:** WhatsApp webhook listens to parent replies (e.g. *"Il est malade"*); automatically records them into `Attendance.justification` with a `[Via WhatsApp]` badge.
+4. **Quiet Hours Buffer:** Delays automated triggers scheduled between 22:00 and 08:00 until 08:15 the following morning.
+5. **Cross-Branch GPS Pin Cards:** For special lessons held in another branch, automatically includes a Google Maps location link to prevent student confusion.
+6. **Bilingual Preference Auto-Switch:** Dynamically serves Arabic or French templates based on the student/family preference.
 
 ---
 
-## 11. Verification & Acceptance Testing Plan
+## 11. Step-by-Step Phased Implementation Roadmap
+
+- **Phase 1 (Days 1–5):** Database schema updates & OCI Baileys daemon setup with local storage mounting.
+- **Phase 2 (Days 6–10):** Owner Control Center UI, SSE QR Scanner & Template Editor with revision fields.
+- **Phase 3 (Days 11–15):** Conflict engines:
+  - Absence hook with late-arrival reversal notices.
+  - 24-hour pre-lesson cron worker for -1 balance warnings.
+  - Special lesson creation & update diff confirmation notices.
+- **Phase 4 (Days 16–20):** Branch Admin Queue (`/list/whatsapp-queue`) & Attendance Roster integration.
+- **Phase 5 (Days 21–25):** Rate limiter, quiet hours, pilot testing at AMPHI branch, and multi-branch rollout.
+
+---
+
+## 12. Verification & Acceptance Testing Plan
 
 | # | Test Scenario | Expected Outcome | Verification Steps |
 | :- | :--- | :--- | :--- |
-| **T1** | **Owner QR Code Scan** | QR renders in browser; school phone scans QR; connection status flips to 🟢 `Connected (+213...)`. | Open `/admin/configuration?tab=whatsapp` as Owner, open WhatsApp Linked Devices, scan QR. |
-| **T2** | **Strict Owner Role Wall** | Branch Admin navigating to `/admin/configuration?tab=whatsapp` is blocked with unauthorized badge. | Log in as Branch Admin; attempt direct navigation. |
-| **T3** | **Mode = OFF Test** | Absences marked, 0 credits hit, or lessons scheduled produce 0 database queue items. | Set mode to `OFF`, mark 3 absences in attendance roster; verify `WhatsAppNotification` table has no new records. |
-| **T4** | **Waterfall Check: Student Phone Has WA** | System detects student's primary phone has WhatsApp; sets recipient to `STUDENT_PRIMARY` and stops checking parents. | Mark absence for student whose `phone` is on WhatsApp; verify `recipientPhone` matches student phone. |
-| **T5** | **Waterfall Check: Fallback to Parent** | Student phone has no WhatsApp; system checks `ParentPhoneNumber` and sends to Parent. | Set student phone to a landline/fake number; set parent phone to valid WhatsApp; mark absence; verify parent receives ping. |
-| **T6** | **Waterfall Check: No Number Has WA** | Notification status transitions to `FAILED_NO_WHATSAPP`; flagged in branch queue. | Remove all WhatsApp numbers; verify warning banner appears on attendance view. |
-| **T7** | **Manual Mode Branch Outbox** | Absences generate `PENDING_MANUAL` records; Branch Admin sees queue, clicks "Send", message delivers. | Set mode to `MANUAL`; take attendance; click "Send All" from outbox; verify single double-ticks on phones. |
-| **T8** | **Auto Mode Instant Dispatch** | Save attendance; within 10 seconds, parent receives message automatically with zero admin clicks. | Set mode to `AUTO`; mark absence; verify message arrives autonomously. |
-| **T9** | **Special Lesson Multi-Group Blast** | Scheduling extra lesson for 2 merged classes queues alerts for all enrolled students with rate-limiting. | Schedule extra lesson with 2 groups; inspect queue; verify 4-8 second interval between sends. |
-| **T10** | **Quiet Hours Hold** | Notification triggered at 23:30 is held with `scheduledFor: 08:15` next morning. | Trigger absence during quiet hours; verify status stays held until 08:15. |
+| **T1** | **Owner QR Code Scan on OCI** | QR renders in browser; school phone scans QR; session saved to `/data/wa-session`; persists across container reboots. | Open `/admin/configuration?tab=whatsapp` as Owner, scan QR, restart container, verify status stays 🟢 `Connected`. |
+| **T2** | **Special Lesson Update Confirmation** | Admin schedules special lesson, then changes time from 14:00 to 16:00. System generates a confirmation notice highlighting old vs new time. | Create special lesson; edit lesson start time; verify generated message contains ⚠️ `تعديل وتأكيد موعد الحصة`. |
+| **T3** | **Special Lesson Cancellation Notice** | Admin deletes special lesson. System purges pending drafts or sends cancellation notice. | Create lesson; send initial alert; delete lesson; verify cancellation alert stages/sends. |
+| **T4** | **Attendance Mistake Reversal** | Student marked absent; parent alert sent; admin changes to present; system sends reassurance notice. | Mark absent; verify alert; change to present; verify correction alert stages/sends. |
+| **T5** | **24-Hour Pre-Lesson -1 Balance Warning** | Student has 0 credits; class is tomorrow at 14:00; cron stages -1 debt alert today at 14:00. | Set student credit to 0; schedule lesson for tomorrow; run worker; verify reminder is generated. |
+| **T6** | **Payment Settled Race Condition Prevention** | Reminder pending; parent pays at desk; admin clicks send; system cancels reminder. | Generate pending reminder; record payment voucher; click send; verify notification is marked `REVOKED_PAYMENT`. |
+| **T7** | **Waterfall Contact Resolution** | Student phone checked first; if no WA, parent checked; if no WA, family payer checked. | Test with different student phone configurations; verify waterfall stops at first valid WhatsApp account. |
+| **T8** | **Strict Owner Role Wall** | Branch Admin navigating to `/admin/configuration?tab=whatsapp` is blocked with unauthorized badge. | Log in as Branch Admin; attempt direct navigation; verify access denied. |
 
 ---
 
 *Document Author: Antigravity AI Architecture Team*  
-*Target Environment: Massinissa School Management System (Next.js 16 App Router, Prisma, PostgreSQL, Baileys v6)*
+*Target Environment: Massinissa School Management System (Oracle Cloud Infrastructure, Next.js 16, PostgreSQL, Baileys v6)*

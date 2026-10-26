@@ -1,7 +1,7 @@
 "use client";
 
 import { Student, Attendance, Voucher, Lesson, Class, Teacher } from "@prisma/client";
-import { useState, useEffect, useRef, useMemo, startTransition } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Link } from "@/i18n/navigation";
 import dynamic from "next/dynamic";
@@ -16,7 +16,7 @@ import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
 import CatchUpVisitorModal from "./CatchUpVisitorModal";
-import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, UserX } from "lucide-react";
+import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, UserX, Send } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
 import BookStatusBadge, { computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
@@ -394,6 +394,51 @@ const AttendanceRoster = ({
     }
   };
 
+  const lessonDateStr = useMemo(() => {
+    const raw = (lesson as any).startTime || (lesson as any).startsAt || lesson.startsAt;
+    if (!raw) return "";
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Africa/Algiers",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(raw));
+    } catch {
+      return "";
+    }
+  }, [lesson]);
+
+  const isSameSessionAttendance = useCallback(
+    (a: any) => {
+      if (!a) return false;
+      if (Number(a.lessonId) === Number(lesson.id)) return true;
+      const aClassId =
+        a.lesson?.classId || a.lesson?.class?.id || a.classId;
+      const thisClassId = lesson.class?.id;
+      if (!aClassId || !thisClassId || Number(aClassId) !== Number(thisClassId)) {
+        return false;
+      }
+      const aStartsAt =
+        a.lesson?.startsAt || a.lesson?.startTime || a.startsAt || a.date;
+      if (aStartsAt && lessonDateStr) {
+        try {
+          const aDateStr = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Africa/Algiers",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          }).format(new Date(aStartsAt));
+          if (aDateStr && aDateStr === lessonDateStr) {
+            return true;
+          }
+        } catch {}
+      }
+      return false;
+    },
+    [lesson.id, lesson.class?.id, lessonDateStr]
+  );
+
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() => {
     const initialState: Record<string, AttendanceStatus> = {};
     activeStudents.forEach((student) => {
@@ -401,7 +446,8 @@ const AttendanceRoster = ({
         initialState[student.id] = "PRESENT";
         return;
       }
-      const record = existingRecords.find((r) => r.studentId === student.id);
+      const existingAtt = (student.attendances || []).find((a: any) => isSameSessionAttendance(a));
+      const record = existingRecords.find((r) => r.studentId === student.id) || existingAtt;
       if (record?.status === "PRESENT" || (!record && inGroupCatchUpMap.has(student.id))) {
         initialState[student.id] = "PRESENT";
       } else if (record?.status === "NOT_DEFINED") {
@@ -417,7 +463,8 @@ const AttendanceRoster = ({
     const initial: Record<string, string> = {};
     activeStudents.forEach((student) => {
       if (student.isVisitor) return;
-      const record = existingRecords.find((r) => r.studentId === student.id);
+      const existingAtt = (student.attendances || []).find((a: any) => isSameSessionAttendance(a));
+      const record = existingRecords.find((r) => r.studentId === student.id) || existingAtt;
       if (record?.justification) {
         initial[student.id] = record.justification;
       }
@@ -438,7 +485,8 @@ const AttendanceRoster = ({
           }
           return;
         }
-        const record = existingRecords.find((r) => r.studentId === student.id);
+        const existingAtt = (student.attendances || []).find((a: any) => isSameSessionAttendance(a));
+        const record = existingRecords.find((r) => r.studentId === student.id) || existingAtt;
         if (next[student.id] === undefined) {
           if (record?.status === "PRESENT") {
             next[student.id] = "PRESENT";
@@ -455,7 +503,7 @@ const AttendanceRoster = ({
       });
       return changed ? next : prev;
     });
-  }, [activeStudents, existingRecords]);
+  }, [activeStudents, existingRecords, isSameSessionAttendance]);
 
   // Synchronize studentReceivedBooks state when active students change
   useEffect(() => {
@@ -479,17 +527,21 @@ const AttendanceRoster = ({
       const scan = customEvent.detail;
       if (
         scan &&
-        Number(scan.lessonId) === Number(lesson.id) &&
         scan.studentId &&
         scan.status === "SUCCESS"
       ) {
-        setAttendance((prev) => ({
-          ...prev,
-          [String(scan.studentId)]: "PRESENT",
-        }));
-        startTransition(() => {
-          router.refresh();
-        });
+        const matchesLesson = Number(scan.lessonId) === Number(lesson.id);
+        const matchesClass = Number(scan.classId) === Number(lesson.class?.id);
+        const matchesStudent = activeStudents.some((s) => s.id === scan.studentId);
+        if (matchesLesson || (matchesClass && matchesStudent)) {
+          setAttendance((prev) => ({
+            ...prev,
+            [String(scan.studentId)]: "PRESENT",
+          }));
+          startTransition(() => {
+            router.refresh();
+          });
+        }
       }
     };
     window.addEventListener("biometric-attendance-marked", handleBiometricScan);
@@ -499,7 +551,7 @@ const AttendanceRoster = ({
         handleBiometricScan
       );
     };
-  }, [lesson.id, router]);
+  }, [lesson.id, lesson.class?.id, activeStudents, router]);
 
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<FullStudent | null>(null);
@@ -648,10 +700,10 @@ const AttendanceRoster = ({
       );
 
       const baseOtherAttendances = (st.attendances || []).filter(
-        (a: any) => Number(a.lessonId) !== Number(lesson.id)
+        (a: any) => !isSameSessionAttendance(a)
       );
       const existingCurrentAtt: any = (st.attendances || []).find(
-        (a: any) => Number(a.lessonId) === Number(lesson.id)
+        (a: any) => isSameSessionAttendance(a)
       );
       const liveStudentAttendances =
         !lesson.isFree &&
@@ -953,7 +1005,9 @@ const AttendanceRoster = ({
             }
 
             // Rule 3: Waived sibling pass strictly follows paying sibling's remaining credit
-            const isPayerSiblingPaid = isSiblingWaived100
+            const isPayerSiblingPaid = (student as any).isPayerActiveAndPaid !== undefined
+              ? Boolean((student as any).isPayerActiveAndPaid)
+              : isSiblingWaived100
               ? (effectivePayerRemainingCredit !== undefined ? effectivePayerRemainingCredit > 0 : true)
               : true;
             const isWaivedTuition = isNonPayer || (isSiblingWaived100 && isPayerSiblingPaid);
@@ -1005,10 +1059,10 @@ const AttendanceRoster = ({
             // Merge the live status for the current lesson into student.attendances so credits update instantaneously (0ms)
             // when a student scans their fingerprint or when the admin toggles Present/Absent manually
             const baseOtherAttendances = (student.attendances || []).filter(
-              (a: any) => Number(a.lessonId) !== Number(lesson.id)
+              (a: any) => !isSameSessionAttendance(a)
             );
             const existingCurrentAtt: any = (student.attendances || []).find(
-              (a: any) => Number(a.lessonId) === Number(lesson.id)
+              (a: any) => isSameSessionAttendance(a)
             );
             const liveStudentAttendances =
               !lesson.isFree &&
@@ -1053,7 +1107,7 @@ const AttendanceRoster = ({
               siblingDiscountPercentage: siblingDiscountPct,
               isSiblingWaived: isSiblingWaived100,
               isPayerSiblingPaid,
-              payerRemainingCredit: isSiblingDiscount ? effectivePayerRemainingCredit : undefined,
+              payerRemainingCredit: isSiblingDiscount && !isSiblingWaived100 ? effectivePayerRemainingCredit : undefined,
               tuitionVouchers,
               transfersIn: student.transfersTo || [],
               transfersOut: student.transfersFrom || [],
@@ -1064,7 +1118,7 @@ const AttendanceRoster = ({
             });
 
             const sessionsRemaining =
-              isSiblingDiscount && effectivePayerRemainingCredit !== undefined
+              isSiblingDiscount && !isSiblingWaived100 && effectivePayerRemainingCredit !== undefined
                 ? effectivePayerRemainingCredit
                 : creditMetrics.netSessions;
             const sessionsConsumed = creditMetrics.attendedSessions;
@@ -1108,12 +1162,20 @@ const AttendanceRoster = ({
                 statusBubble = { text: t("unpaidDue"), color: "bg-red-500" };
               }
             } else {
-              if (isSiblingDiscount) {
+              if (isSiblingWaived100) {
+                statusBubble = isPayerSiblingPaid
+                  ? {
+                      text: locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)",
+                      color: "bg-emerald-600",
+                    }
+                  : {
+                      text: locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)",
+                      color: "bg-red-500",
+                    };
+              } else if (isSiblingDiscount) {
                 if (sessionsRemaining >= 2) {
                   statusBubble = {
-                    text: isSiblingWaived100
-                      ? (locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)")
-                      : (locale === "ar" ? `مدفوع (-${siblingDiscountPct}%)` : `Payé (-${siblingDiscountPct}%)`),
+                    text: locale === "ar" ? `مدفوع (-${siblingDiscountPct}%)` : `Payé (-${siblingDiscountPct}%)`,
                     color: "bg-green-500",
                   };
                 } else if (sessionsRemaining === 1) {
@@ -1129,8 +1191,6 @@ const AttendanceRoster = ({
                 }
               } else if (isNonPayer) {
                 statusBubble = { text: locale === "ar" ? "معفى من الرسوم" : "Exonéré", color: "bg-amber-600" };
-              } else if (isSiblingWaived100) {
-                statusBubble = { text: locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)", color: "bg-amber-600" };
               } else if (isSchoolFeesOnly) {
                 if (sessionsRemaining >= 2) {
                   statusBubble = {
@@ -1380,8 +1440,10 @@ const AttendanceRoster = ({
                             <span className={sessionsRemaining <= 0 && !isNonPayer && !isSiblingWaived100 ? "font-semibold text-rose-600" : ""}>
                               {isNonPayer
                                 ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
-                                : isSiblingWaived100 && !isSiblingDiscount
-                                ? (locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)")
+                                : isSiblingWaived100
+                                ? (isPayerSiblingPaid
+                                    ? (locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)")
+                                    : (locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)"))
                                 : isSchoolFeesOnly
                                 ? (locale === "ar"
                                     ? `${sessionsRemaining} حصة متبقية (حصة المدرسة)`
@@ -1667,6 +1729,35 @@ const AttendanceRoster = ({
 
         <SubmitButton />
       </form>
+
+      {/* WhatsApp Manual Mode Staged Alerts Banner */}
+      {state?.success && Object.values(attendance).some((s) => s === "ABSENT") && (
+        <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-blue-100 text-blue-700 rounded-lg">
+              <Send className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="text-xs font-bold text-blue-950 block">
+                {locale === "ar"
+                  ? "تم تسجيل غيابات وتجهيز تنبيهات واتساب في صندوق الإرسال"
+                  : "Des absences ont été enregistrées et préparées dans la boîte d'envoi WhatsApp"}
+              </span>
+              <span className="text-[11px] text-blue-700">
+                {locale === "ar"
+                  ? "يمكنك مراجعة وإرسال التنبيهات للأولياء بنقرة واحدة من صندوق الإرسال"
+                  : "Vous pouvez vérifier et envoyer les alertes aux parents depuis la boîte d'envoi"}
+              </span>
+            </div>
+          </div>
+          <Link
+            href="/list/whatsapp-queue"
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition shadow-xs whitespace-nowrap"
+          >
+            {locale === "ar" ? "فتح صندوق واتساب" : "Ouvrir la boîte WhatsApp"}
+          </Link>
+        </div>
+      )}
 
       {/* Catch-Up Visitor Modal (§2.12) */}
       <CatchUpVisitorModal

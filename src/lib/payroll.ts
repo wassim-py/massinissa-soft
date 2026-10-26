@@ -75,6 +75,21 @@ export interface TeacherPayrollCalculation {
     isTeacherAbsent?: boolean;
     isRetroactive?: boolean;
     retroactiveNote?: string;
+    isFormation?: boolean;
+  }>;
+  formationStudentBreakdown?: Array<{
+    classId: number;
+    className: string;
+    studentId: string;
+    studentName: string;
+    cycleNumber: number;
+    totalLevelPrice: number;
+    totalPaidToDate: number;
+    cycleRecognizedBase: number;
+    teacherPercentage: number;
+    teacherAmount: number;
+    schoolAmount: number;
+    status: "FULL" | "PARTIAL" | "UNPAID";
   }>;
   bookRevenue?: number;
   bookRevenueDetails?: Array<{
@@ -478,7 +493,7 @@ export async function calculateTeacherPayroll(
       ],
     },
     include: {
-      class: { select: { id: true, name: true, branchId: true } },
+      class: { select: { id: true, name: true, branchId: true, isFormation: true } },
       student: { select: { id: true, name: true } },
       refunds: true,
     },
@@ -557,6 +572,36 @@ export async function calculateTeacherPayroll(
 
     existing.totalPresentAttendances += presentCount;
     totalPresentAttendances += presentCount;
+
+    // Formation groups: Attendance is recorded above, but teacher is paid on the formation level fee
+    // split over 2 monthly payroll cycles (not per individual lesson session fee).
+    if (lesson.class?.isFormation) {
+      const pricePerCycle = lesson.class?.pricePerCycle ? Number(lesson.class.pricePerCycle) : 0;
+      const appliedGroupPercentage = classRateMap.has(lesson.classId)
+        ? classRateMap.get(lesson.classId)!
+        : (percentageOfSessionFee ?? null);
+
+      sessionDetails.push({
+        lessonId: lesson.id,
+        startsAt: lesson.startsAt,
+        className: lesson.class?.name || "فوج",
+        branchName: lesson.branch.name,
+        presentCount,
+        payingCount: 0,
+        pricePerCycle,
+        sessionPrice: 0,
+        teacherCut: 0,
+        schoolCut: 0,
+        appliedPercentage: appliedGroupPercentage !== null ? appliedGroupPercentage : undefined,
+        lessonAmount: 0,
+        isFree: lesson.isFree,
+        isExtra: lesson.isExtra,
+        isCatchUp: lesson.isCatchUp,
+        isFormation: true,
+        retroactiveNote: "فوج تكويني (الاشتراك يُدفع بنظام الدورة الشهرية)",
+      });
+      return;
+    }
 
     // Filter students whose payer status entitles teacher to payment:
     // Paying attendees include PRESENT + INTERLEAVED_ABSENCE
@@ -688,6 +733,10 @@ export async function calculateTeacherPayroll(
   const bookRevenueDetails: NonNullable<TeacherPayrollCalculation["bookRevenueDetails"]> = [];
 
   bookVouchers.forEach((bv) => {
+    // Formation groups books are 100% school part (0% teacher part, same as inscription fees)
+    if (bv.class?.isFormation) {
+      return;
+    }
     const refunded = bv.refunds?.reduce((sum, r) => sum + Number(r.amount), 0) || 0;
     const netBookAmount = Math.max(0, Number(bv.amount) - refunded);
     if (netBookAmount > 0) {
@@ -732,6 +781,9 @@ export async function calculateTeacherPayroll(
   const previousMonthStart = new Date(Date.UTC(sDate.getUTCFullYear(), sDate.getUTCMonth() - 1, 1, 0, 0, 0, 0));
 
   for (const [cid, historyData] of classHistoryMap.entries()) {
+    // Skip formation classes; their payments are handled via the 2-month cycle formation engine below
+    if (historyData.classInfo?.isFormation) continue;
+
     const priorLessons = historyData.lessons.filter((l) => {
       const lDate = new Date(l.startsAt);
       return lDate >= previousMonthStart && lDate < startDate && !l.isFree;
@@ -873,6 +925,220 @@ export async function calculateTeacherPayroll(
     }
   }
 
+  // 3. Process Formation Groups Teacher Payments (2-Month Cycle Split: 50% Cycle 1 / Remaining Cycle 2)
+  // Per requirement: Formation books are 100% school revenue. The teacher is paid ONLY on the formation level fee
+  // according to their configured percentage (TeacherClassRate or TeacherPayRate), split across 2 monthly payroll cycles.
+  const formationStudentBreakdown: NonNullable<TeacherPayrollCalculation["formationStudentBreakdown"]> = [];
+  const formationGroupSummaries: Array<{
+    classId: number;
+    className: string;
+    branchId: number;
+    branchName: string;
+    courseSessionsCount: number;
+    payingCount: number;
+    teacherAmount: number;
+    tuitionGross: number;
+    schoolAmount: number;
+    appliedPercentage: number;
+    cycleNumber: number;
+  }> = [];
+
+  // Find all formation classes taught by this teacher or with lessons taught by this teacher
+  const formationClasses = await prisma.class.findMany({
+    where: {
+      isFormation: true,
+      OR: [
+        { teacherId: teacher.id },
+        { id: { in: classIds } },
+      ],
+    },
+    include: {
+      FormationLevel: true,
+      branch: true,
+      enrollments: {
+        include: {
+          student: { select: { id: true, name: true } },
+        },
+      },
+    },
+  });
+
+  if (formationClasses.length > 0) {
+    const formationClassIds = formationClasses.map((fc) => fc.id);
+    const [allFormationLessons, allFormationVouchers] = await Promise.all([
+      prisma.lesson.findMany({
+        where: { classId: { in: formationClassIds } },
+        select: { id: true, classId: true, startsAt: true, isTeacherAbsent: true, isFree: true },
+        orderBy: { startsAt: "asc" },
+      }),
+      prisma.voucher.findMany({
+        where: {
+          classId: { in: formationClassIds },
+          paymentType: "FORMATION",
+          isVoided: false,
+          isRefund: false,
+          status: { not: "REFUNDED" },
+          issuedAt: { lte: endDate },
+        },
+        include: { refunds: true },
+        orderBy: { issuedAt: "asc" },
+      }),
+    ]);
+
+    for (const fClass of formationClasses) {
+      const classLessons = allFormationLessons.filter((l) => l.classId === fClass.id);
+      const firstLesson = classLessons[0];
+      const classVouchers = allFormationVouchers.filter((v) => v.classId === fClass.id);
+
+      // Determine group start date (earliest lesson startsAt, or earliest voucher, or fallback to current period startDate)
+      let classStartDate: Date;
+      if (firstLesson) {
+        classStartDate = new Date(firstLesson.startsAt);
+      } else if (classVouchers.length > 0) {
+        classStartDate = new Date(classVouchers[0].issuedAt);
+      } else {
+        classStartDate = new Date(startDate);
+      }
+
+      // Calculate calendar month difference between group start date and current payroll period start
+      const startYear = classStartDate.getUTCFullYear();
+      const startMonth = classStartDate.getUTCMonth();
+      const currentYear = startDate.getUTCFullYear();
+      const currentMonth = startDate.getUTCMonth();
+      const monthDiff = (currentYear - startYear) * 12 + (currentMonth - startMonth);
+
+      // If this group starts in a future month relative to this payroll period, do not recognize payments yet
+      if (monthDiff < 0) {
+        continue;
+      }
+
+      const levelPrice = Number(fClass.FormationLevel?.lumpSumPrice ?? fClass.pricePerCycle ?? 4000);
+      const halfPriceCap = levelPrice > 0 ? levelPrice / 2 : 2000;
+
+      // Group percentage override or teacher default percentage
+      const appliedGroupPercentage = classRateMap.has(fClass.id)
+        ? classRateMap.get(fClass.id)!
+        : (percentageOfSessionFee ?? null);
+      const teacherRatePct = appliedGroupPercentage !== null && appliedGroupPercentage > 0
+        ? appliedGroupPercentage
+        : 0;
+
+      let classTuitionGross = 0;
+      let classTeacherGross = 0;
+      let classSchoolGross = 0;
+      let compensatedStudentsCount = 0;
+
+      // Lessons of this formation class in this period
+      const formationLessonsInPeriod = classLessons.filter((l) => {
+        const d = new Date(l.startsAt);
+        return d >= startDate && d <= endDate;
+      });
+
+      for (const enr of fClass.enrollments) {
+        const pStatus = enr.payerStatus || "NORMAL";
+        if (pStatus === "NON_PAYER" || pStatus === "SCHOOL_FEES_ONLY") {
+          continue;
+        }
+
+        const studentVouchers = classVouchers.filter((v) => v.studentId === enr.studentId);
+        let totalPaidToEnd = 0;
+        let totalPaidToStart = 0;
+
+        studentVouchers.forEach((v) => {
+          const vAmount = Number(v.amount || 0);
+          const refunded = (v.refunds || []).reduce((s, r) => s + Number(r.amount || 0), 0);
+          const netPaid = Math.max(0, vAmount - refunded);
+
+          if (new Date(v.issuedAt) <= endDate) {
+            totalPaidToEnd += netPaid;
+          }
+          if (new Date(v.issuedAt) < startDate) {
+            totalPaidToStart += netPaid;
+          }
+        });
+
+        let cycleRecognizedBase = 0;
+
+        if (monthDiff === 0) {
+          // Month 1 (First Cycle): Capped at 50% of the level fee (e.g. max 2000 DZD out of 4000 DZD)
+          cycleRecognizedBase = Math.min(totalPaidToEnd, halfPriceCap);
+        } else if (monthDiff === 1) {
+          // Month 2 (Second Cycle): Recognized base is what remains of total payment up to levelPrice
+          const base1 = Math.min(totalPaidToStart, halfPriceCap);
+          cycleRecognizedBase = Math.max(0, Math.min(totalPaidToEnd - base1, levelPrice - base1));
+        } else {
+          // Month 3+ (Post-Cycle settlements): Any delayed payments above prior recognized base
+          const priorRecognized = Math.min(totalPaidToStart, levelPrice);
+          cycleRecognizedBase = Math.max(0, Math.min(totalPaidToEnd - priorRecognized, levelPrice - priorRecognized));
+        }
+
+        const studentTeacherCut = Math.round(((cycleRecognizedBase * teacherRatePct) / 100) * 100) / 100;
+        const studentSchoolCut = Math.max(0, Math.round((cycleRecognizedBase - studentTeacherCut) * 100) / 100);
+
+        if (cycleRecognizedBase > 0) {
+          compensatedStudentsCount += 1;
+        }
+
+        classTuitionGross += cycleRecognizedBase;
+        classTeacherGross += studentTeacherCut;
+        classSchoolGross += studentSchoolCut;
+
+        formationStudentBreakdown.push({
+          classId: fClass.id,
+          className: fClass.name,
+          studentId: enr.student.id,
+          studentName: enr.student.name,
+          cycleNumber: monthDiff <= 0 ? 1 : 2,
+          totalLevelPrice: levelPrice,
+          totalPaidToDate: totalPaidToEnd,
+          cycleRecognizedBase,
+          teacherPercentage: teacherRatePct,
+          teacherAmount: studentTeacherCut,
+          schoolAmount: studentSchoolCut,
+          status: totalPaidToEnd >= levelPrice ? "FULL" : totalPaidToEnd > 0 ? "PARTIAL" : "UNPAID",
+        });
+      }
+
+      classTuitionGross = Math.round(classTuitionGross * 100) / 100;
+      classTeacherGross = Math.round(classTeacherGross * 100) / 100;
+      classSchoolGross = Math.round(classSchoolGross * 100) / 100;
+
+      formationGroupSummaries.push({
+        classId: fClass.id,
+        className: fClass.name,
+        branchId: fClass.branchId,
+        branchName: fClass.branch.name,
+        courseSessionsCount: formationLessonsInPeriod.length,
+        payingCount: compensatedStudentsCount,
+        teacherAmount: classTeacherGross,
+        tuitionGross: classTuitionGross,
+        schoolAmount: classSchoolGross,
+        appliedPercentage: teacherRatePct,
+        cycleNumber: monthDiff <= 0 ? 1 : 2,
+      });
+
+      // Update gross totals
+      calculatedGross += classTeacherGross;
+      totalTuitionGross += classTuitionGross;
+      schoolGrossAmount += classSchoolGross;
+
+      // Update branch totals
+      const bEntry = branchSessionsMap.get(fClass.branchId) || {
+        branchName: fClass.branch.name,
+        totalSessions: 0,
+        freeSessions: 0,
+        amount: 0,
+        totalTuition: 0,
+        schoolAmount: 0,
+        totalPresentAttendances: 0,
+      };
+      bEntry.amount += classTeacherGross;
+      bEntry.totalTuition = (bEntry.totalTuition || 0) + classTuitionGross;
+      bEntry.schoolAmount = (bEntry.schoolAmount || 0) + classSchoolGross;
+      branchSessionsMap.set(fClass.branchId, bEntry);
+    }
+  }
+
   const branchBreakdown: TeacherPayrollCalculation["branchBreakdown"] = [];
 
   for (const [branchId, data] of branchSessionsMap.entries()) {
@@ -1003,6 +1269,18 @@ export async function calculateTeacherPayroll(
       g.appliedPercentage = s.appliedPercentage;
     }
 
+    if (s.isFormation) {
+      // Formation session: track session counts only (amounts are computed at the group level below)
+      g.totalSessionsCount += 1;
+      if (s.isFree) {
+        g.freeSessionsCount += 1;
+      } else {
+        g.courseSessionsCount += 1;
+      }
+      groupBreakdownMap.set(key, g);
+      return;
+    }
+
     if (s.isRetroactive) {
       // Retroactive settlements are adjustments for prior periods; do NOT count them as separated lessons in this period
       const payingCountForLesson = Number(s.payingCount ?? 1);
@@ -1036,6 +1314,31 @@ export async function calculateTeacherPayroll(
     groupBreakdownMap.set(key, g);
   });
 
+  // Apply formation group summaries into groupBreakdownMap
+  formationGroupSummaries.forEach((fSum) => {
+    const key = `${fSum.className}___${fSum.branchName}`;
+    const g = groupBreakdownMap.get(key) || {
+      className: fSum.className,
+      branchName: fSum.branchName,
+      courseSessionsCount: fSum.courseSessionsCount,
+      payableLessonsCount: 0,
+      paidSessionsCount: 0,
+      freeSessionsCount: 0,
+      totalSessionsCount: fSum.courseSessionsCount,
+      amount: 0,
+      tuitionGross: 0,
+      schoolAmount: 0,
+      appliedPercentage: fSum.appliedPercentage,
+    };
+    g.payableLessonsCount = fSum.payingCount;
+    g.paidSessionsCount = fSum.payingCount;
+    g.amount = fSum.teacherAmount;
+    g.tuitionGross = fSum.tuitionGross;
+    g.schoolAmount = fSum.schoolAmount;
+    g.appliedPercentage = fSum.appliedPercentage;
+    groupBreakdownMap.set(key, g);
+  });
+
   const groupBreakdown = Array.from(groupBreakdownMap.values()).map((g) => ({
     ...g,
     payableLessonsCount: Math.round(g.payableLessonsCount * 100) / 100,
@@ -1066,6 +1369,7 @@ export async function calculateTeacherPayroll(
     totalPresentAttendances,
     percentageOfSessionFee,
     sessionDetails,
+    formationStudentBreakdown,
     grossAmount,
     salaryAdvances: totalAdvances,
     photocopyDeductions: totalPhotocopyDeductions,

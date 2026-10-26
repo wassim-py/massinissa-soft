@@ -210,25 +210,40 @@ export default function NavbarBiometricControl() {
                     key={item.id}
                     className="p-2.5 rounded-lg border border-gray-200 bg-gray-50/60 hover:bg-gray-50 transition-colors"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-gray-900 flex items-center gap-1.5">
+                    <div className="flex items-center justify-between gap-2 min-w-0">
+                      <span className="font-semibold text-gray-900 flex items-center gap-1.5 min-w-0 truncate">
                         {item.status === "NO_CREDITS" ? (
                           <span className="inline-flex h-2 w-2 rounded-full bg-red-600 shrink-0" />
                         ) : (
                           <span className="inline-flex h-2 w-2 rounded-full biometric-dot-green-red shrink-0" />
                         )}
                         <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span>{item.studentName || "—"}</span>
-                        <span className="text-gray-500 font-mono text-[11px]">
+                        <span className="truncate">{item.studentName || "—"}</span>
+                        <span className="text-gray-500 font-mono text-[11px] shrink-0">
                           (#{item.globalNumber})
                         </span>
                       </span>
-                      <span
-                        className="text-[10px] font-mono text-gray-400"
-                        dir="ltr"
-                      >
-                        {formatTime(item.scannedAt)}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {item.inscriptionStatus === "UNPAID" ? (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shrink-0">
+                            {isAr ? "تسجيل غير مدفوع" : "Inscr. Impayée"}
+                          </span>
+                        ) : item.inscriptionStatus === "PAID" ? (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                            {isAr ? "تسجيل مدفوع" : "Inscr. Payée"}
+                          </span>
+                        ) : item.inscriptionStatus === "WAIVED" ? (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 shrink-0">
+                            {isAr ? "تسجيل معفى" : "Inscr. Exonérée"}
+                          </span>
+                        ) : null}
+                        <span
+                          className="text-[10px] font-mono text-gray-400"
+                          dir="ltr"
+                        >
+                          {formatTime(item.scannedAt)}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="text-gray-600 mt-1 flex items-center justify-between gap-2">

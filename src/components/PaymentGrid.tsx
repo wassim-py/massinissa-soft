@@ -8,7 +8,13 @@ import { Class, Student, Voucher, Enrollment, EnrollmentTransfer, VoucherEdit, R
 import PaymentForm from "./forms/PaymentForm";
 import PrintTicketButton from "./PrintTicketButton";
 import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
-import { computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
+import {
+  computeStudentSessionFee,
+  computeStudentConsumedSessions,
+  computeStudentCreditAndSessions,
+  resolvePayerCredit,
+  computeEnrollmentInscriptionStatus,
+} from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { useTranslations, useLocale } from "next-intl";
@@ -306,7 +312,26 @@ export default function PaymentGrid({
     }
 
     const isFormation = Boolean(classData.isFormation);
-    const totalInscPaid = paidInscByClass.get(classData.id) || 0;
+    const paidInscRegularClassIds = new Set<number>();
+    paidInscByClass.forEach((amount, cid) => {
+      if (amount > 0) paidInscRegularClassIds.add(cid);
+    });
+
+    const inscStatusRes = computeEnrollmentInscriptionStatus({
+      enrollment,
+      classData,
+      vouchers: activeVouchers,
+      paidInscClassIds: paidInscRegularClassIds,
+    });
+
+    const isInscriptionPaid = inscStatusRes.isInscriptionPaid;
+    const totalInscPaid = inscStatusRes.totalPaid;
+    const isOwnerWaived = inscStatusRes.status === "WAIVED_OWNER";
+    const is3GroupsWaived = inscStatusRes.status === "WAIVED_3GROUPS";
+    const isNonPayerInscWaived = inscStatusRes.status === "WAIVED_NON_PAYER";
+    const isAutoWaived = is3GroupsWaived || isNonPayerInscWaived;
+    const hasPaidThreeInscriptions = is3GroupsWaived;
+
     const requiredInscFee =
       configuredInscriptionFee && configuredInscriptionFee > 0
         ? configuredInscriptionFee
@@ -315,16 +340,8 @@ export default function PaymentGrid({
         : isFormation
         ? 1500
         : 1000;
-    const isInscriptionPaid = totalInscPaid > 0;
-    const hasPaidThreeInscriptions = isFormation ? false : paidInscByClass.size >= 3;
     const inscVoucher = inscVouchers.length > 0 ? inscVouchers[0] : null;
     const enrPayerStatusForInsc = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
-    const isOwnerWaived = Boolean(enrollment.feeOverriddenByOwner && !enrollment.inscriptionFeeCharged);
-    const isAutoWaived =
-      !isFormation &&
-      !isInscriptionPaid &&
-      !isOwnerWaived &&
-      (!enrollment.inscriptionFeeCharged || hasPaidThreeInscriptions || enrPayerStatusForInsc === "NON_PAYER");
 
     // Books fee - scoped to active trimester (§7.20)
     const bookVoucher = activeVouchers.find(
@@ -513,6 +530,8 @@ export default function PaymentGrid({
       requiredInscFee,
       isOwnerWaived,
       isAutoWaived,
+      is3GroupsWaived,
+      isNonPayerInscWaived,
       bookVoucher,
       isWaivedSibling: isSiblingWaived100,
       hasPayerSibling: isSiblingDiscount,
@@ -537,6 +556,7 @@ export default function PaymentGrid({
       refundableAmount,
       effectiveLessonPrice,
       status: computedStatus,
+      isNonPayer: enrPayerStatus === "NON_PAYER",
       isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
       bookReceivedCount,
       totalBooks: classBooks.length,
@@ -1025,9 +1045,17 @@ export default function PaymentGrid({
             <Badge variant="success" size="sm" withDot>
               {t("inscriptionPaid")}
             </Badge>
-          ) : item.isAutoWaived || item.isOwnerWaived ? (
+          ) : item.isOwnerWaived ? (
+            <Badge variant="warning" size="sm" withDot title={locale === "ar" ? "معفى من طرف المالك" : "Exonéré par le gérant"}>
+              {locale === "ar" ? "معفى (المالك)" : "Exonéré (Gérant)"}
+            </Badge>
+          ) : item.is3GroupsWaived ? (
             <Badge variant="secondary" size="sm" withDot>
               {t("inscriptionWaived3rd")}
+            </Badge>
+          ) : item.isNonPayerInscWaived || item.isNonPayer ? (
+            <Badge variant="success" size="sm" withDot>
+              {locale === "ar" ? "معفى" : "Exonéré"}
             </Badge>
           ) : (
             <Badge variant="danger" size="sm" withDot>
@@ -1481,9 +1509,17 @@ export default function PaymentGrid({
                         <Badge variant="success" size="sm" withDot>
                           {t("inscriptionPaid")}
                         </Badge>
-                      ) : item.isAutoWaived || item.isOwnerWaived ? (
+                      ) : item.isOwnerWaived ? (
+                        <Badge variant="warning" size="sm" withDot title={locale === "ar" ? "معفى من طرف المالك" : "Exonéré par le gérant"}>
+                          {locale === "ar" ? "معفى (المالك)" : "Exonéré (Gérant)"}
+                        </Badge>
+                      ) : item.is3GroupsWaived ? (
                         <Badge variant="secondary" size="sm" withDot>
                           {t("inscriptionWaived3rd")}
+                        </Badge>
+                      ) : item.isNonPayerInscWaived || item.isNonPayer ? (
+                        <Badge variant="success" size="sm" withDot>
+                          {locale === "ar" ? "معفى" : "Exonéré"}
                         </Badge>
                       ) : (
                         <Badge variant="danger" size="sm" withDot>

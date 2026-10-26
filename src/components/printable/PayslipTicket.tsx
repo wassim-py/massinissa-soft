@@ -18,6 +18,7 @@ export interface PayslipSessionItem {
   isTeacherAbsent?: boolean;
   isRetroactive?: boolean;
   retroactiveNote?: string;
+  isFormation?: boolean;
 }
 
 export interface PayslipGroupLine {
@@ -483,6 +484,8 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                       <span className="bg-purple-100 text-purple-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Supplémentaire</span>
                     ) : l.isCatchUp ? (
                       <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Rattrapage</span>
+                    ) : l.isFormation ? (
+                      <span className="bg-teal-50 text-teal-800 text-[10px] font-medium px-1.5 py-0.5 rounded">Formation</span>
                     ) : (
                       <span className="bg-blue-50 text-blue-800 text-[10px] font-medium px-1.5 py-0.5 rounded">Normale</span>
                     )}

@@ -93,7 +93,8 @@
     "dailyLedger": "Caisse du jour",
     "finance": "Finances & Paie",
     "voucherSeries": "Souches de reçus",
-    "configuration": "Configuration"
+    "configuration": "Configuration",
+    "whatsappQueue": "Boîte WhatsApp"
   },
   "roles": {
     "admin": "Administrateur",
@@ -1645,13 +1646,11 @@
     "searchVoucherPlaceholder": "Rechercher par élève, n° de reçu, classe...",
     "filterAllTypes": "Tous les types",
     "voucherNumCol": "N° Reçu",
-    "studentCol": "Élève",
     "classAndBranchCol": "Classe & Siège",
     "paymentTypeCol": "Type de paiement",
     "dateCol": "Date & Heure",
     "amountCol": "Montant",
     "issuerCol": "Émis par",
-    "statusCol": "Statut",
     "noPaymentsFound": "Aucun reçu de paiement trouvé pour cette période.",
     "noPaymentsFoundDesc": "Modifiez la période ou les filtres pour afficher les reçus.",
     "filterDayBtn": "Inspecter ce jour",

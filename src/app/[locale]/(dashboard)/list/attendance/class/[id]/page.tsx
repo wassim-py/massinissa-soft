@@ -322,7 +322,13 @@ const ClassAttendancePage = async (
                                 where: { classId: classId },
                                 include: {
                                     transfersFrom: true,
-                                    transfersTo: true,
+                                    transfersTo: {
+                                        include: {
+                                            fromEnrollment: {
+                                                include: { class: true },
+                                            },
+                                        },
+                                    },
                                 },
                             },
                             attendances: {
@@ -449,6 +455,7 @@ const ClassAttendancePage = async (
                         : 0;
                     const isSiblingWaived100 = siblingDiscountPct >= 100;
 
+                    let isPayerActiveAndPaid = false;
                     let payerRemainingCredit: number | undefined = undefined;
                     if (isSiblingDiscount && details?.family?.payerStudentId) {
                         const payerId = details.family.payerStudentId;
@@ -459,18 +466,16 @@ const ClassAttendancePage = async (
                         if (targetPayerStudent) {
                             const payerRes = resolvePayerCredit({
                                 payerStudent: targetPayerStudent,
-                                classId: classId,
-                                classPricePerCycle: classPricePerCycle,
-                                isFormation: false,
                             });
                             if (payerRes) {
+                                isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
                                 payerRemainingCredit = payerRes.netSessions;
                             }
                         }
                     }
 
                     const isPayerSiblingPaid = isSiblingWaived100
-                        ? (payerRemainingCredit !== undefined ? payerRemainingCredit > 0 : true)
+                        ? isPayerActiveAndPaid
                         : true;
 
                     const tuitionVouchers = (details?.vouchers || []).filter(
@@ -504,7 +509,7 @@ const ClassAttendancePage = async (
                         siblingDiscountPercentage: siblingDiscountPct,
                         isSiblingWaived: isSiblingWaived100,
                         isPayerSiblingPaid,
-                        payerRemainingCredit,
+                        payerRemainingCredit: isSiblingWaived100 ? undefined : payerRemainingCredit,
                         tuitionVouchers,
                         transfersIn: enrollment?.transfersTo || [],
                         transfersOut: enrollment?.transfersFrom || [],
@@ -514,14 +519,18 @@ const ClassAttendancePage = async (
                         catchUps: sCatchUps,
                     });
 
-                    const net = isSiblingDiscount && payerRemainingCredit !== undefined
-                        ? payerRemainingCredit
-                        : creditMetrics.netSessions;
+                    let net = creditMetrics.netSessions;
+                    let computedStatus = creditMetrics.status;
+
+                    if (isSiblingWaived100) {
+                        net = 0;
+                        computedStatus = isPayerSiblingPaid ? "SIBLING_WAIVED" : "UNPAID";
+                    }
 
                     balance = {
                         isFormation: false,
                         netSessions: net,
-                        status: creditMetrics.status,
+                        status: computedStatus,
                         hasPayerSibling: Boolean(isSiblingDiscount && details?.family?.payerStudentId),
                     };
                 }

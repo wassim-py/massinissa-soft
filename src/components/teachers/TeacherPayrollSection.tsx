@@ -213,6 +213,7 @@ export default function TeacherPayrollSection({
           isTeacherAbsent: s.isTeacherAbsent,
           isRetroactive: s.isRetroactive,
           retroactiveNote: s.retroactiveNote,
+          isFormation: s.isFormation,
         })),
         photocopyDetails: currentPayroll.photocopyChargeDetails?.map((p) => ({
           branchName: p.branchName,
@@ -679,6 +680,91 @@ export default function TeacherPayrollSection({
               </div>
             )}
 
+            {/* Formation Student Contribution Breakdown */}
+            {currentPayroll.formationStudentBreakdown && currentPayroll.formationStudentBreakdown.length > 0 && (
+              <div className="space-y-3 p-4 rounded-xl border border-teal-200 bg-teal-50/30">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                    <BookOpen className="w-4 h-4 text-teal-600" />
+                    <span>{locale === "ar" ? "تفاصيل اشتراكات الدورات التكوينية (نظام 50% لكل دورة شهرية)" : "Détail des paiements de formation (50% Cycle 1 / 50% Cycle 2)"}</span>
+                  </h4>
+                  <Badge variant="neutral" size="sm" className="font-semibold text-teal-800 bg-teal-100">
+                    {currentPayroll.formationStudentBreakdown.length} {locale === "ar" ? "تلميذ مسجل" : "élève(s)"}
+                  </Badge>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-start border-collapse bg-white rounded-lg border border-teal-100 shadow-2xs">
+                    <thead>
+                      <tr className="bg-teal-50/80 border-b border-teal-200 text-teal-950 font-bold">
+                        <th className="p-2.5 text-start">{locale === "ar" ? "التلميذ" : "Élève"}</th>
+                        <th className="p-2.5 text-start">{locale === "ar" ? "الفوج التكويني" : "Groupe"}</th>
+                        <th className="p-2.5 text-center">{locale === "ar" ? "الدورة" : "Cycle"}</th>
+                        <th className="p-2.5 text-end">{locale === "ar" ? "سعر المستوى" : "Forfait Niveau"}</th>
+                        <th className="p-2.5 text-end">{locale === "ar" ? "المدفوع حتى الآن" : "Payé à ce jour"}</th>
+                        <th className="p-2.5 text-end font-bold text-teal-900 bg-teal-100/50">{locale === "ar" ? "المحتسب هذا الشهر" : "Base ce mois"}</th>
+                        <th className="p-2.5 text-center">{locale === "ar" ? "النسبة" : "Taux"}</th>
+                        <th className="p-2.5 text-end font-bold text-success-text">{locale === "ar" ? "حصة الأستاذ" : "Part Enseignant"}</th>
+                        <th className="p-2.5 text-end font-bold text-blue-800">{locale === "ar" ? "حصة المدرسة" : "Part École"}</th>
+                        <th className="p-2.5 text-center">{locale === "ar" ? "الحالة" : "Statut"}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-teal-100">
+                      {currentPayroll.formationStudentBreakdown.map((fsb, idx) => (
+                        <tr key={idx} className="hover:bg-teal-50/40 transition-colors">
+                          <td className="p-2.5 font-bold text-gray-900">{fsb.studentName}</td>
+                          <td className="p-2.5 text-gray-700">{fsb.className}</td>
+                          <td className="p-2.5 text-center">
+                            <Badge variant={fsb.cycleNumber === 1 ? "primary" : "secondary"} size="sm" className="font-semibold">
+                              Cycle {fsb.cycleNumber}/2
+                            </Badge>
+                          </td>
+                          <td className="p-2.5 text-end font-mono text-gray-700">{formatDZD(fsb.totalLevelPrice)}</td>
+                          <td className="p-2.5 text-end font-mono font-semibold text-gray-900">{formatDZD(fsb.totalPaidToDate)}</td>
+                          <td className="p-2.5 text-end font-mono font-bold text-teal-950 bg-teal-50/50">{formatDZD(fsb.cycleRecognizedBase)}</td>
+                          <td className="p-2.5 text-center font-mono font-semibold text-gray-700">{fsb.teacherPercentage}%</td>
+                          <td className="p-2.5 text-end font-mono font-bold text-success-text">{formatDZD(fsb.teacherAmount)}</td>
+                          <td className="p-2.5 text-end font-mono font-bold text-blue-800">{formatDZD(fsb.schoolAmount)}</td>
+                          <td className="p-2.5 text-center">
+                            <Badge
+                              variant={fsb.status === "FULL" ? "success" : fsb.status === "PARTIAL" ? "warning" : "danger"}
+                              size="sm"
+                              className="font-bold"
+                            >
+                              {fsb.status === "FULL"
+                                ? (locale === "ar" ? "مدفوع بالكامل" : "Complet")
+                                : fsb.status === "PARTIAL"
+                                ? (locale === "ar" ? "دفع جزئي" : "Partiel")
+                                : (locale === "ar" ? "غير دافع" : "Non payé")}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-teal-50/60 font-bold border-t border-teal-200 text-gray-900">
+                      <tr>
+                        <td className="p-2.5" colSpan={4}>{locale === "ar" ? "إجمالي التكوين" : "Total Formation"}</td>
+                        <td className="p-2.5 text-end font-mono">
+                          {formatDZD(currentPayroll.formationStudentBreakdown.reduce((sum, f) => sum + f.totalPaidToDate, 0))}
+                        </td>
+                        <td className="p-2.5 text-end font-mono font-black text-teal-950 bg-teal-100/60">
+                          {formatDZD(currentPayroll.formationStudentBreakdown.reduce((sum, f) => sum + f.cycleRecognizedBase, 0))}
+                        </td>
+                        <td className="p-2.5 text-center font-mono">-</td>
+                        <td className="p-2.5 text-end font-mono text-success-text font-black">
+                          {formatDZD(currentPayroll.formationStudentBreakdown.reduce((sum, f) => sum + f.teacherAmount, 0))}
+                        </td>
+                        <td className="p-2.5 text-end font-mono text-blue-800 font-black">
+                          {formatDZD(currentPayroll.formationStudentBreakdown.reduce((sum, f) => sum + f.schoolAmount, 0))}
+                        </td>
+                        <td className="p-2.5 text-center">-</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Granular Session Breakdown Table using DataTable */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -719,6 +805,10 @@ export default function TeacherPayrollSection({
                         <Badge size="sm" className="bg-rose-100 text-rose-800 border-rose-300 font-bold">
                           {locale === "ar" ? "غياب الأستاذ" : "Enseignant absent"}
                         </Badge>
+                      ) : s.isFormation ? (
+                        <Badge size="sm" className="bg-teal-100 text-teal-800 border-teal-300 font-bold">
+                          {locale === "ar" ? "دورة تكوينية" : "Formation"}
+                        </Badge>
                       ) : s.isRetroactive ? (
                         <Badge size="sm" className="bg-purple-100 text-purple-800 border-purple-300 font-bold">
                           {locale === "ar" ? "تسوية متأخرة" : "Régularisation"}
@@ -740,6 +830,11 @@ export default function TeacherPayrollSection({
                         <span className="text-xs text-rose-700 font-medium">
                           {locale === "ar" ? "غياب مسجل" : "Absent"}
                         </span>
+                      ) : s.isFormation ? (
+                        <div className="flex flex-col items-center">
+                          <span className="font-bold text-teal-900">{s.presentCount} {t("presentUnit")}</span>
+                          <span className="text-[10px] text-teal-700 font-medium">{locale === "ar" ? "اشتراك شهري" : "Forfait"}</span>
+                        </div>
                       ) : s.isRetroactive ? (
                         <div className="flex flex-col items-center">
                           <span className="font-bold text-purple-900">{s.payingCount} {locale === "ar" ? "مسوى" : "régul."}</span>
@@ -761,7 +856,7 @@ export default function TeacherPayrollSection({
                       )}
                     </td>
                     <td className="p-3.5 text-end text-gray-700">
-                      {formatDZD(s.sessionPrice)}
+                      {s.isFormation ? "-" : formatDZD(s.sessionPrice)}
                     </td>
                     <td className="p-3.5 text-center">
                       {s.isTeacherAbsent ? (
@@ -781,14 +876,16 @@ export default function TeacherPayrollSection({
                       )}
                     </td>
                     <td className="p-3.5 text-end text-success-text font-semibold">
-                      {s.isTeacherAbsent ? "0 DZD" : formatDZD(Math.round(s.teacherCut))}
+                      {s.isTeacherAbsent ? "0 DZD" : s.isFormation ? "-" : formatDZD(Math.round(s.teacherCut))}
                     </td>
                     <td className="p-3.5 text-end text-blue-700 font-semibold">
-                      {s.isTeacherAbsent ? "0 DZD" : formatDZD(Math.round(Math.max(0, s.sessionPrice - s.teacherCut)))}
+                      {s.isTeacherAbsent ? "0 DZD" : s.isFormation ? "-" : formatDZD(Math.round(Math.max(0, s.sessionPrice - s.teacherCut)))}
                     </td>
                     <td className="p-3.5 text-end font-bold text-gray-900">
                       {s.isTeacherAbsent ? (
                         <span className="text-xs text-rose-600 font-bold">0 DZD</span>
+                      ) : s.isFormation ? (
+                        <span className="text-xs text-teal-700 font-semibold">{locale === "ar" ? "مشمول في الفوج" : "Forfait mensuel"}</span>
                       ) : (
                         formatDZD(s.lessonAmount)
                       )}
