@@ -3,7 +3,7 @@ import BackButton from "@/components/BackButton";
 import prisma from "@/lib/prisma";
 import { getAuthSession, getActiveBranchId } from "@/lib/auth";
 import { getDailyRevenueDashboardData } from "@/lib/revenue";
-import { getOwnerPayrollOverview, getPayrollRunFinancialReport } from "@/lib/payroll";
+import { getOwnerPayrollOverview } from "@/lib/payroll";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -263,25 +263,8 @@ export default async function FinancePage(props: PageProps) {
     const endDate = searchParams.dateTo ? new Date(searchParams.dateTo) : lastDay;
 
     if (currentTab === "runs") {
-      const targetRunId = searchParams.runId ? Number(searchParams.runId) : undefined;
-      const [rawOverview, rawRuns, rawPayslips, teacherList, financialReportData] = await Promise.all([
+      const [rawOverview, rawPayslips, teacherList] = await Promise.all([
         getOwnerPayrollOverview(startDate, endDate),
-        prisma.payrollRun.findMany({
-          orderBy: { periodEnd: "desc" },
-          include: {
-            Payslip: {
-              select: {
-                id: true,
-                personType: true,
-                grossAmount: true,
-                advances: true,
-                photocopyDeductions: true,
-                netAmount: true,
-              },
-            },
-          },
-          take: 30,
-        }),
         prisma.payslip.findMany({
           where: { personType: "TEACHER" },
           orderBy: { id: "desc" },
@@ -294,13 +277,12 @@ export default async function FinancePage(props: PageProps) {
           take: 100,
         }),
         prisma.teacher.findMany({ select: { id: true, name: true } }),
-        getPayrollRunFinancialReport(startDate, endDate, targetRunId),
       ]);
 
       overviewData = rawOverview;
-      payrollRuns = rawRuns;
+      payrollRuns = [];
       payslips = rawPayslips;
-      financialReport = financialReportData;
+      financialReport = null;
       teacherList.forEach((tItem) => teacherMap.set(tItem.id, tItem.name));
     } else if (currentTab === "deductions") {
       const [rawPhotocopy, rawAdvances, teacherList, branchList] = await Promise.all([

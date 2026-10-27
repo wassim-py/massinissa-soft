@@ -3,8 +3,6 @@
 import React, { useState, useTransition } from "react";
 import Link from "next/link";
 import {
-  generatePayrollRunAction,
-  setPayrollRunStatusAction,
   deletePayrollRunAction,
   recordPhotocopyChargeAction,
   updatePhotocopyChargeAction,
@@ -15,8 +13,8 @@ import {
   saveTeacherPayRateAction,
 } from "@/lib/actions";
 import PrintPayslipButton from "@/components/PrintPayslipButton";
-import PrintSchoolShareButton from "@/components/PrintSchoolShareButton";
-import PrintRealNetButton from "@/components/PrintRealNetButton";
+import PrintOwnerConsolidationButton from "@/components/PrintOwnerConsolidationButton";
+import PrintMasterOwnerReportButton from "@/components/PrintMasterOwnerReportButton";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -35,6 +33,8 @@ import {
   Building2,
   Users,
   TrendingUp,
+  Search,
+  Eye,
 } from "lucide-react";
 
 interface Props {
@@ -241,7 +241,6 @@ export default function PayrollClientTabs({
   const locale = useLocale();
   const [isPending, startTransition] = useTransition();
   const [feedbackMessage, setFeedbackMessage] = useState<{ text: string; isError: boolean } | null>(null);
-  const [payrollViewMode, setPayrollViewMode] = useState<"teachers" | "school_share" | "real_net">("teachers");
 
   // Tab mapping: 3 clear views
   const isRunsTab =
@@ -260,12 +259,29 @@ export default function PayrollClientTabs({
     currentTab === "photocopy" ? "photocopy" : "advances"
   );
 
-  // Form states
-  // 1. Generate Run form
-  const [periodStart, setPeriodStart] = useState("2026-09-01");
-  const [periodEnd, setPeriodEnd] = useState("2026-09-30");
+  // Form states & Filters
+  const [searchTeacher, setSearchTeacher] = useState("");
+  const [periodFilterStart, setPeriodFilterStart] = useState("");
+  const [periodFilterEnd, setPeriodFilterEnd] = useState("");
 
-  // 2. Photocopy charge form
+  const filteredPayslips = payslips.filter((p) => {
+    if (searchTeacher && !p.teacherName.toLowerCase().includes(searchTeacher.toLowerCase())) {
+      return false;
+    }
+    if (periodFilterStart) {
+      const pStart = new Date(p.periodStart).getTime();
+      const fStart = new Date(periodFilterStart).getTime();
+      if (pStart < fStart) return false;
+    }
+    if (periodFilterEnd) {
+      const pEnd = new Date(p.periodEnd).getTime();
+      const fEnd = new Date(periodFilterEnd).getTime();
+      if (pEnd > fEnd) return false;
+    }
+    return true;
+  });
+
+  // 1. Photocopy charge form
   const [pcTeacherId, setPcTeacherId] = useState(teachers[0]?.id || "");
   const [pcBranchId, setPcBranchId] = useState(branches[0]?.id || 1);
   const [pcPages, setPcPages] = useState(20);
@@ -306,41 +322,16 @@ export default function PayrollClientTabs({
   };
 
   // Handlers
-  const handleGenerateRun = (e: React.FormEvent) => {
-    e.preventDefault();
-    setFeedbackMessage(null);
-    startTransition(async () => {
-      const res = await generatePayrollRunAction({ periodStart, periodEnd });
-      if (res.success) {
-        setFeedbackMessage({ text: res.message, isError: false });
-      } else {
-        setFeedbackMessage({ text: res.message, isError: true });
-      }
-    });
-  };
-
-  const handleUpdateStatus = (runId: number, status: "DRAFT" | "VALIDATED" | "PAID") => {
-    setFeedbackMessage(null);
-    startTransition(async () => {
-      const res = await setPayrollRunStatusAction({ payrollRunId: runId, status });
-      if (res.success) {
-        setFeedbackMessage({ text: res.message, isError: false });
-      } else {
-        setFeedbackMessage({ text: res.message, isError: true });
-      }
-    });
-  };
-
-  const handleDeleteRun = (runId: number) => {
+  const handleDeletePayslip = (payrollRunId: number, payslipId: number, teacherName: string) => {
     const msg =
       locale === "ar"
-        ? "هل أنت متأكد من رغبتك في إلغاء وحذف دورة الرواتب هذه؟ سيتم حذف جميع كشوف الرواتب المرتبطة بها وتراجع القيود المالية."
-        : "Êtes-vous sûr de vouloir annuler et supprimer ce cycle de paie ? Toutes les fiches de paie générées seront supprimées.";
+        ? `هل أنت متأكد من رغبتك في حذف كشف الراتب #${payslipId} للأستاذ ${teacherName}؟`
+        : `Êtes-vous sûr de vouloir supprimer la fiche de paie #${payslipId} pour ${teacherName} ?`;
     if (!window.confirm(msg)) return;
 
     setFeedbackMessage(null);
     startTransition(async () => {
-      const res = await deletePayrollRunAction(runId);
+      const res = await deletePayrollRunAction(payrollRunId);
       if (res.success) {
         setFeedbackMessage({ text: res.message, isError: false });
       } else {
@@ -535,175 +526,196 @@ export default function PayrollClientTabs({
       )}
 
       {/* ========================================================================= */}
-      {/* VIEW 1: CYCLES DE PAIE & FICHES DE PAIE CONSOLIDÉES                       */}
+      {/* VIEW 1: FICHES DE PAIE DES ENSEIGNANTS                                    */}
       {/* ========================================================================= */}
       {isRunsTab && (
         <div className="flex flex-col gap-6">
-          {/* Card 1: Generate Run Form */}
+          {/* Card: Dedicated Payslips Management Section */}
           <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle className="text-section-title font-bold text-gray-900">
-                {t("generateRunFormTitle")}
-              </CardTitle>
-              <CardDescription className="text-form-helper text-muted">
-                {t("generateRunFormDesc")}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5">
-              <form onSubmit={handleGenerateRun} className="flex flex-wrap items-end gap-4">
-                <div className="w-full sm:w-auto min-w-[200px]">
-                  <FormField label={t("periodStartLabel")}>
-                    <Input
-                      type="date"
-                      value={periodStart}
-                      onChange={(e) => setPeriodStart(e.target.value)}
-                      required
-                      className="font-mono text-xs"
-                    />
-                  </FormField>
-                </div>
-
-                <div className="w-full sm:w-auto min-w-[200px]">
-                  <FormField label={t("periodEndLabel")}>
-                    <Input
-                      type="date"
-                      value={periodEnd}
-                      onChange={(e) => setPeriodEnd(e.target.value)}
-                      required
-                      className="font-mono text-xs"
-                    />
-                  </FormField>
-                </div>
-
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="md"
-                  disabled={isPending}
-                  isLoading={isPending}
-                  className="h-[38px]"
-                >
-                  {isPending ? t("generating") : t("calculateAndGenerateRunBtn")}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
-          {/* Card 2: Recorded Payroll Runs Table */}
-          <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border flex flex-row items-center justify-between">
+            <CardHeader className="p-5 border-b border-border flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
-                <CardTitle className="text-section-title font-bold text-gray-900">
-                  {t("recordedPayrollRunsTitle")}
-                </CardTitle>
-                <CardDescription className="text-form-helper text-muted">
-                  {payrollRuns.length} {locale === "ar" ? "دورات مسجلة" : "cycle(s) enregistré(s)"}
+                <div className="flex items-center gap-2">
+                  <Users className="w-5 h-5 text-primary" />
+                  <CardTitle className="text-section-title font-bold text-gray-900">
+                    {t("consolidatedPayslipsTitle")}
+                  </CardTitle>
+                  <Badge variant="primary" size="sm" className="font-semibold">
+                    {filteredPayslips.length} {locale === "ar" ? "كشف" : "fiche(s)"}
+                  </Badge>
+                </div>
+                <CardDescription className="text-form-helper text-muted mt-1">
+                  {locale === "ar"
+                    ? "كشوف الرواتب المحفوظة من ملفات الأساتذة."
+                    : "Fiches de paie générées depuis les profils enseignants."}
                 </CardDescription>
               </div>
+
+              {/* Master Accumulated Owner Report Print Button */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <PrintMasterOwnerReportButton
+                  periodStart={periodFilterStart || undefined}
+                  periodEnd={periodFilterEnd || undefined}
+                />
+              </div>
             </CardHeader>
-            <CardContent className="p-5">
+            <CardContent className="p-5 space-y-5">
+              {/* Filter and Search Bar */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3 bg-surface-subtle border border-border/80 rounded-xl">
+                <div className="relative flex-1 min-w-[220px]">
+                  <Search className="w-4 h-4 text-muted absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchTeacher}
+                    onChange={(e) => setSearchTeacher(e.target.value)}
+                    placeholder={locale === "ar" ? "بحث عن أستاذ..." : "Rechercher un enseignant..."}
+                    className="w-full text-xs pl-9 pr-3 py-2 rounded-lg border border-border bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-muted text-[11px] font-semibold">{locale === "ar" ? "من:" : "Du :"}</span>
+                    <input
+                      type="date"
+                      value={periodFilterStart}
+                      onChange={(e) => setPeriodFilterStart(e.target.value)}
+                      className="text-xs font-mono px-2.5 py-1.5 rounded-lg border border-border bg-white"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-muted text-[11px] font-semibold">{locale === "ar" ? "إلى:" : "Au :"}</span>
+                    <input
+                      type="date"
+                      value={periodFilterEnd}
+                      onChange={(e) => setPeriodFilterEnd(e.target.value)}
+                      className="text-xs font-mono px-2.5 py-1.5 rounded-lg border border-border bg-white"
+                    />
+                  </div>
+                  {(searchTeacher || periodFilterStart || periodFilterEnd) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchTeacher("");
+                        setPeriodFilterStart("");
+                        setPeriodFilterEnd("");
+                      }}
+                      className="text-xs font-semibold text-danger hover:underline px-2 py-1 cursor-pointer"
+                    >
+                      {locale === "ar" ? "إعادة تعيين" : "Réinitialiser"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Summary KPIs for Displayed Payslips */}
+              {filteredPayslips.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                  <div className="p-3 rounded-xl bg-surface-subtle border border-border">
+                    <span className="text-[11px] text-muted font-semibold block">{t("totalSessionsCol")}</span>
+                    <span className="text-base font-black font-mono text-gray-900 mt-1 block">
+                      {filteredPayslips.reduce((s, p) => s + (p.sessionsCount || 0), 0)}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-surface-subtle border border-border">
+                    <span className="text-[11px] text-muted font-semibold block">{t("grossAmountCol")}</span>
+                    <span className="text-base font-black font-mono text-gray-900 mt-1 block">
+                      {formatDZD(filteredPayslips.reduce((s, p) => s + p.grossAmount, 0))}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-surface-subtle border border-border">
+                    <span className="text-[11px] text-muted font-semibold block">{t("advancesCol")}</span>
+                    <span className="text-base font-black font-mono text-danger mt-1 block">
+                      - {formatDZD(filteredPayslips.reduce((s, p) => s + p.advances, 0))}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-surface-subtle border border-border">
+                    <span className="text-[11px] text-muted font-semibold block">{t("photocopyCol")}</span>
+                    <span className="text-base font-black font-mono text-warning-text mt-1 block">
+                      - {formatDZD(filteredPayslips.reduce((s, p) => s + p.photocopyDeductions, 0))}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-primary/5 border border-primary/20">
+                    <span className="text-[11px] text-primary font-bold block">{t("netDueCol")}</span>
+                    <span className="text-base font-black font-mono text-primary mt-1 block">
+                      {formatDZD(filteredPayslips.reduce((s, p) => s + p.netAmount, 0))}
+                    </span>
+                  </div>
+                </div>
+              )}
               <DataTable
                 columns={[
-                  { header: t("runNumberCol"), accessor: "id" },
+                  { header: "#", accessor: "id" },
+                  { header: t("teacher"), accessor: "teacherName" },
                   { header: t("periodCol"), accessor: "period" },
-                  { header: t("statusCol"), accessor: "status", align: "center" },
-                  { header: t("teachersCountCol"), accessor: "payslipsCount", align: "center" },
-                  { header: t("grossAmountCol"), accessor: "totalGross", align: "end" },
-                  { header: t("advancesCol"), accessor: "totalAdvances", align: "end" },
-                  { header: t("photocopyCol"), accessor: "totalPhotocopy", align: "end" },
-                  { header: t("netDueCol"), accessor: "totalNet", align: "end" },
-                  { header: t("schoolShareNetCol"), accessor: "schoolShareNet", align: "end" },
-                  { header: t("realNetCol"), accessor: "realNet", align: "end" },
-                  { header: t("actions"), accessor: "actions", align: "center" },
+                  { header: t("totalSessionsCol"), accessor: "sessionsCount", align: "center" },
+                  { header: t("branchesDetailCol"), accessor: "branches" },
+                  { header: t("grossAmountCol"), accessor: "grossAmount", align: "end" },
+                  { header: t("advancesCol"), accessor: "advances", align: "end" },
+                  { header: t("photocopyCol"), accessor: "photocopy", align: "end" },
+                  { header: t("netDueCol"), accessor: "netAmount", align: "end" },
+                  { header: t("printCol"), accessor: "actions", align: "center" },
                 ]}
-                data={payrollRuns}
-                renderRow={(r) => (
-                  <tr key={r.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                    <td className="p-3.5 font-mono font-bold">#{r.id}</td>
-                    <td className="p-3.5 font-semibold text-gray-900">
-                      {t("periodFromTo", {
-                        start: formatDate(r.periodStart),
-                        end: formatDate(r.periodEnd),
-                      })}
+                data={filteredPayslips}
+                renderRow={(p) => (
+                  <tr key={p.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
+                    <td className="p-3.5 font-mono font-bold">#{p.id}</td>
+                    <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
+                    <td className="p-3.5 text-muted text-xs">
+                      {formatDate(p.periodStart)} → {formatDate(p.periodEnd)}
                     </td>
+                    <td className="p-3.5 text-center font-mono font-bold">{p.sessionsCount}</td>
+                    <td className="p-3.5">
+                      <div className="flex flex-col gap-0.5">
+                        {p.branchLines.map((bl) => (
+                          <span key={bl.branchId} className="text-xs text-muted">
+                            • <span className="font-semibold text-gray-800">{bl.branchName}</span>: {bl.sessionsCount} {locale === "ar" ? "حصة" : "séance(s)"} ({formatDZD(bl.amount)})
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="p-3.5 text-end font-mono font-bold text-gray-800">{formatDZD(p.grossAmount)}</td>
+                    <td className="p-3.5 text-end font-mono text-danger font-semibold">- {formatDZD(p.advances)}</td>
+                    <td className="p-3.5 text-end font-mono text-warning-text font-semibold">- {formatDZD(p.photocopyDeductions)}</td>
+                    <td className="p-3.5 text-end font-mono font-black text-primary text-sm">{formatDZD(p.netAmount)}</td>
                     <td className="p-3.5 text-center">
-                      <Badge
-                        variant={
-                          r.status === "PAID"
-                            ? "success"
-                            : r.status === "VALIDATED"
-                            ? "primary"
-                            : "warning"
-                        }
-                        size="sm"
-                        withDot
-                      >
-                        {r.status === "PAID"
-                          ? t("statusPaidLabel")
-                          : r.status === "VALIDATED"
-                          ? t("statusValidatedLabel")
-                          : t("statusDraftLabel")}
-                      </Badge>
-                    </td>
-                    <td className="p-3.5 text-center font-mono">
-                      {r.payslipsCount} {locale === "ar" ? "أستاذ" : "enseignant(s)"}
-                    </td>
-                    <td className="p-3.5 text-end font-mono font-bold text-gray-900">{formatDZD(r.totalGross)}</td>
-                    <td className="p-3.5 text-end font-mono text-danger font-semibold">- {formatDZD(r.totalAdvances)}</td>
-                    <td className="p-3.5 text-end font-mono text-warning-text font-semibold">- {formatDZD(r.totalPhotocopy)}</td>
-                    <td className="p-3.5 text-end font-mono font-black text-primary text-sm">{formatDZD(r.totalNet)}</td>
-                    <td className="p-3.5 text-end font-mono font-bold text-emerald-700 text-sm">
-                      {r.schoolShareNet != null ? formatDZD(r.schoolShareNet) : "—"}
-                    </td>
-                    <td
-                      className={`p-3.5 text-end font-mono font-black text-sm ${
-                        r.realNet != null
-                          ? r.realNet >= 0
-                            ? "text-emerald-700"
-                            : "text-rose-600"
-                          : "text-gray-400"
-                      }`}
-                    >
-                      {r.realNet != null ? formatDZD(r.realNet) : "—"}
-                    </td>
-                    <td className="p-3.5 text-center">
-                      <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                        {r.status === "DRAFT" && (
-                          <Button
-                            type="button"
-                            variant="primary"
-                            size="sm"
-                            disabled={isPending}
-                            onClick={() => handleUpdateStatus(r.id, "VALIDATED")}
-                          >
-                            {t("confirmRunBtn")}
-                          </Button>
-                        )}
-                        {r.status === "VALIDATED" && (
-                          <Button
-                            type="button"
-                            variant="primary"
-                            size="sm"
-                            disabled={isPending}
-                            className="bg-emerald-600 hover:bg-emerald-700"
-                            onClick={() => handleUpdateStatus(r.id, "PAID")}
-                          >
-                            {t("disbursePayrollBtn")}
-                          </Button>
-                        )}
-                        {r.status === "PAID" && (
-                          <Badge variant="neutral" size="sm">
-                            {t("disbursedInCashbox")}
-                          </Badge>
-                        )}
+                      <div className="flex items-center justify-center gap-1.5 flex-nowrap">
+                        <Link
+                          href={`/list/finance/payslips/${p.id}?view=teacher`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-xs"
+                          title={locale === "ar" ? "معاينة كشف الراتب" : "Aperçu de la fiche"}
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>{t("previewBtn")}</span>
+                        </Link>
+                        <PrintPayslipButton
+                          label={locale === "ar" ? "الأستاذ" : "Enseignant"}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs cursor-pointer"
+                          data={{
+                            id: p.id,
+                            periodStart: p.periodStart,
+                            periodEnd: p.periodEnd,
+                            status: p.status,
+                            teacher: { id: p.personId, name: p.teacherName },
+                            sessionsCount: p.sessionsCount,
+                            grossAmount: p.grossAmount,
+                            advances: p.advances,
+                            photocopyDeductions: p.photocopyDeductions,
+                            netAmount: p.netAmount,
+                            branchLines: p.branchLines,
+                          }}
+                        />
+                        <PrintOwnerConsolidationButton
+                          payslipId={p.id}
+                          label={locale === "ar" ? "المالك" : "Propriétaire"}
+                        />
                         <Button
                           type="button"
                           variant="danger"
                           size="sm"
                           disabled={isPending}
-                          onClick={() => handleDeleteRun(r.id)}
-                          title={t("undoRunBtn")}
-                          className="!px-2.5"
+                          onClick={() => handleDeletePayslip(p.payrollRunId, p.id, p.teacherName)}
+                          title={locale === "ar" ? "حذف" : "Supprimer"}
+                          className="!px-2 !py-1.5"
                         >
                           <Trash2 className="w-3.5 h-3.5 shrink-0" />
                         </Button>
@@ -711,483 +723,13 @@ export default function PayrollClientTabs({
                     </td>
                   </tr>
                 )}
-                emptyTitle={t("noRunsYetTitle")}
-                emptyDescription={t("noRunsYetDesc")}
+                emptyTitle={t("noPayslipsYetTitle")}
+                emptyDescription={
+                  searchTeacher || periodFilterStart || periodFilterEnd
+                    ? (locale === "ar" ? "لا توجد كشوف رواتب مطابقة للتصفية الحالية." : "Aucune fiche de paie ne correspond aux filtres.")
+                    : t("noPayslipsYetDesc")
+                }
               />
-            </CardContent>
-          </Card>
-
-          {/* Card 3: Unified 3-in-1 Generated Payroll Views */}
-          <Card className="border-border shadow-xs bg-surface">
-            <CardHeader className="p-5 border-b border-border flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <CardTitle className="text-section-title font-bold text-gray-900 flex items-center gap-2">
-                  {payrollViewMode === "teachers" && (
-                    <>
-                      <Users className="w-5 h-5 text-primary" />
-                      <span>{t("consolidatedPayslipsTitle")}</span>
-                    </>
-                  )}
-                  {payrollViewMode === "school_share" && (
-                    <>
-                      <Building2 className="w-5 h-5 text-emerald-700" />
-                      <span>{t("schoolSharePayrollTitle")}</span>
-                    </>
-                  )}
-                  {payrollViewMode === "real_net" && (
-                    <>
-                      <TrendingUp className="w-5 h-5 text-blue-900" />
-                      <span>{t("realNetPayrollTitle")}</span>
-                    </>
-                  )}
-                </CardTitle>
-                <CardDescription className="text-form-helper text-muted">
-                  {payrollViewMode === "teachers" && t("consolidatedPayslipsDesc")}
-                  {payrollViewMode === "school_share" && t("schoolSharePayrollDesc")}
-                  {payrollViewMode === "real_net" && t("realNetPayrollDesc")}
-                </CardDescription>
-              </div>
-
-              {/* 3-View Segmented Toggle */}
-              <div className="flex items-center p-1 bg-surface-subtle border border-border rounded-xl shadow-xs gap-1 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setPayrollViewMode("teachers")}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    payrollViewMode === "teachers"
-                      ? "bg-white text-gray-900 shadow-xs border border-border"
-                      : "text-muted hover:text-gray-900"
-                  }`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span>{t("teachersPayrollTab")}</span>
-                  <Badge variant="primary" size="sm" className="ml-1">
-                    {payslips.length}
-                  </Badge>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setPayrollViewMode("school_share")}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    payrollViewMode === "school_share"
-                      ? "bg-white text-emerald-800 shadow-xs border border-border"
-                      : "text-muted hover:text-emerald-800"
-                  }`}
-                >
-                  <Building2 className="w-3.5 h-3.5" />
-                  <span>{t("schoolSharePayrollTab")}</span>
-                  {financialReport?.schoolSharePayroll?.items && (
-                    <Badge variant="success" size="sm" className="ml-1">
-                      {financialReport.schoolSharePayroll.items.length}
-                    </Badge>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setPayrollViewMode("real_net")}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    payrollViewMode === "real_net"
-                      ? "bg-white text-blue-950 shadow-xs border border-border"
-                      : "text-muted hover:text-blue-950"
-                  }`}
-                >
-                  <TrendingUp className="w-3.5 h-3.5" />
-                  <span>{t("realNetPayrollTab")}</span>
-                </button>
-              </div>
-            </CardHeader>
-            <CardContent className="p-5">
-              {/* VIEW 1: TEACHERS PAYROLL */}
-              {payrollViewMode === "teachers" && (
-                <DataTable
-                  columns={[
-                    { header: t("payslipIdCol"), accessor: "id" },
-                    { header: t("teacher"), accessor: "teacherName" },
-                    { header: t("periodCol"), accessor: "period" },
-                    { header: t("totalSessionsCol"), accessor: "sessionsCount", align: "center" },
-                    { header: t("branchesDetailCol"), accessor: "branches" },
-                    { header: t("grossAmountCol"), accessor: "grossAmount", align: "end" },
-                    { header: t("advancesCol"), accessor: "advances", align: "end" },
-                    { header: t("photocopyCol"), accessor: "photocopy", align: "end" },
-                    { header: t("netDueCol"), accessor: "netAmount", align: "end" },
-                    { header: t("printCol"), accessor: "actions", align: "center" },
-                  ]}
-                  data={payslips}
-                  renderRow={(p) => (
-                    <tr key={p.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                      <td className="p-3.5 font-mono font-bold">#{p.id}</td>
-                      <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
-                      <td className="p-3.5 text-muted text-xs">
-                        {formatDate(p.periodStart)} → {formatDate(p.periodEnd)}
-                      </td>
-                      <td className="p-3.5 text-center font-mono font-bold">{p.sessionsCount}</td>
-                      <td className="p-3.5">
-                        <div className="flex flex-col gap-0.5">
-                          {p.branchLines.map((bl) => (
-                            <span key={bl.branchId} className="text-xs text-muted">
-                              • <span className="font-semibold text-gray-800">{bl.branchName}</span>: {bl.sessionsCount} {locale === "ar" ? "حصة" : "séance(s)"} ({formatDZD(bl.amount)})
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="p-3.5 text-end font-mono font-bold text-gray-800">{formatDZD(p.grossAmount)}</td>
-                      <td className="p-3.5 text-end font-mono text-danger font-semibold">- {formatDZD(p.advances)}</td>
-                      <td className="p-3.5 text-end font-mono text-warning-text font-semibold">- {formatDZD(p.photocopyDeductions)}</td>
-                      <td className="p-3.5 text-end font-mono font-black text-primary text-sm">{formatDZD(p.netAmount)}</td>
-                      <td className="p-3.5 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <Link
-                            href={`/list/finance/payslips/${p.id}?view=teacher`}
-                            className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-xs"
-                          >
-                            {t("previewBtn")}
-                          </Link>
-                          <PrintPayslipButton
-                            label={t("printBtn")}
-                            className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs"
-                            data={{
-                              id: p.id,
-                              periodStart: p.periodStart,
-                              periodEnd: p.periodEnd,
-                              status: p.status,
-                              teacher: { id: p.personId, name: p.teacherName },
-                              sessionsCount: p.sessionsCount,
-                              grossAmount: p.grossAmount,
-                              advances: p.advances,
-                              photocopyDeductions: p.photocopyDeductions,
-                              netAmount: p.netAmount,
-                              branchLines: p.branchLines,
-                            }}
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                  emptyTitle={t("noPayslipsYetTitle")}
-                  emptyDescription={t("noPayslipsYetDesc")}
-                />
-              )}
-
-              {/* VIEW 2: SCHOOL SHARE PAYROLL */}
-              {payrollViewMode === "school_share" && (
-                <div className="flex flex-col gap-6">
-                  {/* Summary Header & School-Wide Print Action */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-emerald-50/50 border border-emerald-100">
-                    <div className="text-xs text-emerald-950">
-                      <span className="font-bold">{t("schoolSharePayrollTitle")}</span>
-                      <p className="text-muted mt-0.5">{t("schoolSharePayrollDesc")}</p>
-                    </div>
-
-                    {financialReport?.schoolSharePayroll && (
-                      <PrintSchoolShareButton
-                        data={{
-                          periodStart: financialReport.periodStart,
-                          periodEnd: financialReport.periodEnd,
-                          sessionsCount: financialReport.schoolSharePayroll.totalSessions,
-                          totalTuitionGross: financialReport.schoolSharePayroll.totalTuitionGross,
-                          teacherGross: financialReport.schoolSharePayroll.totalTeacherGross,
-                          schoolGross: financialReport.schoolSharePayroll.totalSchoolGross,
-                          photocopyRecovered: financialReport.schoolSharePayroll.totalPhotocopyRecovered,
-                          schoolNet: financialReport.schoolSharePayroll.totalSchoolNet,
-                          branchLines: [],
-                          teacherSummaryList: financialReport.schoolSharePayroll.items,
-                        }}
-                        label={t("printSchoolShareSummaryBtn")}
-                        className="bg-emerald-700 hover:bg-emerald-800 text-white font-medium px-4 py-2 rounded-lg text-xs flex items-center gap-2 shadow-xs transition-colors shrink-0"
-                      />
-                    )}
-                  </div>
-
-                  {/* 6 Metric KPI Cards */}
-                  {financialReport?.schoolSharePayroll && (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                      <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("totalSessionsCol")}</span>
-                        <span className="text-base font-black font-mono text-gray-900 mt-1 block">
-                          {financialReport.schoolSharePayroll.totalSessions}
-                        </span>
-                      </div>
-                      <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("totalTuitionLabel")}</span>
-                        <span className="text-base font-black font-mono text-gray-900 mt-1 block">
-                          {formatDZD(financialReport.schoolSharePayroll.totalTuitionGross)}
-                        </span>
-                      </div>
-                      <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("teacherGrossLabel")}</span>
-                        <span className="text-base font-black font-mono text-rose-600 mt-1 block">
-                          {formatDZD(financialReport.schoolSharePayroll.totalTeacherGross)}
-                        </span>
-                      </div>
-                      <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("schoolCutLabel")}</span>
-                        <span className="text-base font-black font-mono text-emerald-800 mt-1 block">
-                          {formatDZD(financialReport.schoolSharePayroll.totalSchoolGross)}
-                        </span>
-                      </div>
-                      <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("photocopyRecoveredLabel")}</span>
-                        <span className="text-base font-black font-mono text-amber-700 mt-1 block">
-                          + {formatDZD(financialReport.schoolSharePayroll.totalPhotocopyRecovered)}
-                        </span>
-                      </div>
-                      <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 shadow-xs">
-                        <span className="text-[11px] text-emerald-900 font-bold block">{t("netSchoolCutLabel")}</span>
-                        <span className="text-base font-black font-mono text-emerald-700 mt-1 block">
-                          {formatDZD(financialReport.schoolSharePayroll.totalSchoolNet)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* School Share Table per Teacher */}
-                  <DataTable
-                    columns={[
-                      { header: t("teacher"), accessor: "teacherName" },
-                      { header: t("totalSessionsCol"), accessor: "sessionsCount", align: "center" },
-                      { header: t("totalTuitionLabel"), accessor: "totalTuitionGross", align: "end" },
-                      { header: t("teacherGrossLabel"), accessor: "teacherCut", align: "end" },
-                      { header: t("schoolCutLabel"), accessor: "schoolCut", align: "end" },
-                      { header: t("photocopyRecoveredLabel"), accessor: "photocopyRecovered", align: "end" },
-                      { header: t("netSchoolCutLabel"), accessor: "netSchoolCut", align: "end" },
-                      { header: t("branchesDetailCol"), accessor: "branchLines" },
-                      { header: t("actions"), accessor: "actions", align: "center" },
-                    ]}
-                    data={financialReport?.schoolSharePayroll?.items || []}
-                    renderRow={(item) => (
-                      <tr key={item.teacherId} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                        <td className="p-3.5">
-                          <span className="font-bold text-gray-900 block">{item.teacherName}</span>
-                          {item.phone && <span className="text-muted text-[11px] font-mono">{item.phone}</span>}
-                        </td>
-                        <td className="p-3.5 text-center font-mono font-bold">{item.sessionsCount}</td>
-                        <td className="p-3.5 text-end font-mono font-bold text-gray-800">{formatDZD(item.totalTuitionGross)}</td>
-                        <td className="p-3.5 text-end font-mono text-rose-600 font-semibold">{formatDZD(item.teacherCut)}</td>
-                        <td className="p-3.5 text-end font-mono text-emerald-800 font-semibold">{formatDZD(item.schoolCut)}</td>
-                        <td className="p-3.5 text-end font-mono text-amber-700 font-semibold">+ {formatDZD(item.photocopyRecovered)}</td>
-                        <td className="p-3.5 text-end font-mono font-black text-emerald-700 text-sm">{formatDZD(item.netSchoolCut)}</td>
-                        <td className="p-3.5">
-                          <div className="flex flex-col gap-0.5">
-                            {item.branchLines.map((bl) => (
-                              <span key={bl.branchId} className="text-xs text-muted">
-                                • <span className="font-semibold text-gray-800">{bl.branchName}</span>: {bl.sessionsCount} {locale === "ar" ? "حصة" : "séance(s)"} ({formatDZD(bl.schoolAmount)})
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="p-3.5 text-center">
-                          <div className="flex items-center justify-center gap-2">
-                            {item.payslipId && (
-                              <Link
-                                href={`/list/finance/payslips/${item.payslipId}?view=school`}
-                                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition-colors shadow-xs"
-                              >
-                                {t("previewBtn")}
-                              </Link>
-                            )}
-                            <PrintSchoolShareButton
-                              data={{
-                                id: item.payslipId,
-                                periodStart: financialReport?.periodStart || periodStart,
-                                periodEnd: financialReport?.periodEnd || periodEnd,
-                                teacher: { id: item.teacherId, name: item.teacherName, phone: item.phone },
-                                sessionsCount: item.sessionsCount,
-                                totalTuitionGross: item.totalTuitionGross,
-                                teacherGross: item.teacherCut,
-                                schoolGross: item.schoolCut,
-                                photocopyRecovered: item.photocopyRecovered,
-                                schoolNet: item.netSchoolCut,
-                                branchLines: item.branchLines,
-                              }}
-                              label={t("printBtn")}
-                              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-800 hover:bg-emerald-900 text-white transition-colors shadow-xs"
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                    emptyTitle={t("noPayslipsYetTitle")}
-                    emptyDescription={t("noPayslipsYetDesc")}
-                  />
-                </div>
-              )}
-
-              {/* VIEW 3: REAL NET STATEMENT */}
-              {payrollViewMode === "real_net" && (
-                <div className="flex flex-col gap-6">
-                  {/* Equation Banner & Print Action */}
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-4 rounded-xl bg-blue-50/50 border border-blue-100">
-                    <div className="flex flex-col gap-1">
-                      <span className="font-bold text-xs text-blue-950 uppercase tracking-wide">
-                        {t("realNetPayrollTitle")}
-                      </span>
-                      <p className="text-xs text-muted font-medium font-mono">
-                        {locale === "ar"
-                          ? "الصافي الحقيقي = المداخيل الإجمالية - مصاريف التسيير - رواتب الأساتذة - رواتب الموظفين"
-                          : "Net Réel = Recettes Générales − Dépenses d'exploitation − Paie Enseignants − Paie Staff"}
-                      </p>
-                    </div>
-
-                    {financialReport?.realNetPayroll && (
-                      <PrintRealNetButton
-                        data={{
-                          periodStart: financialReport.periodStart,
-                          periodEnd: financialReport.periodEnd,
-                          totalRevenue: financialReport.realNetPayroll.totalRevenue,
-                          totalOutcomes: financialReport.realNetPayroll.totalOutcomes,
-                          totalTeacherPayroll: financialReport.realNetPayroll.totalTeacherPayroll,
-                          totalStaffPayroll: financialReport.realNetPayroll.totalStaffPayroll,
-                          realNet: financialReport.realNetPayroll.realNet,
-                          revenueBreakdown: financialReport.realNetPayroll.revenueBreakdown,
-                          outcomesByCategory: financialReport.realNetPayroll.outcomesByCategory,
-                          outcomesBreakdown: financialReport.realNetPayroll.outcomesBreakdown,
-                          staffPayrollBreakdown: financialReport.realNetPayroll.staffPayrollBreakdown,
-                          branchBreakdown: financialReport.realNetPayroll.branchBreakdown,
-                        }}
-                        label={t("printRealNetBtn")}
-                        className="bg-blue-950 hover:bg-black text-white font-medium px-4 py-2 rounded-lg text-xs flex items-center gap-2 shadow-xs transition-colors shrink-0"
-                      />
-                    )}
-                  </div>
-
-                  {/* 5 Prominent Equation KPI Cards */}
-                  {financialReport?.realNetPayroll && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                      <div className="p-3.5 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("schoolRevenueTotal")}</span>
-                        <span className="text-lg font-black font-mono text-emerald-700 mt-1 block">
-                          + {formatDZD(financialReport.realNetPayroll.totalRevenue)}
-                        </span>
-                      </div>
-                      <div className="p-3.5 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("outcomesExpensesLabel")}</span>
-                        <span className="text-lg font-black font-mono text-rose-600 mt-1 block">
-                          - {formatDZD(financialReport.realNetPayroll.totalOutcomes)}
-                        </span>
-                      </div>
-                      <div className="p-3.5 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("teachersPayrollLabel")}</span>
-                        <span className="text-lg font-black font-mono text-rose-600 mt-1 block">
-                          - {formatDZD(financialReport.realNetPayroll.totalTeacherPayroll)}
-                        </span>
-                      </div>
-                      <div className="p-3.5 rounded-xl bg-surface-subtle border border-border">
-                        <span className="text-[11px] text-muted font-semibold block">{t("staffsPayrollLabel")}</span>
-                        <span className="text-lg font-black font-mono text-rose-600 mt-1 block">
-                          - {formatDZD(financialReport.realNetPayroll.totalStaffPayroll)}
-                        </span>
-                      </div>
-                      <div
-                        className={`p-3.5 rounded-xl border shadow-xs ${
-                          financialReport.realNetPayroll.realNet >= 0
-                            ? "bg-emerald-50/80 border-emerald-200"
-                            : "bg-rose-50/80 border-rose-200"
-                        }`}
-                      >
-                        <span
-                          className={`text-[11px] font-bold block ${
-                            financialReport.realNetPayroll.realNet >= 0 ? "text-emerald-900" : "text-rose-900"
-                          }`}
-                        >
-                          {t("realNetLabel")}
-                        </span>
-                        <span
-                          className={`text-lg font-black font-mono mt-1 block ${
-                            financialReport.realNetPayroll.realNet >= 0 ? "text-emerald-700" : "text-rose-700"
-                          }`}
-                        >
-                          {formatDZD(financialReport.realNetPayroll.realNet)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Subsection 1: Real Net Comparison by Branch */}
-                  {financialReport?.realNetPayroll?.branchBreakdown && (
-                    <div className="border border-border rounded-xl p-4 bg-surface shadow-xs">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 mb-3">
-                        {t("branchComparisonTitle")}
-                      </h4>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="border-b border-border text-muted font-semibold">
-                              <th className="p-2 text-start">{t("branchNameCol")}</th>
-                              <th className="p-2 text-end">{t("branchRevenueCol")}</th>
-                              <th className="p-2 text-end">{t("outcomesExpensesLabel")}</th>
-                              <th className="p-2 text-end">{t("teachersPayrollLabel")}</th>
-                              <th className="p-2 text-end">{t("staffsPayrollLabel")}</th>
-                              <th className="p-2 text-end">{t("realNetLabel")}</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {financialReport.realNetPayroll.branchBreakdown.map((b) => (
-                              <tr key={b.branchId} className="border-b border-border/50 hover:bg-surface-subtle">
-                                <td className="p-2.5 font-bold text-gray-900">{b.branchName}</td>
-                                <td className="p-2.5 text-end font-mono text-emerald-700 font-semibold">{formatDZD(b.revenue)}</td>
-                                <td className="p-2.5 text-end font-mono text-rose-600">- {formatDZD(b.outcomes)}</td>
-                                <td className="p-2.5 text-end font-mono text-rose-600">- {formatDZD(b.teacherPayroll)}</td>
-                                <td className="p-2.5 text-end font-mono text-rose-600">- {formatDZD(b.staffPayroll)}</td>
-                                <td
-                                  className={`p-2.5 text-end font-mono font-black ${
-                                    b.realNet >= 0 ? "text-emerald-700" : "text-rose-600"
-                                  }`}
-                                >
-                                  {formatDZD(b.realNet)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Subsection 2: Outcomes by Category & Staff Payroll Details */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Outcomes Categories */}
-                    {financialReport?.realNetPayroll?.outcomesByCategory && (
-                      <div className="border border-border rounded-xl p-4 bg-surface shadow-xs">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 mb-3">
-                          {t("outcomesExpensesLabel")}
-                        </h4>
-                        <div className="space-y-2">
-                          {financialReport.realNetPayroll.outcomesByCategory.map((cat) => (
-                            <div key={cat.category} className="flex justify-between items-center text-xs p-2 rounded-lg bg-surface-subtle">
-                              <span className="font-semibold text-gray-800">
-                                {cat.category} <span className="text-muted font-normal">({cat.count})</span>
-                              </span>
-                              <span className="font-mono font-bold text-rose-600">- {formatDZD(cat.amount)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Staff Payroll Breakdown */}
-                    {financialReport?.realNetPayroll?.staffPayrollBreakdown && (
-                      <div className="border border-border rounded-xl p-4 bg-surface shadow-xs">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700 mb-3">
-                          {t("staffsPayrollLabel")} ({financialReport.realNetPayroll.staffPayrollBreakdown.length})
-                        </h4>
-                        <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                          {financialReport.realNetPayroll.staffPayrollBreakdown.map((staff) => (
-                            <div key={staff.id} className="flex justify-between items-center text-xs p-2 rounded-lg bg-surface-subtle">
-                              <div>
-                                <span className="font-bold text-gray-800 block">{staff.staffName}</span>
-                                <span className="text-[11px] text-muted">{staff.roleTitle} • {staff.branchName}</span>
-                              </div>
-                              <span className="font-mono font-bold text-rose-600">- {formatDZD(staff.total)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
             </CardContent>
           </Card>
 

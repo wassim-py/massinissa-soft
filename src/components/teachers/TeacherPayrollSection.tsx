@@ -23,6 +23,8 @@ import {
 } from "@/lib/actions";
 import { PrintPayslipButton } from "@/components/PrintPayslipButton";
 import { PayslipPrintData } from "@/components/printable/PayslipTicket";
+import { PrintOwnerConsolidationButton } from "@/components/PrintOwnerConsolidationButton";
+import { OwnerTeacherConsolidationPrintData } from "@/components/printable/OwnerTeacherConsolidationReport";
 
 interface TeacherPayrollSectionProps {
   teacherId: string;
@@ -224,6 +226,41 @@ export default function TeacherPayrollSection({
       }
     : null;
 
+  const ownerConsolidationData: OwnerTeacherConsolidationPrintData | null = currentPayroll
+    ? {
+        id: savedRunId || undefined,
+        periodStart: startDate,
+        periodEnd: endDate,
+        status: savedRunId ? "SAVED" : "ESTIMATED",
+        teacher: {
+          id: teacherId,
+          name: currentPayroll.teacherName || teacherName,
+          phone: teacherPhone || null,
+        },
+        groups: (currentPayroll.groupBreakdown || []).map((g) => ({
+          teacherName: currentPayroll.teacherName || teacherName,
+          groupName: g.className,
+          branchName: g.branchName,
+          payableLessons: g.payableLessonsCount || 0,
+          teacherCut: g.amount || 0,
+          schoolCut: g.schoolAmount || 0,
+          totalTuition: g.tuitionGross || 0,
+        })),
+        totalPayableLessons:
+          (currentPayroll.groupBreakdown || []).reduce((s, g) => s + (g.payableLessonsCount || 0), 0) ||
+          currentPayroll.totalSessions,
+        totalTeacherCut: currentPayroll.grossAmount,
+        totalSchoolCut: (currentPayroll.groupBreakdown || []).reduce((s, g) => s + (g.schoolAmount || 0), 0),
+        salaryAdvances: currentPayroll.salaryAdvances,
+        photocopyDeductions: currentPayroll.photocopyDeductions,
+        netTeacherPayout: currentPayroll.netAmount,
+        netSchoolRevenue:
+          (currentPayroll.groupBreakdown || []).reduce((s, g) => s + (g.schoolAmount || 0), 0) +
+          currentPayroll.photocopyDeductions,
+        generatedAt: new Date(),
+      }
+    : null;
+
   const percentage = currentPayroll?.percentageOfSessionFee ?? 0;
   const sessions = currentPayroll?.sessionDetails || [];
 
@@ -376,7 +413,7 @@ export default function TeacherPayrollSection({
                   className="self-end shadow-xs cursor-pointer h-[38px]"
                   leftIcon={<Calculator className="w-4 h-4" />}
                 >
-                  {isCalculating ? t("calculatingPayroll") : t("calculateNow")}
+                  {isCalculating ? (locale === "ar" ? "جاري الحساب..." : "Calcul...") : (locale === "ar" ? "حساب" : "Calculer")}
                 </Button>
               </div>
 
@@ -393,14 +430,22 @@ export default function TeacherPayrollSection({
                     className="text-xs border-primary/30 text-primary hover:bg-primary/5 cursor-pointer h-[38px]"
                     leftIcon={<Save className="w-3.5 h-3.5" />}
                   >
-                    {isSaving ? t("savingPayslip") : t("savePayslipBtn")}
+                    {isSaving ? (locale === "ar" ? "جاري الحفظ..." : "Enregistrement...") : (locale === "ar" ? "حفظ كشف الراتب" : "Enregistrer la fiche")}
                   </Button>
 
                   {printData && (
                     <PrintPayslipButton
                       data={printData}
-                      label={t("printPayslipBtn")}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer h-[38px]"
+                      label={locale === "ar" ? "طباعة القسيمة" : "Imprimer Fiche"}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer h-[38px]"
+                    />
+                  )}
+
+                  {isOwner && ownerConsolidationData && (
+                    <PrintOwnerConsolidationButton
+                      data={ownerConsolidationData}
+                      label={locale === "ar" ? "تقرير المالك" : "Rapport Propriétaire"}
+                      className="bg-slate-900 hover:bg-black text-white font-semibold px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer h-[38px]"
                     />
                   )}
                 </div>

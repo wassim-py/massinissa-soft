@@ -5,6 +5,7 @@ import { PayslipTicket, PayslipPrintData } from "@/components/printable/PayslipT
 import { SchoolShareTicket, SchoolSharePrintData } from "@/components/printable/SchoolShareTicket";
 import PrintPayslipButton from "@/components/PrintPayslipButton";
 import PrintSchoolShareButton from "@/components/PrintSchoolShareButton";
+import PrintOwnerConsolidationButton from "@/components/PrintOwnerConsolidationButton";
 import Link from "next/link";
 import { calculateTeacherPayroll } from "@/lib/payroll";
 
@@ -249,15 +250,15 @@ export default async function PayslipDetailPage(props: PageProps) {
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <Link
             href="/list/finance?section=payroll&tab=runs"
-            className="flex items-center gap-1.5 text-xs font-bold text-gray-700 hover:text-primary bg-surface-subtle border border-border px-3 py-2 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 text-xs font-bold text-gray-700 hover:text-primary bg-surface-subtle border border-border px-3 py-1.5 rounded-lg transition-colors"
           >
-            {locale === "ar" ? "← العودة لقائمة الرواتب والمالية" : "← Retour aux finances & paie"}
+            {locale === "ar" ? "← عودة" : "← Retour"}
           </Link>
           <div className="flex items-center gap-2">
             <span className="text-section-title font-bold text-gray-900">
               {activeView === "school"
-                ? (locale === "ar" ? `حصة المؤسسة #${payslip.id}` : `Part École sur l'enseignant #${payslip.id}`)
-                : (locale === "ar" ? `معاينة قسيمة الراتب #${payslip.id}` : `Aperçu de la fiche de paie #${payslip.id}`)}
+                ? (locale === "ar" ? `حصة المدرسة #${payslip.id}` : `Part École #${payslip.id}`)
+                : (locale === "ar" ? `كشف الراتب #${payslip.id}` : `Fiche de paie #${payslip.id}`)}
             </span>
             {teacher?.name && (
               <Badge variant="neutral" size="sm">
@@ -268,41 +269,46 @@ export default async function PayslipDetailPage(props: PageProps) {
         </div>
 
         {/* View Switcher & Action Buttons */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center p-1 bg-surface-subtle border border-border rounded-xl">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center p-1 bg-surface-subtle border border-border rounded-xl text-xs font-medium">
             <Link
               href={`/list/finance/payslips/${payslip.id}?view=teacher`}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              className={`px-3 py-1.5 rounded-lg transition-all ${
                 activeView === "teacher"
-                  ? "bg-white text-gray-900 shadow-xs border border-border"
+                  ? "bg-white text-gray-900 shadow-xs border border-border font-bold"
                   : "text-muted hover:text-gray-900"
               }`}
             >
-              {locale === "ar" ? "قسيمة الأستاذ" : "Fiche Enseignant"}
+              {locale === "ar" ? "الأستاذ" : "Enseignant"}
             </Link>
             <Link
               href={`/list/finance/payslips/${payslip.id}?view=school`}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              className={`px-3 py-1.5 rounded-lg transition-all ${
                 activeView === "school"
-                  ? "bg-white text-emerald-800 shadow-xs border border-border"
+                  ? "bg-white text-emerald-800 shadow-xs border border-border font-bold"
                   : "text-muted hover:text-emerald-800"
               }`}
             >
-              {locale === "ar" ? "حصة المؤسسة" : "Part de l'École"}
+              {locale === "ar" ? "المدرسة" : "École"}
             </Link>
           </div>
 
           {activeView === "school" ? (
             <PrintSchoolShareButton
               data={schoolSharePrintData}
-              label={locale === "ar" ? "طباعة حصة المؤسسة" : "Imprimer la part école"}
+              label={locale === "ar" ? "طباعة" : "Imprimer"}
             />
           ) : (
             <PrintPayslipButton
               data={printData}
-              label={locale === "ar" ? "طباعة قسيمة الراتب" : "Imprimer la fiche de paie"}
+              label={locale === "ar" ? "طباعة" : "Imprimer"}
             />
           )}
+
+          <PrintOwnerConsolidationButton
+            payslipId={payslip.id}
+            label={locale === "ar" ? "تقرير المالك" : "Rapport Propriétaire"}
+          />
         </div>
       </Card>
 

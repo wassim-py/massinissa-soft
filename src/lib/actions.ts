@@ -9306,6 +9306,230 @@ export async function generateIndividualTeacherPayrollAction(formData: {
 }
 
 /**
+ * Fetches the 5-column consolidating report for a single teacher payslip (Owner only).
+ * Columns: Teacher Name, Group Name, Payable Lessons, Teacher Cut, School Cut.
+ */
+export async function getTeacherPayslipConsolidatedReportAction(payslipId: number) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, message: "Accès réservé exclusivement au propriétaire." };
+    }
+
+    const payslip = await prisma.payslip.findUnique({
+      where: { id: payslipId },
+      include: {
+        PayrollRun: true,
+      },
+    });
+
+    if (!payslip) {
+      return { success: false, error: true, message: "Fiche de paie introuvable." };
+    }
+
+    const teacher = await prisma.teacher.findUnique({
+      where: { id: payslip.personId },
+      select: { id: true, name: true, phone: true },
+    });
+
+    const { calculateTeacherPayroll } = await import("./payroll");
+    const calc = await calculateTeacherPayroll(
+      payslip.personId,
+      payslip.PayrollRun.periodStart,
+      payslip.PayrollRun.periodEnd
+    );
+
+    const teacherName = teacher?.name || payslip.personId;
+    const groups = (calc?.groupBreakdown || []).map((g) => ({
+      teacherName,
+      groupName: g.className,
+      branchName: g.branchName,
+      payableLessons: Number(g.payableLessonsCount || 0),
+      teacherCut: Number(g.amount || 0),
+      schoolCut: Number(g.schoolAmount || 0),
+      totalTuition: Number(g.tuitionGross || 0),
+    }));
+
+    const totalPayableLessons = groups.reduce((sum, g) => sum + g.payableLessons, 0) || Number(payslip.sessionsCount || 0);
+    const totalTeacherCut = Number(payslip.grossAmount);
+    const totalSchoolCut = groups.reduce((sum, g) => sum + g.schoolCut, 0);
+    const advances = Number(payslip.advances);
+    const photocopy = Number(payslip.photocopyDeductions);
+    const netTeacherPayout = Number(payslip.netAmount);
+    const netSchoolRevenue = totalSchoolCut + photocopy;
+
+    const data = {
+      id: payslip.id,
+      periodStart: payslip.PayrollRun.periodStart.toISOString(),
+      periodEnd: payslip.PayrollRun.periodEnd.toISOString(),
+      status: payslip.PayrollRun.status,
+      teacher: {
+        id: payslip.personId,
+        name: teacherName,
+        phone: teacher?.phone || null,
+      },
+      groups,
+      totalPayableLessons,
+      totalTeacherCut,
+      totalSchoolCut,
+      salaryAdvances: advances,
+      photocopyDeductions: photocopy,
+      netTeacherPayout,
+      netSchoolRevenue,
+      generatedAt: new Date().toISOString(),
+    };
+
+    return { success: true, error: false, data: serializeForClient(data) };
+  } catch (error: any) {
+    console.error("Error in getTeacherPayslipConsolidatedReportAction:", error);
+    return { success: false, error: true, message: error.message || "Erreur lors de la génération du rapport consolidé" };
+  }
+}
+
+/**
+ * Accumulates all generated teachers payslips into one fully detailed finance report for the owner.
+ */
+export async function getMasterAccumulatedPayrollReportAction(filters?: {
+  periodStart?: string;
+  periodEnd?: string;
+  payslipIds?: number[];
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, message: "Accès réservé exclusivement au propriétaire." };
+    }
+
+    const whereClause: any = {
+      personType: "TEACHER",
+    };
+
+    if (filters?.payslipIds && filters.payslipIds.length > 0) {
+      whereClause.id = { in: filters.payslipIds };
+    } else if (filters?.periodStart && filters?.periodEnd) {
+      const start = new Date(filters.periodStart);
+      const end = new Date(filters.periodEnd);
+      whereClause.PayrollRun = {
+        periodStart: { gte: start },
+        periodEnd: { lte: end },
+      };
+    }
+
+    const payslips = await prisma.payslip.findMany({
+      where: whereClause,
+      include: {
+        PayrollRun: true,
+      },
+      orderBy: { id: "desc" },
+      take: 200,
+    });
+
+    if (payslips.length === 0) {
+      return {
+        success: true,
+        error: false,
+        data: {
+          periodStart: filters?.periodStart,
+          periodEnd: filters?.periodEnd,
+          generatedAt: new Date().toISOString(),
+          teachersCount: 0,
+          totalLessons: 0,
+          totalTeacherGross: 0,
+          totalAdvances: 0,
+          totalPhotocopy: 0,
+          totalTeacherNet: 0,
+          totalSchoolGross: 0,
+          totalSchoolNet: 0,
+          teachers: [],
+        },
+      };
+    }
+
+    const teacherIds = Array.from(new Set(payslips.map((p) => p.personId)));
+    const teachersList = await prisma.teacher.findMany({
+      where: { id: { in: teacherIds } },
+      select: { id: true, name: true, phone: true },
+    });
+    const teacherMap = new Map(teachersList.map((t) => [t.id, t]));
+
+    const { calculateTeacherPayroll } = await import("./payroll");
+
+    const teacherItems = await Promise.all(
+      payslips.map(async (p) => {
+        const teacher = teacherMap.get(p.personId);
+        const teacherName = teacher?.name || p.personId;
+
+        const calc = await calculateTeacherPayroll(
+          p.personId,
+          p.PayrollRun.periodStart,
+          p.PayrollRun.periodEnd
+        );
+
+        const groups = (calc?.groupBreakdown || []).map((g) => ({
+          teacherName,
+          groupName: g.className,
+          branchName: g.branchName,
+          payableLessons: Number(g.payableLessonsCount || 0),
+          teacherCut: Number(g.amount || 0),
+          schoolCut: Number(g.schoolAmount || 0),
+        }));
+
+        const totalLessons = groups.reduce((s, g) => s + g.payableLessons, 0) || Number(p.sessionsCount || 0);
+        const grossTeacherCut = Number(p.grossAmount);
+        const advances = Number(p.advances);
+        const photocopyDeductions = Number(p.photocopyDeductions);
+        const netTeacherCut = Number(p.netAmount);
+        const totalSchoolCut = groups.reduce((s, g) => s + g.schoolCut, 0);
+
+        return {
+          teacherId: p.personId,
+          teacherName,
+          phone: teacher?.phone || null,
+          payslipId: p.id,
+          periodStart: p.PayrollRun.periodStart.toISOString(),
+          periodEnd: p.PayrollRun.periodEnd.toISOString(),
+          groups,
+          totalLessons,
+          grossTeacherCut,
+          advances,
+          photocopyDeductions,
+          netTeacherCut,
+          totalSchoolCut,
+        };
+      })
+    );
+
+    const totalLessons = teacherItems.reduce((sum, t) => sum + t.totalLessons, 0);
+    const totalTeacherGross = teacherItems.reduce((sum, t) => sum + t.grossTeacherCut, 0);
+    const totalAdvances = teacherItems.reduce((sum, t) => sum + t.advances, 0);
+    const totalPhotocopy = teacherItems.reduce((sum, t) => sum + t.photocopyDeductions, 0);
+    const totalTeacherNet = teacherItems.reduce((sum, t) => sum + t.netTeacherCut, 0);
+    const totalSchoolGross = teacherItems.reduce((sum, t) => sum + t.totalSchoolCut, 0);
+    const totalSchoolNet = totalSchoolGross + totalPhotocopy;
+
+    const data = {
+      periodStart: filters?.periodStart || (payslips[0] ? payslips[payslips.length - 1].PayrollRun.periodStart.toISOString() : undefined),
+      periodEnd: filters?.periodEnd || (payslips[0] ? payslips[0].PayrollRun.periodEnd.toISOString() : undefined),
+      generatedAt: new Date().toISOString(),
+      teachersCount: teacherItems.length,
+      totalLessons,
+      totalTeacherGross,
+      totalAdvances,
+      totalPhotocopy,
+      totalTeacherNet,
+      totalSchoolGross,
+      totalSchoolNet,
+      teachers: teacherItems,
+    };
+
+    return { success: true, error: false, data: serializeForClient(data) };
+  } catch (error: any) {
+    console.error("Error in getMasterAccumulatedPayrollReportAction:", error);
+    return { success: false, error: true, message: error.message || "Erreur lors de la génération du rapport cumulé" };
+  }
+}
+
+/**
  * Update the status of a PayrollRun (DRAFT | VALIDATED | PAID).
  */
 export async function setPayrollRunStatusAction(formData: {
