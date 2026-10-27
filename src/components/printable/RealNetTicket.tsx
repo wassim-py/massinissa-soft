@@ -90,7 +90,7 @@ export function RealNetTicket({ data }: RealNetTicketProps) {
       {/* Header */}
       <div className="flex justify-between items-center border-b-2 border-gray-900 pb-4 mb-6">
         <div className="flex items-center gap-3">
-          <Image src="/logo.png" alt="logo" width={60} height={60} className="object-contain" />
+          <Image src="/massinissa-emblem.png" alt="École Massinissa" width={60} height={60} className="object-contain" unoptimized />
           <div>
             <h1 className="text-2xl font-black text-gray-900">École Massinissa</h1>
             <p className="text-xs text-gray-600 font-semibold">Siège principal : Constantine - Algérie</p>

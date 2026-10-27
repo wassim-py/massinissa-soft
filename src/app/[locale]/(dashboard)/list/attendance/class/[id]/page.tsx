@@ -446,33 +446,44 @@ const ClassAttendancePage = async (
                     const enrollment = details?.enrollments?.[0];
                     const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
 
-                    const isSiblingDiscount = Boolean(
-                        details?.family?.payerStudentId &&
-                        details.family.payerStudentId !== studentId
+                    const payerId = details?.family?.payerStudentId;
+                    const hasPayerSibling = Boolean(payerId && payerId !== studentId);
+
+                    let targetPayerStudent: any = details?.family?.payerStudent;
+                    if (!targetPayerStudent && payerId) {
+                        targetPayerStudent = billingMap.get(payerId);
+                    }
+
+                    // Sibling discount applies ONLY if designated payer sibling is actively enrolled in THIS class
+                    const isPayerInClass = Boolean(
+                        hasPayerSibling && (
+                            studentMap.has(payerId!) ||
+                            targetPayerStudent?.enrollments?.some(
+                                (pe: any) => pe.classId === classId && (pe.status === "ACTIVE" || !pe.status)
+                            )
+                        )
                     );
-                    const siblingDiscountPct = isSiblingDiscount
-                        ? Number((details?.family as any)?.discountPercentage ?? 50)
-                        : 0;
-                    const isSiblingWaived100 = siblingDiscountPct >= 100;
 
                     let isPayerActiveAndPaid = false;
                     let payerRemainingCredit: number | undefined = undefined;
-                    if (isSiblingDiscount && details?.family?.payerStudentId) {
-                        const payerId = details.family.payerStudentId;
-                        let targetPayerStudent: any = details.family.payerStudent;
-                        if (!targetPayerStudent) {
-                            targetPayerStudent = billingMap.get(payerId);
-                        }
-                        if (targetPayerStudent) {
-                            const payerRes = resolvePayerCredit({
-                                payerStudent: targetPayerStudent,
-                            });
-                            if (payerRes) {
-                                isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
-                                payerRemainingCredit = payerRes.netSessions;
-                            }
+                    if (isPayerInClass && targetPayerStudent) {
+                        const payerRes = resolvePayerCredit({
+                            payerStudent: targetPayerStudent,
+                            classId,
+                            classPricePerCycle: Number(classHeader?.pricePerCycle || 0),
+                            isFormation: false,
+                        });
+                        if (payerRes) {
+                            isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+                            payerRemainingCredit = payerRes.netSessions;
                         }
                     }
+
+                    const isSiblingDiscount = Boolean(isPayerInClass && isPayerActiveAndPaid);
+                    const siblingDiscountPct = isPayerInClass
+                        ? Number((details?.family as any)?.discountPercentage ?? 50)
+                        : 0;
+                    const isSiblingWaived100 = isPayerInClass && siblingDiscountPct >= 100;
 
                     const isPayerSiblingPaid = isSiblingWaived100
                         ? isPayerActiveAndPaid
@@ -531,7 +542,7 @@ const ClassAttendancePage = async (
                         isFormation: false,
                         netSessions: net,
                         status: computedStatus,
-                        hasPayerSibling: Boolean(isSiblingDiscount && details?.family?.payerStudentId),
+                        hasPayerSibling: Boolean(isPayerInClass && isSiblingDiscount),
                     };
                 }
 

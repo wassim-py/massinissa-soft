@@ -998,6 +998,7 @@ export function resolvePayerCredit({
   let hasAnyPaidActiveEnrollment = false;
   let matchingClassNetSessions = 0;
   let hasMatchingClass = false;
+  let isMatchingClassPaid = false;
 
   for (const enr of activeEnrs) {
     const cId = enr.classId;
@@ -1049,21 +1050,25 @@ export function resolvePayerCredit({
       catchUps: cus,
     });
 
+    let isThisEnrollmentPaid = false;
     if (isEnrFormation) {
       const lumpSum = Number((enr.class as any)?.FormationLevel?.lumpSumPrice ?? enr.class?.pricePerCycle ?? 0);
       const paid = vouchers.reduce((sum: number, v: any) => sum + Number(v.amount || 0), 0);
       if (paid >= lumpSum && lumpSum > 0) {
         hasAnyPaidActiveEnrollment = true;
+        isThisEnrollmentPaid = true;
       }
     } else {
       if (metrics.netSessions >= 1) {
         hasAnyPaidActiveEnrollment = true;
+        isThisEnrollmentPaid = true;
       }
     }
 
     if (classId && cId === classId) {
       hasMatchingClass = true;
       matchingClassNetSessions = metrics.netSessions;
+      isMatchingClassPaid = isThisEnrollmentPaid;
     }
   }
 
@@ -1077,12 +1082,65 @@ export function resolvePayerCredit({
     }
   }
 
+  if (classId != null) {
+    return {
+      isPayerActiveAndPaid: hasMatchingClass && isMatchingClassPaid,
+      netSessions: hasMatchingClass ? matchingClassNetSessions : 0,
+      status: !hasMatchingClass || !isMatchingClassPaid ? "UNPAID" : "PAID",
+      hasMatchingClass,
+    };
+  }
+
   return {
     isPayerActiveAndPaid: hasAnyPaidActiveEnrollment,
     netSessions: hasMatchingClass ? matchingClassNetSessions : (hasAnyPaidActiveEnrollment ? 1 : 0),
     status: hasAnyPaidActiveEnrollment ? "PAID" : "UNPAID",
     hasMatchingClass,
   };
+}
+
+/**
+ * Checks if a student is eligible for sibling discount in a specific group/class.
+ * Per business rules: sibling discount applies ONLY on groups where the two siblings
+ * are enrolled in. If just one of them is enrolled in a group, he pays normally as a
+ * normal payer even if he is the waived one.
+ */
+export function isSiblingDiscountEligibleInClass({
+  studentId,
+  classId,
+  family,
+  payerStudent,
+  classEnrollments,
+}: {
+  studentId: string;
+  classId: number;
+  family?: { payerStudentId?: string | null; discountPercentage?: any } | null;
+  payerStudent?: any;
+  classEnrollments?: Array<{ studentId?: string; student?: { id: string }; status?: string | null }> | null;
+}): boolean {
+  if (!family?.payerStudentId || family.payerStudentId === studentId) {
+    return false; // Designated payer or student with no designated payer in family pays normally
+  }
+
+  const payerId = family.payerStudentId;
+
+  // 1. Check if payer is in classEnrollments (if available)
+  if (classEnrollments && classEnrollments.length > 0) {
+    return classEnrollments.some((e) => {
+      const sid = e.studentId || e.student?.id;
+      return sid === payerId && (e.status === "ACTIVE" || !e.status);
+    });
+  }
+
+  // 2. Check if payer's active enrollments include this class (if payerStudent available)
+  if (payerStudent?.enrollments && Array.isArray(payerStudent.enrollments)) {
+    return payerStudent.enrollments.some((e: any) => {
+      const cId = e.classId || e.class?.id;
+      return cId === classId && (e.status === "ACTIVE" || !e.status);
+    });
+  }
+
+  return false;
 }
 
 

@@ -573,6 +573,7 @@ export default function StaffPayrollSection({
         <html dir="ltr" lang="fr">
           <head>
             <meta charset="utf-8">
+            <base href="${window.location.origin}/">
             <title>Bulletin de paie #STF-${p.id} - ${p.staffName}</title>
             <script src="https://cdn.tailwindcss.com"></script>
             <link rel="preconnect" href="https://fonts.googleapis.com">

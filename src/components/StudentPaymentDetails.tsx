@@ -267,19 +267,8 @@ export default function StudentPaymentDetails({
     student.family && student.family.payerStudentId && student.family.payerStudentId !== student.id
   );
 
-  let isPayerActiveAndPaid = false;
-  if (hasPayerSibling && (student.family as any)?.payerStudent) {
-    const payerRes = resolvePayerCredit({
-      payerStudent: (student.family as any).payerStudent,
-    });
-    isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
-  }
-
-  const isSiblingDiscount = Boolean(hasPayerSibling && isPayerActiveAndPaid);
-  const siblingDiscountPct = isSiblingDiscount
-    ? Number((student.family as any)?.discountPercentage ?? 50)
-    : 0;
-  const isSiblingWaived100 = siblingDiscountPct >= 100;
+  const familyDiscountPercentage = Number((student.family as any)?.discountPercentage ?? 50);
+  const isSiblingWaived100 = familyDiscountPercentage >= 100;
 
   // CROSS-BRANCH ENROLLMENT (§1.0):
   // Both OWNER and BRANCH_ADMIN see the SAME complete picture (all branches, all groups).
@@ -494,23 +483,58 @@ export default function StudentPaymentDetails({
         ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
         : null;
 
+    // Sibling discount applies ONLY if designated payer sibling is actively enrolled in THIS class
+    const isPayerInThisClass = Boolean(
+      hasPayerSibling &&
+      (
+        ((student.family as any)?.payerStudent?.enrollments && Array.isArray((student.family as any).payerStudent.enrollments) &&
+          (student.family as any).payerStudent.enrollments.some(
+            (pe: any) => (pe.classId === c.id || pe.class?.id === c.id) && (pe.status === "ACTIVE" || !pe.status)
+          )
+        ) ||
+        (classData && (classData.id === c.id) && classData.enrollments?.some(
+          (pe: any) => (pe.student?.id === student.family?.payerStudentId || pe.studentId === student.family?.payerStudentId) && (pe.status === "ACTIVE" || !pe.status)
+        ))
+      )
+    );
+
+    let enrPayerActiveAndPaid = false;
+    let enrPayerRemainingCredit: number | undefined = undefined;
+    if (isPayerInThisClass && (student.family as any)?.payerStudent) {
+      const payerRes = resolvePayerCredit({
+        payerStudent: (student.family as any).payerStudent,
+        classId: c.id,
+        classPricePerCycle: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
+        isFormation,
+      });
+      enrPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+      enrPayerRemainingCredit = payerRes.netSessions;
+    }
+
+    const enrSiblingDiscount = Boolean(isPayerInThisClass && enrPayerActiveAndPaid);
+    const enrSiblingDiscountPct = isPayerInThisClass
+      ? Number((student.family as any)?.discountPercentage ?? 50)
+      : 0;
+    const enrIsSiblingWaived100 = isPayerInThisClass && enrSiblingDiscountPct >= 100;
+
     const feeCalc = computeStudentSessionFee({
       payerStatus: enrPayerStatus,
       pricePerCycle: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
       teacherPercentage,
-      isSiblingWaived: isSiblingWaived100,
-      siblingDiscountPercentage: siblingDiscountPct,
+      isSiblingWaived: enrIsSiblingWaived100,
+      siblingDiscountPercentage: enrSiblingDiscountPct,
       isFormation,
-      isPayerActiveAndPaid,
+      isPayerActiveAndPaid: enrPayerActiveAndPaid,
     });
 
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
       isFormation,
       payerStatus: enrPayerStatus,
-      siblingDiscountPercentage: siblingDiscountPct,
-      isSiblingWaived: isSiblingWaived100,
-      isPayerActiveAndPaid,
+      siblingDiscountPercentage: enrSiblingDiscountPct,
+      isSiblingWaived: enrIsSiblingWaived100,
+      isPayerActiveAndPaid: enrPayerActiveAndPaid,
+      payerRemainingCredit: enrSiblingDiscount ? enrPayerRemainingCredit : undefined,
       teacherPercentage,
       tuitionVouchers,
       transfersIn: enr.transfersTo,
@@ -596,7 +620,6 @@ export default function StudentPaymentDetails({
       isGroupWaived,
       isNonPayerInscWaived,
       isInscriptionWaived,
-      isSiblingWaived: isSiblingWaived100,
       totalInscPaid,
       requiredInscFee,
       bookVoucher,
@@ -615,7 +638,10 @@ export default function StudentPaymentDetails({
       mostRecentActiveCycle,
       status,
       feeCalc,
-      hasPayerSibling: isSiblingDiscount,
+      hasPayerSibling: isPayerInThisClass,
+      isSiblingWaived: enrIsSiblingWaived100,
+      isPayerSiblingPaid: enrIsSiblingWaived100 ? enrPayerActiveAndPaid : true,
+      siblingDiscountPct: enrSiblingDiscountPct,
     };
   });
 
@@ -853,39 +879,39 @@ export default function StudentPaymentDetails({
           </div>
 
           {/* Sibling waiver/discount banner if applicable */}
-          {isSiblingDiscount && (
+          {allClassMetrics.some((m) => m.hasPayerSibling) && (
             <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-xl flex items-center gap-2 text-xs text-purple-900">
               <span className="font-bold">
                 {locale === "ar"
-                  ? `خصم الإخوة مفعل (${siblingDiscountPct}%):`
-                  : `Remise fratrie active (${siblingDiscountPct}%) :`}
+                  ? `خصم الإخوة مفعل (${familyDiscountPercentage}%):`
+                  : `Remise fratrie active (${familyDiscountPercentage}%) :`}
               </span>
               <span>
                 {locale === "ar"
                   ? isSiblingWaived100
                     ? t("siblingWaiverDesc")
-                    : `يستفيد هذا التلميذ من تخفيض بنسبة ${siblingDiscountPct}% على معاليم الحصص الدراسية (يدفع النصف فقط).`
+                    : `يستفيد هذا التلميذ من تخفيض بنسبة ${familyDiscountPercentage}% على معاليم الحصص الدراسية في الأفواج المشتركة مع أخيه.`
                   : isSiblingWaived100
                   ? t("siblingWaiverDesc")
-                  : `Cet élève bénéficie d'une réduction de ${siblingDiscountPct}% sur les cours (paie la moitié).`}
+                  : `Cet élève bénéficie d'une réduction de ${familyDiscountPercentage}% sur les cours dans les groupes partagés avec sa fratrie.`}
               </span>
             </div>
           )}
 
-          {/* Sibling discount suspended notice if payer is unpaid/inactive */}
-          {hasPayerSibling && !isPayerActiveAndPaid && (
+          {/* Sibling discount suspended notice if payer is unpaid/inactive in shared groups */}
+          {allClassMetrics.some((m) => m.hasPayerSibling && !m.isPayerSiblingPaid) && (
             <div className="mt-4 p-3 bg-amber-50 border border-amber-300 rounded-xl flex items-center gap-2 text-xs text-amber-950">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
               <div>
                 <span className="font-bold">
                   {locale === "ar"
-                    ? "خصم الإخوة غير مفعل حالياً:"
-                    : "Remise fratrie suspendue :"}
+                    ? "خصم الإخوة غير مفعل في بعض الأفواج المشتركة:"
+                    : "Remise fratrie suspendue dans certains groupes :"}
                 </span>{" "}
                 <span>
                   {locale === "ar"
-                    ? "التلميذ الدافع الرئيسي ليس لديه اشتراك مالي مدفوع أو غير مسجل في أي فوج نشط. يدفع هذا التلميذ السعر الكامل حتى تجديد اشتراك الدافع."
-                    : "L'élève payeur principal n'a aucun abonnement actif payé. Cet élève paie plein tarif tant que le payeur n'a pas renouvelé."}
+                    ? "التلميذ الدافع الرئيسي ليس لديه اشتراك مالي مدفوع في الفوج المشترك. يدفع هذا التلميذ السعر الكامل حتى تجديد اشتراك الدافع."
+                    : "L'élève payeur principal n'a aucun abonnement actif payé dans le groupe partagé. Cet élève paie plein tarif tant que le payeur n'a pas renouvelé."}
                 </span>
               </div>
             </div>
@@ -1603,8 +1629,9 @@ export default function StudentPaymentDetails({
                         );
                         const effectiveCap = Math.round(unconsumedTransferSessions * trfPricePerSession);
                         const maxRefundableTransfer = Math.min(trfRemainingBalance, effectiveCap);
+                        const toMetric = toClassMetric || (trf.toClass ? classMetricsMap.get(trf.toClass.id) : null);
                         const canRefundTransfer =
-                          !isSiblingDiscount &&
+                          !(toMetric?.hasPayerSibling && toMetric?.isSiblingWaived) &&
                           trfRemainingBalance > 0 &&
                           maxRefundableTransfer > 0 &&
                           unconsumedTransferSessions > 0;
@@ -2230,7 +2257,7 @@ export default function StudentPaymentDetails({
                     const effectiveCap = Math.round(unconsumedTransferSessions * trfPricePerSession);
                     const maxRefundableTransfer = Math.min(trfRemainingBalance, effectiveCap);
                     const canRefundTransfer =
-                      !isSiblingDiscount &&
+                      !(toClassMetric?.hasPayerSibling && toClassMetric?.isSiblingWaived) &&
                       trfRemainingBalance > 0 &&
                       maxRefundableTransfer > 0 &&
                       unconsumedTransferSessions > 0;

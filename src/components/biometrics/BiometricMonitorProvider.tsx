@@ -38,7 +38,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import {
-  BiometricScanResult,
+  type BiometricScanResult,
   resolveBiometricAlertAction,
   clearBiometricJournalAction,
   getBiometricCatchUpOptionsAction,
@@ -534,6 +534,11 @@ export default function BiometricMonitorProvider({
               return;
             }
 
+            if (msg.type === "scan_pending") {
+              // Bridge has accepted scan from hardware and is processing directly with backend
+              return;
+            }
+
             if (msg.type === "scan_resolved" && msg.scan) {
               ingestDirectScanResult(msg.scan);
               return;
@@ -544,8 +549,10 @@ export default function BiometricMonitorProvider({
                 ingestDirectScanResult(msg.scan);
                 return;
               }
-              // Instant scan event received from K50 Pro via Local Bridge!
-              // Post directly to /api/biometrics/scan and render the popup immediately from the response
+              // Only post from browser if the bridge explicitly flagged a cloud POST failure fallback
+              if (!msg.fallback) {
+                return;
+              }
               const branchId =
                 currentBranchIdRef.current ||
                 (initialBranchId && !isNaN(Number(initialBranchId))

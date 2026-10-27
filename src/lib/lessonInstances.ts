@@ -64,163 +64,170 @@ export async function resolveOrCreateLessonForDate(
   // Recurring rows are scoped to the base lesson's OWN branch. A lesson that runs in a
   // different branch is a different session for the same group (e.g. 13:30–15:30 on branch A
   // followed by 15:30–17:30 on branch B) and its dated rows must never be reused here.
-  const classRecurring = await prisma.lesson.findMany({
-    where: {
-      classId: baseLesson.classId,
-      branchId: baseLesson.branchId,
-      isExtra: false,
-      isCatchUp: false,
-      isFree: false,
-    },
-    include: {
-      _count: {
-        select: {
-          attendances: true,
-          missedByCatchUps: true,
-          catchUpVisitsHosted: true,
+  return prisma.$transaction(async (tx) => {
+    // Acquire a PostgreSQL transaction-level advisory lock to serialize concurrent resolutions
+    // for this specific class, branch, date, and recurring time slot.
+    const lockKey = `lesson_resolve_${baseLesson.classId}_${baseLesson.branchId}_${targetDateStr}_${baseInfo.timeStr}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+
+    const classRecurring = await tx.lesson.findMany({
+      where: {
+        classId: baseLesson.classId,
+        branchId: baseLesson.branchId,
+        isExtra: false,
+        isCatchUp: false,
+        isFree: false,
+      },
+      include: {
+        _count: {
+          select: {
+            attendances: true,
+            missedByCatchUps: true,
+            catchUpVisitsHosted: true,
+          },
         },
       },
-    },
-    orderBy: { id: "desc" },
-  });
-
-  // 1. Check if a recurring Lesson row for this class AND branch on targetDateStr at the same slot already exists
-  const candidatesOnDate = classRecurring.filter((c) => {
-    const cInfo = getAlgiersDateInfo(c.startsAt);
-    return cInfo.dateStr === targetDateStr;
-  });
-
-  const exactSlotMatch = candidatesOnDate.find((c) => {
-    const cInfo = getAlgiersDateInfo(c.startsAt);
-    const cEndInfo = getAlgiersDateInfo(c.endsAt);
-    return (
-      cInfo.timeStr === baseInfo.timeStr && cEndInfo.timeStr === baseEndInfo.timeStr
-    );
-  });
-  if (exactSlotMatch) {
-    return exactSlotMatch.id;
-  }
-
-  // A group that runs several distinct time slots must never inherit a dated row belonging to
-  // another slot — that is exactly what marks a student present at the wrong session.
-  const hasOtherSlots = classRecurring.some((c) => {
-    const cInfo = getAlgiersDateInfo(c.startsAt);
-    const cEndInfo = getAlgiersDateInfo(c.endsAt);
-    return cInfo.timeStr !== baseInfo.timeStr || cEndInfo.timeStr !== baseEndInfo.timeStr;
-  });
-
-  // Legacy / renamed slot: safe only when this is the group's single recurring slot in this branch.
-  if (candidatesOnDate.length === 1 && !hasOtherSlots) {
-    return candidatesOnDate[0].id;
-  }
-
-  // 2. If baseLesson itself belongs to the same target date (or a future placeholder >= targetDateStr)
-  // and is completely unused (no attendance, no catch-ups, teacher not marked absent),
-  // move baseLesson to targetStartsAt/targetEndsAt.
-  // CRITICAL: Past lesson rows (< targetDateStr) must NEVER be mutated or shifted forward!
-  const isBasePast = baseInfo.dateStr < targetDateStr;
-  const isBaseUnused =
-    !isBasePast &&
-    baseLesson._count.attendances === 0 &&
-    baseLesson._count.missedByCatchUps === 0 &&
-    baseLesson._count.catchUpVisitsHosted === 0 &&
-    !baseLesson.isTeacherAbsent;
-
-  if (isBaseUnused) {
-    await prisma.lesson.update({
-      where: { id: baseLesson.id },
-      data: {
-        startsAt: targetStartsAt,
-        endsAt: targetEndsAt,
-      },
+      orderBy: { id: "desc" },
     });
-    return baseLesson.id;
-  }
 
-  // 3. Check if there is any other unused recurring Lesson row for this exact slot
-  // (classId, branchId, weekday, timeStr, endTimeStr)
-  // only if that sibling is on or after targetDateStr (never steal an older date's record).
-  // classRecurring is already scoped to this branch, so an unused row from another branch
-  // can never be picked ("stolen") for this session.
-  const unusedSibling = classRecurring.find((c) => {
-    const cInfo = getAlgiersDateInfo(c.startsAt);
-    const cEndInfo = getAlgiersDateInfo(c.endsAt);
-    return (
-      cInfo.weekday === baseInfo.weekday &&
-      cInfo.timeStr === baseInfo.timeStr &&
-      cEndInfo.timeStr === baseEndInfo.timeStr &&
-      cInfo.dateStr >= targetDateStr &&
-      c._count.attendances === 0 &&
-      c._count.missedByCatchUps === 0 &&
-      c._count.catchUpVisitsHosted === 0 &&
-      !c.isTeacherAbsent
-    );
-  });
+    // 1. Check if a recurring Lesson row for this class AND branch on targetDateStr at the same slot already exists
+    const candidatesOnDate = classRecurring.filter((c) => {
+      const cInfo = getAlgiersDateInfo(c.startsAt);
+      return cInfo.dateStr === targetDateStr;
+    });
 
-  if (unusedSibling) {
-    await prisma.lesson.update({
-      where: { id: unusedSibling.id },
+    const exactSlotMatch = candidatesOnDate.find((c) => {
+      const cInfo = getAlgiersDateInfo(c.startsAt);
+      const cEndInfo = getAlgiersDateInfo(c.endsAt);
+      return (
+        cInfo.timeStr === baseInfo.timeStr && cEndInfo.timeStr === baseEndInfo.timeStr
+      );
+    });
+    if (exactSlotMatch) {
+      return exactSlotMatch.id;
+    }
+
+    // A group that runs several distinct time slots must never inherit a dated row belonging to
+    // another slot — that is exactly what marks a student present at the wrong session.
+    const hasOtherSlots = classRecurring.some((c) => {
+      const cInfo = getAlgiersDateInfo(c.startsAt);
+      const cEndInfo = getAlgiersDateInfo(c.endsAt);
+      return cInfo.timeStr !== baseInfo.timeStr || cEndInfo.timeStr !== baseEndInfo.timeStr;
+    });
+
+    // Legacy / renamed slot: safe only when this is the group's single recurring slot in this branch.
+    if (candidatesOnDate.length === 1 && !hasOtherSlots) {
+      return candidatesOnDate[0].id;
+    }
+
+    // 2. If baseLesson itself belongs to the same target date (or a future placeholder >= targetDateStr)
+    // and is completely unused (no attendance, no catch-ups, teacher not marked absent),
+    // move baseLesson to targetStartsAt/targetEndsAt.
+    // CRITICAL: Past lesson rows (< targetDateStr) must NEVER be mutated or shifted forward!
+    const isBasePast = baseInfo.dateStr < targetDateStr;
+    const isBaseUnused =
+      !isBasePast &&
+      baseLesson._count.attendances === 0 &&
+      baseLesson._count.missedByCatchUps === 0 &&
+      baseLesson._count.catchUpVisitsHosted === 0 &&
+      !baseLesson.isTeacherAbsent;
+
+    if (isBaseUnused) {
+      await tx.lesson.update({
+        where: { id: baseLesson.id },
+        data: {
+          startsAt: targetStartsAt,
+          endsAt: targetEndsAt,
+        },
+      });
+      return baseLesson.id;
+    }
+
+    // 3. Check if there is any other unused recurring Lesson row for this exact slot
+    // (classId, branchId, weekday, timeStr, endTimeStr)
+    // only if that sibling is on or after targetDateStr (never steal an older date's record).
+    // classRecurring is already scoped to this branch, so an unused row from another branch
+    // can never be picked ("stolen") for this session.
+    const unusedSibling = classRecurring.find((c) => {
+      const cInfo = getAlgiersDateInfo(c.startsAt);
+      const cEndInfo = getAlgiersDateInfo(c.endsAt);
+      return (
+        cInfo.weekday === baseInfo.weekday &&
+        cInfo.timeStr === baseInfo.timeStr &&
+        cEndInfo.timeStr === baseEndInfo.timeStr &&
+        cInfo.dateStr >= targetDateStr &&
+        c._count.attendances === 0 &&
+        c._count.missedByCatchUps === 0 &&
+        c._count.catchUpVisitsHosted === 0 &&
+        !c.isTeacherAbsent
+      );
+    });
+
+    if (unusedSibling) {
+      await tx.lesson.update({
+        where: { id: unusedSibling.id },
+        data: {
+          teacherId: baseLesson.teacherId,
+          classroomId: baseLesson.classroomId,
+          branchId: baseLesson.branchId,
+          startsAt: targetStartsAt,
+          endsAt: targetEndsAt,
+        },
+      });
+
+      if (baseLesson.lessonGroups && baseLesson.lessonGroups.length > 0) {
+        try {
+          await tx.lessonGroup.deleteMany({
+            where: { lessonId: unusedSibling.id },
+          });
+          await tx.lessonGroup.createMany({
+            data: baseLesson.lessonGroups.map((lg) => ({
+              lessonId: unusedSibling.id,
+              classId: lg.classId,
+            })),
+            skipDuplicates: true,
+          });
+        } catch (err) {
+          console.warn("Could not sync lessonGroups to unusedSibling lesson instance:", err);
+        }
+      }
+
+      return unusedSibling.id;
+    }
+
+    // 4. Otherwise, create a new dedicated Lesson row for targetDateStr
+    const created = await tx.lesson.create({
       data: {
+        classId: baseLesson.classId,
         teacherId: baseLesson.teacherId,
         classroomId: baseLesson.classroomId,
         branchId: baseLesson.branchId,
         startsAt: targetStartsAt,
         endsAt: targetEndsAt,
+        isExtra: false,
+        isCatchUp: false,
+        isFree: false,
+        isTeacherAbsent: false,
+        extraFee: null,
       },
     });
 
     if (baseLesson.lessonGroups && baseLesson.lessonGroups.length > 0) {
       try {
-        await prisma.lessonGroup.deleteMany({
-          where: { lessonId: unusedSibling.id },
-        });
-        await prisma.lessonGroup.createMany({
+        await tx.lessonGroup.createMany({
           data: baseLesson.lessonGroups.map((lg) => ({
-            lessonId: unusedSibling.id,
+            lessonId: created.id,
             classId: lg.classId,
           })),
           skipDuplicates: true,
         });
       } catch (err) {
-        console.warn("Could not sync lessonGroups to unusedSibling lesson instance:", err);
+        console.warn("Could not copy lessonGroups to new lesson instance:", err);
       }
     }
 
-    return unusedSibling.id;
-  }
-
-  // 4. Otherwise, create a new dedicated Lesson row for targetDateStr
-  const created = await prisma.lesson.create({
-    data: {
-      classId: baseLesson.classId,
-      teacherId: baseLesson.teacherId,
-      classroomId: baseLesson.classroomId,
-      branchId: baseLesson.branchId,
-      startsAt: targetStartsAt,
-      endsAt: targetEndsAt,
-      isExtra: false,
-      isCatchUp: false,
-      isFree: false,
-      isTeacherAbsent: false,
-      extraFee: null,
-    },
+    return created.id;
   });
-
-  if (baseLesson.lessonGroups && baseLesson.lessonGroups.length > 0) {
-    try {
-      await prisma.lessonGroup.createMany({
-        data: baseLesson.lessonGroups.map((lg) => ({
-          lessonId: created.id,
-          classId: lg.classId,
-        })),
-        skipDuplicates: true,
-      });
-    } catch (err) {
-      console.warn("Could not copy lessonGroups to new lesson instance:", err);
-    }
-  }
-
-  return created.id;
 }
 
 /**

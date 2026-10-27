@@ -60,14 +60,29 @@ const PaymentForm = ({
   const tCommon = useTranslations("common");
   const locale = useLocale();
 
-  const isFormation = Boolean((classData as any)?.isFormation || (classData as any)?.FormationLevel || (classData as any)?.formationLevelId);
-  const isSiblingDiscount = !isFormation && Boolean(
-    student.family && student.family.payerStudentId && student.family.payerStudentId !== student.id
+  const payerStudentId = student.family?.payerStudentId;
+  const hasPayerSibling = Boolean(payerStudentId && payerStudentId !== student.id);
+
+  // Sibling discount applies ONLY if both siblings are enrolled in this class
+  const initialIsPayerInClass = Boolean(
+    hasPayerSibling && (
+      (classData?.enrollments && Array.isArray(classData.enrollments) && classData.enrollments.some(
+        (e: any) => (e.studentId === payerStudentId || e.student?.id === payerStudentId) && (e.status === "ACTIVE" || !e.status)
+      )) ||
+      ((student.family as any)?.payerStudent?.enrollments && Array.isArray((student.family as any).payerStudent.enrollments) && (student.family as any).payerStudent.enrollments.some(
+        (pe: any) => (pe.classId === classData.id || pe.class?.id === classData.id) && (pe.status === "ACTIVE" || !pe.status)
+      ))
+    )
   );
-  const siblingDiscountPct = isSiblingDiscount
-    ? Number((student.family as any)?.discountPercentage ?? 50)
-    : 0;
-  const isSiblingWaived = siblingDiscountPct >= 100;
+
+  const [isPayerInClass, setIsPayerInClass] = useState<boolean>(initialIsPayerInClass);
+  const [siblingDiscountPct, setSiblingDiscountPct] = useState<number>(
+    initialIsPayerInClass ? Number((student.family as any)?.discountPercentage ?? 50) : 0
+  );
+
+  const isFormation = Boolean((classData as any)?.isFormation || (classData as any)?.FormationLevel || (classData as any)?.formationLevelId);
+  const isSiblingDiscount = !isFormation && isPayerInClass;
+  const isSiblingWaived = isSiblingDiscount && siblingDiscountPct >= 100;
 
   const teacherClassOverride = (classData as any)?.teacherClassRates?.find(
     (tcr: any) => tcr.teacherId === (classData as any)?.teacherId
@@ -148,6 +163,15 @@ const PaymentForm = ({
     })
       .then((res) => {
         if (isMounted) {
+          if ((res as any).isPayerInThisClass !== undefined) {
+            const payerEnrolled = Boolean((res as any).isPayerInThisClass);
+            setIsPayerInClass(payerEnrolled);
+            if (payerEnrolled) {
+              setSiblingDiscountPct(Number((res as any).siblingDiscountPercentage ?? (student.family as any)?.discountPercentage ?? 50));
+            } else {
+              setSiblingDiscountPct(0);
+            }
+          }
           const fee = res.configuredInscriptionFee || 0;
           setConfiguredFee(fee);
           setInscriptionStatus({
@@ -177,6 +201,12 @@ const PaymentForm = ({
       isMounted = false;
     };
   }, [student?.id, classData?.id, type]);
+
+  useEffect(() => {
+    if (amountOwedByStudent === undefined && type === "create") {
+      setTuitionAmount(isFormation ? formationLevelPrice : feeCalc.studentCycleFee);
+    }
+  }, [feeCalc.studentCycleFee, isFormation, formationLevelPrice, amountOwedByStudent, type]);
 
   // Compute live total amount
   const parsedTuition = isTuitionChecked ? Math.max(0, Number(tuitionAmount || 0)) : 0;

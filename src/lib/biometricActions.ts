@@ -64,6 +64,7 @@ const globalForBiometricFeed = globalThis as unknown as {
   __biometricFeedCache?: Map<number, BiometricFeedCacheEntry>;
   __biometricLastCleanupAt?: number;
   __biometricScanDedupCache?: Map<string, { result: { success: boolean; scan: BiometricScanResult }; expiresAt: number }>;
+  __biometricInFlightScans?: Map<string, Promise<{ success: boolean; scan: BiometricScanResult }>>;
 };
 
 const BIOMETRIC_FEED_CACHE_TTL_MS = 30 * 1000; // 30s in-memory cache when idle (invalidated immediately on scan/action)
@@ -193,6 +194,15 @@ export async function processBiometricScan(input: {
     return cachedScan.result;
   }
 
+  if (!globalForBiometricFeed.__biometricInFlightScans) {
+    globalForBiometricFeed.__biometricInFlightScans = new Map();
+  }
+  const inFlightPromise = globalForBiometricFeed.__biometricInFlightScans.get(dedupKey);
+  if (inFlightPromise) {
+    return inFlightPromise;
+  }
+
+  const executeScan = async (): Promise<{ success: boolean; scan: BiometricScanResult }> => {
   const openLessonIdNum = input.openLessonId && !isNaN(Number(input.openLessonId)) ? Number(input.openLessonId) : null;
   const scanDateInfo = getAlgiersDateInfo(scanTime);
   const [sYear, sMonth, sDay] = scanDateInfo.dateStr.split("-").map(Number);
@@ -382,10 +392,22 @@ export async function processBiometricScan(input: {
       const rawDateStr = getAlgiersDateInfo(raw.startsAt).dateStr;
       const tInfo = getAlgiersDateInfo(raw.startsAt);
       const key = `${raw.class.id}-${rawDateStr}-${tInfo.timeStr}`;
-      candidateLessonsBySlot.set(key, {
-        ...raw,
-        instanceDate: rawDateStr,
-      });
+      const existing = candidateLessonsBySlot.get(key);
+      const studentPresentInRaw = (student.attendances || []).some(
+        (a: any) => a.lessonId === raw.id && a.status === "PRESENT"
+      );
+      const studentPresentInExisting = existing && (student.attendances || []).some(
+        (a: any) => a.lessonId === existing.id && a.status === "PRESENT"
+      );
+
+      // If student is already marked present in existing, keep existing!
+      // Otherwise if student is present in raw, prefer raw!
+      if (!existing || (!studentPresentInExisting && studentPresentInRaw)) {
+        candidateLessonsBySlot.set(key, {
+          ...raw,
+          instanceDate: rawDateStr,
+        });
+      }
     }
   }
 
@@ -465,17 +487,14 @@ export async function processBiometricScan(input: {
     }
 
     if (!matchedLesson) {
-      // 2. If student is ALREADY marked PRESENT in an in-window lesson currently in session (startsAt <= scanTime <= endsAt),
+      // 2. If student is ALREADY marked PRESENT in an in-window lesson,
       // stick to that lesson! Never jump to a different overlapping group and double-register attendance!
-      const ongoingAlreadyPresent = inWindowBranchLessons.find((l) => {
-        if (!presentLessonIds.has(l.id)) return false;
-        const sTime = new Date(l.startsAt).getTime();
-        const eTime = new Date(l.endsAt).getTime();
-        return scanTime.getTime() >= sTime && scanTime.getTime() <= eTime;
-      });
+      const alreadyPresentInWindow = inWindowBranchLessons.find((l) =>
+        presentLessonIds.has(l.id)
+      );
 
-      if (ongoingAlreadyPresent) {
-        matchedLesson = ongoingAlreadyPresent;
+      if (alreadyPresentInWindow) {
+        matchedLesson = alreadyPresentInWindow;
       } else {
         // 3. Otherwise prioritize in-window lesson where student is NOT yet marked present
         const notPresentInWindow = inWindowBranchLessons
@@ -617,9 +636,8 @@ export async function processBiometricScan(input: {
   const siblingDiscountPct = (enrollment as any)?.siblingDiscountPercentage ?? null;
   const isSiblingWaived = Boolean((enrollment as any)?.isSiblingWaived);
   const needsPayerSiblingCheck = Boolean(
-    isSiblingWaived &&
-      student.family?.payerStudentId &&
-      student.family.payerStudentId !== student.id
+    student.family?.payerStudentId &&
+    student.family.payerStudentId !== student.id
   );
 
   const classLessonRows = await prisma.$queryRaw<Array<{ id: number }>>`
@@ -712,15 +730,21 @@ export async function processBiometricScan(input: {
     ]);
 
   let payerRemainingCredit: number | null = null;
+  let isPayerInThisClass = false;
   if (payerStudent) {
-    const resolvedPayer = resolvePayerCredit({
-      payerStudent,
-      classId,
-      classPricePerCycle: Number(matchedLesson.class.pricePerCycle || 0),
-      isFormation: Boolean(matchedLesson.class.isFormation),
-    });
-    if (resolvedPayer) {
-      payerRemainingCredit = resolvedPayer.netSessions;
+    isPayerInThisClass = (payerStudent.enrollments || []).some(
+      (e: any) => e.classId === classId && (e.status === "ACTIVE" || !e.status)
+    );
+    if (isPayerInThisClass) {
+      const resolvedPayer = resolvePayerCredit({
+        payerStudent,
+        classId,
+        classPricePerCycle: Number(matchedLesson.class.pricePerCycle || 0),
+        isFormation: Boolean(matchedLesson.class.isFormation),
+      });
+      if (resolvedPayer) {
+        payerRemainingCredit = resolvedPayer.netSessions;
+      }
     }
   }
 
@@ -827,10 +851,12 @@ export async function processBiometricScan(input: {
     effectivePayerStatus === "NON_PAYER"
   );
   const isSiblingStudent = Boolean(
-    isSiblingWaived ||
-    creditMetricsBefore.isSiblingWaived ||
-    needsPayerSiblingCheck ||
-    (student.family?.payerStudentId && student.family.payerStudentId !== student.id)
+    isPayerInThisClass && (
+      isSiblingWaived ||
+      creditMetricsBefore.isSiblingWaived ||
+      needsPayerSiblingCheck ||
+      (student.family?.payerStudentId && student.family.payerStudentId !== student.id)
+    )
   );
 
   const alreadyMarkedPresent = primaryRow?.status === "PRESENT";
@@ -1032,6 +1058,15 @@ export async function processBiometricScan(input: {
   }
 
   return state1Result;
+  };
+
+  const scanPromise = executeScan();
+  globalForBiometricFeed.__biometricInFlightScans.set(dedupKey, scanPromise);
+  try {
+    return await scanPromise;
+  } finally {
+    globalForBiometricFeed.__biometricInFlightScans.delete(dedupKey);
+  }
 }
 
 function serializeScanLog(log: any, index?: number): BiometricScanResult {

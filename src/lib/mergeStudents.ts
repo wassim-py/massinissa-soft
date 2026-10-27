@@ -452,7 +452,18 @@ export async function mergeStudents(
       },
     });
 
-    // 14. Finally, safely delete source student!
+    // 14. Finally, safely delete source student and tombstone their globalNumber!
+    if (source.globalNumber) {
+      await tx.biometricHardwareTombstone.upsert({
+        where: { globalNumber: source.globalNumber },
+        update: { reason: `MERGED_INTO_${target.globalNumber}` },
+        create: {
+          globalNumber: source.globalNumber,
+          reason: `MERGED_INTO_${target.globalNumber}`,
+        },
+      });
+    }
+
     await tx.student.delete({
       where: { id: source.id },
     });

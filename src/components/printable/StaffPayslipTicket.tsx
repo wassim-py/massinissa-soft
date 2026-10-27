@@ -63,7 +63,7 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
       {/* Header */}
       <div className="flex justify-between items-center border-b-2 border-gray-900 pb-4 mb-6">
         <div className="flex items-center gap-3">
-          <Image src="/logo.png" alt="logo" width={60} height={60} className="object-contain" />
+          <Image src="/massinissa-emblem.png" alt="École Massinissa" width={60} height={60} className="object-contain" unoptimized />
           <div>
             <h1 className="text-2xl font-black text-gray-900">École Massinissa</h1>
             <p className="text-xs text-gray-600 font-semibold">Siège principal : Constantine - Algérie</p>
@@ -136,7 +136,7 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
                   <span>Avances sur salaire</span>
                 </td>
                 <td className="p-2.5 border border-gray-200 text-amber-900">
-                  Déduction des acomptes / avances perçus par l'employé(e)
+                  Déduction des acomptes / avances perçus par l&apos;employé(e)
                 </td>
                 <td className="p-2.5 border border-gray-200 font-mono font-bold text-right text-amber-950">
                   - {formatDZD(data.advance || 0)}

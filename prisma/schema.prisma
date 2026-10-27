@@ -878,6 +878,15 @@ model BiometricScanLog {
   @@index([studentId, lessonId])
 }
 
+model BiometricHardwareTombstone {
+  id           Int      @id @default(autoincrement())
+  globalNumber Int      @unique
+  reason       String?
+  createdAt    DateTime @default(now())
+
+  @@index([globalNumber])
+}
+
 // =================================================================
 // WHATSAPP INTEGRATION & CONFLICT PROTECTION MODELS
 // =================================================================

@@ -10,18 +10,25 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
-    const fingerprints = await prisma.studentFingerprint.findMany({
-      include: {
-        student: {
-          select: {
-            id: true,
-            name: true,
-            globalNumber: true,
+    const [fingerprints, tombstones] = await Promise.all([
+      prisma.studentFingerprint.findMany({
+        include: {
+          student: {
+            select: {
+              id: true,
+              name: true,
+              globalNumber: true,
+            },
           },
         },
-      },
-      orderBy: { globalNumber: "asc" },
-    });
+        orderBy: { globalNumber: "asc" },
+      }),
+      prisma.biometricHardwareTombstone.findMany({
+        select: {
+          globalNumber: true,
+        },
+      }),
+    ]);
 
     return NextResponse.json({
       success: true,
@@ -34,6 +41,7 @@ export async function GET() {
         templateData: f.templateData,
         updatedAt: f.updatedAt.toISOString(),
       })),
+      deletedGlobalNumbers: tombstones.map((t) => t.globalNumber),
     });
   } catch (err: any) {
     console.error("GET /api/biometrics/templates error:", err);

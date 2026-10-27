@@ -296,25 +296,11 @@ const SingleStudentPage = async (
     }
     const s = rawStudent[0];
 
-    // Sibling discount check (§2.4): applies if family has a designated payer who is actively enrolled and paid
+    // Sibling discount check (§2.4): applies ONLY on groups where BOTH siblings are enrolled in
     const hasPayerSibling = Boolean(
       studentPaymentData?.family?.payerStudentId &&
       studentPaymentData.family.payerStudentId !== id
     );
-
-    let isPayerActiveAndPaid = false;
-    if (hasPayerSibling && studentPaymentData?.family?.payerStudent) {
-      const payerRes = resolvePayerCredit({
-        payerStudent: studentPaymentData.family.payerStudent,
-      });
-      isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
-    }
-
-    const isSiblingDiscount = Boolean(hasPayerSibling && isPayerActiveAndPaid);
-    const siblingDiscountPct = isSiblingDiscount
-      ? Number((studentPaymentData?.family as any)?.discountPercentage ?? 50)
-      : 0;
-    const isSiblingWaived100 = siblingDiscountPct >= 100;
 
     const isFamilyPayer = Boolean(
       studentPaymentData?.family?.payerStudentId &&
@@ -331,6 +317,14 @@ const SingleStudentPage = async (
       const isFormation = Boolean(c.isFormation || (c as any).FormationLevel || (c as any).formationLevelId);
       const classVouchers = (studentPaymentData?.vouchers || []).filter(
         (v) => !v.isVoided && !v.isRefund && (v.classId === c.id || v.class?.id === c.id)
+      );
+
+      // Sibling discount applies ONLY if designated payer sibling is actively enrolled in THIS group
+      const isPayerInThisGroup = Boolean(
+        hasPayerSibling &&
+        studentPaymentData?.family?.payerStudent?.enrollments?.some(
+          (pe: any) => (pe.classId === c.id || pe.class?.id === c.id) && (pe.status === "ACTIVE" || !pe.status)
+        )
       );
 
       // Formation Level metrics
@@ -354,6 +348,25 @@ const SingleStudentPage = async (
       const isLevelPartiallyPaid = isFormation && totalPaidFormation > 0 && totalPaidFormation < formationLevelPrice;
       const levelRemainingBalance = Math.max(0, formationLevelPrice - totalPaidFormation);
 
+      let groupPayerActiveAndPaid = false;
+      let groupPayerRemainingCredit: number | undefined = undefined;
+      if (isPayerInThisGroup && studentPaymentData?.family?.payerStudent) {
+        const payerRes = resolvePayerCredit({
+          payerStudent: studentPaymentData.family.payerStudent,
+          classId: c.id,
+          classPricePerCycle: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
+          isFormation,
+        });
+        groupPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+        groupPayerRemainingCredit = payerRes.netSessions;
+      }
+
+      const groupSiblingDiscount = Boolean(isPayerInThisGroup && groupPayerActiveAndPaid);
+      const groupSiblingDiscountPct = isPayerInThisGroup
+        ? Number((studentPaymentData?.family as any)?.discountPercentage ?? 50)
+        : 0;
+      const groupIsSiblingWaived100 = isPayerInThisGroup && groupSiblingDiscountPct >= 100;
+
       const enrStatus = enr.payerStatus || "NORMAL";
       const classCatchUps = (studentPaymentData?.catchUpAttendances || []).filter(
         (cu: any) => cu.missedLesson?.classId === c.id
@@ -372,9 +385,10 @@ const SingleStudentPage = async (
         pricePerCycle: Number(c?.pricePerCycle || 0),
         isFormation,
         payerStatus: enrStatus,
-        siblingDiscountPercentage: siblingDiscountPct,
-        isSiblingWaived: isSiblingWaived100,
-        isPayerActiveAndPaid,
+        siblingDiscountPercentage: groupSiblingDiscountPct,
+        isSiblingWaived: groupIsSiblingWaived100,
+        isPayerActiveAndPaid: groupPayerActiveAndPaid,
+        payerRemainingCredit: groupSiblingDiscount ? groupPayerRemainingCredit : undefined,
         tuitionVouchers,
         transfersIn: enr.transfersTo,
         transfersOut: enr.transfersFrom,
@@ -396,10 +410,10 @@ const SingleStudentPage = async (
         payerStatus: enrStatus,
         pricePerCycle: Number(c.pricePerCycle || 0),
         teacherPercentage,
-        isSiblingWaived: isSiblingWaived100,
-        siblingDiscountPercentage: siblingDiscountPct,
+        isSiblingWaived: groupIsSiblingWaived100,
+        siblingDiscountPercentage: groupSiblingDiscountPct,
         isFormation,
-        isPayerActiveAndPaid,
+        isPayerActiveAndPaid: groupPayerActiveAndPaid,
       });
 
       return {
@@ -419,8 +433,8 @@ const SingleStudentPage = async (
         levelRemainingBalance,
         teacherName: c.teacher?.name || null,
         netSessions,
-        isSiblingWaived: isSiblingWaived100,
-        hasPayerSibling: isSiblingDiscount,
+        isSiblingWaived: groupIsSiblingWaived100,
+        hasPayerSibling: isPayerInThisGroup,
         isNonPayer: enrStatus === "NON_PAYER",
         payerStatus: enrStatus,
         status:
@@ -631,13 +645,13 @@ const SingleStudentPage = async (
                     <span>{t("familyPayer")}</span>
                   </Badge>
                 )}
-                {isSiblingDiscount && (
+                {groupSummaries.some((g) => g.hasPayerSibling) && (
                   <Badge variant="warning" size="sm" withDot>
                     <ShieldCheck className="w-3 h-3 text-warning" />
                     <span>
                       {locale === "ar"
-                        ? `خصم إخوة (${siblingDiscountPct}%)`
-                        : `Remise fratrie (${siblingDiscountPct}%)`}
+                        ? `خصم إخوة (${Number((studentPaymentData?.family as any)?.discountPercentage ?? 50)}%)`
+                        : `Remise fratrie (${Number((studentPaymentData?.family as any)?.discountPercentage ?? 50)}%)`}
                     </span>
                   </Badge>
                 )}

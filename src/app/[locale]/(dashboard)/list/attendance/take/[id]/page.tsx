@@ -351,7 +351,15 @@ const TakeAttendancePage = async (
     const s = v.student;
     const missedClassId = v.missedLesson.classId;
     const vEnr = s.enrollments?.find((e: any) => e.classId === missedClassId);
-    const isSiblingDiscount = Boolean(s.family?.payerStudentId && s.family.payerStudentId !== s.id);
+    const payerId = s.family?.payerStudentId;
+    const isPayerInMissedClass = Boolean(
+      payerId &&
+      payerId !== s.id &&
+      (s.family as any)?.payerStudent?.enrollments?.some(
+        (pe: any) => (pe.classId === missedClassId || pe.class?.id === missedClassId) && (pe.status === "ACTIVE" || !pe.status)
+      )
+    );
+    const isSiblingDiscount = isPayerInMissedClass;
     const siblingDiscountPct = isSiblingDiscount ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
     const isSiblingWaived100 = siblingDiscountPct >= 100;
     const vPayerStatus = vEnr?.payerStatus || s.payerStatus || "NORMAL";
@@ -738,21 +746,33 @@ const TakeAttendancePage = async (
     const enrollmentStatus = enrollment?.status || "ACTIVE";
     const payerStudentId = details?.family?.payerStudentId;
     const hasPayerSibling = Boolean(payerStudentId && payerStudentId !== s.id);
+    const payerObj = hasPayerSibling && payerStudentId ? allRelevantStudentsMap.get(payerStudentId) : null;
+
+    // Both siblings must be actively enrolled in this class
+    const isPayerInThisClass = Boolean(
+      hasPayerSibling && (
+        rawStudents.some((rs) => rs.id === payerStudentId) ||
+        payerObj?.enrollments?.some(
+          (pe: any) => (pe.classId === studentClassId || pe.classId === l.classId) && (pe.status === "ACTIVE" || !pe.status)
+        )
+      )
+    );
+
     let isPayerActiveAndPaid = false;
     let payerSessionsRemaining: number | undefined = undefined;
-    if (hasPayerSibling && payerStudentId) {
-      const payerObj = allRelevantStudentsMap.get(payerStudentId);
-      if (payerObj) {
-        const resolved = resolvePayerCredit({
-          payerStudent: payerObj,
-        });
-        if (resolved) {
-          isPayerActiveAndPaid = resolved.isPayerActiveAndPaid;
-          payerSessionsRemaining = resolved.netSessions;
-        }
+    if (isPayerInThisClass && payerObj) {
+      const resolved = resolvePayerCredit({
+        payerStudent: payerObj,
+        classId: studentClassId,
+        classPricePerCycle: Number(studentClass?.pricePerCycle || 0),
+        isFormation: Boolean(studentClass?.isFormation),
+      });
+      if (resolved) {
+        isPayerActiveAndPaid = resolved.isPayerActiveAndPaid;
+        payerSessionsRemaining = resolved.netSessions;
       }
       if (payerSessionsRemaining === undefined) {
-        payerSessionsRemaining = payerRemainingMap.get(payerStudentId);
+        payerSessionsRemaining = payerRemainingMap.get(payerStudentId!);
       }
     }
 

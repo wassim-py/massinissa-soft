@@ -350,56 +350,49 @@ export default function PaymentGrid({
         (!activeTrimester?.id || v.trimesterId === activeTrimester.id)
     );
 
-    // Sibling discount: applies if primary payer is active and paid
-    const hasPayerSibling = Boolean(
-      student.family &&
-      student.family.payerStudentId &&
-      student.family.payerStudentId !== student.id
-    );
+    // Sibling discount: applies ONLY on groups where BOTH siblings are enrolled in
+    const payerId = student.family?.payerStudentId;
+    const hasPayerSibling = Boolean(payerId && payerId !== student.id);
+
+    // Check if designated payer sibling is actively enrolled in THIS class
+    const payerEnrollmentInClass = hasPayerSibling
+      ? classData.enrollments.find(
+          (e) => e.student.id === payerId && (e.status === "ACTIVE" || !e.status)
+        )
+      : null;
+
+    const isPayerInThisClass = Boolean(payerEnrollmentInClass);
 
     let isPayerActiveAndPaid = false;
-    if (hasPayerSibling) {
-      const payerId = student.family!.payerStudentId!;
-      // First check if payer is in the same class
-      const payerEnrollmentInClass = classData.enrollments.find(
-        (e) => e.student.id === payerId
-      );
+    if (isPayerInThisClass && payerEnrollmentInClass) {
+      const targetPayerStudent = {
+        ...payerEnrollmentInClass.student,
+        enrollments: [payerEnrollmentInClass],
+        vouchers: classData.vouchers.filter(v => v.studentId === payerId && !v.isVoided && !v.isRefund),
+        attendances: classData.lessons.flatMap(l => 
+          l.attendances.filter(a => a.studentId === payerId).map(a => ({
+            lessonId: l.id,
+            status: a.status,
+            lesson: { id: l.id, classId: classData.id, startsAt: (l as any).startsAt || new Date(0), isFree: l.isFree, isTeacherAbsent: Boolean((l as any).isTeacherAbsent) }
+          }))
+        ),
+        catchUpAttendances: (payerEnrollmentInClass.student as any).catchUpAttendances || [],
+      };
 
-      let targetPayerStudent: any = null;
-      if (payerEnrollmentInClass) {
-        targetPayerStudent = {
-          ...payerEnrollmentInClass.student,
-          enrollments: [payerEnrollmentInClass],
-          vouchers: classData.vouchers.filter(v => v.studentId === payerId && !v.isVoided && !v.isRefund),
-          attendances: classData.lessons.flatMap(l => 
-            l.attendances.filter(a => a.studentId === payerId).map(a => ({
-              lessonId: l.id,
-              status: a.status,
-              lesson: { id: l.id, classId: classData.id, startsAt: (l as any).startsAt || new Date(0), isFree: l.isFree, isTeacherAbsent: Boolean((l as any).isTeacherAbsent) }
-            }))
-          ),
-          catchUpAttendances: (payerEnrollmentInClass.student as any).catchUpAttendances || [],
-        };
-      } else if ((student.family as any)?.payerStudent) {
-        targetPayerStudent = (student.family as any).payerStudent;
-      }
-
-      if (targetPayerStudent) {
-        const payerRes = resolvePayerCredit({
-          payerStudent: targetPayerStudent,
-          classId: classData.id,
-          classPricePerCycle: Number(classData.pricePerCycle || 0),
-          isFormation: Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId),
-        });
-        isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
-      }
+      const payerRes = resolvePayerCredit({
+        payerStudent: targetPayerStudent,
+        classId: classData.id,
+        classPricePerCycle: Number(classData.pricePerCycle || 0),
+        isFormation: Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId),
+      });
+      isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
     }
 
-    const isSiblingDiscount = Boolean(hasPayerSibling && isPayerActiveAndPaid);
-    const siblingDiscountPct = isSiblingDiscount
+    const isSiblingDiscount = Boolean(isPayerInThisClass && isPayerActiveAndPaid);
+    const siblingDiscountPct = isPayerInThisClass
       ? Number((student.family as any)?.discountPercentage ?? 50)
       : 0;
-    const isSiblingWaived100 = siblingDiscountPct >= 100;
+    const isSiblingWaived100 = isPayerInThisClass && siblingDiscountPct >= 100;
 
     // Tuition cycles & sessions
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");

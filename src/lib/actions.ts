@@ -599,20 +599,17 @@ export const deleteTeacher = async (
  * Docs/architecture.md §2.10: Permanent, school-wide student ID number with slot reuse.
  *
  * - Every student gets a sequential ID number (1, 2, 3...), unique across ALL 3 branches combined.
- * - When a student is deleted, their number becomes available again.
- * - The next newly-registered student receives the lowest available deleted number in the sequence,
- *   not simply the next highest number ever used.
+ * - Deleted or merged student numbers are NEVER recycled (tombstoned in BiometricHardwareTombstone)
+ *   to prevent hardware terminal fingerprint mismatches across branches.
  * - Deleting a student does NOT renumber anyone else's ID.
  */
 export async function getNextGlobalStudentNumber(tx?: any): Promise<number> {
   const client = tx || prisma;
   const result = await client.$queryRaw<Array<{ nextNumber: number | string | bigint }>>`
-    SELECT s.num AS "nextNumber"
-    FROM generate_series(1, (SELECT COALESCE(MAX("globalNumber"), 0) + 1 FROM "Student")) s(num)
-    LEFT JOIN "Student" ON "Student"."globalNumber" = s.num
-    WHERE "Student"."globalNumber" IS NULL
-    ORDER BY s.num ASC
-    LIMIT 1;
+    SELECT GREATEST(
+      COALESCE((SELECT MAX("globalNumber") FROM "Student"), 0),
+      COALESCE((SELECT MAX("globalNumber") FROM "BiometricHardwareTombstone"), 0)
+    ) + 1 AS "nextNumber";
   `;
 
   if (result.length > 0 && result[0].nextNumber !== undefined && result[0].nextNumber !== null) {
@@ -1017,6 +1014,16 @@ export const deleteStudent = async (
     // Also delete the student's user & fingerprint template from the physical ZKTeco K50 Pro hardware
     if (deletedGlobalNumber > 0) {
       try {
+        await prisma.biometricHardwareTombstone.upsert({
+          where: { globalNumber: deletedGlobalNumber },
+          update: { reason: "STUDENT_DELETED" },
+          create: { globalNumber: deletedGlobalNumber, reason: "STUDENT_DELETED" },
+        });
+      } catch (tombstoneErr) {
+        console.error("Failed to record biometric hardware tombstone for student deletion:", tombstoneErr);
+      }
+
+      try {
         const { deleteK50HardwareUser } = await import("./zkK50Manager");
         await deleteK50HardwareUser(deletedGlobalNumber);
       } catch {
@@ -1025,7 +1032,7 @@ export const deleteStudent = async (
     }
 
     // IMPORTANT: Deleting a student does NOT renumber anyone else's ID (§2.10).
-    // The freed slot will be reused by getNextGlobalStudentNumber on the next registration.
+    // The number is tombstoned to prevent recycled biometric recognition errors on physical terminals.
 
     safeRevalidatePath("/list/students");
     return { success: true, error: false, message: "Élève supprimé avec succès / تم حذف التلميذ بنجاح." };
@@ -3137,7 +3144,15 @@ export async function searchCatchUpCandidatesAction(
           },
           take: 30,
         },
-        family: true,
+        family: {
+          include: {
+            payerStudent: {
+              include: {
+                enrollments: { select: { classId: true, status: true } },
+              },
+            },
+          },
+        },
         vouchers: {
           where: {
             isVoided: false,
@@ -3289,14 +3304,20 @@ export async function searchCatchUpCandidatesAction(
       const studentAttendanceMap = new Map(s.attendances.map((a) => [a.lessonId, a]));
       const seenLessonIds = new Set<number>();
 
-      const isSiblingDiscount = Boolean(s.family?.payerStudentId && s.family.payerStudentId !== s.id);
-      const siblingDiscountPct = isSiblingDiscount ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
-      const isSiblingWaived100 = siblingDiscountPct >= 100;
-
       // Precalculate credit per enrolled class
       const classCreditsMap = new Map<number, number>();
       (s.enrollments || []).forEach((enr: any) => {
         const cls = enr.class;
+        const payerId = s.family?.payerStudentId;
+        const isPayerInClass = Boolean(
+          payerId &&
+          payerId !== s.id &&
+          (s.family as any)?.payerStudent?.enrollments?.some(
+            (pe: any) => pe.classId === cls.id && (pe.status === "ACTIVE" || !pe.status)
+          )
+        );
+        const siblingDiscountPct = isPayerInClass ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
+        const isSiblingWaived100 = isPayerInClass && siblingDiscountPct >= 100;
         const vTuition = (s.vouchers || []).filter(
           (v: any) => v.classId === cls.id || !v.classId
         );
@@ -3965,7 +3986,15 @@ export async function searchStudentsForEnrollmentAction({
       },
       include: {
         registeredBranch: { select: { name: true } },
-        family: true,
+        family: {
+          include: {
+            payerStudent: {
+              include: {
+                enrollments: { select: { classId: true, status: true } },
+              },
+            },
+          },
+        },
         vouchers: {
           where: { isVoided: false, isRefund: false, paymentType: "TUITION_4SESSION" },
           include: { refunds: true },
@@ -4026,10 +4055,6 @@ export async function searchStudentsForEnrollmentAction({
     });
 
     const candidates = students.map((s) => {
-      const isSiblingDiscount = Boolean(s.family?.payerStudentId && s.family.payerStudentId !== s.id);
-      const siblingDiscountPct = isSiblingDiscount ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
-      const isSiblingWaived100 = siblingDiscountPct >= 100;
-
       let bestTransfer: {
         fromEnrollmentId: number;
         fromClassId: number;
@@ -4050,6 +4075,16 @@ export async function searchStudentsForEnrollmentAction({
           if (!isSameLevel) continue;
 
           const cls = enr.class;
+          const payerId = s.family?.payerStudentId;
+          const isPayerInClass = Boolean(
+            payerId &&
+            payerId !== s.id &&
+            (s.family as any)?.payerStudent?.enrollments?.some(
+              (pe: any) => pe.classId === cls.id && (pe.status === "ACTIVE" || !pe.status)
+            )
+          );
+          const siblingDiscountPct = isPayerInClass ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
+          const isSiblingWaived100 = isPayerInClass && siblingDiscountPct >= 100;
           const vTuition = (s.vouchers || []).filter((v: any) => v.classId === cls.id || !v.classId);
           const vAtts = (s.attendances || []).filter((a: any) => a.lesson.classId === cls.id);
           const vCatchUps = (s.catchUpAttendances || []).filter(
@@ -4336,6 +4371,8 @@ export async function checkStudentInscriptionExemptionAction({
   isEnrollmentWaived?: boolean;
   paidGroupsCount: number;
   configuredInscriptionFee: number;
+  isPayerInThisClass?: boolean;
+  siblingDiscountPercentage?: number;
 }> {
   try {
     const targetClass = await prisma.class.findUnique({
@@ -4402,6 +4439,36 @@ export async function checkStudentInscriptionExemptionAction({
       ? false
       : paidGroupsCount >= 3;
 
+    // Sibling discount applies ONLY if both siblings are enrolled in this class
+    let isPayerInThisClass = false;
+    let siblingDiscountPercentage = 0;
+    const studentWithFam = await prisma.student.findUnique({
+      where: { id: studentId },
+      select: {
+        family: {
+          select: {
+            payerStudentId: true,
+            discountPercentage: true,
+          },
+        },
+      },
+    });
+
+    const payerId = studentWithFam?.family?.payerStudentId;
+    if (payerId && payerId !== studentId) {
+      const payerEnrollmentInClass = await prisma.enrollment.findFirst({
+        where: {
+          studentId: payerId,
+          classId: classId,
+          status: "ACTIVE",
+        },
+      });
+      if (payerEnrollmentInClass) {
+        isPayerInThisClass = true;
+        siblingDiscountPercentage = Number(studentWithFam?.family?.discountPercentage ?? 50);
+      }
+    }
+
     return {
       success: true,
       isAlreadyPaidInThisClass,
@@ -4409,6 +4476,8 @@ export async function checkStudentInscriptionExemptionAction({
       isEnrollmentWaived,
       paidGroupsCount,
       configuredInscriptionFee: requiredFee,
+      isPayerInThisClass,
+      siblingDiscountPercentage,
     };
   } catch (err) {
     console.error("checkStudentInscriptionExemptionAction error:", err);
@@ -5067,7 +5136,15 @@ export const issueVoucher = async (
     const student = await prisma.student.findUnique({
       where: { id: data.studentId },
       include: {
-        family: true,
+        family: {
+          include: {
+            payerStudent: {
+              include: {
+                enrollments: { select: { classId: true, status: true } },
+              },
+            },
+          },
+        },
       },
     });
     if (!student) {
@@ -5112,8 +5189,19 @@ export const issueVoucher = async (
           },
         });
         if (payerStudent) {
-          const payerRes = resolvePayerCredit({ payerStudent });
-          isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+          // Sibling discount applies ONLY if designated payer sibling is actively enrolled in THIS group
+          const isPayerInThisClass = (payerStudent.enrollments || []).some(
+            (e) => e.classId === targetClass.id && (e.status === "ACTIVE" || !e.status)
+          );
+          if (isPayerInThisClass) {
+            const payerRes = resolvePayerCredit({
+              payerStudent,
+              classId: targetClass.id,
+              classPricePerCycle: Number(targetClass.pricePerCycle || 0),
+              isFormation: false,
+            });
+            isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+          }
         }
 
         if (isPayerActiveAndPaid) {
@@ -5986,11 +6074,20 @@ export const createRefund = async (
 
       const student = transfer.toEnrollment.student || transfer.fromEnrollment.student;
       if (student?.family?.payerStudentId && student.family.payerStudentId !== student.id) {
-        return {
-          success: false,
-          error: true,
-          message: "لا يمكن استرداد مبالغ لطالب معفى بموجب تخفيض الأخوة. / Aucun remboursement pour un élève exonéré fratrie.",
-        };
+        const payerInFromClass = await prisma.enrollment.findFirst({
+          where: {
+            studentId: student.family.payerStudentId,
+            classId: transfer.fromEnrollment.classId,
+            status: "ACTIVE",
+          },
+        });
+        if (payerInFromClass && Number(student.family.discountPercentage ?? 50) >= 100) {
+          return {
+            success: false,
+            error: true,
+            message: "لا يمكن استرداد مبالغ لطالب معفى بموجب تخفيض الأخوة. / Aucun remboursement pour un élève exonéré fratrie.",
+          };
+        }
       }
 
       // Find any prior refunds recorded for this transfer
@@ -6409,23 +6506,30 @@ export const createRefund = async (
         };
       }
 
-      // Sibling discount waiver check
+      // Sibling discount waiver check: applies ONLY on groups where both siblings are enrolled in
       const student = await prisma.student.findUnique({
         where: { id: voucher.studentId },
         include: { family: true },
       });
-      const isSiblingDiscount = Boolean(
-        student?.family?.payerStudentId && student.family.payerStudentId !== voucher.studentId
-      );
-      const siblingDiscountPct = isSiblingDiscount
-        ? Number((student?.family as any)?.discountPercentage ?? 50)
-        : 0;
-      if (siblingDiscountPct >= 100) {
-        return {
-          success: false,
-          error: true,
-          message: "لا يمكن استرداد مبالغ لطالب معفى بموجب تخفيض الأخوة. / Aucun remboursement pour un élève exonéré fratrie.",
-        };
+      let siblingDiscountPct = 0;
+      if (voucher.classId && student?.family?.payerStudentId && student.family.payerStudentId !== voucher.studentId) {
+        const payerInClass = await prisma.enrollment.findFirst({
+          where: {
+            studentId: student.family.payerStudentId,
+            classId: voucher.classId,
+            status: "ACTIVE",
+          },
+        });
+        if (payerInClass) {
+          siblingDiscountPct = Number((student.family as any)?.discountPercentage ?? 50);
+        }
+        if (payerInClass && siblingDiscountPct >= 100) {
+          return {
+            success: false,
+            error: true,
+            message: "لا يمكن استرداد مبالغ لطالب معفى بموجب تخفيض الأخوة. / Aucun remboursement pour un élève exonéré fratrie.",
+          };
+        }
       }
 
       // Calculate consumed sessions using Massinissa School rules:
@@ -7435,7 +7539,15 @@ export const exportToExcel = async (
           include: {
             registeredBranch: true,
             enrollments: { include: { class: true } },
-            family: true,
+            family: {
+          include: {
+            payerStudent: {
+              include: {
+                enrollments: { select: { classId: true, status: true } },
+              },
+            },
+          },
+        },
           },
           orderBy: { name: 'asc' }
         });
@@ -7624,11 +7736,17 @@ export const exportToExcel = async (
               bookStatus = bookVoucher ? `مدفوع (${Number(bookVoucher.amount).toFixed()} دج)` : "غير مدفوع";
             }
 
-            // Sibling discount waiver & percentage
+            // Sibling discount waiver & percentage: applies ONLY if designated payer sibling is in THIS class
             const family = student.family;
-            const isWaivedSibling = Boolean(
-              family && family.payerStudentId && family.payerStudentId !== student.id
+            const payerId = family?.payerStudentId;
+            const isPayerInClass = Boolean(
+              payerId &&
+              payerId !== student.id &&
+              classTarget.enrollments.some(
+                (e) => e.studentId === payerId && (e.status === "ACTIVE" || !e.status)
+              )
             );
+            const isWaivedSibling = isPayerInClass;
             const siblingDiscountPct = isWaivedSibling ? Number(family?.discountPercentage ?? 50) : 0;
 
             // Tuition vouchers calculation
@@ -8045,7 +8163,15 @@ export const exportToExcel = async (
 
             const enrPayerStatus = enrollment.payerStatus || (student as any).payerStatus || "NORMAL";
             const family = student.family;
-            const isWaivedSibling = Boolean(family && family.payerStudentId && family.payerStudentId !== student.id);
+            const payerId = family?.payerStudentId;
+            const isPayerInClass = Boolean(
+              payerId &&
+              payerId !== student.id &&
+              classData.enrollments.some(
+                (e: any) => e.studentId === payerId && (e.status === "ACTIVE" || !e.status)
+              )
+            );
+            const isWaivedSibling = isPayerInClass;
             const siblingDiscountPct = isWaivedSibling ? Number(family?.discountPercentage ?? 50) : 0;
             const isSiblingWaived100 = isWaivedSibling && siblingDiscountPct >= 100;
             const isNonPayer = enrPayerStatus === "NON_PAYER" || enrPayerStatus === "FREE_ALL" || enrPayerStatus === "FREE_TUITION";
@@ -8054,6 +8180,9 @@ export const exportToExcel = async (
             const payerCredit = isWaivedSibling && family?.payerStudent
                 ? resolvePayerCredit({
                     payerStudent: family.payerStudent,
+                    classId: classData.id,
+                    classPricePerCycle: Number(classData.pricePerCycle || 0),
+                    isFormation: Boolean((classData as any).isFormation),
                 })
                 : null;
             const isPayerActiveAndPaid = isWaivedSibling
@@ -10708,7 +10837,15 @@ export async function unsuspendEnrollmentWithDebtClearance(
             id: true,
             name: true,
             payerStatus: true,
-            family: true,
+            family: {
+          include: {
+            payerStudent: {
+              include: {
+                enrollments: { select: { classId: true, status: true } },
+              },
+            },
+          },
+        },
             attendances: {
               where: {
                 lesson: {
@@ -10772,15 +10909,23 @@ export async function unsuspendEnrollmentWithDebtClearance(
     });
 
     const family = student.family;
-    const isSiblingDiscount = Boolean(
-      family &&
-        family.payerStudentId &&
-        family.payerStudentId !== student.id
-    );
+    const payerId = family?.payerStudentId;
+    let isPayerInClass = false;
+    if (payerId && payerId !== student.id) {
+      const payerEnrollmentInClass = await prisma.enrollment.findFirst({
+        where: {
+          studentId: payerId,
+          classId: c.id,
+          status: "ACTIVE",
+        },
+      });
+      isPayerInClass = Boolean(payerEnrollmentInClass);
+    }
+    const isSiblingDiscount = isPayerInClass;
     const siblingDiscountPct = isSiblingDiscount
       ? Number((family as any)?.discountPercentage ?? 50)
       : 0;
-    const isSiblingWaived100 = siblingDiscountPct >= 100;
+    const isSiblingWaived100 = isSiblingDiscount && siblingDiscountPct >= 100;
 
     const cyclePrice = Number(c.pricePerCycle || 0);
     const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
@@ -10953,7 +11098,15 @@ export async function toggleEnrollmentSuspensionAction(
             name: true,
             registeredBranchId: true,
             payerStatus: true,
-            family: true,
+            family: {
+          include: {
+            payerStudent: {
+              include: {
+                enrollments: { select: { classId: true, status: true } },
+              },
+            },
+          },
+        },
             attendances: {
               where: {
                 lesson: {

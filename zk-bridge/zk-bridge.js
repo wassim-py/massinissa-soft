@@ -718,31 +718,21 @@ async function syncTemplatesWithCloud(force = false) {
     const templates = cloudData.templates;
     const cache = loadSyncCache();
     let syncedCount = 0;
-    let backfilledCount = 0;
+    let prunedCount = 0;
 
-    // Phase 1: BACKFILL (If local K50 has a template that the cloud doesn't have yet, upload it)
-    for (const t of templates) {
-      const isPlaceholder = !t.templateData || t.templateData.startsWith("ZK_K50_");
-      if (isPlaceholder && t.globalNumber > 0) {
-        for (const dev of devices.values()) {
-          if (!dev.isConnected) continue;
-          const tplBuf = await downloadTemplateFromDevice(dev, t.globalNumber, t.fingerIndex || 0, 1500);
-          if (tplBuf && tplBuf.length > 20) {
-            const b64 = tplBuf.toString("base64");
-            t.templateData = b64;
-            await postToCloud("/api/biometrics/templates", {
-              globalNumber: t.globalNumber,
-              fingerIndex: t.fingerIndex || 0,
-              templateData: b64,
-              branchId: state.branchId,
-            });
-            backfilledCount++;
-            console.log(
-              `[K50 Cloud Sync] ↑ Backfilled template for Student #${t.globalNumber} (${t.studentName}) to Cloud DB!`
-            );
-            break;
+    // Phase 1: PRUNE TOMBSTONED / DELETED HARDWARE USERS FROM FLASH MEMORY
+    if (Array.isArray(cloudData.deletedGlobalNumbers)) {
+      for (const delNum of cloudData.deletedGlobalNumbers) {
+        if (delNum > 0) {
+          deleteHardwareUserOnAllDevices(delNum);
+          for (let fi = 0; fi <= 9; fi++) {
+            delete cache[`${delNum}_${fi}`];
           }
+          prunedCount++;
         }
+      }
+      if (prunedCount > 0) {
+        console.log(`[K50 Cloud Sync] ✗ Pruned ${prunedCount} tombstoned users from K50 hardware flash.`);
       }
     }
 
@@ -790,7 +780,7 @@ async function syncTemplatesWithCloud(force = false) {
       );
     }
 
-    if (syncedCount > 0 || backfilledCount > 0) {
+    if (syncedCount > 0 || prunedCount > 0) {
       sendToAllDevices(CMD_REFRESHDATA);
       sendToAllDevices(CMD_STARTVERIFY);
       sendToAllDevices(CMD_ENABLEDEVICE);
@@ -798,13 +788,13 @@ async function syncTemplatesWithCloud(force = false) {
     }
 
     console.log(
-      `[K50 Cloud Sync] ✓ Multi-branch sync complete: ${syncedCount} downloaded, ${backfilledCount} backfilled to cloud.`
+      `[K50 Cloud Sync] ✓ Multi-branch sync complete: ${syncedCount} downloaded, ${prunedCount} tombstoned users pruned.`
     );
 
     broadcastSse({
       type: "sync_complete",
       syncedCount,
-      backfilledCount,
+      prunedCount,
       totalTemplates: templates.length,
       timestamp: Date.now(),
     });
@@ -812,7 +802,7 @@ async function syncTemplatesWithCloud(force = false) {
     return {
       success: true,
       syncedCount,
-      backfilledCount,
+      prunedCount,
       totalTemplates: templates.length,
       message: `Synchronisation terminée : ${syncedCount} élèves synchronisés sur ce lecteur K50 Pro.`,
     };
@@ -825,9 +815,9 @@ async function syncTemplatesWithCloud(force = false) {
 }
 
 async function dispatchScanEvent(scanPayload) {
-  // 1. Instantly broadcast to open browser SSE clients for 0ms audio and visual feedback
+  // 1. Instantly broadcast pending event to open browser SSE clients for 0ms visual/audio response
   broadcastSse({
-    type: "scan",
+    type: "scan_pending",
     ...scanPayload,
     timestamp: Date.now(),
   });
@@ -863,11 +853,19 @@ async function dispatchScanEvent(scanPayload) {
     }
   }
 
-  // 3. Fallback queue if appUrl is unreachable (persisted so it retries on next poll)
+  // 3. Fallback queue if appUrl is unreachable (persisted so it retries on next poll or via UI fallback)
   state.pendingScans.push(scanPayload);
   if (state.pendingScans.length > 50) {
     state.pendingScans.shift();
   }
+
+  // Broadcast fallback scan so active UI tab can attempt the post if bridge network fails
+  broadcastSse({
+    type: "scan",
+    ...scanPayload,
+    fallback: true,
+    timestamp: Date.now(),
+  });
 }
 
 function scheduleUnrecognizedFingerCheck(delayMs = 220) {

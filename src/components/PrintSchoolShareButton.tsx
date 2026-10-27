@@ -33,6 +33,7 @@ export const PrintSchoolShareButton = ({
         <html dir="${isAr ? "rtl" : "ltr"}" lang="${locale}">
           <head>
             <meta charset="utf-8">
+            <base href="${window.location.origin}/">
             <title>${isAr ? "حصة المؤسسة" : "Part École"} - ${data.teacher ? data.teacher.name : "Récapitulatif"}</title>
             <script src="https://cdn.tailwindcss.com"></script>
             <link rel="preconnect" href="https://fonts.googleapis.com">

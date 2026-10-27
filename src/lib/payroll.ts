@@ -143,7 +143,15 @@ function computeAllowedPaidSessions(
   if (baseLessonPrice <= 0) return 999;
 
   const fam = enrollment.student?.family;
-  const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== studentId);
+  const payerId = fam?.payerStudentId;
+  const isPayerInClass = Boolean(
+    payerId &&
+    payerId !== studentId &&
+    classInfo?.enrollments?.some(
+      (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+    )
+  );
+  const isSiblingDiscount = isPayerInClass;
   const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
   if (siblingDiscountPct >= 100) return 0;
 
@@ -262,6 +270,7 @@ export async function calculateTeacherPayroll(
             select: {
               studentId: true,
               payerStatus: true,
+              status: true,
               student: {
                 select: {
                   family: {
@@ -634,7 +643,15 @@ export async function calculateTeacherPayroll(
 
           countedPayingStudentIds.add(att.studentId);
           const fam = enrollment?.student?.family;
-          const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== att.studentId);
+          const payerId = fam?.payerStudentId;
+          const isPayerInClass = Boolean(
+            payerId &&
+            payerId !== att.studentId &&
+            lesson.class?.enrollments?.some(
+              (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+            )
+          );
+          const isSiblingDiscount = isPayerInClass;
           const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
 
           if (siblingDiscountPct >= 100) {
@@ -659,7 +676,15 @@ export async function calculateTeacherPayroll(
         if (vPayerStatus === "NON_PAYER" || vPayerStatus === "SCHOOL_FEES_ONLY") return;
 
         const fam = cv.student?.family;
-        const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== cv.student.id);
+        const payerId = fam?.payerStudentId;
+        const isPayerInClass = Boolean(
+          payerId &&
+          payerId !== cv.student.id &&
+          lesson.class?.enrollments?.some(
+            (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+          )
+        );
+        const isSiblingDiscount = isPayerInClass;
         const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
 
         if (siblingDiscountPct >= 100) return;
@@ -837,7 +862,15 @@ export async function calculateTeacherPayroll(
             const pStatus = enrollment?.payerStatus || "NORMAL";
             if (pStatus !== "NON_PAYER" && pStatus !== "SCHOOL_FEES_ONLY") {
               const fam = enrollment?.student?.family;
-              const isSiblingDiscount = Boolean(fam?.payerStudentId && fam.payerStudentId !== att.studentId);
+              const payerId = fam?.payerStudentId;
+              const isPayerInClass = Boolean(
+                payerId &&
+                payerId !== att.studentId &&
+                historyData.classInfo?.enrollments?.some(
+                  (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+                )
+              );
+              const isSiblingDiscount = isPayerInClass;
               const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
               if (siblingDiscountPct < 100) {
                 const weight = siblingDiscountPct > 0 ? (1 - siblingDiscountPct / 100) : 1;

@@ -33,6 +33,7 @@ export const PrintPayslipButton = ({
         <html dir="${isAr ? "rtl" : "ltr"}" lang="${locale}">
           <head>
             <meta charset="utf-8">
+            <base href="${window.location.origin}/">
             <title>${isAr ? "قسيمة راتب" : "Bulletin de paie"} #${data.id} - ${data.teacher.name}</title>
             <script src="https://cdn.tailwindcss.com"></script>
             <link rel="preconnect" href="https://fonts.googleapis.com">

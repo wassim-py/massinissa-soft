@@ -974,21 +974,30 @@ const AttendanceRoster = ({
           filteredStudents.map((student) => {
             const currentStatus = attendance[student.id];
 
-            const isSiblingDiscount = Boolean(
-              student.family &&
-              student.family.payerStudentId &&
-              student.family.payerStudentId !== student.id
+            const payerStudentId = student.family?.payerStudentId;
+            const hasPayerSibling = Boolean(
+              payerStudentId &&
+              payerStudentId !== student.id
             );
+
+            // Sibling discount applies ONLY if designated payer sibling is actively enrolled in this class
+            const isPayerInThisClass = Boolean(
+              hasPayerSibling &&
+              students.some(
+                (s) => s.id === payerStudentId && (s.enrollmentStatus === "ACTIVE" || !s.enrollmentStatus || s.enrollmentStatus !== "INACTIVE")
+              )
+            );
+
+            const isSiblingDiscount = isPayerInThisClass;
             const siblingDiscountPct = isSiblingDiscount
               ? Number((student.family as any)?.discountPercentage ?? 50)
               : 0;
-            const isSiblingWaived100 = siblingDiscountPct >= 100;
+            const isSiblingWaived100 = isSiblingDiscount && siblingDiscountPct >= 100;
 
             const payerStatus = student.payerStatus || "NORMAL";
             const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
             const isSchoolFeesOnly = payerStatus === "SCHOOL_FEES_ONLY";
 
-            const payerStudentId = student.family?.payerStudentId;
             let effectivePayerRemainingCredit: number | undefined = undefined;
             if (isSiblingDiscount && payerStudentId) {
               if (livePayerRemainingMap.has(payerStudentId)) {

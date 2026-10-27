@@ -33,6 +33,7 @@ export const PrintRealNetButton = ({
         <html dir="${isAr ? "rtl" : "ltr"}" lang="${locale}">
           <head>
             <meta charset="utf-8">
+            <base href="${window.location.origin}/">
             <title>${isAr ? "كشف الصافي الحقيقي" : "Bilan Net Réel de l'École"}</title>
             <script src="https://cdn.tailwindcss.com"></script>
             <link rel="preconnect" href="https://fonts.googleapis.com">

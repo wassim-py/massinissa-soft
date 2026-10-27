@@ -251,15 +251,19 @@ const AdminPage = async () => {
         (v) => v.paymentType === "TUITION_4SESSION"
       );
 
-      const isSiblingDiscount = Boolean(
-        student.family &&
-          student.family.payerStudentId &&
-          student.family.payerStudentId !== student.id
+      const payerId = student.family?.payerStudentId;
+      const hasPayerSibling = Boolean(
+        payerId &&
+        payerId !== student.id
       );
-      const siblingDiscountPct = isSiblingDiscount
-        ? Number((student.family as any)?.discountPercentage ?? 50)
-        : 0;
-      const isSiblingWaived100 = siblingDiscountPct >= 100;
+
+      // Sibling discount applies ONLY if designated payer sibling is actively enrolled in THIS class
+      const isPayerInThisClass = Boolean(
+        hasPayerSibling &&
+        (student.family as any)?.payerStudent?.enrollments?.some(
+          (pe: any) => (pe.classId === cls.id || pe.class?.id === cls.id) && (pe.status === "ACTIVE" || !pe.status)
+        )
+      );
 
       const studentAtts: Array<{ lessonId: number; status: string }> = [];
       cls.lessons.forEach((l) => {
@@ -276,7 +280,7 @@ const AdminPage = async () => {
         (cu: any) => cls.lessons.some((l) => l.id === cu.missedLessonId)
       );
 
-      const payerCredit = isSiblingDiscount && (student.family as any)?.payerStudent
+      const payerCredit = isPayerInThisClass && (student.family as any)?.payerStudent
         ? resolvePayerCredit({
             payerStudent: (student.family as any).payerStudent,
             classId: cls.id,
@@ -284,6 +288,12 @@ const AdminPage = async () => {
             isFormation,
           })
         : null;
+
+      const isSiblingDiscount = Boolean(isPayerInThisClass && payerCredit?.isPayerActiveAndPaid);
+      const siblingDiscountPct = isPayerInThisClass
+        ? Number((student.family as any)?.discountPercentage ?? 50)
+        : 0;
+      const isSiblingWaived100 = isPayerInThisClass && siblingDiscountPct >= 100;
 
       const creditMetrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(cls.pricePerCycle || 0),
