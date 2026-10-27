@@ -4,6 +4,7 @@ import { useLocale } from "next-intl";
 import { usePathname, useRouter } from "@/i18n/navigation";
 import { useSearchParams } from "next/navigation";
 import { useState, useRef, useEffect, useTransition } from "react";
+import { setUserLocaleAction } from "@/lib/actions";
 
 const FlagFR = () => (
   <svg
@@ -60,6 +61,16 @@ export default function LanguageSwitcher() {
     languages.find((lang) => lang.code === locale) || languages[0];
 
   useEffect(() => {
+    // Keep client-side cookie and localStorage synchronized with active locale
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("NEXT_LOCALE", locale);
+      } catch {}
+      document.cookie = `NEXT_LOCALE=${locale}; path=/; max-age=31536000; SameSite=Lax`;
+    }
+  }, [locale]);
+
+  useEffect(() => {
     const handleClickOutside = (e: MouseEvent | TouchEvent) => {
       if (
         dropdownRef.current &&
@@ -82,6 +93,19 @@ export default function LanguageSwitcher() {
       return;
     }
     setIsOpen(false);
+
+    // 1. Immediately persist on client via persistent cookie (1 year)
+    document.cookie = `NEXT_LOCALE=${newLocale}; path=/; max-age=31536000; SameSite=Lax`;
+
+    // 2. Persist in localStorage for resilient client-side remembering
+    try {
+      localStorage.setItem("NEXT_LOCALE", newLocale);
+    } catch {}
+
+    // 3. Asynchronously persist in DB / Clerk user metadata / server cookies
+    setUserLocaleAction(newLocale).catch(() => {});
+
+    // 4. Smoothly route to the new locale
     startTransition(() => {
       const params = searchParams.toString();
       const url = params ? `${pathname}?${params}` : pathname;

@@ -1813,7 +1813,9 @@
     "unauthorizedTitle": "وصول غير مصرح",
     "unauthorizedDesc": "ليس لديك الصلاحية للاطلاع على صندوق هذا الفرع.",
     "ownerSwitchBranch": "تغيير الفرع :",
-    "reconcileHelper": "أداة مساعدة لجرد ومطابقة النقدية الفعلية في الصندوق"
+    "reconcileHelper": "أداة مساعدة لجرد ومطابقة النقدية الفعلية في الصندوق",
+    "dateLabel": "تاريخ التصريح",
+    "dateHelper": "بصفتك مالك المؤسسة، يمكنك تسجيل التصريح لتاريخ سابق."
   },
   "branchSwitcher": {
     "switchBranch": "تغيير الفرع",

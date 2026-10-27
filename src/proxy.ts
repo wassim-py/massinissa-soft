@@ -57,11 +57,26 @@ const clerkAuth = clerkMiddleware(
     }
   }
 
-  // Detect current locale or fallback to cookie / default
+  // Detect current locale or fallback to cookie / user metadata / default
   const localeMatch = req.nextUrl.pathname.match(/^\/(fr|ar)(\/|$)/);
+  const rawCookieLocale = req.cookies.get("NEXT_LOCALE")?.value;
+  const cookieLocale =
+    rawCookieLocale && routing.locales.includes(rawCookieLocale as any)
+      ? rawCookieLocale
+      : undefined;
+
+  const userPref =
+    ((sessionClaims?.metadata as any)?.localePreference ||
+     (sessionClaims as any)?.publicMetadata?.localePreference) as string | undefined;
+  const validUserLocale =
+    userPref && routing.locales.includes(userPref as any)
+      ? userPref
+      : undefined;
+
   const currentLocale =
     localeMatch?.[1] ||
-    req.cookies.get("NEXT_LOCALE")?.value ||
+    cookieLocale ||
+    validUserLocale ||
     routing.defaultLocale;
 
   const getRoleDestination = (userRole?: string, loc: string = currentLocale) => {
@@ -83,10 +98,20 @@ const clerkAuth = clerkMiddleware(
   const isRootOrLocaleRoot =
     req.nextUrl.pathname === "/" ||
     req.nextUrl.pathname === `/${currentLocale}` ||
-    req.nextUrl.pathname === `/${currentLocale}/`;
+    req.nextUrl.pathname === `/${currentLocale}/` ||
+    req.nextUrl.pathname === "/fr" ||
+    req.nextUrl.pathname === "/fr/" ||
+    req.nextUrl.pathname === "/ar" ||
+    req.nextUrl.pathname === "/ar/";
 
   if (isRootOrLocaleRoot && userId && role) {
-    return NextResponse.redirect(new URL(destination, req.url));
+    const res = NextResponse.redirect(new URL(destination, req.url));
+    res.cookies.set("NEXT_LOCALE", currentLocale, {
+      path: "/",
+      maxAge: 365 * 24 * 60 * 60,
+      sameSite: "lax",
+    });
+    return res;
   }
 
   // Check role-based route permissions
@@ -98,7 +123,13 @@ const clerkAuth = clerkMiddleware(
         req.cookies.get("x-dev-test")?.value === "true";
 
       if (!userId && !isDevTest) {
-        return NextResponse.redirect(new URL(`/${currentLocale}`, req.url));
+        const res = NextResponse.redirect(new URL(`/${currentLocale}`, req.url));
+        res.cookies.set("NEXT_LOCALE", currentLocale, {
+          path: "/",
+          maxAge: 365 * 24 * 60 * 60,
+          sameSite: "lax",
+        });
+        return res;
       }
 
       // If user has a resolved role and it is NOT permitted on this route, redirect to their role page
@@ -107,7 +138,13 @@ const clerkAuth = clerkMiddleware(
         !allowedRoles.some((r) => r.toLowerCase() === role.toLowerCase())
       ) {
         if (req.nextUrl.pathname !== destination) {
-          return NextResponse.redirect(new URL(destination, req.url));
+          const res = NextResponse.redirect(new URL(destination, req.url));
+          res.cookies.set("NEXT_LOCALE", currentLocale, {
+            path: "/",
+            maxAge: 365 * 24 * 60 * 60,
+            sameSite: "lax",
+          });
+          return res;
         }
       }
     }

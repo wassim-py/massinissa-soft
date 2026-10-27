@@ -4,9 +4,9 @@ import * as Clerk from "@clerk/elements/common";
 import * as SignIn from "@clerk/elements/sign-in";
 import { useUser } from "@clerk/nextjs";
 import Image from "next/image";
-import { useRouter } from "@/i18n/navigation";
+import { useRouter, usePathname } from "@/i18n/navigation";
 import { useEffect, useRef } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 const getDashboardUrl = (role?: string) => {
@@ -20,18 +20,56 @@ const getDashboardUrl = (role?: string) => {
 
 const LoginPage = () => {
   const t = useTranslations("auth");
+  const locale = useLocale();
+  const pathname = usePathname();
   const { isLoaded, isSignedIn, user } = useUser();
   const router = useRouter();
   const hasRedirected = useRef(false);
+
+  // Auto-restore selected language from localStorage if cookie was missing
+  useEffect(() => {
+    if (!isSignedIn && typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("NEXT_LOCALE");
+        if ((stored === "fr" || stored === "ar") && stored !== locale) {
+          document.cookie = `NEXT_LOCALE=${stored}; path=/; max-age=31536000; SameSite=Lax`;
+          router.replace(pathname, { locale: stored });
+        }
+      } catch {}
+    }
+  }, [isSignedIn, locale, pathname, router]);
 
   useEffect(() => {
     if (isLoaded && isSignedIn && user && !hasRedirected.current) {
       const role = user.publicMetadata?.role;
       hasRedirected.current = true;
       const targetUrl = getDashboardUrl(typeof role === "string" ? role : undefined);
-      router.push(targetUrl);
+
+      // Resolve user's preferred locale
+      let preferredLocale: "fr" | "ar" = locale === "ar" ? "ar" : "fr";
+      const userMetaPref = user.publicMetadata?.localePreference as string | undefined;
+
+      if (userMetaPref === "fr" || userMetaPref === "ar") {
+        preferredLocale = userMetaPref;
+      } else if (typeof window !== "undefined") {
+        const localPref = localStorage.getItem("NEXT_LOCALE");
+        if (localPref === "fr" || localPref === "ar") {
+          preferredLocale = localPref;
+        }
+      }
+
+      document.cookie = `NEXT_LOCALE=${preferredLocale}; path=/; max-age=31536000; SameSite=Lax`;
+      try {
+        localStorage.setItem("NEXT_LOCALE", preferredLocale);
+      } catch {}
+
+      if (preferredLocale !== locale) {
+        router.replace(targetUrl, { locale: preferredLocale });
+      } else {
+        router.push(targetUrl);
+      }
     }
-  }, [isLoaded, isSignedIn, user, router]);
+  }, [isLoaded, isSignedIn, user, router, locale]);
 
   if (isLoaded && isSignedIn) {
     const role = user?.publicMetadata?.role as string | undefined;

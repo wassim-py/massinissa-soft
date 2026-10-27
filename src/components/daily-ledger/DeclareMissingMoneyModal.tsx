@@ -1,32 +1,45 @@
 "use client";
 
-import React, { useState, useTransition } from "react";
+import React, { useState, useTransition, useEffect } from "react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { toast } from "react-toastify";
 import { declareMissingMoneyAction } from "@/lib/actions";
+import { getAlgiersTodayDateString } from "@/lib/algiersDate";
 import { AlertCircle, X } from "lucide-react";
 
 interface DeclareMissingMoneyModalProps {
   branchId: number;
   branchName: string;
+  isOwner?: boolean;
+  selectedDate?: string;
 }
 
 export default function DeclareMissingMoneyModal({
   branchId,
   branchName,
+  isOwner = false,
+  selectedDate,
 }: DeclareMissingMoneyModalProps) {
   const t = useTranslations("dailyLedger");
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [amount, setAmount] = useState<string>("");
   const [reason, setReason] = useState<string>("");
+  const [date, setDate] = useState<string>(selectedDate || getAlgiersTodayDateString());
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    if (selectedDate) {
+      setDate(selectedDate);
+    }
+  }, [selectedDate]);
 
   const handleOpen = () => {
     setAmount("");
     setReason("");
+    setDate(selectedDate || getAlgiersTodayDateString());
     setIsOpen(true);
   };
 
@@ -49,6 +62,7 @@ export default function DeclareMissingMoneyModal({
           branchId,
           amount: numAmount,
           reason,
+          date: isOwner && date ? date : undefined,
         });
 
         if (res.success) {
@@ -104,6 +118,26 @@ export default function DeclareMissingMoneyModal({
 
             {/* Modal Form */}
             <form onSubmit={handleSubmit} className="p-5 space-y-4">
+              {isOwner && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    {t("dateLabel")}
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={date}
+                    max={getAlgiersTodayDateString()}
+                    onChange={(e) => setDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 text-sm bg-surface border border-border rounded-xl focus:ring-2 focus:ring-danger/20 focus:border-danger font-mono outline-hidden transition-all cursor-pointer"
+                    disabled={isPending}
+                  />
+                  <p className="text-[11px] text-muted mt-1">
+                    {t("dateHelper")}
+                  </p>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
                   {t("amountLabel")}

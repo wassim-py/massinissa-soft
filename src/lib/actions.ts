@@ -92,6 +92,61 @@ export const setBranchAction = async (branchId: number) => {
   }
 };
 
+export const setUserLocaleAction = async (locale: string) => {
+  try {
+    if (locale !== "fr" && locale !== "ar") {
+      return { success: false, error: true, message: "Langue non valide / لغة غير صالحة" };
+    }
+    const cookieStore = await cookies();
+    cookieStore.set("NEXT_LOCALE", locale, {
+      path: "/",
+      maxAge: 365 * 24 * 60 * 60, // 1 year persistence
+      sameSite: "lax",
+    });
+
+    try {
+      const { auth: clerkAuth } = await import("./auth");
+      const { userId } = await clerkAuth({ treatPendingAsSignedOut: false });
+      if (userId) {
+        // 1. Update database UserProfile if exists
+        try {
+          await prisma.userProfile.updateMany({
+            where: { id: userId },
+            data: { localePreference: locale },
+          });
+        } catch {
+          // UserProfile record might not exist for this user id
+        }
+
+        // 2. Synchronize to Clerk user publicMetadata if configured
+        const clerkSecret = process.env.CLERK_SECRET_KEY;
+        if (clerkSecret) {
+          try {
+            const { createClerkClient } = await import("@clerk/nextjs/server");
+            const client = createClerkClient({ secretKey: clerkSecret });
+            const user = await client.users.getUser(userId);
+            await client.users.updateUser(userId, {
+              publicMetadata: {
+                ...(user.publicMetadata || {}),
+                localePreference: locale,
+              },
+            });
+          } catch {
+            // Ignore Clerk sync error
+          }
+        }
+      }
+    } catch {
+      // Ignore auth error in unauthenticated context
+    }
+
+    return { success: true, error: false };
+  } catch (err) {
+    console.error("setUserLocaleAction error:", err);
+    return { success: false, error: true };
+  }
+};
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -9846,6 +9901,7 @@ export async function declareMissingMoneyAction(data: {
   branchId: number;
   amount: number;
   reason?: string;
+  date?: string | Date;
 }): Promise<{ success: boolean; error: boolean; message: string }> {
   try {
     const session = await getAuthSession();
@@ -9888,12 +9944,31 @@ export async function declareMissingMoneyAction(data: {
       };
     }
 
-    const todayDate = normalizeDateToStartOfDay(new Date());
+    let recordDate = normalizeDateToStartOfDay(new Date());
+
+    if (data.date) {
+      if (!session.isOwner) {
+        return {
+          success: false,
+          error: true,
+          message: "Seul le propriétaire peut déclarer un manque pour une date spécifique / هذا الإجراء متاح لمالك المؤسسة فقط",
+        };
+      }
+      const parsedDate = new Date(data.date);
+      if (isNaN(parsedDate.getTime())) {
+        return {
+          success: false,
+          error: true,
+          message: "Date invalide / تاريخ غير صالح",
+        };
+      }
+      recordDate = normalizeDateToStartOfDay(data.date);
+    }
 
     await prisma.missingMoney.create({
       data: {
         branchId,
-        date: todayDate,
+        date: recordDate,
         amount: new Prisma.Decimal(amount),
         reason: data.reason?.trim() || null,
         declaredBy: session.userId || session.rawRole || "admin",
@@ -10060,6 +10135,7 @@ export async function declareSurplusMoneyAction(data: {
   branchId: number;
   amount: number;
   reason?: string;
+  date?: string | Date;
 }): Promise<{ success: boolean; error: boolean; message: string }> {
   try {
     const session = await getAuthSession();
@@ -10102,12 +10178,31 @@ export async function declareSurplusMoneyAction(data: {
       };
     }
 
-    const todayDate = normalizeDateToStartOfDay(new Date());
+    let recordDate = normalizeDateToStartOfDay(new Date());
+
+    if (data.date) {
+      if (!session.isOwner) {
+        return {
+          success: false,
+          error: true,
+          message: "Seul le propriétaire peut déclarer un surplus pour une date spécifique / هذا الإجراء متاح لمالك المؤسسة فقط",
+        };
+      }
+      const parsedDate = new Date(data.date);
+      if (isNaN(parsedDate.getTime())) {
+        return {
+          success: false,
+          error: true,
+          message: "Date invalide / تاريخ غير صالح",
+        };
+      }
+      recordDate = normalizeDateToStartOfDay(data.date);
+    }
 
     await prisma.surplusMoney.create({
       data: {
         branchId,
-        date: todayDate,
+        date: recordDate,
         amount: new Prisma.Decimal(amount),
         reason: data.reason?.trim() || null,
         declaredBy: session.userId || session.rawRole || "admin",

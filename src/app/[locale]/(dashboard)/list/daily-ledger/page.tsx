@@ -388,10 +388,14 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
               <DeclareMissingMoneyModal
                 branchId={branch.id}
                 branchName={branch.name}
+                isOwner={isOwner}
+                selectedDate={targetDateStr}
               />
               <DeclareSurplusMoneyModal
                 branchId={branch.id}
                 branchName={branch.name}
+                isOwner={isOwner}
+                selectedDate={targetDateStr}
               />
             </div>
           </div>

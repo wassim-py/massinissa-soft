@@ -1813,7 +1813,9 @@
     "unauthorizedTitle": "Accès non autorisé",
     "unauthorizedDesc": "Vous n'avez pas l'autorisation de consulter la caisse de cette branche.",
     "ownerSwitchBranch": "Changer de branche :",
-    "reconcileHelper": "Outil d'aide au comptage et à la réconciliation de la caisse physique"
+    "reconcileHelper": "Outil d'aide au comptage et à la réconciliation de la caisse physique",
+    "dateLabel": "Date de la déclaration",
+    "dateHelper": "En tant que propriétaire, vous pouvez déclarer pour un jour antérieur."
   },
   "branchSwitcher": {
     "switchBranch": "Changer de siège",
