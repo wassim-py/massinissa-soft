@@ -6,6 +6,7 @@ import { SchoolShareTicket, SchoolSharePrintData } from "@/components/printable/
 import PrintPayslipButton from "@/components/PrintPayslipButton";
 import PrintSchoolShareButton from "@/components/PrintSchoolShareButton";
 import PrintOwnerConsolidationButton from "@/components/PrintOwnerConsolidationButton";
+import ConfirmPayslipButton from "@/components/ConfirmPayslipButton";
 import Link from "next/link";
 import { calculateTeacherPayroll } from "@/lib/payroll";
 
@@ -308,6 +309,11 @@ export default async function PayslipDetailPage(props: PageProps) {
           <PrintOwnerConsolidationButton
             payslipId={payslip.id}
             label={locale === "ar" ? "تقرير المالك" : "Rapport Propriétaire"}
+          />
+
+          <ConfirmPayslipButton
+            payslipId={payslip.id}
+            initialStatus={payslip.PayrollRun.status}
           />
         </div>
       </Card>

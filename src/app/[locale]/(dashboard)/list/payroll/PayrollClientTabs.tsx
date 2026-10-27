@@ -3,6 +3,7 @@
 import React, { useState, useTransition } from "react";
 import Link from "next/link";
 import {
+  confirmTeacherPayslipAction,
   deletePayrollRunAction,
   recordPhotocopyChargeAction,
   updatePhotocopyChargeAction,
@@ -35,6 +36,8 @@ import {
   TrendingUp,
   Search,
   Eye,
+  CheckCircle2,
+  Check,
 } from "lucide-react";
 
 interface Props {
@@ -322,6 +325,18 @@ export default function PayrollClientTabs({
   };
 
   // Handlers
+  const handleConfirmPayslip = (payslipId: number, confirm: boolean) => {
+    setFeedbackMessage(null);
+    startTransition(async () => {
+      const res = await confirmTeacherPayslipAction(payslipId, confirm);
+      if (res.success) {
+        setFeedbackMessage({ text: res.message, isError: false });
+      } else {
+        setFeedbackMessage({ text: res.message, isError: true });
+      }
+    });
+  };
+
   const handleDeletePayslip = (payrollRunId: number, payslipId: number, teacherName: string) => {
     const msg =
       locale === "ar"
@@ -642,94 +657,292 @@ export default function PayrollClientTabs({
                   </div>
                 </div>
               )}
-              <DataTable
-                columns={[
-                  { header: "#", accessor: "id" },
-                  { header: t("teacher"), accessor: "teacherName" },
-                  { header: t("periodCol"), accessor: "period" },
-                  { header: t("totalSessionsCol"), accessor: "sessionsCount", align: "center" },
-                  { header: t("branchesDetailCol"), accessor: "branches" },
-                  { header: t("grossAmountCol"), accessor: "grossAmount", align: "end" },
-                  { header: t("advancesCol"), accessor: "advances", align: "end" },
-                  { header: t("photocopyCol"), accessor: "photocopy", align: "end" },
-                  { header: t("netDueCol"), accessor: "netAmount", align: "end" },
-                  { header: t("printCol"), accessor: "actions", align: "center" },
-                ]}
-                data={filteredPayslips}
-                renderRow={(p) => (
-                  <tr key={p.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
-                    <td className="p-3.5 font-mono font-bold">#{p.id}</td>
-                    <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
-                    <td className="p-3.5 text-muted text-xs">
-                      {formatDate(p.periodStart)} → {formatDate(p.periodEnd)}
-                    </td>
-                    <td className="p-3.5 text-center font-mono font-bold">{p.sessionsCount}</td>
-                    <td className="p-3.5">
-                      <div className="flex flex-col gap-0.5">
-                        {p.branchLines.map((bl) => (
-                          <span key={bl.branchId} className="text-xs text-muted">
-                            • <span className="font-semibold text-gray-800">{bl.branchName}</span>: {bl.sessionsCount} {locale === "ar" ? "حصة" : "séance(s)"} ({formatDZD(bl.amount)})
+              {/* DESKTOP TABLE VIEW */}
+              <div className="hidden md:block">
+                <DataTable
+                  columns={[
+                    { header: "#", accessor: "id" },
+                    { header: locale === "ar" ? "الحالة" : "Statut", accessor: "status", align: "center" },
+                    { header: t("teacher"), accessor: "teacherName" },
+                    { header: t("periodCol"), accessor: "period" },
+                    { header: t("totalSessionsCol"), accessor: "sessionsCount", align: "center" },
+                    { header: t("branchesDetailCol"), accessor: "branches" },
+                    { header: t("grossAmountCol"), accessor: "grossAmount", align: "end" },
+                    { header: t("advancesCol"), accessor: "advances", align: "end" },
+                    { header: t("photocopyCol"), accessor: "photocopy", align: "end" },
+                    { header: t("netDueCol"), accessor: "netAmount", align: "end" },
+                    { header: t("printCol"), accessor: "actions", align: "center" },
+                  ]}
+                  data={filteredPayslips}
+                  renderRow={(p) => {
+                    const isConfirmed = p.status === "PAID" || p.status === "VALIDATED" || p.status === "CONFIRMED";
+                    return (
+                      <tr key={p.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
+                        <td className="p-3.5 font-mono font-bold">#{p.id}</td>
+                        <td className="p-3.5 text-center">
+                          {isConfirmed ? (
+                            <Badge variant="success" size="sm" withDot className="font-semibold whitespace-nowrap">
+                              {locale === "ar" ? "مؤكد" : "Confirmé"}
+                            </Badge>
+                          ) : (
+                            <Badge variant="warning" size="sm" className="font-semibold whitespace-nowrap">
+                              {locale === "ar" ? "مسودة" : "Brouillon"}
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
+                        <td className="p-3.5 text-muted text-xs">
+                          {formatDate(p.periodStart)} → {formatDate(p.periodEnd)}
+                        </td>
+                        <td className="p-3.5 text-center font-mono font-bold">{p.sessionsCount}</td>
+                        <td className="p-3.5">
+                          <div className="flex flex-col gap-0.5">
+                            {p.branchLines.map((bl) => (
+                              <span key={bl.branchId} className="text-xs text-muted">
+                                • <span className="font-semibold text-gray-800">{bl.branchName}</span>: {bl.sessionsCount} {locale === "ar" ? "حصة" : "séance(s)"} ({formatDZD(bl.amount)})
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="p-3.5 text-end font-mono font-bold text-gray-800">{formatDZD(p.grossAmount)}</td>
+                        <td className="p-3.5 text-end font-mono text-danger font-semibold">- {formatDZD(p.advances)}</td>
+                        <td className="p-3.5 text-end font-mono text-warning-text font-semibold">- {formatDZD(p.photocopyDeductions)}</td>
+                        <td className="p-3.5 text-end font-mono font-black text-primary text-sm">{formatDZD(p.netAmount)}</td>
+                        <td className="p-3.5 text-center">
+                          <div className="flex items-center justify-center gap-1.5 flex-nowrap">
+                            {isConfirmed ? (
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => handleConfirmPayslip(p.id, false)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-800 hover:bg-emerald-200 transition-colors shadow-xs cursor-pointer"
+                                title={locale === "ar" ? "كشف مؤكد - اضغط لإلغاء التأكيد" : "Fiche confirmée - cliquer pour annuler"}
+                              >
+                                <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                                <span>{locale === "ar" ? "مؤكد" : "Confirmé"}</span>
+                              </button>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={isPending}
+                                onClick={() => handleConfirmPayslip(p.id, true)}
+                                className="!bg-emerald-600 hover:!bg-emerald-700 !text-white !px-2.5 !py-1.5 text-xs font-semibold gap-1 shadow-xs cursor-pointer"
+                                title={locale === "ar" ? "تأكيد وصرف كشف الراتب وخصمه من الصافي الإجمالي" : "Confirmer la fiche de paie et mettre à jour le revenu net"}
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                <span>{locale === "ar" ? "تأكيد" : "Confirmer"}</span>
+                              </Button>
+                            )}
+
+                            <Link
+                              href={`/list/finance/payslips/${p.id}?view=teacher`}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-xs"
+                              title={locale === "ar" ? "معاينة كشف الراتب" : "Aperçu de la fiche"}
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>{t("previewBtn")}</span>
+                            </Link>
+                            <PrintPayslipButton
+                              label={locale === "ar" ? "الأستاذ" : "Enseignant"}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs cursor-pointer"
+                              data={{
+                                id: p.id,
+                                periodStart: p.periodStart,
+                                periodEnd: p.periodEnd,
+                                status: p.status,
+                                teacher: { id: p.personId, name: p.teacherName },
+                                sessionsCount: p.sessionsCount,
+                                grossAmount: p.grossAmount,
+                                advances: p.advances,
+                                photocopyDeductions: p.photocopyDeductions,
+                                netAmount: p.netAmount,
+                                branchLines: p.branchLines,
+                              }}
+                            />
+                            <PrintOwnerConsolidationButton
+                              payslipId={p.id}
+                              label={locale === "ar" ? "المالك" : "Propriétaire"}
+                            />
+                            <Button
+                              type="button"
+                              variant="danger"
+                              size="sm"
+                              disabled={isPending}
+                              onClick={() => handleDeletePayslip(p.payrollRunId, p.id, p.teacherName)}
+                              title={locale === "ar" ? "حذف" : "Supprimer"}
+                              className="!px-2 !py-1.5"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }}
+                  emptyTitle={t("noPayslipsYetTitle")}
+                  emptyDescription={
+                    searchTeacher || periodFilterStart || periodFilterEnd
+                      ? (locale === "ar" ? "لا توجد كشوف رواتب مطابقة للتصفية الحالية." : "Aucune fiche de paie ne correspond aux filtres.")
+                      : t("noPayslipsYetDesc")
+                  }
+                />
+              </div>
+
+              {/* MOBILE CARDS VIEW (Fully responsive for small screens) */}
+              <div className="block md:hidden space-y-3">
+                {filteredPayslips.length === 0 ? (
+                  <div className="p-6 text-center text-muted bg-surface-subtle rounded-xl border border-dashed border-border text-xs">
+                    {searchTeacher || periodFilterStart || periodFilterEnd
+                      ? (locale === "ar" ? "لا توجد كشوف مطابقة للتصفية." : "Aucune fiche ne correspond aux filtres.")
+                      : t("noPayslipsYetDesc")}
+                  </div>
+                ) : (
+                  filteredPayslips.map((p) => {
+                    const isConfirmed = p.status === "PAID" || p.status === "VALIDATED" || p.status === "CONFIRMED";
+                    return (
+                      <div
+                        key={p.id}
+                        className={`p-4 rounded-xl border bg-surface transition-all shadow-xs space-y-3 ${
+                          isConfirmed ? "border-emerald-200 bg-emerald-50/20" : "border-border"
+                        }`}
+                      >
+                        {/* Top Card Row */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-bold text-muted">#{p.id}</span>
+                            <span className="font-bold text-sm text-gray-900">{p.teacherName}</span>
+                          </div>
+                          {isConfirmed ? (
+                            <Badge variant="success" size="sm" withDot className="font-semibold text-[11px]">
+                              {locale === "ar" ? "مؤكد" : "Confirmé"}
+                            </Badge>
+                          ) : (
+                            <Badge variant="warning" size="sm" className="font-semibold text-[11px]">
+                              {locale === "ar" ? "مسودة" : "Brouillon"}
+                            </Badge>
+                          )}
+                        </div>
+
+                        {/* Period & Sessions */}
+                        <div className="flex items-center justify-between text-xs text-muted">
+                          <span>{formatDate(p.periodStart)} → {formatDate(p.periodEnd)}</span>
+                          <span className="font-mono font-bold text-gray-800">
+                            {p.sessionsCount} {locale === "ar" ? "حصة" : "séances"}
                           </span>
-                        ))}
+                        </div>
+
+                        {/* Branches Details */}
+                        {p.branchLines && p.branchLines.length > 0 && (
+                          <div className="text-[11px] text-muted flex flex-wrap gap-1.5 pt-1 border-t border-border/50">
+                            {p.branchLines.map((bl) => (
+                              <span key={bl.branchId} className="bg-surface-subtle px-2 py-0.5 rounded border border-border/60">
+                                {bl.branchName}: <strong className="text-gray-800">{bl.sessionsCount}</strong> ({formatDZD(bl.amount)})
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Financials Grid */}
+                        <div className="grid grid-cols-2 gap-2 p-2.5 rounded-lg bg-surface-subtle/80 border border-border/60 text-xs">
+                          <div>
+                            <span className="text-[10px] text-muted block">{locale === "ar" ? "الخام" : "Brut"}</span>
+                            <span className="font-mono font-bold text-gray-900">{formatDZD(p.grossAmount)}</span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-muted block">{locale === "ar" ? "الصافي للدفع" : "Net à payer"}</span>
+                            <span className="font-mono font-black text-primary text-sm">{formatDZD(p.netAmount)}</span>
+                          </div>
+                          {(p.advances > 0 || p.photocopyDeductions > 0) && (
+                            <div className="col-span-2 flex items-center justify-between text-[11px] pt-1.5 border-t border-border/50">
+                              {p.advances > 0 && (
+                                <span className="font-mono text-danger font-semibold">
+                                  {locale === "ar" ? "تسبيق:" : "Avance :"} -{formatDZD(p.advances)}
+                                </span>
+                              )}
+                              {p.photocopyDeductions > 0 && (
+                                <span className="font-mono text-warning-text font-semibold">
+                                  {locale === "ar" ? "نسخ:" : "Copies :"} -{formatDZD(p.photocopyDeductions)}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Actions Row */}
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                          {isConfirmed ? (
+                            <button
+                              type="button"
+                              disabled={isPending}
+                              onClick={() => handleConfirmPayslip(p.id, false)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-800 hover:bg-emerald-200 transition-colors shadow-xs"
+                              title={locale === "ar" ? "كشف مؤكد - اضغط لإلغاء التأكيد" : "Fiche confirmée - cliquer pour annuler"}
+                            >
+                              <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                              <span>{locale === "ar" ? "مؤكد" : "Confirmé"}</span>
+                            </button>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={isPending}
+                              onClick={() => handleConfirmPayslip(p.id, true)}
+                              className="!bg-emerald-600 hover:!bg-emerald-700 !text-white !px-3 !py-1.5 text-xs font-semibold gap-1 shadow-xs"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              <span>{locale === "ar" ? "تأكيد" : "Confirmer"}</span>
+                            </Button>
+                          )}
+
+                          <Link
+                            href={`/list/finance/payslips/${p.id}?view=teacher`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-xs"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>{t("previewBtn")}</span>
+                          </Link>
+
+                          <PrintPayslipButton
+                            label={locale === "ar" ? "الأستاذ" : "Enseignant"}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs"
+                            data={{
+                              id: p.id,
+                              periodStart: p.periodStart,
+                              periodEnd: p.periodEnd,
+                              status: p.status,
+                              teacher: { id: p.personId, name: p.teacherName },
+                              sessionsCount: p.sessionsCount,
+                              grossAmount: p.grossAmount,
+                              advances: p.advances,
+                              photocopyDeductions: p.photocopyDeductions,
+                              netAmount: p.netAmount,
+                              branchLines: p.branchLines,
+                            }}
+                          />
+
+                          <PrintOwnerConsolidationButton
+                            payslipId={p.id}
+                            label={locale === "ar" ? "المالك" : "Propriétaire"}
+                          />
+
+                          <Button
+                            type="button"
+                            variant="danger"
+                            size="sm"
+                            disabled={isPending}
+                            onClick={() => handleDeletePayslip(p.payrollRunId, p.id, p.teacherName)}
+                            className="!px-2 !py-1.5 ms-auto"
+                            title={locale === "ar" ? "حذف" : "Supprimer"}
+                          >
+                            <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                          </Button>
+                        </div>
                       </div>
-                    </td>
-                    <td className="p-3.5 text-end font-mono font-bold text-gray-800">{formatDZD(p.grossAmount)}</td>
-                    <td className="p-3.5 text-end font-mono text-danger font-semibold">- {formatDZD(p.advances)}</td>
-                    <td className="p-3.5 text-end font-mono text-warning-text font-semibold">- {formatDZD(p.photocopyDeductions)}</td>
-                    <td className="p-3.5 text-end font-mono font-black text-primary text-sm">{formatDZD(p.netAmount)}</td>
-                    <td className="p-3.5 text-center">
-                      <div className="flex items-center justify-center gap-1.5 flex-nowrap">
-                        <Link
-                          href={`/list/finance/payslips/${p.id}?view=teacher`}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition-colors shadow-xs"
-                          title={locale === "ar" ? "معاينة كشف الراتب" : "Aperçu de la fiche"}
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>{t("previewBtn")}</span>
-                        </Link>
-                        <PrintPayslipButton
-                          label={locale === "ar" ? "الأستاذ" : "Enseignant"}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs cursor-pointer"
-                          data={{
-                            id: p.id,
-                            periodStart: p.periodStart,
-                            periodEnd: p.periodEnd,
-                            status: p.status,
-                            teacher: { id: p.personId, name: p.teacherName },
-                            sessionsCount: p.sessionsCount,
-                            grossAmount: p.grossAmount,
-                            advances: p.advances,
-                            photocopyDeductions: p.photocopyDeductions,
-                            netAmount: p.netAmount,
-                            branchLines: p.branchLines,
-                          }}
-                        />
-                        <PrintOwnerConsolidationButton
-                          payslipId={p.id}
-                          label={locale === "ar" ? "المالك" : "Propriétaire"}
-                        />
-                        <Button
-                          type="button"
-                          variant="danger"
-                          size="sm"
-                          disabled={isPending}
-                          onClick={() => handleDeletePayslip(p.payrollRunId, p.id, p.teacherName)}
-                          title={locale === "ar" ? "حذف" : "Supprimer"}
-                          className="!px-2 !py-1.5"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 shrink-0" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
+                    );
+                  })
                 )}
-                emptyTitle={t("noPayslipsYetTitle")}
-                emptyDescription={
-                  searchTeacher || periodFilterStart || periodFilterEnd
-                    ? (locale === "ar" ? "لا توجد كشوف رواتب مطابقة للتصفية الحالية." : "Aucune fiche de paie ne correspond aux filtres.")
-                    : t("noPayslipsYetDesc")
-                }
-              />
+              </div>
             </CardContent>
           </Card>
 

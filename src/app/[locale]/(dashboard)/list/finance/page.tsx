@@ -426,10 +426,25 @@ export default async function FinancePage(props: PageProps) {
     });
   }
 
+  // Confirmed Teacher Payslips (PAID)
+  const confirmedTeacherPayslips = await prisma.payslip.findMany({
+    where: {
+      personType: "TEACHER",
+      PayrollRun: {
+        status: { in: ["PAID", "VALIDATED", "CONFIRMED"] },
+      },
+    },
+    select: {
+      netAmount: true,
+    },
+  });
+
+  const totalTeacherPayrollSum = confirmedTeacherPayslips.reduce(
+    (sum, p) => sum + Number(p.netAmount),
+    0
+  );
+
   const totalRevenueSum = Number(dashboardData?.summary?.grossRevenue || 0);
-  const totalTeacherPayrollSum = overviewData?.totalGrossPayroll
-    ? Number(overviewData.totalGrossPayroll)
-    : 0;
   const totalAllDecaissed = totalDailyExpensesSum + totalStaffPayrollSum + totalTeacherPayrollSum;
   const netProfitSum = totalRevenueSum - totalAllDecaissed;
 

@@ -9559,6 +9559,52 @@ export async function setPayrollRunStatusAction(formData: {
 }
 
 /**
+ * Confirms or unconfirms a teacher payslip (Owner only).
+ * When confirmed (status = "PAID"), the payslip amount is posted to DailyLedger
+ * and counts as decaissed in the school's Net Revenue.
+ */
+export async function confirmTeacherPayslipAction(payslipId: number, confirm: boolean = true) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, message: "Accès réservé exclusivement au propriétaire." };
+    }
+
+    const payslip = await prisma.payslip.findUnique({
+      where: { id: payslipId },
+      include: { PayrollRun: true },
+    });
+
+    if (!payslip) {
+      return { success: false, error: true, message: "Fiche de paie introuvable." };
+    }
+
+    const newStatus: "PAID" | "DRAFT" = confirm ? "PAID" : "DRAFT";
+    await updatePayrollRunStatus(payslip.payrollRunId, newStatus);
+
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/list/finance");
+    safeRevalidatePath(`/list/finance/payslips/${payslipId}`);
+
+    return {
+      success: true,
+      error: false,
+      status: newStatus,
+      message: confirm
+        ? "Fiche de paie confirmée avec succès. Le revenu net a été actualisé."
+        : "Confirmation annulée. Le revenu net a été réajusté.",
+    };
+  } catch (error: any) {
+    console.error("Error in confirmTeacherPayslipAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "Erreur lors de la confirmation de la fiche de paie.",
+    };
+  }
+}
+
+/**
  * Delete / undo a PayrollRun and its generated payslips.
  */
 export async function deletePayrollRunAction(payrollRunId: number) {

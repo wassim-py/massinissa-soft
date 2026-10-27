@@ -1685,6 +1685,16 @@ export async function updatePayrollRunStatus(
       data: { status: newStatus },
     });
 
+    // If unmarking from PAID back to DRAFT/VALIDATED, clean up ledger entries
+    if (run.status === "PAID" && newStatus !== "PAID") {
+      await tx.dailyLedger.deleteMany({
+        where: {
+          type: "PAYROLL_OUT" as any,
+          date: run.periodEnd,
+        },
+      });
+    }
+
     // If marked as PAID, post ledger expense per branch from PayslipBranchLine
     // ONLY for TEACHER payslips (expenses paid out)
     if (newStatus === "PAID") {
@@ -1803,6 +1813,7 @@ export async function getOwnerPayrollOverview(startDate: Date, endDate: Date) {
       PayrollRun: {
         periodStart: { gte: startDate },
         periodEnd: { lte: endDate },
+        status: { in: ["PAID", "VALIDATED", "CONFIRMED"] },
       },
       personType: "TEACHER",
     },
