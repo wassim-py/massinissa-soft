@@ -14,6 +14,7 @@ import {
   computeStudentCreditAndSessions,
   resolvePayerCredit,
   computeEnrollmentInscriptionStatus,
+  isLessonApplicableToEnrollment,
 } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
@@ -411,6 +412,9 @@ export default function PaymentGrid({
     // Consumed non-free sessions (accounting for Massinissa absence rules)
     const studentAtts: Array<{ lessonId: number; status: string }> = [];
     classData.lessons.forEach((l) => {
+      if (!isLessonApplicableToEnrollment(l as any, classData.id, enrollment as any)) {
+        return;
+      }
       const att = l.attendances.find((a) => a.studentId === student.id);
       if (att) {
         studentAtts.push({ lessonId: l.id, status: att.status });

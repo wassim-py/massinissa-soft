@@ -429,6 +429,7 @@ model Payslip {
   advances            Decimal             @default(0)
   photocopyDeductions Decimal             @default(0)
   netAmount           Decimal
+  bonus               Decimal             @default(0)
   PayrollRun          PayrollRun          @relation(fields: [payrollRunId], references: [id])
   PayslipBranchLine   PayslipBranchLine[]
 }

@@ -26,6 +26,7 @@ export interface OwnerTeacherConsolidationPrintData {
   totalPayableLessons: number;
   totalTeacherCut: number;
   totalSchoolCut: number;
+  bonus?: number;
   salaryAdvances?: number;
   photocopyDeductions?: number;
   netTeacherPayout?: number;
@@ -82,11 +83,12 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
 
   const formatDZD = (num: number) => formatDZDLib(num, 'fr');
 
+  const bonus = data.bonus || 0;
   const advances = data.salaryAdvances || 0;
   const photocopy = data.photocopyDeductions || 0;
   const netTeacher = data.netTeacherPayout !== undefined
     ? data.netTeacherPayout
-    : Math.max(0, data.totalTeacherCut - advances - photocopy);
+    : Math.max(0, data.totalTeacherCut + bonus - advances - photocopy);
   const netSchool = data.netSchoolRevenue !== undefined
     ? data.netSchoolRevenue
     : data.totalSchoolCut + photocopy;
@@ -229,6 +231,12 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
               <span className="text-gray-600 font-sans">Part Brute des Cours :</span>
               <span className="font-bold text-gray-900">{formatDZD(data.totalTeacherCut)}</span>
             </div>
+            {bonus > 0 && (
+              <div className="flex justify-between text-emerald-700 font-bold">
+                <span className="font-sans">Prime / Bonus accordé :</span>
+                <span>+ {formatDZD(bonus)}</span>
+              </div>
+            )}
             {advances > 0 && (
               <div className="flex justify-between text-red-600">
                 <span className="font-sans">Avances sur salaire déduites :</span>
@@ -277,8 +285,8 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
         <div>
           <p className="font-bold text-gray-800">Avis de Confidentialité :</p>
           <p className="text-[10px] text-gray-500 max-w-sm">
-            Ce rapport consolidé détaille la marge de l'établissement et les montants par groupe.
-            Il est exclusivement destiné au propriétaire / à la direction générale et ne doit en aucun cas être remis à l'enseignant.
+            Ce rapport consolidé détaille la marge de l&apos;établissement et les montants par groupe.
+            Il est exclusivement destiné au propriétaire / à la direction générale et ne doit en aucun cas être remis à l&apos;enseignant.
           </p>
         </div>
         <div className="text-center min-w-[180px]">

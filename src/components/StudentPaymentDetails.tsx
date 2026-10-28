@@ -19,6 +19,7 @@ import {
   computeStudentCreditAndSessions,
   resolvePayerCredit,
   computeEnrollmentInscriptionStatus,
+  isLessonApplicableToEnrollment,
 } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { Card, CardContent } from "@/components/ui/Card";
@@ -541,11 +542,18 @@ export default function StudentPaymentDetails({
       transfersOut: enr.transfersFrom,
       creditResetOffset: (enr as any).creditResetOffset,
       attendances: (student.attendances || []).filter(
-        (att: any) =>
-          att.lesson &&
-          (att.lesson.classId === c.id ||
-            att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id)) &&
-          !att.lesson.isFree
+        (att: any) => {
+          if (!att.lesson || att.lesson.isFree) return false;
+          const isDirectClass = att.lesson.classId === c.id;
+          const isGroupLesson = att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id);
+          if (!isDirectClass && !isGroupLesson) return false;
+
+          if (!isLessonApplicableToEnrollment(att.lesson, c.id, enr as any)) {
+            return false;
+          }
+
+          return true;
+        }
       ),
       catchUps: classCatchUps,
       lessons: (c as any).lessons,

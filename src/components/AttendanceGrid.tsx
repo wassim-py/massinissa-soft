@@ -156,6 +156,8 @@ type AttendanceGridProps = {
         balance?: StudentBalanceInfo;
         isTransferred?: boolean;
         transferredAt?: string | null;
+        enrolledAt?: string | null;
+        transferredInAt?: string | null;
     })[];
     lessonInstances: LessonInstance[];
     attendanceMap: Map<string, Map<string, AttendanceCellDetail | boolean>>;
@@ -726,6 +728,31 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         <div
                                                             className="w-5 h-5 mx-auto flex items-center justify-center text-muted/40 font-mono text-xs select-none cursor-not-allowed"
                                                             title={locale === "ar" ? "تم تحويل التلميذ قبل هذا الدرس" : "Élève transféré avant cette séance"}
+                                                        >
+                                                            —
+                                                        </div>
+                                                    </td>
+                                                );
+                                            }
+
+                                            // Lessons strictly before enrollment date for a student who joined late or was transferred into this group
+                                            const isBeforeEnrollment = Boolean(
+                                                !rawRecord &&
+                                                !isTransferred &&
+                                                (student.enrolledAt || (student as any).transferredInAt) &&
+                                                new Date(instance.startsAt || `${instance.date}T00:00:00.000Z`).getTime() <
+                                                    new Date((student as any).transferredInAt || student.enrolledAt).getTime()
+                                            );
+
+                                            if (isBeforeEnrollment) {
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <div
+                                                            className="w-5 h-5 mx-auto flex items-center justify-center text-muted/40 font-mono text-xs select-none cursor-not-allowed"
+                                                            title={locale === "ar" ? "لم يكن التلميذ مسجلاً في هذا الفوج في هذا التاريخ" : "Élève non encore inscrit(e) à cette séance"}
                                                         >
                                                             —
                                                         </div>

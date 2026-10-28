@@ -710,6 +710,7 @@ export default async function FinancePage(props: PageProps) {
               status: p.PayrollRun.status,
               sessionsCount: p.sessionsCount || 0,
               grossAmount: Number(p.grossAmount),
+              bonus: Number((p as any).bonus || 0),
               advances: Number(p.advances),
               photocopyDeductions: Number(p.photocopyDeductions),
               netAmount: Number(p.netAmount),

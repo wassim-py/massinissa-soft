@@ -169,7 +169,7 @@ export default async function PayslipDetailPage(props: PageProps) {
     paidSessionsCount: payrollCalc?.totalPaidSessions ?? sessionItems.filter((s) => !s.isFree && !s.isTeacherAbsent).length,
     freeSessionsCount,
     teacherAbsencesCount,
-    grossAmount: Number(payslip.grossAmount),
+    grossAmount: Number(payslip.grossAmount) + Number((payslip as any).bonus || 0),
     bookRevenue: payrollCalc?.bookRevenue || 0,
     bookRevenueDetails: payrollCalc?.bookRevenueDetails || [],
     advances: Number(payslip.advances),

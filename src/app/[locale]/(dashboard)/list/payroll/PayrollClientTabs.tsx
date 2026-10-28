@@ -59,6 +59,7 @@ interface Props {
         phone?: string | null;
         sessionsCount: number;
         grossAmount: number;
+        bonus?: number;
         advances: number;
         photocopyDeductions: number;
         netAmount: number;
@@ -180,6 +181,7 @@ interface Props {
     status: string;
     sessionsCount: number;
     grossAmount: number;
+    bonus?: number;
     advances: number;
     photocopyDeductions: number;
     netAmount: number;
@@ -753,7 +755,7 @@ export default function PayrollClientTabs({
                                 status: p.status,
                                 teacher: { id: p.personId, name: p.teacherName },
                                 sessionsCount: p.sessionsCount,
-                                grossAmount: p.grossAmount,
+                                grossAmount: p.grossAmount + (p.bonus || 0),
                                 advances: p.advances,
                                 photocopyDeductions: p.photocopyDeductions,
                                 netAmount: p.netAmount,
@@ -913,7 +915,7 @@ export default function PayrollClientTabs({
                               status: p.status,
                               teacher: { id: p.personId, name: p.teacherName },
                               sessionsCount: p.sessionsCount,
-                              grossAmount: p.grossAmount,
+                              grossAmount: p.grossAmount + (p.bonus || 0),
                               advances: p.advances,
                               photocopyDeductions: p.photocopyDeductions,
                               netAmount: p.netAmount,

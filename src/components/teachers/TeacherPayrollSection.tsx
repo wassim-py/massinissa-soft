@@ -78,6 +78,9 @@ export default function TeacherPayrollSection({
   const [isCalculating, setIsCalculating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedRunId, setSavedRunId] = useState<number | null>(null);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [bonusInput, setBonusInput] = useState<string>("");
+  const [savedBonus, setSavedBonus] = useState<number>(0);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [, startTransition] = useTransition();
 
@@ -135,6 +138,7 @@ export default function TeacherPayrollSection({
         });
         setCurrentPeriodLabel(`${df.format(dStart)} - ${df.format(dEnd)}`);
         setSavedRunId(null);
+        setSavedBonus(0);
         const scopeSuffix = hasFormationGroups
           ? scope === "normal"
             ? (locale === "ar" ? " (الأفواج العادية)" : " (Groupes ordinaires)")
@@ -155,8 +159,15 @@ export default function TeacherPayrollSection({
     });
   };
 
-  const handleSavePayslip = () => {
-    if (!startDate || !endDate) return;
+  const handleOpenSaveModal = () => {
+    if (!startDate || !endDate || !currentPayroll) return;
+    setBonusInput(savedBonus > 0 ? String(savedBonus) : "");
+    setShowSaveModal(true);
+  };
+
+  const handleConfirmSavePayslip = () => {
+    if (!startDate || !endDate || !currentPayroll) return;
+    const bonusNum = Math.max(0, Number(bonusInput) || 0);
     setIsSaving(true);
     setFeedback(null);
     startTransition(async () => {
@@ -165,13 +176,21 @@ export default function TeacherPayrollSection({
         startDate,
         endDate,
         groupFilter: calculationScope,
+        bonus: bonusNum,
       });
       setIsSaving(false);
       if (res.success && res.payrollRunId) {
         setSavedRunId(res.payrollRunId);
+        setSavedBonus(bonusNum);
+        setShowSaveModal(false);
         setFeedback({
           type: "success",
-          message: t("payslipSavedSuccess", { runId: res.payrollRunId }),
+          message:
+            bonusNum > 0
+              ? locale === "ar"
+                ? `تم حفظ كشف الراتب بنجاح (دورة #${res.payrollRunId}) مع إضافة منحة بقيمة ${bonusNum.toLocaleString("ar-DZ")} دج.`
+                : `Fiche de paie enregistrée avec succès (Cycle #${res.payrollRunId}) avec un bonus de ${bonusNum.toLocaleString("fr-DZ")} DZD.`
+              : t("payslipSavedSuccess", { runId: res.payrollRunId }),
         });
       } else {
         setFeedback({
@@ -298,12 +317,12 @@ export default function TeacherPayrollSection({
         ),
         freeSessionsCount: currentPayroll.totalFreeSessions ?? currentPayroll.sessionDetails?.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length,
         teacherAbsencesCount: currentPayroll.teacherAbsencesCount,
-        grossAmount: currentPayroll.grossAmount,
+        grossAmount: currentPayroll.grossAmount + savedBonus,
         bookRevenue: currentPayroll.bookRevenue,
         bookRevenueDetails: currentPayroll.bookRevenueDetails,
         advances: currentPayroll.salaryAdvances,
         photocopyDeductions: currentPayroll.photocopyDeductions,
-        netAmount: currentPayroll.netAmount,
+        netAmount: currentPayroll.netAmount + savedBonus,
         branchLines: currentPayroll.branchBreakdown.map((b) => ({
           branchId: b.branchId,
           branchName: b.branchName,
@@ -364,9 +383,10 @@ export default function TeacherPayrollSection({
           currentPayroll.totalSessions,
         totalTeacherCut: currentPayroll.grossAmount,
         totalSchoolCut: (currentPayroll.groupBreakdown || []).reduce((s, g) => s + (g.schoolAmount || 0), 0),
+        bonus: savedBonus,
         salaryAdvances: currentPayroll.salaryAdvances,
         photocopyDeductions: currentPayroll.photocopyDeductions,
-        netTeacherPayout: currentPayroll.netAmount,
+        netTeacherPayout: currentPayroll.netAmount + savedBonus,
         netSchoolRevenue:
           (currentPayroll.groupBreakdown || []).reduce((s, g) => s + (g.schoolAmount || 0), 0) +
           currentPayroll.photocopyDeductions,
@@ -649,7 +669,7 @@ export default function TeacherPayrollSection({
                       type="button"
                       variant="outline"
                       size="md"
-                      onClick={handleSavePayslip}
+                      onClick={handleOpenSaveModal}
                       disabled={isSaving || isCalculating}
                       isLoading={isSaving}
                       className="text-xs border-primary/30 text-primary hover:bg-primary/5 cursor-pointer h-[38px]"
@@ -792,10 +812,17 @@ export default function TeacherPayrollSection({
 
               {/* Gross Amount */}
               <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
-                <span className="text-xs text-muted font-medium">{t("grossSalary")}</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted font-medium">{t("grossSalary")}</span>
+                  {savedBonus > 0 && (
+                    <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                      {locale === "ar" ? "(يشمل المنحة)" : "(Bonus inclus)"}
+                    </span>
+                  )}
+                </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-bold text-success-text">
-                    {formatDZD(currentPayroll.grossAmount)}
+                    {formatDZD(currentPayroll.grossAmount + savedBonus)}
                   </span>
                 </div>
               </div>
@@ -886,10 +913,17 @@ export default function TeacherPayrollSection({
 
               {/* Net Amount Due */}
               <div className="bg-emerald-50/70 border-2 border-emerald-300 p-4 rounded-xl flex flex-col justify-between shadow-xs">
-                <span className="text-xs font-bold text-emerald-800">{t("netDueAmount")}</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-800">{t("netDueAmount")}</span>
+                  {savedBonus > 0 && (
+                    <Badge variant="success" size="sm" className="bg-emerald-100 text-emerald-950 font-bold border border-emerald-300">
+                      {locale === "ar" ? `+ ${formatDZD(savedBonus)} منحة` : `+ ${formatDZD(savedBonus)} bonus`}
+                    </Badge>
+                  )}
+                </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-black text-emerald-900">
-                    {formatDZD(currentPayroll.netAmount)}
+                    {formatDZD(currentPayroll.netAmount + savedBonus)}
                   </span>
                 </div>
               </div>
@@ -1481,6 +1515,161 @@ export default function TeacherPayrollSection({
                   leftIcon={<CheckCircle2 className="w-4 h-4" />}
                 >
                   {locale === "ar" ? "تأكيد وحفظ التسبيق" : "Enregistrer l'avance"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Save Payroll & Bonus Pop-up Modal */}
+      {showSaveModal && currentPayroll && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+          <div className="bg-surface rounded-2xl border border-border shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-4 bg-emerald-500/10 border-b border-border flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-800 flex items-center justify-center shadow-xs">
+                  <Coins className="w-4 h-4 text-emerald-700" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">
+                    {locale === "ar" ? "حفظ كشف الراتب وإضافة مكافأة" : "Enregistrer la paie & Bonus"}
+                  </h3>
+                  <p className="text-xs text-muted">
+                    {teacherName} • {currentPeriodLabel}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSaveModal(false)}
+                disabled={isSaving}
+                className="w-8 h-8 rounded-lg text-muted hover:text-gray-900 hover:bg-surface-subtle flex items-center justify-center text-sm cursor-pointer disabled:opacity-50"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleConfirmSavePayslip();
+              }}
+              className="p-5 space-y-4"
+            >
+              {/* Highlight: Net Payable to that teacher */}
+              <div className="p-3.5 rounded-xl bg-blue-50/80 border border-blue-200 flex items-center justify-between shadow-xs">
+                <div>
+                  <span className="text-xs text-blue-900 font-bold block">
+                    {locale === "ar" ? "صافي المستحقات للأستاذ (Net à Payer)" : "Net à payer à l'enseignant"}
+                  </span>
+                  <span className="text-[11px] text-blue-700">
+                    {locale === "ar" ? "المبلغ المحسوب الحالي قبل المكافأة" : "Montant calculé avant bonus"}
+                  </span>
+                </div>
+                <span className="text-xl font-black font-mono text-blue-950">
+                  {formatDZD(currentPayroll.netAmount)}
+                </span>
+              </div>
+
+              {/* Bonus Input */}
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-1.5 flex items-center justify-between">
+                  <span>{locale === "ar" ? "إضافة مكافأة / منحة للأستاذ (دج)" : "Ajouter une prime / bonus (DZD)"}</span>
+                  <span className="text-[11px] text-muted font-normal">
+                    {locale === "ar" ? "(0 دج في حال عدم وجود منحة)" : "(0 si aucun)"}
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="500"
+                  value={bonusInput}
+                  onChange={(e) => setBonusInput(e.target.value)}
+                  placeholder="0"
+                  className="w-full text-base font-mono font-bold px-3.5 py-2.5 rounded-xl border border-border bg-surface text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                  autoFocus
+                />
+
+                {/* Fast Presets */}
+                <div className="grid grid-cols-4 gap-1.5 mt-2.5">
+                  {[0, 2000, 5000, 10000].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setBonusInput(preset === 0 ? "" : String(preset))}
+                      className={`px-2 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border cursor-pointer ${
+                        (preset === 0 && (!bonusInput || bonusInput === "0")) || String(bonusInput) === String(preset)
+                          ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                          : "bg-surface-subtle border-border/70 text-gray-700 hover:bg-emerald-50 hover:border-emerald-300"
+                      }`}
+                    >
+                      {preset === 0
+                        ? (locale === "ar" ? "بدون منحة" : "0 DZD")
+                        : `${preset.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Explanatory rules */}
+              <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 space-y-1">
+                <p className="font-bold flex items-center gap-1 text-[11px] text-amber-950">
+                  <span>💡</span>
+                  <span>{locale === "ar" ? "قاعدة عرض المكافأة في المخرجات :" : "Règles d'affichage du bonus :"}</span>
+                </p>
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  {locale === "ar"
+                    ? "• قسيمة الراتب المطبوعة للأستاذ: لن يظهر بند المكافأة إطلاقاً، بل ستظهر القيمة الصافية الجديدة مباشرة بعد المكافأة."
+                    : "• Fiche imprimable (enseignant) : Le bonus ne s'affichera pas, la nouvelle valeur après bonus s'affichera directement."}
+                </p>
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  {locale === "ar"
+                    ? "• تقرير المالك الفردي الخاص: ستظهر المكافأة بالتفصيل كبند مستقل (+ Prime/Bonus) مع الصافي النهائي المستحق."
+                    : "• Rapport individuel propriétaire : Le bonus apparaîtra en détail (+ Prime/Bonus) avec le net réel à décaisser."}
+                </p>
+              </div>
+
+              {/* Dynamic preview after bonus */}
+              <div className="p-3 rounded-xl bg-emerald-50 border-2 border-emerald-300 flex items-center justify-between shadow-xs">
+                <div>
+                  <span className="text-xs text-emerald-950 font-bold block">
+                    {locale === "ar" ? "الصافي الإجمالي الجديد (Net à Décaisser)" : "Nouveau net à décaisser"}
+                  </span>
+                  <span className="text-[10px] text-emerald-700 font-mono">
+                    {formatDZD(currentPayroll.netAmount)}
+                    {Number(bonusInput) > 0 ? ` + ${formatDZD(Number(bonusInput))}` : ""}
+                  </span>
+                </div>
+                <span className="text-xl font-black font-mono text-emerald-900">
+                  {formatDZD(currentPayroll.netAmount + Math.max(0, Number(bonusInput) || 0))}
+                </span>
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="md"
+                  onClick={() => setShowSaveModal(false)}
+                  disabled={isSaving}
+                  className="cursor-pointer"
+                >
+                  {locale === "ar" ? "إلغاء" : "Annuler"}
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  disabled={isSaving}
+                  isLoading={isSaving}
+                  className="!bg-emerald-600 hover:!bg-emerald-700 !text-white font-bold cursor-pointer"
+                  leftIcon={<CheckCircle2 className="w-4 h-4" />}
+                >
+                  {isSaving
+                    ? (locale === "ar" ? "جاري الحفظ..." : "Enregistrement...")
+                    : (locale === "ar" ? "تأكيد وحفظ كشف الراتب" : "Confirmer et enregistrer")}
                 </Button>
               </div>
             </form>

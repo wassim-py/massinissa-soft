@@ -1476,7 +1476,8 @@ export async function generatePayrollRun(
   periodStart: Date | string,
   periodEnd: Date | string,
   targetTeacherId?: string,
-  groupFilter: "all" | "normal" | "formation" = "all"
+  groupFilter: "all" | "normal" | "formation" = "all",
+  targetBonus: number = 0
 ) {
   const startDate = normalizeDateToStartOfDay(periodStart);
   const endDate = normalizeDateToEndOfDay(periodEnd);
@@ -1584,6 +1585,10 @@ export async function generatePayrollRun(
             amount: new Prisma.Decimal(line.amount),
           }));
 
+        const isTarget = targetTeacherId && calc.teacherId === targetTeacherId;
+        const teacherBonus = isTarget ? Math.max(0, targetBonus || 0) : 0;
+        const netAfterBonus = calc.netAmount + teacherBonus;
+
         await tx.payslip.create({
           data: {
             payrollRunId: payrollRun.id,
@@ -1591,9 +1596,10 @@ export async function generatePayrollRun(
             personType: "TEACHER",
             sessionsCount: calc.totalSessions,
             grossAmount: new Prisma.Decimal(calc.grossAmount),
+            bonus: new Prisma.Decimal(teacherBonus),
             advances: new Prisma.Decimal(calc.salaryAdvances),
             photocopyDeductions: new Prisma.Decimal(calc.photocopyDeductions),
-            netAmount: new Prisma.Decimal(calc.netAmount),
+            netAmount: new Prisma.Decimal(netAfterBonus),
             ...(branchLinesData.length > 0 && {
               PayslipBranchLine: {
                 create: branchLinesData,
@@ -1629,6 +1635,7 @@ export async function generatePayrollRun(
             personType: "SCHOOL_SHARE",
             sessionsCount: calc.totalSessions,
             grossAmount: new Prisma.Decimal(schoolGross),
+            bonus: new Prisma.Decimal(0),
             advances: new Prisma.Decimal(0),
             photocopyDeductions: new Prisma.Decimal(calc.photocopyDeductions),
             netAmount: new Prisma.Decimal(schoolNet),
@@ -1965,6 +1972,7 @@ export interface PayrollRunFinancialReport {
       phone?: string | null;
       sessionsCount: number;
       grossAmount: number;
+      bonus?: number;
       advances: number;
       photocopyDeductions: number;
       netAmount: number;
@@ -2133,6 +2141,7 @@ export async function getPayrollRunFinancialReport(
       phone: teacherRecord?.phone || null,
       sessionsCount: calc.totalSessions,
       grossAmount: saved ? Number(saved.grossAmount) : calc.grossAmount,
+      bonus: saved ? Number((saved as any).bonus || 0) : 0,
       advances: saved ? Number(saved.advances) : calc.salaryAdvances,
       photocopyDeductions: saved ? Number(saved.photocopyDeductions) : calc.photocopyDeductions,
       netAmount: saved ? Number(saved.netAmount) : calc.netAmount,

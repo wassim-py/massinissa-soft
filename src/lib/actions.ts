@@ -51,7 +51,7 @@ import { canUserAccessBranch } from "./settings";
 import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from "./ledger";
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "./studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit, isLessonApplicableToEnrollment } from "./studentBilling";
 import { getFixedInscriptionFeeAction, getFormationInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
 import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds, serializeForClient } from "./utils";
 import {
@@ -7754,6 +7754,9 @@ export const exportToExcel = async (
             
             const studentAtts: Array<{ lessonId: number; status: string }> = [];
             classTarget.lessons.forEach(l => {
+              if (!isLessonApplicableToEnrollment(l as any, classTarget.id, enrollment as any)) {
+                return;
+              }
               const att = l.attendances.find(a => a.studentId === student.id);
               if (att) {
                 studentAtts.push({ lessonId: l.id, status: att.status });
@@ -8203,6 +8206,9 @@ export const exportToExcel = async (
 
             const studentAtts: Array<{ lessonId: number; status: string }> = [];
             classData.lessons.forEach((l) => {
+                if (!isLessonApplicableToEnrollment(l as any, classData.id, enrollment as any)) {
+                    return;
+                }
                 const att = l.attendances.find((a: any) => a.studentId === student.id);
                 if (att) {
                     studentAtts.push({ lessonId: l.id, status: att.status });
@@ -9303,6 +9309,7 @@ export async function generateIndividualTeacherPayrollAction(formData: {
   startDate: string;
   endDate: string;
   groupFilter?: "all" | "normal" | "formation";
+  bonus?: number;
 }) {
   try {
     const session = await getAuthSession();
@@ -9313,7 +9320,8 @@ export async function generateIndividualTeacherPayrollAction(formData: {
       formData.startDate,
       formData.endDate,
       formData.teacherId,
-      formData.groupFilter || "all"
+      formData.groupFilter || "all",
+      formData.bonus || 0
     );
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
@@ -9372,6 +9380,7 @@ export async function getTeacherPayslipConsolidatedReportAction(payslipId: numbe
     const totalPayableLessons = groups.reduce((sum, g) => sum + g.payableLessons, 0) || Number(payslip.sessionsCount || 0);
     const totalTeacherCut = Number(payslip.grossAmount);
     const totalSchoolCut = groups.reduce((sum, g) => sum + g.schoolCut, 0);
+    const bonus = Number((payslip as any).bonus || 0);
     const advances = Number(payslip.advances);
     const photocopy = Number(payslip.photocopyDeductions);
     const netTeacherPayout = Number(payslip.netAmount);
@@ -9391,6 +9400,7 @@ export async function getTeacherPayslipConsolidatedReportAction(payslipId: numbe
       totalPayableLessons,
       totalTeacherCut,
       totalSchoolCut,
+      bonus,
       salaryAdvances: advances,
       photocopyDeductions: photocopy,
       netTeacherPayout,
@@ -9495,6 +9505,7 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
 
         const totalLessons = groups.reduce((s, g) => s + g.payableLessons, 0) || Number(p.sessionsCount || 0);
         const grossTeacherCut = Number(p.grossAmount);
+        const bonus = Number((p as any).bonus || 0);
         const advances = Number(p.advances);
         const photocopyDeductions = Number(p.photocopyDeductions);
         const netTeacherCut = Number(p.netAmount);
@@ -9510,6 +9521,7 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
           groups,
           totalLessons,
           grossTeacherCut,
+          bonus,
           advances,
           photocopyDeductions,
           netTeacherCut,

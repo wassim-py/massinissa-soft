@@ -1143,6 +1143,57 @@ export function isSiblingDiscountEligibleInClass({
   return false;
 }
 
+/**
+ * Determines if a lesson (especially a multi-group lesson) applies to a student's enrollment in a target class.
+ * For multi-group lessons where lesson.classId !== targetClassId:
+ * - If the student transferred from lesson.classId into targetClassId, the lesson belongs to the prior class.
+ * - If the lesson occurred prior to the student's enrollment/transfer date in targetClassId, it belongs to the prior class.
+ */
+export function isLessonApplicableToEnrollment(
+  lesson: { id?: number; classId?: number; startsAt?: Date | string },
+  targetClassId: number,
+  enrollment?: {
+    enrolledAt?: Date | string | null;
+    transferredInAt?: Date | string | null;
+    transferredFromClassId?: number | null;
+    transfersTo?: Array<{
+      transferredAt?: Date | string | null;
+      fromEnrollment?: { classId: number } | null;
+      fromEnrollmentId?: number;
+    }>;
+  } | null
+): boolean {
+  // If the lesson was directly created for this target class, it is a primary lesson of the class
+  if (!lesson.classId || lesson.classId === targetClassId) {
+    return true;
+  }
+
+  if (!enrollment) return false;
+
+  const lessonTime = new Date(lesson.startsAt || 0).getTime();
+  const enrolledTime = enrollment.enrolledAt ? new Date(enrollment.enrolledAt).getTime() : 0;
+  const transferTime = enrollment.transferredInAt
+    ? new Date(enrollment.transferredInAt).getTime()
+    : enrollment.transfersTo?.[0]?.transferredAt
+    ? new Date(enrollment.transfersTo[0].transferredAt).getTime()
+    : null;
+  const effectiveCutoff = transferTime ? Math.min(enrolledTime || transferTime, transferTime) : enrolledTime;
+
+  // Check if student transferred from lesson.classId
+  const transferredFromLessonClass =
+    (enrollment.transferredFromClassId && enrollment.transferredFromClassId === lesson.classId) ||
+    (enrollment.transfersTo || []).some(
+      (t: any) =>
+        t.fromEnrollment?.classId === lesson.classId ||
+        t.fromEnrollment?.class?.id === lesson.classId
+    );
+
+  if (transferredFromLessonClass || (effectiveCutoff > 0 && lessonTime < effectiveCutoff)) {
+    return false;
+  }
+
+  return true;
+}
 
 /**
  * Canonical calculation of student credit and lesson metrics.

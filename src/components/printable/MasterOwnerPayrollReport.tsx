@@ -19,6 +19,7 @@ export interface MasterOwnerPayrollTeacherItem {
   }>;
   totalLessons: number;
   grossTeacherCut: number;
+  bonus?: number;
   advances: number;
   photocopyDeductions: number;
   netTeacherCut: number;
@@ -215,9 +216,11 @@ export function MasterOwnerPayrollReport({ data }: MasterOwnerPayrollReportProps
                     <td colSpan={2} className="border border-gray-400 p-2 text-gray-900 font-bold">
                       <span className="text-gray-700 font-bold">المجموع الفرعي : </span>
                       <span className="text-gray-950 font-black text-sm">{teacher.teacherName}</span>
-                      {(teacher.advances > 0 || teacher.photocopyDeductions > 0) && (
+                      {(teacher.advances > 0 || teacher.photocopyDeductions > 0 || (teacher.bonus && teacher.bonus > 0)) && (
                         <span className="font-bold text-gray-600 mr-2.5 text-xs">
-                          [تسبيق: -{formatDZD(teacher.advances)} | نسخ: -{formatDZD(teacher.photocopyDeductions)} | الصافي: {formatDZD(teacher.netTeacherCut)}]
+                          [
+                          {teacher.bonus && teacher.bonus > 0 ? `منحة: +${formatDZD(teacher.bonus)} | ` : ""}
+                          تسبيق: -{formatDZD(teacher.advances)} | نسخ: -{formatDZD(teacher.photocopyDeductions)} | الصافي: {formatDZD(teacher.netTeacherCut)}]
                         </span>
                       )}
                     </td>

@@ -11,7 +11,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { getTranslations, getLocale } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit, isLessonApplicableToEnrollment } from "@/lib/studentBilling";
 import { getAlgiersDateInfo } from "@/lib/utils";
 import { StudentBalanceInfo } from "@/components/AttendanceGrid";
 
@@ -144,7 +144,22 @@ const ClassAttendancePage = async (
                         WHERE et."fromEnrollmentId" = e.id
                         ORDER BY et."transferredAt" DESC
                         LIMIT 1
-                    ) as "transferredAt"
+                    ) as "transferredAt",
+                    (
+                        SELECT et."transferredAt"
+                        FROM "EnrollmentTransfer" et
+                        WHERE et."toEnrollmentId" = e.id
+                        ORDER BY et."transferredAt" DESC
+                        LIMIT 1
+                    ) as "transferredInAt",
+                    (
+                        SELECT fe."classId"
+                        FROM "EnrollmentTransfer" et
+                        JOIN "Enrollment" fe ON fe.id = et."fromEnrollmentId"
+                        WHERE et."toEnrollmentId" = e.id
+                        ORDER BY et."transferredAt" DESC
+                        LIMIT 1
+                    ) as "transferredFromClassId"
                 FROM "Student" s
                 JOIN "Enrollment" e ON e."studentId" = s.id
                 WHERE e."classId" = ${classId}
@@ -164,6 +179,9 @@ const ClassAttendancePage = async (
                         surname: "",
                         isTransferred,
                         transferredAt: s.transferredAt ? new Date(s.transferredAt).toISOString() : null,
+                        enrolledAt: s.enrolledAt ? new Date(s.enrolledAt).toISOString() : null,
+                        transferredInAt: s.transferredInAt ? new Date(s.transferredInAt).toISOString() : null,
+                        transferredFromClassId: s.transferredFromClassId ? Number(s.transferredFromClassId) : null,
                         attendances: [],
                     });
                 } else if (!isTransferred && studentMap.get(s.id)?.isTransferred) {
@@ -171,6 +189,9 @@ const ClassAttendancePage = async (
                     const existing = studentMap.get(s.id);
                     existing.isTransferred = false;
                     existing.transferredAt = null;
+                    existing.enrolledAt = s.enrolledAt ? new Date(s.enrolledAt).toISOString() : existing.enrolledAt;
+                    existing.transferredInAt = s.transferredInAt ? new Date(s.transferredInAt).toISOString() : existing.transferredInAt;
+                    existing.transferredFromClassId = s.transferredFromClassId ? Number(s.transferredFromClassId) : existing.transferredFromClassId;
                 }
             }
 
@@ -183,6 +204,7 @@ const ClassAttendancePage = async (
                         a.justification,
                         l.id as "lessonId",
                         l."startsAt" as date,
+                        l."classId" as "lessonClassId",
                         l."isTeacherAbsent",
                         l."isFree",
                         l."isExtra",
@@ -209,6 +231,13 @@ const ClassAttendancePage = async (
                 for (const att of rawAttendances) {
                     const s = studentMap.get(att.studentId);
                     if (s) {
+                        if (!isLessonApplicableToEnrollment(
+                            { id: att.lessonId, classId: att.lessonClassId, startsAt: att.date },
+                            classId,
+                            s
+                        )) {
+                            continue;
+                        }
                         s.attendances.push({
                             id: att.attendanceId,
                             lessonId: att.lessonId,
@@ -502,7 +531,8 @@ const ClassAttendancePage = async (
                             att.lesson &&
                             (att.lesson.classId === classId ||
                                 att.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)) &&
-                            !att.lesson.isFree
+                            !att.lesson.isFree &&
+                            isLessonApplicableToEnrollment(att.lesson, classId, enrollment as any)
                     );
 
                     const classCatchUpsForStudent = (catchUpAttendances || []).filter(
