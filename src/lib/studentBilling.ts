@@ -1168,27 +1168,27 @@ export function isLessonApplicableToEnrollment(
     return true;
   }
 
-  if (!enrollment) return false;
+  if (!enrollment) return true;
 
   const lessonTime = new Date(lesson.startsAt || 0).getTime();
-  const enrolledTime = enrollment.enrolledAt ? new Date(enrollment.enrolledAt).getTime() : 0;
-  const transferTime = enrollment.transferredInAt
+
+  // Find if this student transferred from the lesson's primary class into targetClassId
+  const transferFromLessonClass = (enrollment.transfersTo || []).find(
+    (t: any) =>
+      t.fromEnrollment?.classId === lesson.classId ||
+      t.fromEnrollment?.class?.id === lesson.classId
+  );
+
+  const transferTime = transferFromLessonClass?.transferredAt
+    ? new Date(transferFromLessonClass.transferredAt).getTime()
+    : (enrollment.transferredFromClassId === lesson.classId && enrollment.transferredInAt)
     ? new Date(enrollment.transferredInAt).getTime()
-    : enrollment.transfersTo?.[0]?.transferredAt
-    ? new Date(enrollment.transfersTo[0].transferredAt).getTime()
     : null;
-  const effectiveCutoff = transferTime ? Math.min(enrolledTime || transferTime, transferTime) : enrolledTime;
 
-  // Check if student transferred from lesson.classId
-  const transferredFromLessonClass =
-    (enrollment.transferredFromClassId && enrollment.transferredFromClassId === lesson.classId) ||
-    (enrollment.transfersTo || []).some(
-      (t: any) =>
-        t.fromEnrollment?.classId === lesson.classId ||
-        t.fromEnrollment?.class?.id === lesson.classId
-    );
-
-  if (transferredFromLessonClass || (effectiveCutoff > 0 && lessonTime < effectiveCutoff)) {
+  // If the student transferred from lesson.classId into targetClassId,
+  // and this joint lesson occurred BEFORE the transfer took place:
+  // this lesson was attended in the source class and must NOT be attributed to targetClassId!
+  if (transferTime && lessonTime < transferTime) {
     return false;
   }
 
