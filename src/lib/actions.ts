@@ -9156,11 +9156,13 @@ export async function recordSalaryAdvanceAction(formData: {
 
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
+    safeRevalidatePath(`/list/teachers/${formData.personId}`);
+    safeRevalidatePath("/list/teachers");
     return {
       success: true,
       error: false,
       message: `تم تسجيل التسبيق المالي (${formData.amount} دج) بنجاح`,
-      data: advance,
+      data: serializeForClient(advance),
     };
   } catch (error: any) {
     console.error("Error in recordSalaryAdvanceAction:", error);
@@ -9182,6 +9184,8 @@ export async function updateSalaryAdvanceAction(
       return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
     }
 
+    const existing = await prisma.salaryAdvance.findUnique({ where: { id } });
+
     const advance = await prisma.salaryAdvance.update({
       where: { id },
       data: {
@@ -9193,11 +9197,16 @@ export async function updateSalaryAdvanceAction(
 
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
+    const pId = formData.personId || existing?.personId;
+    if (pId) {
+      safeRevalidatePath(`/list/teachers/${pId}`);
+    }
+    safeRevalidatePath("/list/teachers");
     return {
       success: true,
       error: false,
       message: "تم تحديث التسبيق المالي بنجاح",
-      data: advance,
+      data: serializeForClient(advance),
     };
   } catch (error: any) {
     console.error("Error in updateSalaryAdvanceAction:", error);
@@ -9212,12 +9221,18 @@ export async function deleteSalaryAdvanceAction(id: number) {
       return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
     }
 
+    const existing = await prisma.salaryAdvance.findUnique({ where: { id } });
+
     await prisma.salaryAdvance.delete({
       where: { id },
     });
 
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
+    if (existing?.personId) {
+      safeRevalidatePath(`/list/teachers/${existing.personId}`);
+    }
+    safeRevalidatePath("/list/teachers");
     return {
       success: true,
       error: false,

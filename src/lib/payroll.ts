@@ -205,6 +205,11 @@ export async function calculateTeacherPayroll(
   endDate: Date,
   groupFilter: "all" | "normal" | "formation" = "all"
 ): Promise<TeacherPayrollCalculation | null> {
+  const normStartDate = normalizeDateToStartOfDay(startDate);
+  const normEndDate = normalizeDateToEndOfDay(endDate);
+  startDate = normStartDate;
+  endDate = normEndDate;
+
   const teacher = await prisma.teacher.findUnique({
     where: { id: teacherId },
     include: {
@@ -1820,6 +1825,11 @@ export async function deletePayrollRun(payrollRunId: number) {
  * Primary view is school-wide; secondary view breaks down by branch.
  */
 export async function getOwnerPayrollOverview(startDate: Date, endDate: Date) {
+  const normStartDate = normalizeDateToStartOfDay(startDate);
+  const normEndDate = normalizeDateToEndOfDay(endDate);
+  startDate = normStartDate;
+  endDate = normEndDate;
+
   // 1. Total revenue from DailyLedger in period
   const revenueEntries = await prisma.dailyLedger.findMany({
     where: {

@@ -16,11 +16,18 @@ import {
   Save,
   Calendar,
   GraduationCap,
+  Banknote,
+  Trash2,
+  PlusCircle,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 import {
   calculateIndividualTeacherPayrollAction,
   generateIndividualTeacherPayrollAction,
+  recordSalaryAdvanceAction,
+  deleteSalaryAdvanceAction,
 } from "@/lib/actions";
 import { PrintPayslipButton } from "@/components/PrintPayslipButton";
 import { PayslipPrintData } from "@/components/printable/PayslipTicket";
@@ -73,6 +80,14 @@ export default function TeacherPayrollSection({
   const [savedRunId, setSavedRunId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [, startTransition] = useTransition();
+
+  // Salary advance management states
+  const [showAdvanceModal, setShowAdvanceModal] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState<string>("");
+  const [advanceDate, setAdvanceDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
+  const [isSubmittingAdvance, setIsSubmittingAdvance] = useState(false);
+  const [isDeletingAdvanceId, setIsDeletingAdvanceId] = useState<number | null>(null);
+  const [showAdvanceDetails, setShowAdvanceDetails] = useState(false);
 
   const setPresetThisMonth = () => {
     const now = new Date();
@@ -165,6 +180,88 @@ export default function TeacherPayrollSection({
         });
       }
     });
+  };
+
+  const handleCreateAdvance = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const amt = Number(advanceAmount);
+    if (!amt || amt <= 0) {
+      setFeedback({
+        type: "error",
+        message: locale === "ar" ? "يرجى إدخال مبلغ تسبيق صحيح" : "Veuillez saisir un montant d'avance valide",
+      });
+      return;
+    }
+    setIsSubmittingAdvance(true);
+    setFeedback(null);
+    try {
+      const res = await recordSalaryAdvanceAction({
+        personId: teacherId,
+        amount: amt,
+        date: advanceDate || new Date().toISOString().split("T")[0],
+      });
+      setIsSubmittingAdvance(false);
+      if (res.success) {
+        setShowAdvanceModal(false);
+        setAdvanceAmount("");
+        setFeedback({
+          type: "success",
+          message:
+            locale === "ar"
+              ? `تم تسجيل تسبيق مالي بقيمة ${amt.toLocaleString("ar-DZ")} دج بنجاح`
+              : `Avance de ${amt.toLocaleString("fr-DZ")} DZD enregistrée avec succès`,
+        });
+        // Immediately trigger recalculation so net payout and deductions reflect new advance in real-time
+        handleCalculate(calculationScope);
+      } else {
+        setFeedback({
+          type: "error",
+          message: res.message || "Erreur lors de l'enregistrement de l'avance",
+        });
+      }
+    } catch (err: any) {
+      setIsSubmittingAdvance(false);
+      setFeedback({
+        type: "error",
+        message: err.message || "Erreur inattendue",
+      });
+    }
+  };
+
+  const handleDeleteAdvance = async (advanceId: number, advanceAmt: number) => {
+    const confirmMsg =
+      locale === "ar"
+        ? `هل أنت متأكد من حذف هذا التسبيق بقيمة ${advanceAmt.toLocaleString("ar-DZ")} دج؟`
+        : `Êtes-vous sûr de vouloir supprimer cette avance de ${advanceAmt.toLocaleString("fr-DZ")} DZD ?`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setIsDeletingAdvanceId(advanceId);
+    setFeedback(null);
+    try {
+      const res = await deleteSalaryAdvanceAction(advanceId);
+      setIsDeletingAdvanceId(null);
+      if (res.success) {
+        setFeedback({
+          type: "success",
+          message:
+            locale === "ar"
+              ? `تم حذف التسبيق بقيمة ${advanceAmt.toLocaleString("ar-DZ")} دج بنجاح`
+              : `Avance de ${advanceAmt.toLocaleString("fr-DZ")} DZD supprimée avec succès`,
+        });
+        handleCalculate(calculationScope);
+      } else {
+        setFeedback({
+          type: "error",
+          message: res.message || "Erreur lors de la suppression",
+        });
+      }
+    } catch (err: any) {
+      setIsDeletingAdvanceId(null);
+      setFeedback({
+        type: "error",
+        message: err.message || "Erreur inattendue",
+      });
+    }
   };
 
   const formatDate = (date: Date | string) => {
@@ -526,39 +623,61 @@ export default function TeacherPayrollSection({
                 )}
               </div>
 
-              {/* Secondary Actions when calculation is available */}
-              {currentPayroll && (
-                <div className="flex items-center gap-2 self-end flex-wrap">
+              {/* Actions */}
+              <div className="flex items-center gap-2 self-end flex-wrap">
+                {isOwner && (
                   <Button
                     type="button"
                     variant="outline"
                     size="md"
-                    onClick={handleSavePayslip}
-                    disabled={isSaving || isCalculating}
-                    isLoading={isSaving}
-                    className="text-xs border-primary/30 text-primary hover:bg-primary/5 cursor-pointer h-[38px]"
-                    leftIcon={<Save className="w-3.5 h-3.5" />}
+                    onClick={() => setShowAdvanceModal(true)}
+                    className="text-xs border-amber-500/50 text-amber-800 bg-amber-50/70 hover:bg-amber-100 cursor-pointer h-[38px] font-bold shadow-xs"
+                    leftIcon={<Banknote className="w-3.5 h-3.5 text-amber-700" />}
+                    title={
+                      locale === "ar"
+                        ? "تسجيل تسبيق مالي فوري لهذا الأستاذ"
+                        : "Enregistrer une avance financière immédiate pour cet enseignant"
+                    }
                   >
-                    {isSaving ? (locale === "ar" ? "جاري الحفظ..." : "Enregistrement...") : (locale === "ar" ? "حفظ كشف الراتب" : "Enregistrer la fiche")}
+                    {locale === "ar" ? "+ تسبيق مالي" : "+ Avance"}
                   </Button>
+                )}
 
-                  {printData && (
-                    <PrintPayslipButton
-                      data={printData}
-                      label={locale === "ar" ? "طباعة القسيمة" : "Imprimer Fiche"}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer h-[38px]"
-                    />
-                  )}
+                {currentPayroll && (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="md"
+                      onClick={handleSavePayslip}
+                      disabled={isSaving || isCalculating}
+                      isLoading={isSaving}
+                      className="text-xs border-primary/30 text-primary hover:bg-primary/5 cursor-pointer h-[38px]"
+                      leftIcon={<Save className="w-3.5 h-3.5" />}
+                    >
+                      {isSaving
+                        ? (locale === "ar" ? "جاري الحفظ..." : "Enregistrement...")
+                        : (locale === "ar" ? "حفظ كشف الراتب" : "Enregistrer la fiche")}
+                    </Button>
 
-                  {isOwner && ownerConsolidationData && (
-                    <PrintOwnerConsolidationButton
-                      data={ownerConsolidationData}
-                      label={locale === "ar" ? "تقرير المالك" : "Rapport Propriétaire"}
-                      className="bg-slate-900 hover:bg-black text-white font-semibold px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer h-[38px]"
-                    />
-                  )}
-                </div>
-              )}
+                    {printData && (
+                      <PrintPayslipButton
+                        data={printData}
+                        label={locale === "ar" ? "طباعة القسيمة" : "Imprimer Fiche"}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer h-[38px]"
+                      />
+                    )}
+
+                    {isOwner && ownerConsolidationData && (
+                      <PrintOwnerConsolidationButton
+                        data={ownerConsolidationData}
+                        label={locale === "ar" ? "تقرير المالك" : "Rapport Propriétaire"}
+                        className="bg-slate-900 hover:bg-black text-white font-semibold px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer h-[38px]"
+                      />
+                    )}
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Feedback notification */}
@@ -718,7 +837,20 @@ export default function TeacherPayrollSection({
 
               {/* Deductions: Advances & Photocopies */}
               <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
-                <span className="text-xs text-muted font-medium">{t("totalDeductions")}</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted font-medium">{t("totalDeductions")}</span>
+                  {isOwner && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAdvanceModal(true)}
+                      className="text-[11px] font-bold text-amber-700 hover:text-amber-900 hover:underline flex items-center gap-1 cursor-pointer bg-amber-100/70 hover:bg-amber-200/80 px-2 py-0.5 rounded-md transition-colors"
+                      title={locale === "ar" ? "تسجيل تسبيق مالي" : "Ajouter une avance"}
+                    >
+                      <Banknote className="w-3 h-3 text-amber-700" />
+                      <span>{locale === "ar" ? "+ تسبيق" : "+ Avance"}</span>
+                    </button>
+                  )}
+                </div>
                 <div className="mt-1 flex flex-col gap-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted">{t("copiesDeduction")}</span>
@@ -727,7 +859,24 @@ export default function TeacherPayrollSection({
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted">{t("advancesDeduction")}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-muted">{t("advancesDeduction")}</span>
+                      {currentPayroll.salaryAdvanceDetails && currentPayroll.salaryAdvanceDetails.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAdvanceDetails((prev) => !prev)}
+                          className="text-[10px] text-primary hover:underline font-bold cursor-pointer inline-flex items-center gap-0.5"
+                          title={locale === "ar" ? "عرض تفاصيل التسبيقات" : "Voir le détail des avances"}
+                        >
+                          <span>({currentPayroll.salaryAdvanceDetails.length})</span>
+                          {showAdvanceDetails ? (
+                            <ChevronUp className="w-2.5 h-2.5" />
+                          ) : (
+                            <ChevronDown className="w-2.5 h-2.5" />
+                          )}
+                        </button>
+                      )}
+                    </div>
                     <span className="font-semibold text-danger">
                       - {formatDZD(currentPayroll.salaryAdvances)}
                     </span>
@@ -745,6 +894,72 @@ export default function TeacherPayrollSection({
                 </div>
               </div>
             </div>
+
+            {/* Salary Advances Breakdown (if any exist or toggled) */}
+            {currentPayroll.salaryAdvanceDetails && currentPayroll.salaryAdvanceDetails.length > 0 && (
+              <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200/80 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Banknote className="w-4 h-4 text-amber-700" />
+                    <h4 className="text-xs font-bold text-amber-950">
+                      {locale === "ar"
+                        ? "التسبيقات المالية المخصومة في هذه الفترة"
+                        : "Avances sur salaire déduites sur cette période"}
+                    </h4>
+                    <Badge variant="warning" size="sm" className="font-mono font-bold">
+                      {currentPayroll.salaryAdvanceDetails.length}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black text-rose-700 font-mono">
+                      - {formatDZD(currentPayroll.salaryAdvances)}
+                    </span>
+                    {isOwner && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowAdvanceModal(true)}
+                        className="text-[11px] h-7 border-amber-400 text-amber-800 bg-white hover:bg-amber-50 cursor-pointer"
+                        leftIcon={<PlusCircle className="w-3 h-3" />}
+                      >
+                        {locale === "ar" ? "إضافة تسبيق" : "Ajouter une avance"}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                  {currentPayroll.salaryAdvanceDetails.map((adv) => (
+                    <div
+                      key={adv.id}
+                      className="p-3 bg-white rounded-xl border border-amber-200/70 shadow-2xs flex items-center justify-between gap-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-mono font-black text-rose-700 text-sm">
+                          - {formatDZD(adv.amount)}
+                        </span>
+                        <div className="flex items-center gap-1 text-[11px] text-muted mt-0.5">
+                          <Calendar className="w-3 h-3 text-muted" />
+                          <span>{formatDate(adv.date)}</span>
+                        </div>
+                      </div>
+                      {isOwner && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAdvance(adv.id, adv.amount)}
+                          disabled={isDeletingAdvanceId === adv.id}
+                          className="p-1.5 text-muted hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title={locale === "ar" ? "حذف هذا التسبيق" : "Supprimer cette avance"}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Group Breakdown Card */}
             {currentPayroll.groupBreakdown && currentPayroll.groupBreakdown.length > 0 && (
@@ -1162,6 +1377,116 @@ export default function TeacherPayrollSection({
           </>
         )}
       </CardContent>
+
+      {/* Quick Salary Advance Modal */}
+      {showAdvanceModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-border max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="p-5 border-b border-border bg-gradient-to-r from-amber-50 via-orange-50/40 to-surface flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center text-amber-700">
+                  <Banknote className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">
+                    {locale === "ar" ? "تسجيل تسبيق مالي" : "Ajouter une avance sur salaire"}
+                  </h3>
+                  <p className="text-xs text-muted font-medium mt-0.5">
+                    {teacherName}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAdvanceModal(false)}
+                className="w-8 h-8 rounded-lg text-muted hover:text-gray-900 hover:bg-surface-subtle flex items-center justify-center text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateAdvance} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-1.5">
+                  {locale === "ar" ? "مبلغ التسبيق (دج)" : "Montant de l'avance (DZD)"}
+                </label>
+                <input
+                  type="number"
+                  min="100"
+                  step="100"
+                  required
+                  value={advanceAmount}
+                  onChange={(e) => setAdvanceAmount(e.target.value)}
+                  placeholder="ex: 10000"
+                  className="w-full text-base font-mono font-bold px-3.5 py-2.5 rounded-xl border border-border bg-surface text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                  autoFocus
+                />
+
+                {/* Fast Presets */}
+                <div className="grid grid-cols-3 gap-1.5 mt-2.5">
+                  {[5000, 10000, 15000, 20000, 30000, 50000].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setAdvanceAmount(String(preset))}
+                      className={`px-2 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border cursor-pointer ${
+                        String(advanceAmount) === String(preset)
+                          ? "bg-amber-600 text-white border-amber-600 shadow-xs"
+                          : "bg-surface-subtle border-border/70 text-gray-700 hover:bg-amber-50 hover:border-amber-300"
+                      }`}
+                    >
+                      {preset.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-1.5 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-muted" />
+                  <span>{locale === "ar" ? "تاريخ صرف التسبيق" : "Date de versement"}</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={advanceDate}
+                  onChange={(e) => setAdvanceDate(e.target.value)}
+                  className="w-full text-xs font-mono px-3.5 py-2.5 rounded-xl border border-border bg-surface text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                />
+                <p className="text-[11px] text-muted mt-1.5 leading-relaxed">
+                  {locale === "ar"
+                    ? "💡 سيتم خصم هذا التسبيق تلقائياً وتحديث صافي المستحقات (Net à payer) فور الحفظ."
+                    : "💡 Cette avance sera automatiquement déduite du calcul en cours et mettra à jour le net à payer immédiatement."}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="md"
+                  onClick={() => setShowAdvanceModal(false)}
+                  disabled={isSubmittingAdvance}
+                  className="cursor-pointer"
+                >
+                  {locale === "ar" ? "إلغاء" : "Annuler"}
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  disabled={isSubmittingAdvance || !advanceAmount}
+                  isLoading={isSubmittingAdvance}
+                  className="!bg-amber-600 hover:!bg-amber-700 !text-white font-bold cursor-pointer"
+                  leftIcon={<CheckCircle2 className="w-4 h-4" />}
+                >
+                  {locale === "ar" ? "تأكيد وحفظ التسبيق" : "Enregistrer l'avance"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
