@@ -177,6 +177,7 @@ const ClassAttendancePage = async (
                         globalNumber: s.globalNumber,
                         phone: s.phone,
                         surname: "",
+                        status: s.enrollmentStatus,
                         isTransferred,
                         transferredAt: s.transferredAt ? new Date(s.transferredAt).toISOString() : null,
                         enrolledAt: s.enrolledAt ? new Date(s.enrolledAt).toISOString() : null,
@@ -188,6 +189,7 @@ const ClassAttendancePage = async (
                     // Prefer active enrollment status if multiple enrollment records exist
                     const existing = studentMap.get(s.id);
                     existing.isTransferred = false;
+                    existing.status = s.enrollmentStatus;
                     existing.transferredAt = null;
                     existing.enrolledAt = s.enrolledAt ? new Date(s.enrolledAt).toISOString() : existing.enrolledAt;
                     existing.transferredInAt = s.transferredInAt ? new Date(s.transferredInAt).toISOString() : existing.transferredInAt;

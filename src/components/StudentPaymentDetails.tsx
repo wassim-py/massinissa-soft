@@ -548,7 +548,7 @@ export default function StudentPaymentDetails({
           const isGroupLesson = att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id);
           if (!isDirectClass && !isGroupLesson) return false;
 
-          if (!isLessonApplicableToEnrollment(att.lesson, c.id, enr as any)) {
+          if (!isLessonApplicableToEnrollment(att.lesson, c.id, { ...enr, student } as any)) {
             return false;
           }
 

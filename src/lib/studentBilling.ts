@@ -1145,32 +1145,89 @@ export function isSiblingDiscountEligibleInClass({
 
 /**
  * Determines if a lesson (especially a multi-group lesson) applies to a student's enrollment in a target class.
- * For multi-group lessons where lesson.classId !== targetClassId:
- * - If the student transferred from lesson.classId into targetClassId, the lesson belongs to the prior class.
- * - If the lesson occurred prior to the student's enrollment/transfer date in targetClassId, it belongs to the prior class.
+ *
+ * Rules:
+ * 1. Primary lesson (lesson.classId === targetClassId):
+ *    - If the student transferred OUT of targetClassId before the lesson occurred, it does not apply.
+ * 2. Multi-group lesson from another class (lesson.classId !== targetClassId):
+ *    - If the student is UNENROLLED, INACTIVE, or TRANSFERRED in targetClassId, it does not apply.
+ *    - If the student is ALSO actively enrolled in the lesson's primary class, it belongs to the primary class (prevents double charging).
+ *    - If the student transferred from lesson.classId into targetClassId, and the lesson occurred BEFORE the transfer date, it belongs to the prior class.
  */
 export function isLessonApplicableToEnrollment(
   lesson: { id?: number; classId?: number; startsAt?: Date | string },
   targetClassId: number,
   enrollment?: {
+    status?: string | null;
     enrolledAt?: Date | string | null;
+    transferredAt?: Date | string | null;
     transferredInAt?: Date | string | null;
     transferredFromClassId?: number | null;
     transfersTo?: Array<{
       transferredAt?: Date | string | null;
-      fromEnrollment?: { classId: number } | null;
+      fromEnrollment?: { classId: number; class?: { id: number } } | null;
       fromEnrollmentId?: number;
     }>;
+    transfersFrom?: Array<{
+      transferredAt?: Date | string | null;
+      toEnrollment?: { classId: number; class?: { id: number } } | null;
+      toEnrollmentId?: number;
+    }>;
+    student?: {
+      enrollments?: Array<{
+        classId?: number;
+        class?: { id: number };
+        status?: string | null;
+      }>;
+    };
   } | null
 ): boolean {
-  // If the lesson was directly created for this target class, it is a primary lesson of the class
-  if (!lesson.classId || lesson.classId === targetClassId) {
-    return true;
-  }
-
   if (!enrollment) return true;
 
   const lessonTime = new Date(lesson.startsAt || 0).getTime();
+
+  // 1. Primary lesson of this target class:
+  if (!lesson.classId || lesson.classId === targetClassId) {
+    if (enrollment.status === "TRANSFERRED" || enrollment.status === "UNENROLLED") {
+      const transferOut = (enrollment.transfersFrom || []).find(
+        (t: any) =>
+          t.toEnrollment?.classId ||
+          t.toEnrollment?.class?.id ||
+          t.toEnrollmentId
+      );
+      const transferOutTime = transferOut?.transferredAt
+        ? new Date(transferOut.transferredAt).getTime()
+        : enrollment.transferredAt
+        ? new Date(enrollment.transferredAt).getTime()
+        : null;
+
+      if (transferOutTime && lessonTime > transferOutTime) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // 2. Multi-group lesson created under another class (lesson.classId !== targetClassId):
+  // If the student is not active in this target class, multi-group lessons from other classes do not apply
+  if (
+    enrollment.status === "UNENROLLED" ||
+    enrollment.status === "INACTIVE" ||
+    enrollment.status === "TRANSFERRED"
+  ) {
+    return false;
+  }
+
+  // If the student is ALSO actively enrolled in the lesson's primary class,
+  // the lesson belongs to the primary class to avoid double-charging
+  const isStudentActiveInPrimaryClass = enrollment.student?.enrollments?.some(
+    (e: any) =>
+      (e.classId === lesson.classId || e.class?.id === lesson.classId) &&
+      (e.status === "ACTIVE" || !e.status)
+  );
+  if (isStudentActiveInPrimaryClass) {
+    return false;
+  }
 
   // Find if this student transferred from the lesson's primary class into targetClassId
   const transferFromLessonClass = (enrollment.transfersTo || []).find(
