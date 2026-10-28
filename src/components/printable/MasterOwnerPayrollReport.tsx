@@ -1,5 +1,5 @@
 import React from 'react';
-import Image from 'next/image';
+import { MASSINISSA_LOGO_BASE64 } from "@/lib/receiptAssets";
 import { formatAlgiersDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 
 export interface MasterOwnerPayrollTeacherItem {
@@ -94,9 +94,13 @@ export function MasterOwnerPayrollReport({ data }: MasterOwnerPayrollReportProps
       {/* Header */}
       <div className="flex justify-between items-center border-b-2 border-gray-900 pb-4 mb-5">
         <div className="flex items-center gap-3">
-          <Image src="/massinissa-emblem.png" alt="École Massinissa" width={60} height={60} className="object-contain" unoptimized />
+          <img
+            src={MASSINISSA_LOGO_BASE64}
+            alt="Massinissa School"
+            style={{ width: '64px', height: '64px', objectFit: 'contain' }}
+          />
           <div>
-            <h1 className="text-2xl font-black text-gray-900 tracking-tight">École Massinissa</h1>
+            <h1 className="text-2xl font-black text-gray-900 tracking-tight">Massinissa School</h1>
             <p className="text-xs text-gray-600 font-semibold">Constantine - Algérie</p>
             <p className="text-[11px] text-gray-500 font-mono">Système Financier & Contrôle de Gestion</p>
           </div>
@@ -140,27 +144,30 @@ export function MasterOwnerPayrollReport({ data }: MasterOwnerPayrollReportProps
         </div>
       </div>
 
-      {/* Master 5-Column Consolidated Table */}
-      <div className="mb-6">
-        <h2 className="text-xs font-bold text-gray-800 uppercase tracking-wide mb-2 pb-1 border-b border-gray-200">
-          Détail par Enseignant et Groupe (5 Colonnes de Contrôle)
+      {/* Master 5-Column Consolidated Table (Arabic & RTL with larger, bolder typography) */}
+      <div className="mb-6" dir="rtl">
+        <h2 className="text-sm font-black text-gray-900 mb-2.5 pb-1.5 border-b-2 border-gray-400 flex justify-between items-center">
+          <span>جدول تفاصيل المستحقات حسب الأستاذ والفوج (الأعمدة الخمسة)</span>
+          <span className="text-xs font-bold text-gray-500 font-sans" dir="ltr">
+            5 Colonnes de Contrôle
+          </span>
         </h2>
 
-        <table className="w-full border-collapse border border-gray-300 text-[11px]">
+        <table className="w-full border-collapse border border-gray-400 text-sm">
           <thead>
-            <tr className="bg-gray-100 text-gray-800 uppercase font-bold text-[9px] tracking-wider">
-              <th className="border border-gray-300 p-2 text-left">1. Enseignant</th>
-              <th className="border border-gray-300 p-2 text-left">2. Groupe / Classe</th>
-              <th className="border border-gray-300 p-2 text-center">3. Séances Payables</th>
-              <th className="border border-gray-300 p-2 text-right">4. Part Enseignant</th>
-              <th className="border border-gray-300 p-2 text-right">5. Part École</th>
+            <tr className="bg-gray-200 text-gray-950 font-black text-xs tracking-wide">
+              <th className="border border-gray-400 p-2.5 text-right font-black">1. الأستاذ</th>
+              <th className="border border-gray-400 p-2.5 text-right font-black">2. الفوج / القسم</th>
+              <th className="border border-gray-400 p-2.5 text-center font-black">3. الحصص المستحقة</th>
+              <th className="border border-gray-400 p-2.5 text-left font-black">4. مستحقات الأستاذ</th>
+              <th className="border border-gray-400 p-2.5 text-left font-black">5. حصة المدرسة</th>
             </tr>
           </thead>
           <tbody>
             {data.teachers.length === 0 ? (
               <tr>
-                <td colSpan={5} className="p-4 text-center text-gray-500 italic">
-                  Aucune fiche de paie générée trouvée pour cette période.
+                <td colSpan={5} className="p-5 text-center text-gray-600 font-bold text-sm">
+                  لا توجد كشوف رواتب مسجلة لهذه الفترة.
                 </td>
               </tr>
             ) : (
@@ -169,32 +176,34 @@ export function MasterOwnerPayrollReport({ data }: MasterOwnerPayrollReportProps
                   {/* Group rows for this teacher */}
                   {teacher.groups.length === 0 ? (
                     <tr className="bg-white">
-                      <td className="border border-gray-300 p-2 font-bold text-gray-900">
+                      <td className="border border-gray-400 p-2.5 font-black text-sm text-gray-950">
                         {teacher.teacherName}
                       </td>
-                      <td colSpan={4} className="border border-gray-300 p-2 text-gray-400 italic">
-                        Aucun cours régulier (Salaire fixe ou retenues seules)
+                      <td colSpan={4} className="border border-gray-400 p-2.5 text-gray-500 font-semibold text-xs italic">
+                        لا توجد حصص منتظمة (راتب شهري ثابت أو تسبيقات / خصومات فقط)
                       </td>
                     </tr>
                   ) : (
                     teacher.groups.map((group, gIdx) => (
                       <tr key={gIdx} className="hover:bg-gray-50/50">
-                        <td className="border border-gray-300 p-1.5 font-bold text-gray-900">
+                        <td className="border border-gray-400 p-2 font-black text-sm text-gray-950">
                           {gIdx === 0 ? teacher.teacherName : ''}
                         </td>
-                        <td className="border border-gray-300 p-1.5">
-                          <span className="font-semibold text-gray-900">{group.groupName}</span>
+                        <td className="border border-gray-400 p-2">
+                          <span className="font-bold text-sm text-gray-900">{group.groupName}</span>
                           {group.branchName && (
-                            <span className="text-[9px] text-gray-500 ml-1">({group.branchName})</span>
+                            <span className="text-xs font-semibold text-gray-600 mr-2 bg-gray-100 px-1.5 py-0.5 rounded border border-gray-300">
+                              ({group.branchName})
+                            </span>
                           )}
                         </td>
-                        <td className="border border-gray-300 p-1.5 text-center font-mono font-bold text-gray-800">
+                        <td className="border border-gray-400 p-2 text-center font-mono font-black text-sm text-gray-950">
                           {group.payableLessons}
                         </td>
-                        <td className="border border-gray-300 p-1.5 text-right font-mono font-bold text-rose-700">
+                        <td className="border border-gray-400 p-2 text-left font-mono font-black text-sm text-rose-700">
                           {formatDZD(group.teacherCut)}
                         </td>
-                        <td className="border border-gray-300 p-1.5 text-right font-mono font-bold text-emerald-700">
+                        <td className="border border-gray-400 p-2 text-left font-mono font-black text-sm text-emerald-800">
                           {formatDZD(group.schoolCut)}
                         </td>
                       </tr>
@@ -202,22 +211,23 @@ export function MasterOwnerPayrollReport({ data }: MasterOwnerPayrollReportProps
                   )}
 
                   {/* Teacher Subtotal Row */}
-                  <tr className="bg-slate-50 font-bold border-b-2 border-gray-400 text-[10px]">
-                    <td colSpan={2} className="border border-gray-300 p-1.5 text-gray-800">
-                      Sous-total : <span className="text-gray-950 font-black">{teacher.teacherName}</span>
+                  <tr className="bg-slate-100 font-black border-b-2 border-gray-500 text-xs">
+                    <td colSpan={2} className="border border-gray-400 p-2 text-gray-900 font-bold">
+                      <span className="text-gray-700 font-bold">المجموع الفرعي : </span>
+                      <span className="text-gray-950 font-black text-sm">{teacher.teacherName}</span>
                       {(teacher.advances > 0 || teacher.photocopyDeductions > 0) && (
-                        <span className="font-normal text-gray-500 ml-2">
-                          [Avances: -{formatDZD(teacher.advances)} | Photocopies: -{formatDZD(teacher.photocopyDeductions)} | Net payé: {formatDZD(teacher.netTeacherCut)}]
+                        <span className="font-bold text-gray-600 mr-2.5 text-xs">
+                          [تسبيق: -{formatDZD(teacher.advances)} | نسخ: -{formatDZD(teacher.photocopyDeductions)} | الصافي: {formatDZD(teacher.netTeacherCut)}]
                         </span>
                       )}
                     </td>
-                    <td className="border border-gray-300 p-1.5 text-center font-mono text-gray-900">
+                    <td className="border border-gray-400 p-2 text-center font-mono font-black text-sm text-gray-950">
                       {teacher.totalLessons}
                     </td>
-                    <td className="border border-gray-300 p-1.5 text-right font-mono text-rose-800">
+                    <td className="border border-gray-400 p-2 text-left font-mono font-black text-sm text-rose-800">
                       {formatDZD(teacher.grossTeacherCut)}
                     </td>
-                    <td className="border border-gray-300 p-1.5 text-right font-mono text-emerald-800">
+                    <td className="border border-gray-400 p-2 text-left font-mono font-black text-sm text-emerald-900">
                       {formatDZD(teacher.totalSchoolCut)}
                     </td>
                   </tr>
@@ -226,17 +236,17 @@ export function MasterOwnerPayrollReport({ data }: MasterOwnerPayrollReportProps
             )}
           </tbody>
           <tfoot>
-            <tr className="bg-gray-100 font-black text-xs border-t-2 border-gray-900">
-              <td colSpan={2} className="border border-gray-300 p-2 text-gray-900 uppercase">
-                TOTAL GÉNÉRAL CUMULÉ ({data.teachersCount} enseignants)
+            <tr className="bg-gray-200 font-black text-sm border-t-2 border-gray-900">
+              <td colSpan={2} className="border border-gray-400 p-2.5 text-gray-950 font-black">
+                المجموع العام التراكمي ({data.teachersCount} أساتذة)
               </td>
-              <td className="border border-gray-300 p-2 text-center font-mono text-gray-900">
+              <td className="border border-gray-400 p-2.5 text-center font-mono text-base font-black text-gray-950">
                 {data.totalLessons}
               </td>
-              <td className="border border-gray-300 p-2 text-right font-mono text-rose-700">
+              <td className="border border-gray-400 p-2.5 text-left font-mono text-base font-black text-rose-800">
                 {formatDZD(data.totalTeacherGross)}
               </td>
-              <td className="border border-gray-300 p-2 text-right font-mono text-emerald-700">
+              <td className="border border-gray-400 p-2.5 text-left font-mono text-base font-black text-emerald-900">
                 {formatDZD(data.totalSchoolGross)}
               </td>
             </tr>

@@ -1,5 +1,5 @@
 import React from 'react';
-import Image from 'next/image';
+import { MASSINISSA_LOGO_BASE64 } from "@/lib/receiptAssets";
 import { formatAlgiersDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 
 export interface OwnerConsolidatedGroupLine {
@@ -96,9 +96,13 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
       {/* Header */}
       <div className="flex justify-between items-center border-b-2 border-gray-900 pb-4 mb-6">
         <div className="flex items-center gap-3">
-          <Image src="/massinissa-emblem.png" alt="École Massinissa" width={60} height={60} className="object-contain" unoptimized />
+          <img
+            src={MASSINISSA_LOGO_BASE64}
+            alt="Massinissa School"
+            style={{ width: '64px', height: '64px', objectFit: 'contain' }}
+          />
           <div>
-            <h1 className="text-2xl font-black text-gray-900 tracking-tight">École Massinissa</h1>
+            <h1 className="text-2xl font-black text-gray-900 tracking-tight">Massinissa School</h1>
             <p className="text-xs text-gray-600 font-semibold">Constantine - Algérie</p>
             <p className="text-[11px] text-gray-500 font-mono">Système de Consolidation Financière</p>
           </div>

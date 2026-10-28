@@ -1,5 +1,5 @@
 import React from 'react';
-import Image from 'next/image';
+import { MASSINISSA_LOGO_BASE64 } from "@/lib/receiptAssets";
 import { formatAlgiersDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 
 export interface SchoolShareSessionItem {
@@ -115,9 +115,13 @@ export function SchoolShareTicket({ data }: SchoolShareTicketProps) {
       {/* Header */}
       <div className="flex justify-between items-center border-b-2 border-gray-900 pb-4 mb-6">
         <div className="flex items-center gap-3">
-          <Image src="/massinissa-emblem.png" alt="École Massinissa" width={60} height={60} className="object-contain" unoptimized />
+          <img
+            src={MASSINISSA_LOGO_BASE64}
+            alt="Massinissa School"
+            style={{ width: '64px', height: '64px', objectFit: 'contain' }}
+          />
           <div>
-            <h1 className="text-2xl font-black text-gray-900">École Massinissa</h1>
+            <h1 className="text-2xl font-black text-gray-900">Massinissa School</h1>
             <p className="text-xs text-gray-600 font-semibold">Siège principal : Constantine - Algérie</p>
             <p className="text-xs text-gray-500">Système de gestion et ventilation des recettes scolaires</p>
           </div>

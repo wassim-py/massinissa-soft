@@ -57,6 +57,9 @@ export const PrintOwnerConsolidationButton = ({
               .font-mono {
                 font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important;
               }
+              [dir="rtl"] {
+                font-family: 'Tajawal', system-ui, -apple-system, sans-serif !important;
+              }
               body {
                 font-family: system-ui, -apple-system, sans-serif;
                 background-color: #fff;
