@@ -292,6 +292,31 @@ export async function calculateTeacherPayroll(
           },
         },
       },
+      lessonGroups: {
+        include: {
+          class: {
+            include: {
+              enrollments: {
+                select: {
+                  studentId: true,
+                  payerStatus: true,
+                  status: true,
+                  student: {
+                    select: {
+                      family: {
+                        select: {
+                          payerStudentId: true,
+                          discountPercentage: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       attendances: true,
     },
     orderBy: { startsAt: "asc" },
@@ -304,7 +329,12 @@ export async function calculateTeacherPayroll(
   });
 
   // Get all unique class IDs taught by this teacher in or before this period to compute attendance histories
-  const classIds = Array.from(new Set(lessons.map((l) => l.classId)));
+  const classIds = Array.from(
+    new Set([
+      ...lessons.map((l) => l.classId),
+      ...lessons.flatMap((l) => (l as any).lessonGroups?.map((lg: any) => lg.classId) || []),
+    ].filter(Boolean))
+  );
 
   // For each class, fetch all historical non-free lessons and attendances up to endDate
   const classHistoryMap = new Map<
@@ -322,25 +352,45 @@ export async function calculateTeacherPayroll(
     const [cLessons, cAttendances, cCatchUps, cClass, cVouchers] = await Promise.all([
       prisma.lesson.findMany({
         where: {
-          classId: cid,
-          startsAt: { lte: endDate },
-          OR: [
-            { attendances: { some: {} } },
-            { isTeacherAbsent: true },
+          AND: [
+            {
+              OR: [
+                { classId: cid },
+                { lessonGroups: { some: { classId: cid } } },
+              ],
+            },
+            {
+              OR: [
+                { attendances: { some: {} } },
+                { isTeacherAbsent: true },
+              ],
+            },
           ],
+          startsAt: { lte: endDate },
         },
         select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
         orderBy: { startsAt: "asc" },
       }),
       prisma.attendance.findMany({
         where: {
-          lesson: { classId: cid, startsAt: { lte: endDate } },
+          lesson: {
+            OR: [
+              { classId: cid },
+              { lessonGroups: { some: { classId: cid } } },
+            ],
+            startsAt: { lte: endDate },
+          },
         },
         select: { lessonId: true, studentId: true, status: true },
       }),
       prisma.catchUpAttendance.findMany({
         where: {
-          missedLesson: { classId: cid },
+          missedLesson: {
+            OR: [
+              { classId: cid },
+              { lessonGroups: { some: { classId: cid } } },
+            ],
+          },
           recordedAt: { lte: endDate },
         },
         select: { studentId: true, missedLessonId: true, recordedAt: true },
@@ -391,12 +441,21 @@ export async function calculateTeacherPayroll(
   const studentPaidSessionAtStart = new Map<string, boolean>();
 
   for (const [cid, historyData] of classHistoryMap.entries()) {
-    const studentIds = Array.from(new Set(historyData.attendances.map((a: any) => a.studentId))) as string[];
+    const enrolledStudents = historyData.classInfo?.enrollments || [];
+    const enrolledStudentIds = new Set(enrolledStudents.map((e: any) => e.studentId));
+
+    const studentIds = Array.from(
+      new Set(
+        historyData.attendances
+          .map((a: any) => a.studentId)
+          .filter((sid: string) => enrolledStudentIds.has(sid))
+      )
+    ) as string[];
 
     for (const sid of studentIds) {
       const studentAtts = historyData.attendances.filter((a: any) => a.studentId === sid);
       const studentCatchUps = historyData.catchUps.filter((c: any) => c.studentId === sid);
-      const enrollment = historyData.classInfo?.enrollments?.find((e: any) => e.studentId === sid);
+      const enrollment = enrolledStudents.find((e: any) => e.studentId === sid);
       const creditResetOffset = Number(enrollment?.creditResetOffset || 0);
 
       // Classification as of endDate
@@ -408,6 +467,7 @@ export async function calculateTeacherPayroll(
         creditResetOffset,
       });
       classifiedAtEnd.forEach((item) => {
+        studentStatusAtEnd.set(`${sid}_${cid}_${item.lessonId}`, item);
         studentStatusAtEnd.set(`${sid}_${item.lessonId}`, item);
       });
 
@@ -418,6 +478,7 @@ export async function calculateTeacherPayroll(
         .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
       consumingLessonsAtEnd.forEach((item, idx) => {
+        studentPaidSessionAtEnd.set(`${sid}_${cid}_${item.lessonId}`, idx + 1 <= allowedAtEnd);
         studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}`, idx + 1 <= allowedAtEnd);
       });
 
@@ -432,6 +493,7 @@ export async function calculateTeacherPayroll(
           creditResetOffset,
         });
         classifiedAtStart.forEach((item) => {
+          studentStatusAtStart.set(`${sid}_${cid}_${item.lessonId}`, item);
           studentStatusAtStart.set(`${sid}_${item.lessonId}`, item);
         });
 
@@ -441,6 +503,7 @@ export async function calculateTeacherPayroll(
           .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
         consumingLessonsAtStart.forEach((item, idx) => {
+          studentPaidSessionAtStart.set(`${sid}_${cid}_${item.lessonId}`, idx + 1 <= allowedAtStart);
           studentPaidSessionAtStart.set(`${sid}_${item.lessonId}`, idx + 1 <= allowedAtStart);
         });
       }
@@ -641,14 +704,47 @@ export async function calculateTeacherPayroll(
         // Skip duplicate student attendance records to guarantee accurate calculation
         if (countedPayingStudentIds.has(att.studentId)) return;
 
-        const enrollment = lesson.class?.enrollments?.find((e) => e.studentId === att.studentId);
+        // Resolve student enrollment across primary group and secondary merged groups
+        let enrollment = lesson.class?.enrollments?.find((e) => e.studentId === att.studentId);
+        let enrolledClassId = lesson.classId;
+
+        if (!enrollment || enrollment.status === "TRANSFERRED") {
+          const secondaryGroups = (lesson as any).lessonGroups || [];
+          for (const lg of secondaryGroups) {
+            const lgEnr = lg.class?.enrollments?.find((e: any) => e.studentId === att.studentId);
+            if (lgEnr && (lgEnr.status === "ACTIVE" || !enrollment)) {
+              enrollment = lgEnr;
+              enrolledClassId = lg.classId;
+              if (lgEnr.status === "ACTIVE") break;
+            }
+          }
+        }
+
         const payerStatus = enrollment?.payerStatus || "NORMAL";
         if (payerStatus === "NON_PAYER" || payerStatus === "SCHOOL_FEES_ONLY") return;
 
-        const classification = studentStatusAtEnd.get(`${att.studentId}_${lesson.id}`);
+        const classification =
+          studentStatusAtEnd.get(`${att.studentId}_${enrolledClassId}_${lesson.id}`) ||
+          studentStatusAtEnd.get(`${att.studentId}_${lesson.id}`);
+
         if (classification && classification.isTeacherPayable) {
           // Rule: Teacher is paid ONLY if student session is covered by paid tuition vouchers
-          const isSessionPaid = studentPaidSessionAtEnd.get(`${att.studentId}_${lesson.id}`) ?? false;
+          // Check class-specific paid coverage first, or general coverage if enrolled in merged groups
+          let isSessionPaid =
+            studentPaidSessionAtEnd.get(`${att.studentId}_${enrolledClassId}_${lesson.id}`) ??
+            studentPaidSessionAtEnd.get(`${att.studentId}_${lesson.id}`) ??
+            false;
+
+          // If the student is enrolled in a secondary merged group, also check if covered under that group
+          if (!isSessionPaid && (lesson as any).lessonGroups) {
+            for (const lg of (lesson as any).lessonGroups) {
+              if (studentPaidSessionAtEnd.get(`${att.studentId}_${lg.classId}_${lesson.id}`)) {
+                isSessionPaid = true;
+                break;
+              }
+            }
+          }
+
           if (!isSessionPaid) {
             // Unpaid by student (debt): teacher receives 0 DZD for this session until settled
             return;
@@ -660,8 +756,15 @@ export async function calculateTeacherPayroll(
           const isPayerInClass = Boolean(
             payerId &&
             payerId !== att.studentId &&
-            lesson.class?.enrollments?.some(
-              (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+            (
+              lesson.class?.enrollments?.some(
+                (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+              ) ||
+              (lesson as any).lessonGroups?.some((lg: any) =>
+                lg.class?.enrollments?.some(
+                  (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+                )
+              )
             )
           );
           const isSiblingDiscount = isPayerInClass;
@@ -838,11 +941,21 @@ export async function calculateTeacherPayroll(
       let resolvedAbsenceCount = 0;
 
       for (const att of plAttendances) {
-        const atStart = studentStatusAtStart.get(`${att.studentId}_${pl.id}`);
-        const atEnd = studentStatusAtEnd.get(`${att.studentId}_${pl.id}`);
+        const atStart =
+          studentStatusAtStart.get(`${att.studentId}_${cid}_${pl.id}`) ||
+          studentStatusAtStart.get(`${att.studentId}_${pl.id}`);
+        const atEnd =
+          studentStatusAtEnd.get(`${att.studentId}_${cid}_${pl.id}`) ||
+          studentStatusAtEnd.get(`${att.studentId}_${pl.id}`);
 
-        const wasPaidAtStart = studentPaidSessionAtStart.get(`${att.studentId}_${pl.id}`) ?? false;
-        const isPaidAtEnd = studentPaidSessionAtEnd.get(`${att.studentId}_${pl.id}`) ?? false;
+        const wasPaidAtStart =
+          studentPaidSessionAtStart.get(`${att.studentId}_${cid}_${pl.id}`) ??
+          studentPaidSessionAtStart.get(`${att.studentId}_${pl.id}`) ??
+          false;
+        const isPaidAtEnd =
+          studentPaidSessionAtEnd.get(`${att.studentId}_${cid}_${pl.id}`) ??
+          studentPaidSessionAtEnd.get(`${att.studentId}_${pl.id}`) ??
+          false;
 
         // Condition A: Trailing absence held at start that became interleaved at end (and student has paid)
         const isResolvedAbsence =
