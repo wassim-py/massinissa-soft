@@ -169,7 +169,7 @@ const ClassAttendancePage = async (
 
             const studentMap = new Map<string, any>();
             for (const s of rawStudents) {
-                const isTransferred = s.enrollmentStatus === "TRANSFERRED" || Boolean(s.transferredAt);
+                const isTransferred = s.enrollmentStatus === "TRANSFERRED" || (s.enrollmentStatus !== "ACTIVE" && Boolean(s.transferredAt));
                 if (!studentMap.has(s.id)) {
                     studentMap.set(s.id, {
                         id: s.id,

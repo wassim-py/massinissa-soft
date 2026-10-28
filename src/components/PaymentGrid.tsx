@@ -262,7 +262,7 @@ export default function PaymentGrid({
     if (
       enr.status === "TRANSFERRED" ||
       enr.status === "UNENROLLED" ||
-      (enr.transfersFrom && enr.transfersFrom.length > 0)
+      (enr.transfersFrom && enr.transfersFrom.length > 0 && enr.status !== "ACTIVE")
     ) {
       continue;
     }

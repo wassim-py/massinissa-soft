@@ -439,7 +439,7 @@ const SingleStudentPage = async (
         payerStatus: enrStatus,
         status:
           (enr as any).status === "TRANSFERRED" ||
-          (enr.transfersFrom && enr.transfersFrom.length > 0)
+          (enr.transfersFrom && enr.transfersFrom.length > 0 && (enr as any).status !== "ACTIVE")
             ? "TRANSFERRED"
             : (enr as any).status || "ACTIVE",
         studentSessionFee: feeCalc.studentSessionFee,
