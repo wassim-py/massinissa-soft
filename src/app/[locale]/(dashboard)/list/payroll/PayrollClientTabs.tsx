@@ -947,50 +947,79 @@ export default function PayrollClientTabs({
           </Card>
 
           {/* Card 4: Per-Branch Comparison */}
-          {overviewData.branchBreakdown.length > 0 && (
-            <Card className="border-border shadow-xs bg-surface">
-              <CardHeader className="p-5 border-b border-border">
-                <CardTitle className="text-section-title font-bold text-gray-900">
-                  {t("branchComparisonTitle")}
-                </CardTitle>
-                <CardDescription className="text-form-helper text-muted">
-                  {t("branchComparisonDesc")}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="p-5">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {overviewData.branchBreakdown.map((b) => (
-                    <div key={b.branchId} className="border border-border rounded-xl p-4 bg-surface-subtle/60 shadow-xs">
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="font-bold text-gray-900 text-table-body">{b.branchName}</span>
-                        <Badge variant="neutral" size="sm">{t("branchNumberBadge", { id: b.branchId })}</Badge>
+          {overviewData.branchBreakdown.length > 0 && (() => {
+            const confirmedSlips = filteredPayslips.filter(
+              (p) => p.status === "PAID" || p.status === "VALIDATED" || p.status === "CONFIRMED"
+            );
+            const reactiveBranchBreakdown = overviewData.branchBreakdown.map((b) => {
+              const payslipsDeductionForBranch = confirmedSlips.reduce((sum, p) => {
+                const lines = (p.branchLines || []).filter((bl) => bl.branchId === b.branchId);
+                return sum + lines.reduce((acc, bl) => acc + Number(bl.amount || 0), 0);
+              }, 0);
+
+              const hasFilters = Boolean(searchTeacher || periodFilterStart || periodFilterEnd);
+              const finalPayrollCost = hasFilters
+                ? payslipsDeductionForBranch
+                : (payslipsDeductionForBranch > 0 ? payslipsDeductionForBranch : (b.payrollCost || 0));
+
+              const finalMargin = b.revenue - finalPayrollCost;
+
+              return {
+                ...b,
+                payrollCost: finalPayrollCost,
+                margin: finalMargin,
+              };
+            });
+
+            return (
+              <Card className="border-border shadow-xs bg-surface">
+                <CardHeader className="p-5 border-b border-border">
+                  <CardTitle className="text-section-title font-bold text-gray-900">
+                    {t("branchComparisonTitle")}
+                  </CardTitle>
+                  <CardDescription className="text-form-helper text-muted">
+                    {t("branchComparisonDesc")}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-5">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {reactiveBranchBreakdown.map((b) => (
+                      <div key={b.branchId} className="border border-border rounded-xl p-4 bg-surface-subtle/60 shadow-xs">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="font-bold text-gray-900 text-table-body">{b.branchName}</span>
+                          <Badge variant="neutral" size="sm">{t("branchNumberBadge", { id: b.branchId })}</Badge>
+                        </div>
+                        <div className="space-y-2 text-table-body text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-muted">{t("branchRevenueLabel")}</span>
+                            <span className="font-mono font-bold text-success-text">{formatDZD(b.revenue)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted">
+                              {locale === "ar" ? "رواتب الأساتذة المخصومة" : "Fiches de paie déduites"}
+                            </span>
+                            <span className={`font-mono font-bold ${b.payrollCost > 0 ? "text-danger" : "text-gray-500"}`}>
+                              {b.payrollCost > 0 ? `- ${formatDZD(b.payrollCost)}` : "0 DZD"}
+                            </span>
+                          </div>
+                          <div className="border-t border-border pt-1.5 flex justify-between font-bold">
+                            <span className="text-gray-800">{t("netOperatingLabel")}</span>
+                            <span
+                              className={`font-mono ${
+                                b.margin >= 0 ? "text-primary font-black" : "text-danger font-black"
+                              }`}
+                            >
+                              {formatDZD(b.margin)}
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="space-y-2 text-table-body text-xs">
-                        <div className="flex justify-between">
-                          <span className="text-muted">{t("branchRevenueLabel")}</span>
-                          <span className="font-mono font-bold text-success-text">{formatDZD(b.revenue)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted">{t("branchPayrollCostLabel")}</span>
-                          <span className="font-mono font-bold text-danger">{formatDZD(b.payrollCost)}</span>
-                        </div>
-                        <div className="border-t border-border pt-1.5 flex justify-between font-bold">
-                          <span className="text-gray-800">{t("netOperatingLabel")}</span>
-                          <span
-                            className={`font-mono ${
-                              b.margin >= 0 ? "text-primary font-black" : "text-danger font-black"
-                            }`}
-                          >
-                            {formatDZD(b.margin)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
         </div>
       )}
 

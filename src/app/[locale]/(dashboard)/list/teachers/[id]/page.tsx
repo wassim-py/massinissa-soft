@@ -515,14 +515,28 @@ const SingleTeacherPage = async (
       />
 
       {/* SECTION 6: CURRENT PAYROLL (§2.9 & Req 6) */}
-      <TeacherPayrollSection
-        teacherId={t.id}
-        teacherName={t.name}
-        teacherPhone={(t as any).phone}
-        payroll={serializeForClient(currentPayroll)}
-        periodLabel={thisMonthLabel}
-        isOwner={session.isOwner}
-      />
+      {(() => {
+        const teacherClasses = t?.classes || allClasses || [];
+        const hasFormationGroups =
+          teacherClasses.some((c: any) => Boolean(c.isFormation)) ||
+          (thisMonthLessons || []).some((l: any) => Boolean(l.class?.isFormation));
+        const hasNormalGroups =
+          teacherClasses.some((c: any) => !c.isFormation) ||
+          (thisMonthLessons || []).some((l: any) => !l.class?.isFormation);
+
+        return (
+          <TeacherPayrollSection
+            teacherId={t.id}
+            teacherName={t.name}
+            teacherPhone={(t as any).phone}
+            payroll={serializeForClient(currentPayroll)}
+            periodLabel={thisMonthLabel}
+            isOwner={session.isOwner}
+            hasFormationGroups={hasFormationGroups}
+            hasNormalGroups={hasNormalGroups}
+          />
+        );
+      })()}
 
       {/* SECTION 2: UPCOMING LESSONS IN SCHEDULE */}
       <Card className="border-border/80 shadow-xs">

@@ -9262,6 +9262,7 @@ export async function calculateIndividualTeacherPayrollAction(formData: {
   teacherId: string;
   startDate: string;
   endDate: string;
+  groupFilter?: "all" | "normal" | "formation";
 }) {
   try {
     const session = await getAuthSession();
@@ -9272,7 +9273,8 @@ export async function calculateIndividualTeacherPayrollAction(formData: {
     const payroll = await calculateTeacherPayroll(
       formData.teacherId,
       new Date(formData.startDate),
-      new Date(formData.endDate)
+      new Date(formData.endDate),
+      formData.groupFilter || "all"
     );
     return { success: true, error: false, payroll: serializeForClient(payroll) };
   } catch (error: any) {
@@ -9285,6 +9287,7 @@ export async function generateIndividualTeacherPayrollAction(formData: {
   teacherId: string;
   startDate: string;
   endDate: string;
+  groupFilter?: "all" | "normal" | "formation";
 }) {
   try {
     const session = await getAuthSession();
@@ -9294,7 +9297,8 @@ export async function generateIndividualTeacherPayrollAction(formData: {
     const run = await generatePayrollRun(
       formData.startDate,
       formData.endDate,
-      formData.teacherId
+      formData.teacherId,
+      formData.groupFilter || "all"
     );
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");

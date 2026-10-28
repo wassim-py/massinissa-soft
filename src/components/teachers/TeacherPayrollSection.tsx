@@ -15,6 +15,7 @@ import {
   Calculator,
   Save,
   Calendar,
+  GraduationCap,
 } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 import {
@@ -33,6 +34,8 @@ interface TeacherPayrollSectionProps {
   payroll: TeacherPayrollCalculation | null;
   periodLabel: string;
   isOwner?: boolean;
+  hasFormationGroups?: boolean;
+  hasNormalGroups?: boolean;
 }
 
 export default function TeacherPayrollSection({
@@ -42,6 +45,8 @@ export default function TeacherPayrollSection({
   payroll,
   periodLabel,
   isOwner = false,
+  hasFormationGroups = false,
+  hasNormalGroups = true,
 }: TeacherPayrollSectionProps) {
   const t = useTranslations("teacherProfile");
   const locale = useLocale();
@@ -62,6 +67,7 @@ export default function TeacherPayrollSection({
   const [startDate, setStartDate] = useState<string>(initialDates.start);
   const [endDate, setEndDate] = useState<string>(initialDates.end);
   const [activePreset, setActivePreset] = useState<"thisMonth" | "lastMonth" | "custom">("thisMonth");
+  const [calculationScope, setCalculationScope] = useState<"all" | "normal" | "formation">("all");
   const [isCalculating, setIsCalculating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedRunId, setSavedRunId] = useState<number | null>(null);
@@ -90,15 +96,17 @@ export default function TeacherPayrollSection({
     setActivePreset("lastMonth");
   };
 
-  const handleCalculate = () => {
+  const handleCalculate = (scope: "all" | "normal" | "formation" = calculationScope) => {
     if (!startDate || !endDate) return;
     setIsCalculating(true);
+    setCalculationScope(scope);
     setFeedback(null);
     startTransition(async () => {
       const res = await calculateIndividualTeacherPayrollAction({
         teacherId,
         startDate,
         endDate,
+        groupFilter: scope,
       });
       setIsCalculating(false);
       if (res.success && res.payroll) {
@@ -112,9 +120,16 @@ export default function TeacherPayrollSection({
         });
         setCurrentPeriodLabel(`${df.format(dStart)} - ${df.format(dEnd)}`);
         setSavedRunId(null);
+        const scopeSuffix = hasFormationGroups
+          ? scope === "normal"
+            ? (locale === "ar" ? " (الأفواج العادية)" : " (Groupes ordinaires)")
+            : scope === "formation"
+            ? (locale === "ar" ? " (التكوينات فقط)" : " (Formations uniquement)")
+            : (locale === "ar" ? " (كشف موحد)" : " (Consolidé)")
+          : "";
         setFeedback({
           type: "success",
-          message: t("calculationSuccessToast"),
+          message: `${t("calculationSuccessToast")}${scopeSuffix}`,
         });
       } else {
         setFeedback({
@@ -134,6 +149,7 @@ export default function TeacherPayrollSection({
         teacherId,
         startDate,
         endDate,
+        groupFilter: calculationScope,
       });
       setIsSaving(false);
       if (res.success && res.payrollRunId) {
@@ -308,6 +324,25 @@ export default function TeacherPayrollSection({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {hasFormationGroups && (
+              <Badge
+                variant={
+                  calculationScope === "formation"
+                    ? "warning"
+                    : calculationScope === "normal"
+                    ? "neutral"
+                    : "success"
+                }
+                size="md"
+                className="font-bold"
+              >
+                {calculationScope === "normal"
+                  ? (locale === "ar" ? "أفواج عادية" : "Groupes ordinaires")
+                  : calculationScope === "formation"
+                  ? (locale === "ar" ? "تكوينات فقط" : "Formations uniquement")
+                  : (locale === "ar" ? "كشف موحد" : "Consolidé")}
+              </Badge>
+            )}
             <Badge variant="primary" size="md">
               {t("period", { period: currentPeriodLabel })}
             </Badge>
@@ -403,18 +438,92 @@ export default function TeacherPayrollSection({
                   />
                 </div>
 
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="md"
-                  onClick={handleCalculate}
-                  disabled={isCalculating || !startDate || !endDate}
-                  isLoading={isCalculating}
-                  className="self-end shadow-xs cursor-pointer h-[38px]"
-                  leftIcon={<Calculator className="w-4 h-4" />}
-                >
-                  {isCalculating ? (locale === "ar" ? "جاري الحساب..." : "Calcul...") : (locale === "ar" ? "حساب" : "Calculer")}
-                </Button>
+                {hasFormationGroups ? (
+                  <div className="flex items-center gap-2 flex-wrap self-end">
+                    {hasNormalGroups && (
+                      <Button
+                        type="button"
+                        variant={calculationScope === "normal" ? "primary" : "outline"}
+                        size="md"
+                        onClick={() => handleCalculate("normal")}
+                        disabled={isCalculating || !startDate || !endDate}
+                        isLoading={isCalculating && calculationScope === "normal"}
+                        className={`shadow-xs cursor-pointer h-[38px] text-xs font-semibold ${
+                          calculationScope === "normal"
+                            ? "!bg-blue-600 hover:!bg-blue-700 !text-white"
+                            : "border-border text-gray-700 hover:bg-surface-subtle"
+                        }`}
+                        leftIcon={<BookOpen className="w-3.5 h-3.5" />}
+                        title={
+                          locale === "ar"
+                            ? "حساب مستحقات الأفواج العادية فقط دون التكوينات"
+                            : "Calculer les groupes ordinaires uniquement (sans formations)"
+                        }
+                      >
+                        {locale === "ar" ? "الأفواج العادية" : "Groupes ordinaires"}
+                      </Button>
+                    )}
+
+                    <Button
+                      type="button"
+                      variant={calculationScope === "formation" ? "primary" : "outline"}
+                      size="md"
+                      onClick={() => handleCalculate("formation")}
+                      disabled={isCalculating || !startDate || !endDate}
+                      isLoading={isCalculating && calculationScope === "formation"}
+                      className={`shadow-xs cursor-pointer h-[38px] text-xs font-semibold ${
+                        calculationScope === "formation"
+                          ? "!bg-amber-600 hover:!bg-amber-700 !text-white"
+                          : "border-amber-400/60 text-amber-800 hover:bg-amber-50"
+                      }`}
+                      leftIcon={<GraduationCap className="w-3.5 h-3.5" />}
+                      title={
+                        locale === "ar"
+                          ? "حساب مستحقات دورات التكوين فقط (نظام الدورتين)"
+                          : "Calculer pour les formations uniquement (cycle 2 mois)"
+                      }
+                    >
+                      {locale === "ar" ? "التكوينات فقط" : "Formations uniquement"}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant={calculationScope === "all" ? "primary" : "outline"}
+                      size="md"
+                      onClick={() => handleCalculate("all")}
+                      disabled={isCalculating || !startDate || !endDate}
+                      isLoading={isCalculating && calculationScope === "all"}
+                      className={`shadow-xs cursor-pointer h-[38px] text-xs font-semibold ${
+                        calculationScope === "all"
+                          ? "!bg-emerald-600 hover:!bg-emerald-700 !text-white"
+                          : "border-emerald-500/60 text-emerald-800 hover:bg-emerald-50"
+                      }`}
+                      leftIcon={<Calculator className="w-3.5 h-3.5" />}
+                      title={
+                        locale === "ar"
+                          ? "حساب كشف موحد وشامل لجميع الأفواج والتكوينات"
+                          : "Calcul consolidé (tous les groupes et formations)"
+                      }
+                    >
+                      {locale === "ar" ? "كشف موحد (الكل)" : "Consolidé (Tous)"}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="md"
+                    onClick={() => handleCalculate("all")}
+                    disabled={isCalculating || !startDate || !endDate}
+                    isLoading={isCalculating}
+                    className="self-end shadow-xs cursor-pointer h-[38px]"
+                    leftIcon={<Calculator className="w-4 h-4" />}
+                  >
+                    {isCalculating
+                      ? (locale === "ar" ? "جاري الحساب..." : "Calcul...")
+                      : (locale === "ar" ? "حساب" : "Calculer")}
+                  </Button>
+                )}
               </div>
 
               {/* Secondary Actions when calculation is available */}

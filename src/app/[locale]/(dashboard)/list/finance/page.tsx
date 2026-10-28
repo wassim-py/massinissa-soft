@@ -256,11 +256,13 @@ export default async function FinancePage(props: PageProps) {
 
   if (activeSection === "payroll") {
     const now = new Date();
-    const firstDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const lastDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59));
+    const firstDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+    const lastDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59, 999));
 
     const startDate = searchParams.dateFrom ? new Date(searchParams.dateFrom) : firstDay;
+    startDate.setUTCHours(0, 0, 0, 0);
     const endDate = searchParams.dateTo ? new Date(searchParams.dateTo) : lastDay;
+    endDate.setUTCHours(23, 59, 59, 999);
 
     if (currentTab === "runs") {
       const [rawOverview, rawPayslips, teacherList] = await Promise.all([

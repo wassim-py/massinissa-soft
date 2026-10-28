@@ -114,6 +114,7 @@ export interface TeacherPayrollCalculation {
     date: Date;
     recordedBy: string;
   }>;
+  calculationScope?: "all" | "normal" | "formation";
 }
 
 /**
@@ -201,7 +202,8 @@ function computeAllowedPaidSessions(
 export async function calculateTeacherPayroll(
   teacherId: string,
   startDate: Date,
-  endDate: Date
+  endDate: Date,
+  groupFilter: "all" | "normal" | "formation" = "all"
 ): Promise<TeacherPayrollCalculation | null> {
   const teacher = await prisma.teacher.findUnique({
     where: { id: teacherId },
@@ -226,9 +228,9 @@ export async function calculateTeacherPayroll(
   const defaultSessionRate = activePayRate?.ratePerSession
     ? Number(activePayRate.ratePerSession)
     : 0;
-  const fixedMonthly = activePayRate?.fixedMonthly
-    ? Number(activePayRate.fixedMonthly)
-    : 0;
+  const fixedMonthly = (groupFilter === "formation")
+    ? 0
+    : (activePayRate?.fixedMonthly ? Number(activePayRate.fixedMonthly) : 0);
   const percentageOfSessionFee = activePayRate?.percentageOfSessionFee
     ? Number(activePayRate.percentageOfSessionFee)
     : null;
@@ -250,7 +252,7 @@ export async function calculateTeacherPayroll(
   });
 
   // Find all lessons in the period that ACTUALLY HAPPENED (have attendance) OR where teacher was marked absent
-  const lessons = await prisma.lesson.findMany({
+  const rawLessons = await prisma.lesson.findMany({
     where: {
       teacherId: teacher.id,
       startsAt: {
@@ -288,6 +290,12 @@ export async function calculateTeacherPayroll(
       attendances: true,
     },
     orderBy: { startsAt: "asc" },
+  });
+
+  const lessons = rawLessons.filter((l) => {
+    if (groupFilter === "normal") return l.class?.isFormation !== true;
+    if (groupFilter === "formation") return l.class?.isFormation === true;
+    return true;
   });
 
   // Get all unique class IDs taught by this teacher in or before this period to compute attendance histories
@@ -758,6 +766,10 @@ export async function calculateTeacherPayroll(
   const bookRevenueDetails: NonNullable<TeacherPayrollCalculation["bookRevenueDetails"]> = [];
 
   bookVouchers.forEach((bv) => {
+    // If calculating formation groups only, skip normal book vouchers
+    if (groupFilter === "formation") {
+      return;
+    }
     // Formation groups books are 100% school part (0% teacher part, same as inscription fees)
     if (bv.class?.isFormation) {
       return;
@@ -977,24 +989,26 @@ export async function calculateTeacherPayroll(
   }> = [];
 
   // Find all formation classes taught by this teacher or with lessons taught by this teacher
-  const formationClasses = await prisma.class.findMany({
-    where: {
-      isFormation: true,
-      OR: [
-        { teacherId: teacher.id },
-        { id: { in: classIds } },
-      ],
-    },
-    include: {
-      FormationLevel: true,
-      branch: true,
-      enrollments: {
-        include: {
-          student: { select: { id: true, name: true } },
+  const formationClasses = groupFilter === "normal"
+    ? []
+    : await prisma.class.findMany({
+        where: {
+          isFormation: true,
+          OR: [
+            { teacherId: teacher.id },
+            { id: { in: classIds } },
+          ],
         },
-      },
-    },
-  });
+        include: {
+          FormationLevel: true,
+          branch: true,
+          enrollments: {
+            include: {
+              student: { select: { id: true, name: true } },
+            },
+          },
+        },
+      });
 
   if (formationClasses.length > 0) {
     const formationClassIds = formationClasses.map((fc) => fc.id);
@@ -1233,10 +1247,20 @@ export async function calculateTeacherPayroll(
     orderBy: { date: "asc" },
   });
 
-  const totalAdvances = salaryAdvancesList.reduce(
+  let totalAdvances = salaryAdvancesList.reduce(
     (sum, a) => sum + Number(a.amount),
     0
   );
+
+  // If calculating formation groups only and the teacher also has normal groups, reserve advances for the normal/consolidated run
+  if (groupFilter === "formation") {
+    const normalClassesCount = await prisma.class.count({
+      where: { teacherId: teacher.id, isFormation: false },
+    });
+    if (normalClassesCount > 0) {
+      totalAdvances = 0;
+    }
+  }
 
   // Fetch Photocopy Charges for this teacher in this period (§2.5)
   const photocopyChargesList = await prisma.photocopyCharge.findMany({
@@ -1246,6 +1270,12 @@ export async function calculateTeacherPayroll(
         gte: startDate,
         lte: endDate,
       },
+      ...(groupFilter === "normal" && {
+        OR: [{ class: { isFormation: false } }, { classId: null }],
+      }),
+      ...(groupFilter === "formation" && {
+        class: { isFormation: true },
+      }),
     },
     include: {
       Branch: true,
@@ -1393,6 +1423,7 @@ export async function calculateTeacherPayroll(
   return {
     teacherId: teacher.id,
     teacherName: teacher.name,
+    calculationScope: groupFilter,
     totalSessions,
     totalPaidSessions,
     totalFreeSessions,
@@ -1439,7 +1470,8 @@ export async function calculateTeacherPayroll(
 export async function generatePayrollRun(
   periodStart: Date | string,
   periodEnd: Date | string,
-  targetTeacherId?: string
+  targetTeacherId?: string,
+  groupFilter: "all" | "normal" | "formation" = "all"
 ) {
   const startDate = normalizeDateToStartOfDay(periodStart);
   const endDate = normalizeDateToEndOfDay(periodEnd);
@@ -1453,7 +1485,7 @@ export async function generatePayrollRun(
   const teacherCalculations: TeacherPayrollCalculation[] = [];
 
   for (const t of teachers) {
-    const calc = await calculateTeacherPayroll(t.id, startDate, endDate);
+    const calc = await calculateTeacherPayroll(t.id, startDate, endDate, groupFilter);
     // Only include teachers who taught lessons, had absences, have fixed salary, or have deductions
     // If targetTeacherId is provided, always include the calculation
     if (
@@ -1811,8 +1843,8 @@ export async function getOwnerPayrollOverview(startDate: Date, endDate: Date) {
   const payslips = await prisma.payslip.findMany({
     where: {
       PayrollRun: {
-        periodStart: { gte: startDate },
-        periodEnd: { lte: endDate },
+        periodStart: { lte: endDate },
+        periodEnd: { gte: startDate },
         status: { in: ["PAID", "VALIDATED", "CONFIRMED"] },
       },
       personType: "TEACHER",
