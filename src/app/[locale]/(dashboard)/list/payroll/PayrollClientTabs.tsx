@@ -572,6 +572,11 @@ export default function PayrollClientTabs({
                 <PrintMasterOwnerReportButton
                   periodStart={periodFilterStart || undefined}
                   periodEnd={periodFilterEnd || undefined}
+                  payslipIds={
+                    filteredPayslips.length > 0
+                      ? filteredPayslips.map((p) => p.id)
+                      : (payslips.length > 0 && (searchTeacher || periodFilterStart || periodFilterEnd) ? [] : undefined)
+                  }
                 />
               </div>
             </CardHeader>

@@ -9001,6 +9001,7 @@ import {
   generatePayrollRun,
   updatePayrollRunStatus,
   deletePayrollRun,
+  normalizeDateToEndOfDay,
 } from "./payroll";
 
 /**
@@ -9407,6 +9408,9 @@ export async function getTeacherPayslipConsolidatedReportAction(payslipId: numbe
       where: { id: payslipId },
       include: {
         PayrollRun: true,
+        PayslipBranchLine: {
+          include: { Branch: true },
+        },
       },
     });
 
@@ -9419,23 +9423,49 @@ export async function getTeacherPayslipConsolidatedReportAction(payslipId: numbe
       select: { id: true, name: true, phone: true },
     });
 
-    const { calculateTeacherPayroll } = await import("./payroll");
-    const calc = await calculateTeacherPayroll(
-      payslip.personId,
-      payslip.PayrollRun.periodStart,
-      payslip.PayrollRun.periodEnd
-    );
-
     const teacherName = teacher?.name || payslip.personId;
-    const groups = (calc?.groupBreakdown || []).map((g) => ({
-      teacherName,
-      groupName: g.className,
-      branchName: g.branchName,
-      payableLessons: Number(g.payableLessonsCount || 0),
-      teacherCut: Number(g.amount || 0),
-      schoolCut: Number(g.schoolAmount || 0),
-      totalTuition: Number(g.tuitionGross || 0),
-    }));
+    let groups: Array<{
+      teacherName: string;
+      groupName: string;
+      branchName?: string;
+      payableLessons: number;
+      teacherCut: number;
+      schoolCut: number;
+      totalTuition: number;
+    }> = [];
+
+    try {
+      const { calculateTeacherPayroll } = await import("./payroll");
+      const calc = await calculateTeacherPayroll(
+        payslip.personId,
+        payslip.PayrollRun.periodStart,
+        payslip.PayrollRun.periodEnd
+      );
+
+      groups = (calc?.groupBreakdown || []).map((g) => ({
+        teacherName,
+        groupName: g.className,
+        branchName: g.branchName,
+        payableLessons: Number(g.payableLessonsCount || 0),
+        teacherCut: Number(g.amount || 0),
+        schoolCut: Number(g.schoolAmount || 0),
+        totalTuition: Number(g.tuitionGross || 0),
+      }));
+    } catch (calcError) {
+      console.warn(`[Consolidated Report] calculateTeacherPayroll skipped for ${payslip.personId}:`, calcError);
+    }
+
+    if (groups.length === 0 && payslip.PayslipBranchLine && payslip.PayslipBranchLine.length > 0) {
+      groups = payslip.PayslipBranchLine.map((bl) => ({
+        teacherName,
+        groupName: "Séances consolidées",
+        branchName: bl.Branch?.name || `Siège #${bl.branchId}`,
+        payableLessons: Number(bl.sessionsCount || 0),
+        teacherCut: Number(bl.amount || 0),
+        schoolCut: 0,
+        totalTuition: 0,
+      }));
+    }
 
     const totalPayableLessons = groups.reduce((sum, g) => sum + g.payableLessons, 0) || Number(payslip.sessionsCount || 0);
     const totalTeacherCut = Number(payslip.grossAmount);
@@ -9489,25 +9519,51 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
       return { success: false, error: true, message: "Accès réservé exclusivement au propriétaire." };
     }
 
+    if (filters?.payslipIds && filters.payslipIds.length === 0) {
+      return {
+        success: true,
+        error: false,
+        data: {
+          periodStart: filters?.periodStart,
+          periodEnd: filters?.periodEnd,
+          generatedAt: new Date().toISOString(),
+          teachersCount: 0,
+          totalLessons: 0,
+          totalTeacherGross: 0,
+          totalAdvances: 0,
+          totalPhotocopy: 0,
+          totalTeacherNet: 0,
+          totalSchoolGross: 0,
+          totalSchoolNet: 0,
+          teachers: [],
+        },
+      };
+    }
+
     const whereClause: any = {
       personType: "TEACHER",
     };
 
     if (filters?.payslipIds && filters.payslipIds.length > 0) {
       whereClause.id = { in: filters.payslipIds };
-    } else if (filters?.periodStart && filters?.periodEnd) {
-      const start = new Date(filters.periodStart);
-      const end = new Date(filters.periodEnd);
-      whereClause.PayrollRun = {
-        periodStart: { gte: start },
-        periodEnd: { lte: end },
-      };
+    } else if (filters?.periodStart || filters?.periodEnd) {
+      const payrollRunFilter: any = {};
+      if (filters.periodStart) {
+        payrollRunFilter.periodStart = { gte: normalizeDateToStartOfDay(filters.periodStart) };
+      }
+      if (filters.periodEnd) {
+        payrollRunFilter.periodEnd = { lte: normalizeDateToEndOfDay(filters.periodEnd) };
+      }
+      whereClause.PayrollRun = payrollRunFilter;
     }
 
     const payslips = await prisma.payslip.findMany({
       where: whereClause,
       include: {
         PayrollRun: true,
+        PayslipBranchLine: {
+          include: { Branch: true },
+        },
       },
       orderBy: { id: "desc" },
       take: 200,
@@ -9548,20 +9604,44 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
         const teacher = teacherMap.get(p.personId);
         const teacherName = teacher?.name || p.personId;
 
-        const calc = await calculateTeacherPayroll(
-          p.personId,
-          p.PayrollRun.periodStart,
-          p.PayrollRun.periodEnd
-        );
+        let groups: Array<{
+          teacherName: string;
+          groupName: string;
+          branchName?: string;
+          payableLessons: number;
+          teacherCut: number;
+          schoolCut: number;
+        }> = [];
 
-        const groups = (calc?.groupBreakdown || []).map((g) => ({
-          teacherName,
-          groupName: g.className,
-          branchName: g.branchName,
-          payableLessons: Number(g.payableLessonsCount || 0),
-          teacherCut: Number(g.amount || 0),
-          schoolCut: Number(g.schoolAmount || 0),
-        }));
+        try {
+          const calc = await calculateTeacherPayroll(
+            p.personId,
+            p.PayrollRun.periodStart,
+            p.PayrollRun.periodEnd
+          );
+
+          groups = (calc?.groupBreakdown || []).map((g) => ({
+            teacherName,
+            groupName: g.className,
+            branchName: g.branchName,
+            payableLessons: Number(g.payableLessonsCount || 0),
+            teacherCut: Number(g.amount || 0),
+            schoolCut: Number(g.schoolAmount || 0),
+          }));
+        } catch (calcError) {
+          console.warn(`[Master Report] calculateTeacherPayroll skipped for ${p.personId}:`, calcError);
+        }
+
+        if (groups.length === 0 && p.PayslipBranchLine && p.PayslipBranchLine.length > 0) {
+          groups = p.PayslipBranchLine.map((bl) => ({
+            teacherName,
+            groupName: "Séances consolidées",
+            branchName: bl.Branch?.name || `Siège #${bl.branchId}`,
+            payableLessons: Number(bl.sessionsCount || 0),
+            teacherCut: Number(bl.amount || 0),
+            schoolCut: 0,
+          }));
+        }
 
         const totalLessons = groups.reduce((s, g) => s + g.payableLessons, 0) || Number(p.sessionsCount || 0);
         const grossTeacherCut = Number(p.grossAmount);
