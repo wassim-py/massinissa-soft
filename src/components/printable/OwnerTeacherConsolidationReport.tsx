@@ -237,6 +237,12 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
                 <span>+ {formatDZD(bonus)}</span>
               </div>
             )}
+            {bonus < 0 && (
+              <div className="flex justify-between text-rose-700 font-bold">
+                <span className="font-sans">Déduction / Retenue exceptionnelle :</span>
+                <span>- {formatDZD(Math.abs(bonus))}</span>
+              </div>
+            )}
             {advances > 0 && (
               <div className="flex justify-between text-red-600">
                 <span className="font-sans">Avances sur salaire déduites :</span>

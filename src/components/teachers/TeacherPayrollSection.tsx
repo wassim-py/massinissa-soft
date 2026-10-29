@@ -80,6 +80,7 @@ export default function TeacherPayrollSection({
   const [savedRunId, setSavedRunId] = useState<number | null>(null);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [bonusInput, setBonusInput] = useState<string>("");
+  const [adjustmentMode, setAdjustmentMode] = useState<"addition" | "deduction">("addition");
   const [savedBonus, setSavedBonus] = useState<number>(0);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [, startTransition] = useTransition();
@@ -159,15 +160,30 @@ export default function TeacherPayrollSection({
     });
   };
 
+  const getEffectiveBonus = (input: string, mode: "addition" | "deduction"): number => {
+    if (!input || input === "-" || input === "+") return 0;
+    const cleaned = input.trim().replace(/,/g, ".");
+    const num = parseFloat(cleaned);
+    if (isNaN(num)) return 0;
+    if (input.trim().startsWith("-")) return num;
+    return mode === "deduction" ? -Math.abs(num) : Math.abs(num);
+  };
+
   const handleOpenSaveModal = () => {
     if (!startDate || !endDate || !currentPayroll) return;
-    setBonusInput(savedBonus > 0 ? String(savedBonus) : "");
+    if (savedBonus !== 0) {
+      setAdjustmentMode(savedBonus < 0 ? "deduction" : "addition");
+      setBonusInput(String(Math.abs(savedBonus)));
+    } else {
+      setAdjustmentMode("addition");
+      setBonusInput("");
+    }
     setShowSaveModal(true);
   };
 
   const handleConfirmSavePayslip = () => {
     if (!startDate || !endDate || !currentPayroll) return;
-    const bonusNum = Math.max(0, Number(bonusInput) || 0);
+    const bonusNum = getEffectiveBonus(bonusInput, adjustmentMode);
     setIsSaving(true);
     setFeedback(null);
     startTransition(async () => {
@@ -190,6 +206,10 @@ export default function TeacherPayrollSection({
               ? locale === "ar"
                 ? `تم حفظ كشف الراتب بنجاح (دورة #${res.payrollRunId}) مع إضافة منحة بقيمة ${bonusNum.toLocaleString("ar-DZ")} دج.`
                 : `Fiche de paie enregistrée avec succès (Cycle #${res.payrollRunId}) avec un bonus de ${bonusNum.toLocaleString("fr-DZ")} DZD.`
+              : bonusNum < 0
+              ? locale === "ar"
+                ? `تم حفظ كشف الراتب بنجاح (دورة #${res.payrollRunId}) مع اقتطاع/خصم بقيمة ${Math.abs(bonusNum).toLocaleString("ar-DZ")} دج.`
+                : `Fiche de paie enregistrée avec succès (Cycle #${res.payrollRunId}) avec une déduction de ${Math.abs(bonusNum).toLocaleString("fr-DZ")} DZD.`
               : t("payslipSavedSuccess", { runId: res.payrollRunId }),
         });
       } else {
@@ -317,12 +337,12 @@ export default function TeacherPayrollSection({
         ),
         freeSessionsCount: currentPayroll.totalFreeSessions ?? currentPayroll.sessionDetails?.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length,
         teacherAbsencesCount: currentPayroll.teacherAbsencesCount,
-        grossAmount: currentPayroll.grossAmount + savedBonus,
+        grossAmount: Math.max(0, currentPayroll.grossAmount + savedBonus),
         bookRevenue: currentPayroll.bookRevenue,
         bookRevenueDetails: currentPayroll.bookRevenueDetails,
         advances: currentPayroll.salaryAdvances,
         photocopyDeductions: currentPayroll.photocopyDeductions,
-        netAmount: currentPayroll.netAmount + savedBonus,
+        netAmount: Math.max(0, currentPayroll.netAmount + savedBonus),
         branchLines: currentPayroll.branchBreakdown.map((b) => ({
           branchId: b.branchId,
           branchName: b.branchName,
@@ -386,7 +406,7 @@ export default function TeacherPayrollSection({
         bonus: savedBonus,
         salaryAdvances: currentPayroll.salaryAdvances,
         photocopyDeductions: currentPayroll.photocopyDeductions,
-        netTeacherPayout: currentPayroll.netAmount + savedBonus,
+        netTeacherPayout: Math.max(0, currentPayroll.netAmount + savedBonus),
         netSchoolRevenue:
           (currentPayroll.groupBreakdown || []).reduce((s, g) => s + (g.schoolAmount || 0), 0) +
           currentPayroll.photocopyDeductions,
@@ -814,15 +834,23 @@ export default function TeacherPayrollSection({
               <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-muted font-medium">{t("grossSalary")}</span>
-                  {savedBonus > 0 && (
-                    <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                      {locale === "ar" ? "(يشمل المنحة)" : "(Bonus inclus)"}
+                  {savedBonus !== 0 && (
+                    <span
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                        savedBonus > 0
+                          ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                          : "text-rose-700 bg-rose-50 border-rose-200"
+                      }`}
+                    >
+                      {savedBonus > 0
+                        ? (locale === "ar" ? "(يشمل المنحة)" : "(Bonus inclus)")
+                        : (locale === "ar" ? "(يشمل الخصم)" : "(Déduction incluse)")}
                     </span>
                   )}
                 </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-bold text-success-text">
-                    {formatDZD(currentPayroll.grossAmount + savedBonus)}
+                    {formatDZD(Math.max(0, currentPayroll.grossAmount + savedBonus))}
                   </span>
                 </div>
               </div>
@@ -915,15 +943,25 @@ export default function TeacherPayrollSection({
               <div className="bg-emerald-50/70 border-2 border-emerald-300 p-4 rounded-xl flex flex-col justify-between shadow-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-emerald-800">{t("netDueAmount")}</span>
-                  {savedBonus > 0 && (
-                    <Badge variant="success" size="sm" className="bg-emerald-100 text-emerald-950 font-bold border border-emerald-300">
-                      {locale === "ar" ? `+ ${formatDZD(savedBonus)} منحة` : `+ ${formatDZD(savedBonus)} bonus`}
+                  {savedBonus !== 0 && (
+                    <Badge
+                      variant={savedBonus > 0 ? "success" : "danger"}
+                      size="sm"
+                      className={`font-bold border ${
+                        savedBonus > 0
+                          ? "bg-emerald-100 text-emerald-950 border-emerald-300"
+                          : "bg-rose-100 text-rose-950 border-rose-300"
+                      }`}
+                    >
+                      {savedBonus > 0
+                        ? (locale === "ar" ? `+ ${formatDZD(savedBonus)} منحة` : `+ ${formatDZD(savedBonus)} bonus`)
+                        : (locale === "ar" ? `- ${formatDZD(Math.abs(savedBonus))} خصم` : `- ${formatDZD(Math.abs(savedBonus))} déduction`)}
                     </Badge>
                   )}
                 </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-black text-emerald-900">
-                    {formatDZD(currentPayroll.netAmount + savedBonus)}
+                    {formatDZD(Math.max(0, currentPayroll.netAmount + savedBonus))}
                   </span>
                 </div>
               </div>
@@ -1533,7 +1571,7 @@ export default function TeacherPayrollSection({
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-gray-900">
-                    {locale === "ar" ? "حفظ كشف الراتب وإضافة مكافأة" : "Enregistrer la paie & Bonus"}
+                    {locale === "ar" ? "تعديل المستحقات (منحة أو خصم) وحفظ كشف الراتب" : "Ajustement (Bonus / Déduction) & Enregistrement"}
                   </h3>
                   <p className="text-xs text-muted">
                     {teacherName} • {currentPeriodLabel}
@@ -1561,10 +1599,10 @@ export default function TeacherPayrollSection({
               <div className="p-3.5 rounded-xl bg-blue-50/80 border border-blue-200 flex items-center justify-between shadow-xs">
                 <div>
                   <span className="text-xs text-blue-900 font-bold block">
-                    {locale === "ar" ? "صافي المستحقات للأستاذ (Net à Payer)" : "Net à payer à l'enseignant"}
+                    {locale === "ar" ? "صافي المستحقات الحالي (Net à Payer)" : "Net à payer actuel (calculé)"}
                   </span>
                   <span className="text-[11px] text-blue-700">
-                    {locale === "ar" ? "المبلغ المحسوب الحالي قبل المكافأة" : "Montant calculé avant bonus"}
+                    {locale === "ar" ? "المبلغ المحسوب الحالي قبل أي تعديل" : "Montant calculé avant tout ajustement"}
                   </span>
                 </div>
                 <span className="text-xl font-black font-mono text-blue-950">
@@ -1572,43 +1610,152 @@ export default function TeacherPayrollSection({
                 </span>
               </div>
 
-              {/* Bonus Input */}
+              {/* Adjustment Mode Toggle (Addition vs Deduction) */}
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-1.5">
+                  {locale === "ar" ? "نوع العملية :" : "Type d'ajustement :"}
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdjustmentMode("addition");
+                      if (bonusInput.startsWith("-")) {
+                        setBonusInput(bonusInput.replace("-", ""));
+                      }
+                    }}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all border cursor-pointer ${
+                      adjustmentMode === "addition"
+                        ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                        : "bg-surface-subtle border-border text-gray-700 hover:bg-emerald-50 hover:border-emerald-300"
+                    }`}
+                  >
+                    <span>➕</span>
+                    <span>{locale === "ar" ? "إضافة مكافأة (Bonus +)" : "Ajout (Prime / Bonus +)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdjustmentMode("deduction");
+                      if (bonusInput && !bonusInput.startsWith("-")) {
+                        setBonusInput(`-${bonusInput}`);
+                      } else if (!bonusInput) {
+                        setBonusInput("-");
+                      }
+                    }}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all border cursor-pointer ${
+                      adjustmentMode === "deduction"
+                        ? "bg-rose-600 text-white border-rose-600 shadow-xs"
+                        : "bg-surface-subtle border-border text-gray-700 hover:bg-rose-50 hover:border-rose-300"
+                    }`}
+                  >
+                    <span>➖</span>
+                    <span>{locale === "ar" ? "تطبيق خصم (Déduction -)" : "Déduction / Retenue (-)"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Bonus / Deduction Input Field */}
               <div>
                 <label className="block text-xs font-bold text-gray-800 mb-1.5 flex items-center justify-between">
-                  <span>{locale === "ar" ? "إضافة مكافأة / منحة للأستاذ (دج)" : "Ajouter une prime / bonus (DZD)"}</span>
+                  <span>
+                    {adjustmentMode === "addition"
+                      ? locale === "ar"
+                        ? "مبلغ المكافأة / المنحة (دج)"
+                        : "Montant du bonus / prime (DZD)"
+                      : locale === "ar"
+                      ? "مبلغ الخصم / الاقتطاع (دج)"
+                      : "Montant de la déduction (DZD)"}
+                  </span>
                   <span className="text-[11px] text-muted font-normal">
-                    {locale === "ar" ? "(0 دج في حال عدم وجود منحة)" : "(0 si aucun)"}
+                    {locale === "ar" ? "(يقبل أي قيمة رقمية)" : "(Accepte toute valeur)"}
                   </span>
                 </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="500"
-                  value={bonusInput}
-                  onChange={(e) => setBonusInput(e.target.value)}
-                  placeholder="0"
-                  className="w-full text-base font-mono font-bold px-3.5 py-2.5 rounded-xl border border-border bg-surface text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
-                  autoFocus
-                />
-
-                {/* Fast Presets */}
-                <div className="grid grid-cols-4 gap-1.5 mt-2.5">
-                  {[0, 2000, 5000, 10000].map((preset) => (
+                <div className="relative">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={bonusInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      // Allow empty, minus, digits, dots, commas
+                      if (val === "" || val === "-" || val === "+" || /^[+-]?\d*[.,]?\d*$/.test(val.trim())) {
+                        setBonusInput(val);
+                        if (val.trim().startsWith("-")) {
+                          setAdjustmentMode("deduction");
+                        } else if (val.trim() && val.trim() !== "-" && val.trim() !== "+") {
+                          setAdjustmentMode("addition");
+                        }
+                      }
+                    }}
+                    placeholder={adjustmentMode === "addition" ? "ex: 5000" : "ex: -2000"}
+                    className="w-full text-base font-mono font-bold px-3.5 py-2.5 rounded-xl border border-border bg-surface text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                    autoFocus
+                  />
+                  {bonusInput && (
                     <button
-                      key={preset}
                       type="button"
-                      onClick={() => setBonusInput(preset === 0 ? "" : String(preset))}
-                      className={`px-2 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border cursor-pointer ${
-                        (preset === 0 && (!bonusInput || bonusInput === "0")) || String(bonusInput) === String(preset)
-                          ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
-                          : "bg-surface-subtle border-border/70 text-gray-700 hover:bg-emerald-50 hover:border-emerald-300"
-                      }`}
+                      onClick={() => setBonusInput("")}
+                      className="absolute left-3 rtl:left-auto rtl:right-3 top-1/2 -translate-y-1/2 text-xs text-muted hover:text-gray-900 bg-surface-subtle rounded-full w-5 h-5 flex items-center justify-center cursor-pointer"
+                      title={locale === "ar" ? "مسح" : "Effacer"}
                     >
-                      {preset === 0
-                        ? (locale === "ar" ? "بدون منحة" : "0 DZD")
-                        : `${preset.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD`}
+                      ✕
                     </button>
-                  ))}
+                  )}
+                </div>
+
+                {/* Fast Presets based on Mode */}
+                <div className="grid grid-cols-5 gap-1.5 mt-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBonusInput("");
+                      setAdjustmentMode("addition");
+                    }}
+                    className={`px-1.5 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border cursor-pointer col-span-1 ${
+                      !bonusInput || bonusInput === "0" || bonusInput === "-"
+                        ? "bg-slate-800 text-white border-slate-800 shadow-xs"
+                        : "bg-surface-subtle border-border/70 text-gray-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    {locale === "ar" ? "بدون (0)" : "0 (Aucun)"}
+                  </button>
+
+                  {adjustmentMode === "addition"
+                    ? [1000, 2000, 5000, 10000].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => {
+                            setAdjustmentMode("addition");
+                            setBonusInput(String(preset));
+                          }}
+                          className={`px-1 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border cursor-pointer ${
+                            bonusInput === String(preset)
+                              ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                              : "bg-surface-subtle border-border/70 text-gray-700 hover:bg-emerald-50 hover:border-emerald-300"
+                          }`}
+                        >
+                          +{preset.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                        </button>
+                      ))
+                    : [-500, -1000, -2000, -5000].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => {
+                            setAdjustmentMode("deduction");
+                            setBonusInput(String(preset));
+                          }}
+                          className={`px-1 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border cursor-pointer ${
+                            bonusInput === String(preset)
+                              ? "bg-rose-600 text-white border-rose-600 shadow-xs"
+                              : "bg-surface-subtle border-border/70 text-gray-700 hover:bg-rose-50 hover:border-rose-300"
+                          }`}
+                        >
+                          {preset.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                        </button>
+                      ))}
                 </div>
               </div>
 
@@ -1616,35 +1763,55 @@ export default function TeacherPayrollSection({
               <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 space-y-1">
                 <p className="font-bold flex items-center gap-1 text-[11px] text-amber-950">
                   <span>💡</span>
-                  <span>{locale === "ar" ? "قاعدة عرض المكافأة في المخرجات :" : "Règles d'affichage du bonus :"}</span>
+                  <span>{locale === "ar" ? "قاعدة عرض التعديل في المخرجات :" : "Règles d'affichage :"}</span>
                 </p>
                 <p className="text-[11px] text-amber-800 leading-relaxed">
                   {locale === "ar"
-                    ? "• قسيمة الراتب المطبوعة للأستاذ: لن يظهر بند المكافأة إطلاقاً، بل ستظهر القيمة الصافية الجديدة مباشرة بعد المكافأة."
-                    : "• Fiche imprimable (enseignant) : Le bonus ne s'affichera pas, la nouvelle valeur après bonus s'affichera directement."}
+                    ? "• قسيمة الراتب المطبوعة للأستاذ: لن يظهر بند المكافأة أو الخصم إطلاقاً، بل ستظهر القيمة الصافية الجديدة مباشرة بعد التعديل."
+                    : "• Fiche imprimable (enseignant) : La déduction ou le bonus ne s'affichera pas, la nouvelle valeur finale s'affichera directement."}
                 </p>
                 <p className="text-[11px] text-amber-800 leading-relaxed">
                   {locale === "ar"
-                    ? "• تقرير المالك الفردي الخاص: ستظهر المكافأة بالتفصيل كبند مستقل (+ Prime/Bonus) مع الصافي النهائي المستحق."
-                    : "• Rapport individuel propriétaire : Le bonus apparaîtra en détail (+ Prime/Bonus) avec le net réel à décaisser."}
+                    ? "• تقرير المالك الفردي الخاص: ستظهر المنحة (+ Prime/Bonus) أو الخصم (- Retenue) بالتفصيل مع الصافي النهائي."
+                    : "• Rapport individuel propriétaire : Le bonus (+ Prime) ou la déduction (- Retenue) apparaîtra en détail."}
                 </p>
               </div>
 
-              {/* Dynamic preview after bonus */}
-              <div className="p-3 rounded-xl bg-emerald-50 border-2 border-emerald-300 flex items-center justify-between shadow-xs">
-                <div>
-                  <span className="text-xs text-emerald-950 font-bold block">
-                    {locale === "ar" ? "الصافي الإجمالي الجديد (Net à Décaisser)" : "Nouveau net à décaisser"}
-                  </span>
-                  <span className="text-[10px] text-emerald-700 font-mono">
-                    {formatDZD(currentPayroll.netAmount)}
-                    {Number(bonusInput) > 0 ? ` + ${formatDZD(Number(bonusInput))}` : ""}
-                  </span>
-                </div>
-                <span className="text-xl font-black font-mono text-emerald-900">
-                  {formatDZD(currentPayroll.netAmount + Math.max(0, Number(bonusInput) || 0))}
-                </span>
-              </div>
+              {/* Dynamic preview after bonus / deduction */}
+              {(() => {
+                const effective = getEffectiveBonus(bonusInput, adjustmentMode);
+                const finalNet = Math.max(0, currentPayroll.netAmount + effective);
+
+                return (
+                  <div
+                    className={`p-3.5 rounded-xl border-2 flex items-center justify-between shadow-xs transition-colors ${
+                      effective > 0
+                        ? "bg-emerald-50/90 border-emerald-300 text-emerald-950"
+                        : effective < 0
+                        ? "bg-rose-50/90 border-rose-300 text-rose-950"
+                        : "bg-surface-subtle border-border text-gray-900"
+                    }`}
+                  >
+                    <div>
+                      <span className="text-xs font-bold block">
+                        {locale === "ar" ? "الصافي النهائي المستحق (Net à Décaisser)" : "Net final à décaisser"}
+                      </span>
+                      <span className="text-[11px] font-mono opacity-80">
+                        {formatDZD(currentPayroll.netAmount)}
+                        {effective > 0 && ` + ${formatDZD(effective)} (منحة)`}
+                        {effective < 0 && ` - ${formatDZD(Math.abs(effective))} (خصم)`}
+                      </span>
+                    </div>
+                    <span
+                      className={`text-xl font-black font-mono ${
+                        effective > 0 ? "text-emerald-900" : effective < 0 ? "text-rose-900" : "text-gray-950"
+                      }`}
+                    >
+                      {formatDZD(finalNet)}
+                    </span>
+                  </div>
+                );
+              })()}
 
               {/* Action buttons */}
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">

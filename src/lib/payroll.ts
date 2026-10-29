@@ -1724,8 +1724,8 @@ export async function generatePayrollRun(
           }));
 
         const isTarget = targetTeacherId && calc.teacherId === targetTeacherId;
-        const teacherBonus = isTarget ? Math.max(0, targetBonus || 0) : 0;
-        const netAfterBonus = calc.netAmount + teacherBonus;
+        const teacherBonus = isTarget ? (Number(targetBonus) || 0) : 0;
+        const netAfterBonus = Math.max(0, calc.netAmount + teacherBonus);
 
         await tx.payslip.create({
           data: {

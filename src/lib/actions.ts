@@ -9381,7 +9381,7 @@ export async function generateIndividualTeacherPayrollAction(formData: {
       formData.endDate,
       formData.teacherId,
       formData.groupFilter || "all",
-      formData.bonus || 0
+      formData.bonus ?? 0
     );
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
