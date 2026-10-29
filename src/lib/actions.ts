@@ -2275,14 +2275,34 @@ export const saveAttendance = async (
             .map((v) => v.studentId)
         );
 
+        // Catch-up records where THIS lesson is the missed lesson
+        const caughtUpElsewhereRecords = await tx.catchUpAttendance.findMany({
+          where: { missedLessonId: lessonId },
+          select: {
+            studentId: true,
+            catchUpLesson: { select: { class: { select: { name: true } } } },
+          },
+        });
+        const caughtUpElsewhereMap = new Map(
+          caughtUpElsewhereRecords.map((c) => [c.studentId, c.catchUpLesson?.class?.name || "فوج آخر"])
+        );
+
         for (const [key, value] of attendanceEntries) {
           const studentId = key.substring(key.indexOf("[") + 1, key.indexOf("]"));
           if (externalVisitorStudentIds.has(studentId)) {
             // External catch-up visitors are tracked via CatchUpAttendance
             continue;
           }
-          const status = value === "PRESENT" ? "PRESENT" : value === "NOT_DEFINED" ? "NOT_DEFINED" : "ABSENT";
-          const justification = status === "NOT_DEFINED" ? (data.get(`justification[${studentId}]`) as string)?.trim() || null : null;
+          let status = value === "PRESENT" ? "PRESENT" : value === "NOT_DEFINED" ? "NOT_DEFINED" : "ABSENT";
+          let justification = status === "NOT_DEFINED" ? (data.get(`justification[${studentId}]`) as string)?.trim() || null : null;
+
+          // If the student has an active catch-up elsewhere for this missed lesson,
+          // do NOT allow them to be marked PRESENT (prevents double billing and duplicate session counts).
+          if (status === "PRESENT" && caughtUpElsewhereMap.has(studentId)) {
+            status = "ABSENT";
+            justification = `استدراك في ${caughtUpElsewhereMap.get(studentId)}`;
+          }
+
           const existingRecord = recordsMap.get(studentId);
 
           if (existingRecord) {
@@ -2606,6 +2626,30 @@ export const markSingleAttendanceAction = async (input: {
         error: true,
         message: "La justification est obligatoire pour le statut non défini / تبرير الغياب إلزامي لكل تلميذ محدد كغير محدد.",
       };
+    }
+
+    // Guard against marking a student PRESENT when they already have an active CatchUpAttendance for this missed lesson
+    if (input.status === "PRESENT") {
+      const activeCatchUp = await prisma.catchUpAttendance.findFirst({
+        where: {
+          missedLessonId: input.lessonId,
+          studentId: input.studentId,
+        },
+        include: {
+          catchUpLesson: {
+            include: { class: { select: { name: true } } },
+          },
+        },
+      });
+
+      if (activeCatchUp) {
+        const hostGroup = activeCatchUp.catchUpLesson?.class?.name || "فوج آخر";
+        return {
+          success: false,
+          error: true,
+          message: `لا يمكن تسجيل التلميذ كحاضر لأنه مسجل في استدراك في (${hostGroup}) لهذه الحصة. يرجى إلغاء الاستدراك أولاً إذا كان التلميذ حاضراً هنا فعلياً.`,
+        };
+      }
     }
 
     const adminId = session.userId || session.rawRole || "admin";
@@ -5543,6 +5587,22 @@ export const editVoucher = async (
     }
 
     if (data.fieldName && data.newValue && !auditLogs.some((l) => l.fieldName === data.fieldName)) {
+      if (data.fieldName === "issuedAt") {
+        const parsedDate = new Date(data.newValue);
+        if (isNaN(parsedDate.getTime())) {
+          return { success: false, error: true, message: "تاريخ الوصل غير صالح." };
+        }
+        const now = new Date();
+        const maxFutureDate = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+        if (parsedDate > maxFutureDate) {
+          return {
+            success: false,
+            error: true,
+            message: "تاريخ الوصل لا يمكن أن يتجاوز 90 يوماً في المستقبل.",
+          };
+        }
+      }
+
       auditLogs.push({
         fieldName: data.fieldName,
         oldValue: String((voucher as any)[data.fieldName] ?? ""),

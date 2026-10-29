@@ -305,6 +305,10 @@ function parseDateDMY(str: string): Date | null {
   let [d, m, y] = parts.map(Number);
   if (!d || !m || !y) return null;
   if (y < 100) y += 2000;
+  // Guard against academic year typo: typing 27 for Sept-Dec (which belong to 2026)
+  if (y === 2027 && m >= 9 && m <= 12) {
+    y = 2026;
+  }
   const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
   return isNaN(dt.getTime()) ? null : dt;
 }

@@ -563,6 +563,23 @@ export async function calculateTeacherPayroll(
       })
     : [];
 
+  // Track catch-up records where lessons taught in this period were the MISSED lessons.
+  // If a student already caught up for lesson X in another group (as a visitor),
+  // they must NOT be counted as paying or present in lesson X to prevent double compensation.
+  const catchUpsForMissedLessons = lessonIds.length > 0
+    ? await prisma.catchUpAttendance.findMany({
+        where: { missedLessonId: { in: lessonIds } },
+        select: { studentId: true, missedLessonId: true },
+      })
+    : [];
+  const missedLessonCatchUpMap = new Map<number, Set<string>>();
+  for (const c of catchUpsForMissedLessons) {
+    if (!missedLessonCatchUpMap.has(c.missedLessonId)) {
+      missedLessonCatchUpMap.set(c.missedLessonId, new Set<string>());
+    }
+    missedLessonCatchUpMap.get(c.missedLessonId)!.add(c.studentId);
+  }
+
   // Fetch all non-voided BOOK vouchers issued during [startDate, endDate] for this teacher (100% Teacher Revenue)
   const bookVouchers = await prisma.voucher.findMany({
     where: {
@@ -644,11 +661,17 @@ export async function calculateTeacherPayroll(
       catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id).map((cv) => cv.studentId)
     );
     const visitorsInLesson = catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id);
+    const caughtUpElsewhereStudents = missedLessonCatchUpMap.get(lesson.id);
 
-    // Regular present count excludes any student already counted as a catch-up visitor to prevent double counting
+    // Regular present count excludes any student already counted as a catch-up visitor or who caught up elsewhere to prevent double counting
     const regularPresentStudentIds = new Set(
       lesson.attendances
-        .filter((a) => a.status === "PRESENT" && !visitorStudentIds.has(a.studentId))
+        .filter(
+          (a) =>
+            a.status === "PRESENT" &&
+            !visitorStudentIds.has(a.studentId) &&
+            (!caughtUpElsewhereStudents || !caughtUpElsewhereStudents.has(a.studentId))
+        )
         .map((a) => a.studentId)
     );
     const regularPresentCount = regularPresentStudentIds.size;
@@ -701,6 +724,8 @@ export async function calculateTeacherPayroll(
       lesson.attendances.forEach((att) => {
         // If this student is hosted as a visitor in this lesson, skip here (handled in visitorsInLesson)
         if (visitorStudentIds.has(att.studentId)) return;
+        // If this student already caught up for this missed lesson elsewhere, skip here (paid in host lesson)
+        if (caughtUpElsewhereStudents?.has(att.studentId)) return;
         // Skip duplicate student attendance records to guarantee accurate calculation
         if (countedPayingStudentIds.has(att.studentId)) return;
 

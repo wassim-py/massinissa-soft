@@ -581,6 +581,17 @@ const AttendanceRoster = ({
   const isConfirmedRef = useRef(false);
 
   const handleStatusChange = (studentId: string, status: AttendanceStatus) => {
+    if (status === "PRESENT" && caughtUpMap.has(studentId)) {
+      const cu = caughtUpMap.get(studentId);
+      const hostGroup = cu?.catchUpClassName || (locale === "ar" ? "فوج آخر" : "un autre groupe");
+      toast.warn(
+        locale === "ar"
+          ? `لا يمكن تسجيل التلميذ كحاضر لأنه مسجل في استدراك في (${hostGroup}) لهذه الحصة. ألغِ الاستدراك أولاً إذا حضر هنا.`
+          : `Impossible de marquer l'élève présent: il est déjà inscrit en rattrapage dans (${hostGroup}).`
+      );
+      return;
+    }
+
     const previousStatus = attendance[studentId];
     setAttendance((prev) => ({ ...prev, [studentId]: status }));
 
@@ -1476,13 +1487,25 @@ const AttendanceRoster = ({
                       <button
                         type="button"
                         onClick={() => handleStatusChange(student.id, "PRESENT")}
-                        className={`flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all duration-150 select-none cursor-pointer active:scale-[0.98] ${
-                          currentStatus === "PRESENT"
-                            ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs ring-2 ring-emerald-500/25 border border-emerald-600"
-                            : "bg-emerald-50/70 text-emerald-800 border border-emerald-200/70 hover:bg-emerald-100 hover:border-emerald-300"
+                        disabled={caughtUpMap.has(student.id)}
+                        title={
+                          caughtUpMap.has(student.id)
+                            ? (locale === "ar"
+                                ? `مسجل كاستدراك في (${caughtUpMap.get(student.id)?.catchUpClassName}) - ألغِ الاستدراك أولاً لتسجيل حضوره هنا`
+                                : `Inscrit en rattrapage dans (${caughtUpMap.get(student.id)?.catchUpClassName})`)
+                            : undefined
+                        }
+                        className={`flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all duration-150 select-none ${
+                          caughtUpMap.has(student.id)
+                            ? "opacity-40 cursor-not-allowed bg-gray-100 text-gray-400 border border-gray-200"
+                            : `cursor-pointer active:scale-[0.98] ${
+                                currentStatus === "PRESENT"
+                                  ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs ring-2 ring-emerald-500/25 border border-emerald-600"
+                                  : "bg-emerald-50/70 text-emerald-800 border border-emerald-200/70 hover:bg-emerald-100 hover:border-emerald-300"
+                              }`
                         }`}
                       >
-                        <Check className={`w-3.5 h-3.5 stroke-[2.5] ${currentStatus === "PRESENT" ? "text-white" : "text-emerald-700"}`} />
+                        <Check className={`w-3.5 h-3.5 stroke-[2.5] ${currentStatus === "PRESENT" ? "text-white" : caughtUpMap.has(student.id) ? "text-gray-400" : "text-emerald-700"}`} />
                         <span>{t("present")}</span>
                       </button>
 
