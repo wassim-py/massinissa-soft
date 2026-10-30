@@ -469,9 +469,7 @@ export default function StudentPaymentDetails({
       (cu: any) =>
         cu.missedLesson?.classId === c.id ||
         cu.missedLesson?.lessonGroups?.some((lg: any) => lg.classId === c.id) ||
-        cu.catchUpLesson?.classId === c.id ||
-        cu.catchUpLesson?.lessonGroups?.some((lg: any) => lg.classId === c.id) ||
-        Boolean((c as any).lessons && (c as any).lessons.some((l: any) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId))
+        Boolean((c as any).lessons && (c as any).lessons.some((l: any) => l.id === cu.missedLessonId))
     );
 
     const teacherId = (c as any).teacherId || c.teacher?.id;
@@ -641,6 +639,8 @@ export default function StudentPaymentDetails({
       netRefundableSessions,
       transferableSessions: creditMetrics.transferableSessions,
       openEndedHeldSessions: creditMetrics.openEndedHeldSessions,
+      partialTransferPaidDzd: creditMetrics.partialTransferPaidDzd || 0,
+      partialTransferRemainderDzd: creditMetrics.partialTransferRemainderDzd || 0,
       refundableAmount,
       effectiveLessonPrice,
       mostRecentActiveCycle,
@@ -685,13 +685,14 @@ export default function StudentPaymentDetails({
     availableSessions: number,
     openEndedHeldSessions: number = 0
   ) => {
+    const clampedMax = Math.max(0, availableSessions);
     setTransferModal({
       isOpen: true,
       enrollment: enr,
-      maxSessions: Math.max(0, availableSessions),
+      maxSessions: clampedMax,
       openEndedHeldSessions,
     });
-    setSessionsToTransfer(Math.max(1, availableSessions));
+    setSessionsToTransfer(clampedMax);
     setTargetClassId("");
     setTransferNotes("");
   };
@@ -700,7 +701,8 @@ export default function StudentPaymentDetails({
     if (
       !transferModal.enrollment ||
       !targetClassId ||
-      sessionsToTransfer < 1 ||
+      sessionsToTransfer < 0 ||
+      (transferModal.maxSessions > 0 && sessionsToTransfer < 1) ||
       sessionsToTransfer > transferModal.maxSessions
     ) {
       toast.error(t("transferSelectError"));
@@ -1401,6 +1403,20 @@ export default function StudentPaymentDetails({
                               {cm.transferableSessions} {locale === "ar" ? "قابلة للتحويل" : "transférables"}
                             </span>
                           )}
+                          {cm.partialTransferRemainderDzd > 0 && (
+                            <span
+                              className="block text-[10px] text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-medium mt-1 mx-auto max-w-fit"
+                              title={
+                                locale === "ar"
+                                  ? `رصيد محول جزئي (${cm.partialTransferPaidDzd.toLocaleString("ar-DZ")} دج) — المتبقي لإكمال الدورة: ${cm.partialTransferRemainderDzd.toLocaleString("ar-DZ")} دج`
+                                  : `Transfert partiel (${cm.partialTransferPaidDzd.toLocaleString("fr-DZ")} DZD) — Reste à payer: ${cm.partialTransferRemainderDzd.toLocaleString("fr-DZ")} DZD`
+                              }
+                            >
+                              {locale === "ar"
+                                ? `متبقي ${cm.partialTransferRemainderDzd.toLocaleString("ar-DZ")} دج لإكمال الدورة`
+                                : `Reste ${cm.partialTransferRemainderDzd.toLocaleString("fr-DZ")} DZD`}
+                            </span>
+                          )}
                         </div>
                         <div>
                           <span className="text-[10px] text-muted block">{t("sessionsConsumed")}</span>
@@ -1488,14 +1504,14 @@ export default function StudentPaymentDetails({
                           >
                             {isExpiring ? t("issueVoucherNow") : t("issueVoucher")}
                           </Button>
-                          {(cm.transferableSessions ?? cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions) > 0 && (
+                          {!isInactive && (
                             <Button
                               size="sm"
                               variant="outline"
                               onClick={() =>
                                 handleOpenTransfer(
                                   cm.enrollment,
-                                  cm.transferableSessions ?? cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions,
+                                  Math.max(0, cm.transferableSessions ?? cm.netRefundableSessions ?? cm.unconsumedInCycle ?? cm.netSessions),
                                   cm.openEndedHeldSessions || 0
                                 )
                               }
@@ -2088,20 +2104,23 @@ export default function StudentPaymentDetails({
                 <div className="relative flex items-center">
                   <input
                     type="number"
-                    min="1"
-                    max={Math.max(1, transferModal.maxSessions)}
+                    min={transferModal.maxSessions > 0 ? "1" : "0"}
+                    max={transferModal.maxSessions}
                     value={sessionsToTransfer}
                     onChange={(e) => setSessionsToTransfer(Number(e.target.value))}
+                    disabled={transferModal.maxSessions === 0}
                     className="w-full border border-border rounded p-2 text-xs font-mono pe-16"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setSessionsToTransfer(Math.max(1, transferModal.maxSessions))}
-                    className="absolute end-1.5 px-2.5 py-1 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs"
-                    title={locale === "ar" ? "تحديد كامل الرصيد المتاح" : "Définir le maximum disponible"}
-                  >
-                    MAX
-                  </button>
+                  {transferModal.maxSessions > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSessionsToTransfer(transferModal.maxSessions)}
+                      className="absolute end-1.5 px-2.5 py-1 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs"
+                      title={locale === "ar" ? "تحديد كامل الرصيد المتاح" : "Définir le maximum disponible"}
+                    >
+                      MAX
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -2121,7 +2140,13 @@ export default function StudentPaymentDetails({
                   size="sm"
                   variant="primary"
                   onClick={handleExecuteTransfer}
-                  disabled={isTransferPending || !targetClassId || sessionsToTransfer < 1}
+                  disabled={
+                    isTransferPending ||
+                    !targetClassId ||
+                    sessionsToTransfer < 0 ||
+                    (transferModal.maxSessions > 0 && sessionsToTransfer < 1) ||
+                    sessionsToTransfer > transferModal.maxSessions
+                  }
                 >
                   {isTransferPending ? t("modalTransferSubmitting") : t("modalTransferConfirm")}
                 </Button>

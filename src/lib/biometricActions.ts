@@ -45,6 +45,7 @@ export interface BiometricScanResult {
   isSiblingWaived?: boolean;
   hasPayerSibling?: boolean;
   inscriptionStatus?: "PAID" | "WAIVED" | "UNPAID" | null;
+  isTombstoned?: boolean;
 }
 
 interface BiometricFeedCacheEntry {
@@ -65,16 +66,26 @@ const globalForBiometricFeed = globalThis as unknown as {
   __biometricLastCleanupAt?: number;
   __biometricScanDedupCache?: Map<string, { result: { success: boolean; scan: BiometricScanResult }; expiresAt: number }>;
   __biometricInFlightScans?: Map<string, Promise<{ success: boolean; scan: BiometricScanResult }>>;
+  __biometricClassLessonIdsCache?: Map<number, { ids: number[]; expiresAt: number }>;
 };
 
-const BIOMETRIC_FEED_CACHE_TTL_MS = 30 * 1000; // 30s in-memory cache when idle (invalidated immediately on scan/action)
+const BIOMETRIC_FEED_CACHE_TTL_MS = 15 * 1000; // 15s in-memory cache when idle (invalidated immediately on scan/action)
 const BIOMETRIC_CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // Run stale log cleanup at most once every 10 minutes
+const BIOMETRIC_CLASS_LESSONS_CACHE_TTL_MS = 30 * 1000; // 30s rush-hour cache for class lesson IDs
+const BIOMETRIC_SCAN_COOLDOWN_MS = 10 * 1000; // 10s scan deduplication window
 
 function getBiometricFeedCacheMap(): Map<number, BiometricFeedCacheEntry> {
   if (!globalForBiometricFeed.__biometricFeedCache) {
     globalForBiometricFeed.__biometricFeedCache = new Map();
   }
   return globalForBiometricFeed.__biometricFeedCache;
+}
+
+function getBiometricClassLessonIdsCache(): Map<number, { ids: number[]; expiresAt: number }> {
+  if (!globalForBiometricFeed.__biometricClassLessonIdsCache) {
+    globalForBiometricFeed.__biometricClassLessonIdsCache = new Map();
+  }
+  return globalForBiometricFeed.__biometricClassLessonIdsCache;
 }
 
 function getBiometricScanDedupMap(): Map<string, { result: { success: boolean; scan: BiometricScanResult }; expiresAt: number }> {
@@ -190,7 +201,13 @@ export async function processBiometricScan(input: {
   const dedupMap = getBiometricScanDedupMap();
   const dedupKey = `${branchId}-${globalNumber}`;
   const cachedScan = dedupMap.get(dedupKey);
-  if (cachedScan && Date.now() < cachedScan.expiresAt) {
+  if (
+    cachedScan &&
+    Date.now() < cachedScan.expiresAt &&
+    Math.abs(
+      scanTime.getTime() - new Date(cachedScan.result.scan.scannedAt).getTime()
+    ) < BIOMETRIC_SCAN_COOLDOWN_MS
+  ) {
     return cachedScan.result;
   }
 
@@ -224,6 +241,12 @@ export async function processBiometricScan(input: {
         select: {
           lessonId: true,
           status: true,
+          lesson: {
+            select: {
+              classId: true,
+              startsAt: true,
+            },
+          },
         },
       },
       enrollments: {
@@ -309,8 +332,10 @@ export async function processBiometricScan(input: {
   });
 
   // If no student found in DB with this globalNumber -> STATE 4: UNRECOGNIZED
+  // Only flag isTombstoned=true if the globalNumber is explicitly in BiometricHardwareTombstone
+  // so newly enrolled students (not yet saved in StudentForm) are NEVER prematurely wiped from K50!
   if (!student) {
-    const [, log] = await prisma.$transaction([
+    const [, log, tombstone] = await prisma.$transaction([
       prisma.biometricScanLog.deleteMany({
         where: { branchId, status: "UNRECOGNIZED" },
       }),
@@ -324,10 +349,17 @@ export async function processBiometricScan(input: {
           scannedAt: scanTime,
         },
       }),
+      prisma.biometricHardwareTombstone.findUnique({
+        where: { globalNumber },
+        select: { id: true },
+      }),
     ]);
     return {
       success: true,
-      scan: serializeScanLog(log),
+      scan: {
+        ...serializeScanLog(log),
+        isTombstoned: Boolean(tombstone),
+      },
     };
   }
 
@@ -450,11 +482,27 @@ export async function processBiometricScan(input: {
   let matchedLesson: (typeof studentLessons)[number] | null = null;
 
   if (inWindowBranchLessons.length > 0) {
-    const presentLessonIds = new Set(
-      ((student as any).attendances || [])
-        .filter((a: any) => a.status === "PRESENT")
-        .map((a: any) => a.lessonId)
+    const presentAttendances = ((student as any).attendances || []).filter(
+      (a: any) => a.status === "PRESENT"
     );
+    const presentLessonIds = new Set(
+      presentAttendances.map((a: any) => a.lessonId)
+    );
+    const presentClassDates = new Set(
+      presentAttendances
+        .filter((a: any) => a.lesson?.classId && a.lesson?.startsAt)
+        .map(
+          (a: any) =>
+            `${a.lesson.classId}-${getAlgiersDateInfo(a.lesson.startsAt).dateStr}`
+        )
+    );
+    const isLessonAlreadyPresent = (l: any) =>
+      presentLessonIds.has(l.id) ||
+      presentClassDates.has(
+        `${l.class?.id || l.classId}-${
+          l.instanceDate || getAlgiersDateInfo(l.startsAt).dateStr
+        }`
+      );
 
     // 1. If admin/teacher currently has a specific lesson Attendance sheet open AND it is in-window at this branch
     if (openLessonIdNum) {
@@ -490,7 +538,7 @@ export async function processBiometricScan(input: {
       // 2. If student is ALREADY marked PRESENT in an in-window lesson,
       // stick to that lesson! Never jump to a different overlapping group and double-register attendance!
       const alreadyPresentInWindow = inWindowBranchLessons.find((l) =>
-        presentLessonIds.has(l.id)
+        isLessonAlreadyPresent(l)
       );
 
       if (alreadyPresentInWindow) {
@@ -498,7 +546,7 @@ export async function processBiometricScan(input: {
       } else {
         // 3. Otherwise prioritize in-window lesson where student is NOT yet marked present
         const notPresentInWindow = inWindowBranchLessons
-          .filter((l) => !presentLessonIds.has(l.id))
+          .filter((l) => !isLessonAlreadyPresent(l))
           .sort(
             (a, b) =>
               Math.abs(new Date(a.startsAt).getTime() - scanTime.getTime()) -
@@ -640,15 +688,31 @@ export async function processBiometricScan(input: {
     student.family.payerStudentId !== student.id
   );
 
-  const classLessonRows = await prisma.$queryRaw<Array<{ id: number }>>`
-    SELECT l.id FROM "Lesson" l
-    WHERE l."classId" = ${classId}
-       OR EXISTS (
-         SELECT 1 FROM "LessonGroup" lg
-         WHERE lg."lessonId" = l.id AND lg."classId" = ${classId}
-       )
-  `;
-  const classLessonIds = classLessonRows.map((r) => r.id);
+  const classLessonsCache = getBiometricClassLessonIdsCache();
+  const cachedClassLessons = classLessonsCache.get(classId);
+  let classLessonIds: number[];
+  if (cachedClassLessons && Date.now() < cachedClassLessons.expiresAt) {
+    classLessonIds = cachedClassLessons.ids.includes(matchedLesson.id)
+      ? cachedClassLessons.ids
+      : [...cachedClassLessons.ids, matchedLesson.id];
+  } else {
+    const classLessonRows = await prisma.$queryRaw<Array<{ id: number }>>`
+      SELECT l.id FROM "Lesson" l
+      WHERE l."classId" = ${classId}
+         OR EXISTS (
+           SELECT 1 FROM "LessonGroup" lg
+           WHERE lg."lessonId" = l.id AND lg."classId" = ${classId}
+         )
+    `;
+    classLessonIds = classLessonRows.map((r) => r.id);
+    if (!classLessonIds.includes(matchedLesson.id)) {
+      classLessonIds.push(matchedLesson.id);
+    }
+    classLessonsCache.set(classId, {
+      ids: classLessonIds,
+      expiresAt: Date.now() + BIOMETRIC_CLASS_LESSONS_CACHE_TTL_MS,
+    });
+  }
 
   const [vouchers, classAttendances, catchUps, existingRows, payerStudent] =
     await Promise.all([
@@ -1053,7 +1117,7 @@ export async function processBiometricScan(input: {
   if (globalNumber && globalNumber > 0 && !input.isUnrecognizedFinger) {
     dedupMap.set(dedupKey, {
       result: state1Result,
-      expiresAt: Date.now() + 2500,
+      expiresAt: Date.now() + BIOMETRIC_SCAN_COOLDOWN_MS,
     });
   }
 
@@ -1196,38 +1260,55 @@ export async function getBiometricLiveFeedAction(params?: {
     const now = Date.now();
     const sinceId = params?.sinceId ? Number(params.sinceId) : 0;
 
-    // 1. Serve from in-memory cache if valid (0 database queries when idle!)
+    // 1. Serve from in-memory cache if valid (and cross-check latest scan ID across serverless workers if >2.5s old)
     const cacheMap = getBiometricFeedCacheMap();
     const cached = cacheMap.get(activeBranchId);
     if (cached && now - cached.fetchedAt < BIOMETRIC_FEED_CACHE_TTL_MS) {
-      const recentScans =
-        sinceId > 0
-          ? cached.allScans.filter((s) => s.id > sinceId)
-          : cached.allScans;
-      return {
-        success: true,
-        branchId: activeBranchId,
-        recentScans,
-        pinnedAlerts: cached.pinnedAlerts,
-        devices: cached.devices,
-      };
+      let cacheStillFresh = true;
+      if (now - cached.fetchedAt > 2500) {
+        const cachedMaxId = cached.allScans.length > 0 ? cached.allScans[0].id : 0;
+        const newerExists = await prisma.biometricScanLog.findFirst({
+          where: { branchId: activeBranchId, id: { gt: Math.max(sinceId, cachedMaxId) } },
+          select: { id: true },
+        }).catch(() => null);
+        if (newerExists) {
+          cacheStillFresh = false;
+        }
+      }
+      if (cacheStillFresh) {
+        const recentScans =
+          sinceId > 0
+            ? cached.allScans.filter((s) => s.id > sinceId)
+            : cached.allScans;
+        return {
+          success: true,
+          branchId: activeBranchId,
+          recentScans,
+          pinnedAlerts: cached.pinnedAlerts,
+          devices: cached.devices,
+        };
+      }
     }
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const algiersNow = getAlgiersDateInfo(new Date());
+    const [aYear, aMonth, aDay] = algiersNow.dateStr.split("-").map(Number);
+    // Midnight in Africa/Algiers (UTC+1 -> 23:00 UTC previous day)
+    const todayStart = new Date(Date.UTC(aYear, aMonth - 1, aDay, -1, 0, 0, 0));
 
-    // 2. Throttle stale log cleanup writes to run at most once every 5 minutes (prevents constant DB WAL writes)
+    // 2. Throttle stale log cleanup writes to run at most once every 10 minutes (prevents constant DB WAL writes)
+    // Retains 30 days of historical BiometricScanLog audit records while pruning transient UNRECOGNIZED logs
     const lastCleanupAt = globalForBiometricFeed.__biometricLastCleanupAt || 0;
     if (now - lastCleanupAt > BIOMETRIC_CLEANUP_INTERVAL_MS) {
       globalForBiometricFeed.__biometricLastCleanupAt = now;
       const twoMinAgo = new Date(now - 2 * 60 * 1000);
       const thirtyMinAgo = new Date(now - 30 * 60 * 1000);
+      const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
 
       await Promise.all([
         prisma.biometricScanLog.deleteMany({
           where: {
             OR: [
-              { scannedAt: { lt: todayStart } },
+              { scannedAt: { lt: thirtyDaysAgo } },
               { status: "UNRECOGNIZED", scannedAt: { lt: twoMinAgo } },
             ],
           },
@@ -1597,7 +1678,10 @@ export async function enrollStudentFingerprintAction(input: {
 /**
  * Deletes a student's fingerprint record.
  */
-export async function deleteStudentFingerprintAction(studentId: string) {
+export async function deleteStudentFingerprintAction(
+  studentId: string,
+  fingerIndex?: number
+) {
   try {
     const session = await getAuthSession();
     if (!session.userId && !session.rawRole) {
@@ -1608,7 +1692,12 @@ export async function deleteStudentFingerprintAction(studentId: string) {
     }
 
     await prisma.studentFingerprint.deleteMany({
-      where: { studentId },
+      where: {
+        studentId,
+        ...(typeof fingerIndex === "number" && !isNaN(fingerIndex)
+          ? { fingerIndex }
+          : {}),
+      },
     });
 
     return {

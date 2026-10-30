@@ -28,6 +28,7 @@ const path = require("path");
 const BRIDGE_PORT = Number(process.env.ZK_BRIDGE_PORT || 4375);
 const DEVICE_PORT = Number(process.env.ZK_DEVICE_PORT || 4370);
 const COMM_KEY = Number(process.env.ZK_COMM_KEY || 0);
+const BRIDGE_SECRET = process.env.ZK_BRIDGE_SECRET || "massinissa-zk-bridge-v4-key";
 
 const CONFIGURED_IPS = (
   process.env.ZK_DEVICE_IP ||
@@ -51,6 +52,7 @@ const CMD_CANCELCAPTURE = 62;
 const CMD_TMP_WRITE = 87;
 const CMD_CHECKSUM_BUFFER = 119;
 const CMD_GET_TIME = 201;
+const CMD_SET_TIME = 202;
 const CMD_REG_EVENT = 500;
 const CMD_CONNECT = 1000;
 const CMD_ENABLEDEVICE = 1002;
@@ -82,6 +84,69 @@ const ZOMBIE_TIMEOUT_MS = 14000;
 const RECONNECT_LOOP_MS = 2500;
 const SYNC_CACHE_FILE = path.join(__dirname, "synced_templates.json");
 const BRIDGE_CONFIG_FILE = path.join(__dirname, "bridge_config.json");
+const PENDING_SCANS_FILE = path.join(__dirname, "pending_scans.json");
+
+function loadPendingScans() {
+  try {
+    if (fs.existsSync(PENDING_SCANS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(PENDING_SCANS_FILE, "utf8"));
+      if (Array.isArray(data)) return data.slice(-1000);
+    }
+  } catch {}
+  return [];
+}
+
+function savePendingScans(scans) {
+  try {
+    fs.writeFileSync(
+      PENDING_SCANS_FILE,
+      JSON.stringify((scans || []).slice(-1000), null, 2),
+      "utf8"
+    );
+  } catch {}
+}
+
+function getAlgiersWallClockParts(date = new Date()) {
+  // Algeria is permanently UTC+1 (Africa/Algiers, no DST)
+  const algiersMs = date.getTime() + 60 * 60 * 1000;
+  const d = new Date(algiersMs);
+  return {
+    year: d.getUTCFullYear(),
+    month: d.getUTCMonth() + 1,
+    day: d.getUTCDate(),
+    hour: d.getUTCHours(),
+    minute: d.getUTCMinutes(),
+    second: d.getUTCSeconds(),
+  };
+}
+
+function encodeZkTimeAlgiers(date = new Date()) {
+  const { year, month, day, hour, minute, second } = getAlgiersWallClockParts(date);
+  return (
+    (((year - 2000) * 12 * 31 + (month - 1) * 31 + (day - 1)) * 86400 +
+      hour * 3600 +
+      minute * 60 +
+      second) >>>
+    0
+  );
+}
+
+function decodeZkTimeToUtcMs(zkTime) {
+  let t = zkTime >>> 0;
+  const second = t % 60;
+  t = Math.floor(t / 60);
+  const minute = t % 60;
+  t = Math.floor(t / 60);
+  const hour = t % 24;
+  t = Math.floor(t / 24);
+  const day = (t % 31) + 1;
+  t = Math.floor(t / 31);
+  const month = (t % 12) + 1;
+  t = Math.floor(t / 12);
+  const year = t + 2000;
+  // Convert Algiers wall-clock (UTC+1) back to UTC epoch ms
+  return Date.UTC(year, month - 1, day, hour, minute, second) - 60 * 60 * 1000;
+}
 
 function loadBridgeConfig() {
   try {
@@ -109,7 +174,8 @@ const state = {
   lastAttLogAt: 0,
   lastUnrecognizedAt: 0,
   verifyFailTimer: null,
-  pendingScans: [],
+  pendingScans: loadPendingScans(),
+  isFlushingPending: false,
   hasInitialSynced: false,
   isSyncing: false,
   enrollment: {
@@ -434,18 +500,32 @@ function destroyDeviceSocket(dev, reason) {
   }
 }
 
-function deleteHardwareUserOnAllDevices(globalNumber) {
-  const delTempBuf = Buffer.alloc(25, 0);
-  delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
-  delTempBuf.writeUInt8(0, 24);
-  sendToAllDevices(CMD_DELETE_USERTEMP, delTempBuf);
+function deleteHardwareUserOnAllDevices(globalNumber, fingerIndex) {
+  if (typeof fingerIndex === "number" && !isNaN(fingerIndex)) {
+    const delTempBuf = Buffer.alloc(25, 0);
+    delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
+    delTempBuf.writeUInt8(fingerIndex & 0x0f, 24);
+    sendToAllDevices(CMD_DELETE_USERTEMP, delTempBuf);
+    sendToAllDevices(CMD_REFRESHDATA);
+    console.log(
+      `[K50 Bridge] Deleted fingerprint #${globalNumber} (finger=${fingerIndex}) from K50 Pro flash memory.`
+    );
+    return;
+  }
+
+  for (let fi = 0; fi < 10; fi++) {
+    const delTempBuf = Buffer.alloc(25, 0);
+    delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
+    delTempBuf.writeUInt8(fi, 24);
+    sendToAllDevices(CMD_DELETE_USERTEMP, delTempBuf);
+  }
 
   const delBuf = Buffer.alloc(2);
   delBuf.writeUInt16LE(globalNumber & 0xffff, 0);
   sendToAllDevices(CMD_DELETE_USER, delBuf);
   sendToAllDevices(CMD_REFRESHDATA);
   console.log(
-    `[K50 Bridge] Deleted user #${globalNumber} from K50 Pro flash memory.`
+    `[K50 Bridge] Deleted user & all fingerprints #${globalNumber} from K50 Pro flash memory.`
   );
 }
 
@@ -620,27 +700,55 @@ function saveSyncCache(cache) {
 function fetchFromCloud(path) {
   return new Promise((resolve) => {
     if (!state.appUrl) return resolve(null);
+    let settled = false;
+    const done = (val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      resolve(val);
+    };
+    let req = null;
+    const hardTimer = setTimeout(() => {
+      try {
+        if (req) req.destroy();
+      } catch {}
+      done(null);
+    }, 7500);
+
     try {
       const targetUrl = new URL(path, state.appUrl);
       const client = targetUrl.protocol === "https:" ? https : http;
-      const req = client.get(targetUrl, { timeout: 8000 }, (res) => {
-        let raw = "";
-        res.on("data", (chunk) => (raw += chunk));
-        res.on("end", () => {
-          try {
-            resolve(JSON.parse(raw));
-          } catch {
-            resolve(null);
-          }
-        });
-      });
-      req.on("error", () => resolve(null));
+      req = client.get(
+        targetUrl,
+        {
+          timeout: 6500,
+          headers: {
+            "x-zk-bridge-key": BRIDGE_SECRET,
+            "User-Agent": "Massinissa-ZK-Bridge/4.0",
+            Connection: "close",
+          },
+        },
+        (res) => {
+          let raw = "";
+          res.on("data", (chunk) => (raw += chunk));
+          res.on("end", () => {
+            try {
+              done(JSON.parse(raw));
+            } catch {
+              done(null);
+            }
+          });
+        }
+      );
+      req.on("error", () => done(null));
       req.on("timeout", () => {
-        req.destroy();
-        resolve(null);
+        try {
+          req.destroy();
+        } catch {}
+        done(null);
       });
     } catch {
-      resolve(null);
+      done(null);
     }
   });
 }
@@ -648,43 +756,63 @@ function fetchFromCloud(path) {
 function postToCloud(path, payload) {
   return new Promise((resolve) => {
     if (!state.appUrl) return resolve(null);
+    let settled = false;
+    const done = (val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      resolve(val);
+    };
+    let req = null;
+    const hardTimer = setTimeout(() => {
+      try {
+        if (req) req.destroy();
+      } catch {}
+      done(null);
+    }, 6500);
+
     try {
       const targetUrl = new URL(path, state.appUrl);
       const bodyStr = JSON.stringify(payload);
       const client = targetUrl.protocol === "https:" ? https : http;
 
-      const req = client.request(
+      req = client.request(
         targetUrl,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(bodyStr),
+            "x-zk-bridge-key": BRIDGE_SECRET,
+            "User-Agent": "Massinissa-ZK-Bridge/4.0",
+            Connection: "close",
           },
-          timeout: 7000,
+          timeout: 5500,
         },
         (res) => {
           let raw = "";
           res.on("data", (chunk) => (raw += chunk));
           res.on("end", () => {
             try {
-              resolve(JSON.parse(raw));
+              done(JSON.parse(raw));
             } catch {
-              resolve(null);
+              done(null);
             }
           });
         }
       );
 
-      req.on("error", () => resolve(null));
+      req.on("error", () => done(null));
       req.on("timeout", () => {
-        req.destroy();
-        resolve(null);
+        try {
+          req.destroy();
+        } catch {}
+        done(null);
       });
       req.write(bodyStr);
       req.end();
     } catch {
-      resolve(null);
+      done(null);
     }
   });
 }
@@ -738,6 +866,10 @@ async function syncTemplatesWithCloud(force = false) {
 
     // Phase 2: DOWNLOAD TO HARDWARE
     for (const t of templates) {
+      if (state.enrollment.active) {
+        console.log("[K50 Cloud Sync] Enrollment started — pausing background sync to prioritize 3-tap capture.");
+        break;
+      }
       if (!t.globalNumber || t.globalNumber <= 0) continue;
       const key = `${t.globalNumber}_${t.fingerIndex || 0}`;
       const lastSyncedAt = cache[key]?.updatedAt;
@@ -748,6 +880,11 @@ async function syncTemplatesWithCloud(force = false) {
         lastSyncedAt !== t.updatedAt ||
         cache[key]?.studentName !== t.studentName;
       if (!needsSync) continue;
+
+      // Yield if a live attendance scan just happened so rush-hour scans never experience latency
+      if (Date.now() - state.lastAttLogAt < 2500) {
+        await new Promise((r) => setTimeout(r, 300));
+      }
 
       const hasRealTemplate = Boolean(
         t.templateData && !t.templateData.startsWith("ZK_K50_") && t.templateData.length > 20
@@ -765,6 +902,9 @@ async function syncTemplatesWithCloud(force = false) {
           await uploadTemplateToDevice(dev, t.globalNumber, t.fingerIndex || 0, tplBuf);
         }
       }
+
+      // Brief yield between templates so TCP socket event loop stays responsive
+      await new Promise((r) => setTimeout(r, 35));
 
       cache[key] = {
         globalNumber: t.globalNumber,
@@ -815,10 +955,15 @@ async function syncTemplatesWithCloud(force = false) {
 }
 
 async function dispatchScanEvent(scanPayload) {
+  const enrichedPayload = {
+    ...scanPayload,
+    scanTime: scanPayload.scanTime || new Date().toISOString(),
+  };
+
   // 1. Instantly broadcast pending event to open browser SSE clients for 0ms visual/audio response
   broadcastSse({
     type: "scan_pending",
-    ...scanPayload,
+    ...enrichedPayload,
     timestamp: Date.now(),
   });
 
@@ -829,14 +974,15 @@ async function dispatchScanEvent(scanPayload) {
       const cloudRes = await postToCloud("/api/biometrics/scan", {
         branchId: state.branchId,
         openLessonId: state.openLessonId,
-        ...scanPayload,
+        ...enrichedPayload,
       });
       if (cloudRes && cloudRes.success) {
         if (
           cloudRes.scan?.status === "UNRECOGNIZED" &&
-          scanPayload.globalNumber > 0
+          cloudRes.scan?.isTombstoned &&
+          enrichedPayload.globalNumber > 0
         ) {
-          deleteHardwareUserOnAllDevices(scanPayload.globalNumber);
+          deleteHardwareUserOnAllDevices(enrichedPayload.globalNumber);
         }
         // Broadcast the fully resolved scan object (with student name, lesson, status) to all UIs
         if (cloudRes.scan) {
@@ -853,19 +999,55 @@ async function dispatchScanEvent(scanPayload) {
     }
   }
 
-  // 3. Fallback queue if appUrl is unreachable (persisted so it retries on next poll or via UI fallback)
-  state.pendingScans.push(scanPayload);
-  if (state.pendingScans.length > 50) {
+  // 3. Fallback queue if appUrl is unreachable (persisted to disk so zero scans are lost on outage/restart)
+  state.pendingScans.push(enrichedPayload);
+  if (state.pendingScans.length > 1000) {
     state.pendingScans.shift();
   }
+  savePendingScans(state.pendingScans);
 
   // Broadcast fallback scan so active UI tab can attempt the post if bridge network fails
   broadcastSse({
     type: "scan",
-    ...scanPayload,
+    ...enrichedPayload,
     fallback: true,
     timestamp: Date.now(),
   });
+}
+
+async function flushPendingScansToCloud() {
+  if (state.isFlushingPending || !state.appUrl || state.pendingScans.length === 0) {
+    return;
+  }
+  state.isFlushingPending = true;
+  try {
+    while (state.pendingScans.length > 0) {
+      const item = state.pendingScans[0];
+      const cloudRes = await postToCloud("/api/biometrics/scan", {
+        branchId: state.branchId,
+        openLessonId: state.openLessonId,
+        ...item,
+      });
+      if (cloudRes && cloudRes.success) {
+        state.pendingScans.shift();
+        savePendingScans(state.pendingScans);
+        if (cloudRes.scan) {
+          broadcastSse({
+            type: "scan_resolved",
+            scan: cloudRes.scan,
+            timestamp: Date.now(),
+          });
+        }
+      } else {
+        // Still offline or unreachable; retry on next cycle
+        break;
+      }
+    }
+  } catch {
+    // Ignore transient network errors during flush
+  } finally {
+    state.isFlushingPending = false;
+  }
 }
 
 function scheduleUnrecognizedFingerCheck(delayMs = 220) {
@@ -930,28 +1112,47 @@ function handleRealTimeEvent(dev, eventType, payload) {
 
       if (enrollRes === 0) {
         state.enrollment.step = 3;
-        state.enrollment.active = false;
-        state.enrollment.enrollingDeviceIp = null;
-        state.enrollment.status = "SUCCESS";
-        state.enrollment.message = `Fingerprint enrolled on K50 Pro (#${enrolledNum})!`;
+        state.enrollment.status = "WAITING_FINGER";
+        state.enrollment.message = `Extraction de l'empreinte biométrique (#${enrolledNum})...`;
         state.enrollment.updatedAt = Date.now();
-        console.log(`[K50 Enroll] ✓ SUCCESS on ${dev.ip} for Student #${enrolledNum}. Extracting biometric template...`);
+        console.log(`[K50 Enroll] ✓ 3 taps completed on ${dev.ip} for Student #${enrolledNum}. Extracting biometric template before finalizing...`);
 
-        // Automatically extract template from local K50 & persist to cloud + sibling devices
+        // Extract template from local K50 BEFORE setting status="SUCCESS" so new-student form polling never misses templateData!
         setTimeout(async () => {
+          let extractedBuf = null;
           try {
             const tplBuf = await downloadTemplateFromDevice(dev, enrolledNum, fingerIdx, 2000);
             if (tplBuf && tplBuf.length > 20) {
+              extractedBuf = tplBuf;
               const b64 = tplBuf.toString("base64");
               state.enrollment.templateData = b64;
               console.log(
-                `[K50 Cloud Sync] ✓ Biometric template extracted (${tplBuf.length} bytes) for #${enrolledNum}. Uploading to Cloud DB...`
+                `[K50 Cloud Sync] ✓ Biometric template extracted (${tplBuf.length} bytes) for #${enrolledNum}.`
               );
+            }
+          } catch (e) {
+            console.error(`[K50 Cloud Sync] Error extracting template after enroll:`, e.message);
+          }
+
+          // Finalize enrollment state now that templateData is populated
+          state.enrollment.active = false;
+          state.enrollment.enrollingDeviceIp = null;
+          state.enrollment.status = "SUCCESS";
+          state.enrollment.message = `Fingerprint enrolled on K50 Pro (#${enrolledNum})!`;
+          state.enrollment.updatedAt = Date.now();
+          broadcastSse({
+            type: "enroll_progress",
+            enrollment: state.enrollment,
+          });
+
+          // Persist to Cloud DB (if student already exists) & push to sibling devices
+          if (extractedBuf) {
+            try {
               if (state.appUrl) {
                 await postToCloud("/api/biometrics/templates", {
                   globalNumber: enrolledNum,
                   fingerIndex: fingerIdx,
-                  templateData: b64,
+                  templateData: state.enrollment.templateData,
                   branchId: state.branchId,
                 });
                 console.log(
@@ -965,7 +1166,7 @@ function handleRealTimeEvent(dev, eventType, payload) {
                 if (otherDev.ip !== dev.ip && isDeviceTrulyAlive(otherDev)) {
                   try {
                     sendToDevice(otherDev, CMD_USER_WRQ, userPkt);
-                    await uploadTemplateToDevice(otherDev, enrolledNum, fingerIdx, tplBuf);
+                    await uploadTemplateToDevice(otherDev, enrolledNum, fingerIdx, extractedBuf);
                     sendToDevice(otherDev, CMD_REFRESHDATA);
                     sendToDevice(otherDev, CMD_STARTVERIFY);
                     sendToDevice(otherDev, CMD_ENABLEDEVICE);
@@ -975,15 +1176,11 @@ function handleRealTimeEvent(dev, eventType, payload) {
                   }
                 }
               }
+            } catch (syncErr) {
+              console.warn(`[K50 Cloud Sync] Post-enroll cloud/sibling sync warning:`, syncErr.message);
             }
-          } catch (e) {
-            console.error(`[K50 Cloud Sync] Error extracting template after enroll:`, e.message);
           }
-          broadcastSse({
-            type: "enroll_progress",
-            enrollment: state.enrollment,
-          });
-        }, 200);
+        }, 180);
       } else {
         state.enrollment.active = false;
         state.enrollment.enrollingDeviceIp = null;
@@ -1133,15 +1330,19 @@ function connectDevice(ip, force = false) {
         dev.templateListener(cmd, payload);
       }
 
-      // 2. Pending request ACKs
+      // 2. Pending request ACKs (resolve on ACK_OK, ACK_ERROR, or ACK_DATA so commands like CMD_DELETE_USERTEMP on a new user never hang)
       if (dev.pendingAcks && dev.pendingAcks.has(rId)) {
         const handler = dev.pendingAcks.get(rId);
         dev.pendingAcks.delete(rId);
-        handler({ success: true, cmd, sId, rId, payload });
-      } else if (dev.pendingAcks && dev.pendingAcks.has("any") && cmd === CMD_ACK_OK) {
+        handler({ success: cmd === CMD_ACK_OK || cmd === CMD_ACK_DATA, cmd, sId, rId, payload });
+      } else if (
+        dev.pendingAcks &&
+        dev.pendingAcks.has("any") &&
+        (cmd === CMD_ACK_OK || cmd === CMD_ACK_ERROR || cmd === CMD_ACK_DATA)
+      ) {
         const handler = dev.pendingAcks.get("any");
         dev.pendingAcks.delete("any");
-        handler({ success: true, cmd, sId, rId, payload });
+        handler({ success: cmd === CMD_ACK_OK || cmd === CMD_ACK_DATA, cmd, sId, rId, payload });
       }
 
       // 3. Protocol handshake
@@ -1164,8 +1365,16 @@ function connectDevice(ip, force = false) {
           const maskBuf = Buffer.alloc(4);
           maskBuf.writeUInt32LE(EVENT_MASK, 0);
           sendToDevice(dev, CMD_REG_EVENT, maskBuf);
-          setTimeout(() => sendToDevice(dev, CMD_ENABLEDEVICE), 60);
-          setTimeout(() => sendToDevice(dev, CMD_STARTVERIFY), 120);
+          setTimeout(() => {
+            if (!state.enrollment.active || state.enrollment.enrollingDeviceIp !== dev.ip) {
+              sendToDevice(dev, CMD_ENABLEDEVICE);
+            }
+          }, 60);
+          setTimeout(() => {
+            if (!state.enrollment.active || state.enrollment.enrollingDeviceIp !== dev.ip) {
+              sendToDevice(dev, CMD_STARTVERIFY);
+            }
+          }, 120);
           broadcastSse({
             type: "status",
             connected: true,
@@ -1176,6 +1385,28 @@ function connectDevice(ip, force = false) {
           if (state.appUrl && !state.hasInitialSynced) {
             state.hasInitialSynced = true;
             setTimeout(() => syncTemplatesWithCloud(false), 2000);
+          }
+        } else if (
+          payload.length === 4 &&
+          dev.lastGetTimeReplyId === rId &&
+          !state.enrollment.active &&
+          !state.isSyncing
+        ) {
+          // Verify K50 Pro internal clock against Africa/Algiers (UTC+1) and auto-correct if drift > 60s
+          const deviceZkTime = payload.readUInt32LE(0);
+          const deviceUtcMs = decodeZkTimeToUtcMs(deviceZkTime);
+          const nowMs = Date.now();
+          if (
+            Math.abs(nowMs - deviceUtcMs) > 60 * 1000 &&
+            nowMs - (dev.lastClockSyncAt || 0) > 10 * 60 * 1000
+          ) {
+            dev.lastClockSyncAt = nowMs;
+            const timeBuf = Buffer.alloc(4);
+            timeBuf.writeUInt32LE(encodeZkTimeAlgiers(new Date(nowMs)), 0);
+            sendToDevice(dev, CMD_SET_TIME, timeBuf);
+            console.log(
+              `[K50 Clock Sync] 🕒 Synced K50 Pro (${dev.ip}) internal clock to Africa/Algiers (UTC+1).`
+            );
           }
         }
       } else if (cmd === CMD_REG_EVENT) {
@@ -1211,8 +1442,16 @@ async function ensureTargetDeviceReadyForEnroll(targetIp = null, timeoutMs = 250
     }
   }
 
-  if (dev && isDeviceTrulyAlive(dev) && Date.now() - dev.lastRxAt < 6000) {
-    return dev;
+  // If socket is alive and received data within the last 5.5s, use it immediately without destroying it!
+  if (dev && isDeviceTrulyAlive(dev)) {
+    if (Date.now() - dev.lastRxAt < 5500) {
+      return dev;
+    }
+    // Between 5.5s and 14s: verify socket responsiveness with a fast ping instead of killing the connection
+    const pingAck = await sendZkCommandWithAck(dev, CMD_GET_TIME, Buffer.alloc(0), 700);
+    if (pingAck && pingAck.cmd === CMD_ACK_OK) {
+      return dev;
+    }
   }
 
   if (dev) {
@@ -1231,7 +1470,7 @@ async function ensureTargetDeviceReadyForEnroll(targetIp = null, timeoutMs = 250
         if (isDeviceTrulyAlive(d)) return d;
       }
     }
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise((r) => setTimeout(r, 60));
   }
 
   if (dev && isDeviceTrulyAlive(dev)) return dev;
@@ -1248,10 +1487,49 @@ setInterval(() => {
   }
 }, RECONNECT_LOOP_MS);
 
-// 2. Active ZKTeco Protocol Heartbeat Loop every 8 seconds (CMD_GET_TIME keepalive)
-// Keeps TCP tunnel open, keeps Realtek Ethernet awake, and verifies device responsiveness
-// WITHOUT resetting the real-time event listener or flooding the K50 firmware!
+// 2. Active ZKTeco Protocol Heartbeat Loop every 8 seconds (CMD_GET_TIME keepalive + periodic CMD_REG_EVENT refresh)
+// Keeps TCP tunnel open, keeps Realtek Ethernet awake, and re-asserts real-time event subscription
+// so router branches (e.g. AMPHI) never silently stop pushing live scan events!
+let heartbeatTickCount = 0;
 setInterval(() => {
+  heartbeatTickCount++;
+
+  // Auto-expire stuck enrollment session if untouched for > 45 seconds (e.g. modal closed without cancelling)
+  if (
+    state.enrollment.active &&
+    Date.now() - state.enrollment.updatedAt > 45000
+  ) {
+    console.warn("[K50 Enroll] Auto-expiring idle enrollment session after 45s timeout.");
+    const enrollingIp = state.enrollment.enrollingDeviceIp;
+    state.enrollment.active = false;
+    state.enrollment.enrollingDeviceIp = null;
+    state.enrollment.status = "CANCELLED";
+    state.enrollment.updatedAt = Date.now();
+    if (enrollingIp && devices.has(enrollingIp)) {
+      const d = devices.get(enrollingIp);
+      sendToDevice(d, CMD_CANCELCAPTURE);
+      sendToDevice(d, CMD_STARTVERIFY);
+      sendToDevice(d, CMD_ENABLEDEVICE);
+    } else {
+      sendToAllDevices(CMD_CANCELCAPTURE);
+      sendToAllDevices(CMD_STARTVERIFY);
+      sendToAllDevices(CMD_ENABLEDEVICE);
+    }
+    broadcastSse({
+      type: "enroll_progress",
+      enrollment: state.enrollment,
+    });
+  }
+
+  // Send SSE keepalive frame so browser EventSource never drops silently
+  for (const res of sseClients) {
+    try {
+      res.write(`: keepalive ${Date.now()}\n\n`);
+    } catch {
+      sseClients.delete(res);
+    }
+  }
+
   for (const dev of devices.values()) {
     if (!dev.isConnected) continue;
     if (!isDeviceTrulyAlive(dev)) {
@@ -1265,8 +1543,19 @@ setInterval(() => {
       !state.isSyncing &&
       (!dev.pendingAcks || dev.pendingAcks.size === 0)
     ) {
+      // Every 3rd heartbeat (~24s), re-assert CMD_REG_EVENT + CMD_ENABLEDEVICE so router connections never drop real-time events
+      if (heartbeatTickCount % 3 === 0) {
+        const maskBuf = Buffer.alloc(4);
+        maskBuf.writeUInt32LE(EVENT_MASK, 0);
+        sendToDevice(dev, CMD_REG_EVENT, maskBuf);
+        sendToDevice(dev, CMD_ENABLEDEVICE);
+      }
       sendToDevice(dev, CMD_GET_TIME);
+      dev.lastGetTimeReplyId = dev.replyId;
     }
+  }
+  if (state.pendingScans.length > 0 && state.appUrl) {
+    flushPendingScansToCloud();
   }
 }, HEARTBEAT_INTERVAL_MS);
 
@@ -1372,12 +1661,15 @@ const server = http.createServer((req, res) => {
         setTimeout(() => syncTemplatesWithCloud(false), 2000);
       }
     }
-    if (branchIdParam > 0 && !process.env.BRANCH_ID) {
-      if (state.branchId !== branchIdParam) {
-        state.branchId = branchIdParam;
-        saveBridgeConfig({ branchId: state.branchId });
-      }
-    } else if (branchIdParam > 0) {
+    // Only adopt branchId from browser on initial auto-setup (when neither env BRANCH_ID nor bridge_config.json has locked the physical branch),
+    // or when explicitly forced via ?forceBranch=1. Prevents an Owner switching branches in the web UI from hijacking the physical school PC's branchId!
+    const forceBranch = parsedUrl.searchParams.get("forceBranch") === "1";
+    if (
+      branchIdParam > 0 &&
+      !process.env.BRANCH_ID &&
+      (!persistedConfig.branchId || forceBranch)
+    ) {
+      persistedConfig.branchId = branchIdParam;
       state.branchId = branchIdParam;
       saveBridgeConfig({ branchId: state.branchId });
     }
@@ -1391,6 +1683,7 @@ const server = http.createServer((req, res) => {
 
     const connected = isAnyDeviceConnected();
     const drainedScans = state.pendingScans.splice(0, state.pendingScans.length);
+    savePendingScans(state.pendingScans);
     const devicesList = Array.from(devices.values()).map((d) => ({
       ip: d.ip,
       port: DEVICE_PORT,
@@ -1437,8 +1730,27 @@ const server = http.createServer((req, res) => {
         const studentName = data.studentName || `Student #${globalNumber}`;
         const targetIp = data.deviceIp || null;
 
+        // Mark enrollment active BEFORE touching the device so heartbeats and background sync pause immediately
+        state.enrollment = {
+          active: true,
+          enrollingDeviceIp: targetIp || CONFIGURED_IPS[0] || null,
+          globalNumber,
+          studentId: data.studentId || null,
+          studentName,
+          fingerIndex,
+          templateData: null,
+          step: 0,
+          status: "WAITING_FINGER",
+          message: `Préparation du lecteur K50 Pro (ID #${globalNumber})...`,
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+
         const targetDev = await ensureTargetDeviceReadyForEnroll(targetIp, 2500);
         if (!targetDev) {
+          state.enrollment.active = false;
+          state.enrollment.enrollingDeviceIp = null;
+          state.enrollment.status = "FAILED";
           res.writeHead(200);
           res.end(
             JSON.stringify({
@@ -1449,25 +1761,35 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        // Put target device into enrollment mode ONLY
-        sendToDevice(targetDev, CMD_CANCELCAPTURE);
+        state.enrollment.enrollingDeviceIp = targetDev.ip;
+        state.enrollment.message = `Place finger 3 times on reader ${targetDev.ip} (ID #${globalNumber})...`;
+        state.enrollment.updatedAt = Date.now();
+
+        // Execute enrollment command sequence step-by-step awaiting K50 Pro ACKs so NAND flash writes never drop CMD_STARTENROLL
+        await sendZkCommandWithAck(targetDev, CMD_CANCELCAPTURE, Buffer.alloc(0), 400);
+
         const userPkt = buildUser72Packet(
           globalNumber,
           studentName,
           String(globalNumber)
         );
-        sendToDevice(targetDev, CMD_USER_WRQ, userPkt);
+        await sendZkCommandWithAck(targetDev, CMD_USER_WRQ, userPkt, 700);
 
         const delTempBuf = Buffer.alloc(25, 0);
         delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
         delTempBuf.writeUInt8(fingerIndex, 24);
-        sendToDevice(targetDev, CMD_DELETE_USERTEMP, delTempBuf);
+        await sendZkCommandWithAck(targetDev, CMD_DELETE_USERTEMP, delTempBuf, 500);
 
         const enrollBuf = Buffer.alloc(26, 0);
         enrollBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
         enrollBuf.writeUInt8(fingerIndex, 24);
         enrollBuf.writeUInt8(1, 25);
-        sendToDevice(targetDev, CMD_STARTENROLL, enrollBuf);
+        const startAck = await sendZkCommandWithAck(targetDev, CMD_STARTENROLL, enrollBuf, 800);
+        if (!startAck || !startAck.success) {
+          // Retry CMD_STARTENROLL once after 120ms if K50 flash was still busy
+          await new Promise((r) => setTimeout(r, 120));
+          await sendZkCommandWithAck(targetDev, CMD_STARTENROLL, enrollBuf, 800);
+        }
 
         // Put all OTHER connected devices into verify mode so attendance continues uninterrupted!
         for (const [ip, otherDev] of devices.entries()) {
@@ -1477,21 +1799,6 @@ const server = http.createServer((req, res) => {
             sendToDevice(otherDev, CMD_ENABLEDEVICE);
           }
         }
-
-        state.enrollment = {
-          active: true,
-          enrollingDeviceIp: targetDev.ip,
-          globalNumber,
-          studentId: data.studentId || null,
-          studentName,
-          fingerIndex,
-          templateData: null,
-          step: 0,
-          status: "WAITING_FINGER",
-          message: `Place finger 3 times on reader ${targetDev.ip} (ID #${globalNumber})...`,
-          startedAt: Date.now(),
-          updatedAt: Date.now(),
-        };
 
         res.writeHead(200);
         res.end(
@@ -1513,9 +1820,14 @@ const server = http.createServer((req, res) => {
   if (req.method === "DELETE" && pathname === "/enroll") {
     const mode = parsedUrl.searchParams.get("mode") || "cancel";
     const globalNumber = Number(parsedUrl.searchParams.get("globalNumber") || 0);
+    const fingerIndexParam = parsedUrl.searchParams.get("fingerIndex");
+    const fingerIndex =
+      fingerIndexParam !== null && fingerIndexParam !== "" && !isNaN(Number(fingerIndexParam))
+        ? Number(fingerIndexParam)
+        : undefined;
 
     if (mode === "delete" && globalNumber > 0) {
-      deleteHardwareUserOnAllDevices(globalNumber);
+      deleteHardwareUserOnAllDevices(globalNumber, fingerIndex);
       res.writeHead(200);
       res.end(JSON.stringify({ success: true }));
       return;

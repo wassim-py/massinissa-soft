@@ -51,7 +51,7 @@ import { canUserAccessBranch } from "./settings";
 import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from "./ledger";
 import { getDailyRevenueDashboardData } from "./revenue";
 import { getTranslations } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit, isLessonApplicableToEnrollment } from "./studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit, isLessonApplicableToEnrollment, extractSameTeacherHeldFromTransfers } from "./studentBilling";
 import { getFixedInscriptionFeeAction, getFormationInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
 import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds, serializeForClient } from "./utils";
 import {
@@ -655,17 +655,40 @@ export const createStudent = async (
     const id = crypto.randomUUID();
     const fullName = [data.surname, data.name].filter(Boolean).join(" ").trim();
     const phone = data.phone?.trim() || null;
-    const globalNumber = await getNextGlobalStudentNumber(prisma);
     const birthday = data.birthday ? new Date(data.birthday) : null;
     const address = data.address?.trim() || null;
     const sex = data.sex || "MALE";
-
     const familyId = (data as any).familyId ? Number((data as any).familyId) : null;
 
-    await prisma.$executeRaw`
-      INSERT INTO "Student" (id, "globalNumber", name, phone, "registeredBranchId", birthday, address, sex, "familyId", "createdAt")
-      VALUES (${id}, ${globalNumber}, ${fullName}, ${phone}, ${branchId}, ${birthday}, ${address}, ${sex}, ${familyId}, NOW())
-    `;
+    let globalNumber = 0;
+    const requestedNumber = Number((data as any).reservedGlobalNumber || 0);
+    if (requestedNumber > 0) {
+      const collisionCheck = await prisma.$queryRaw<Array<{ taken: boolean }>>`
+        SELECT (
+          EXISTS (SELECT 1 FROM "Student" WHERE "globalNumber" = ${requestedNumber})
+          OR EXISTS (SELECT 1 FROM "BiometricHardwareTombstone" WHERE "globalNumber" = ${requestedNumber})
+        ) AS "taken"
+      `;
+      if (!collisionCheck[0]?.taken) {
+        globalNumber = requestedNumber;
+      }
+    }
+    if (!globalNumber) {
+      globalNumber = await getNextGlobalStudentNumber(prisma);
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await prisma.$executeRaw`
+          INSERT INTO "Student" (id, "globalNumber", name, phone, "registeredBranchId", birthday, address, sex, "familyId", "createdAt")
+          VALUES (${id}, ${globalNumber}, ${fullName}, ${phone}, ${branchId}, ${birthday}, ${address}, ${sex}, ${familyId}, NOW())
+        `;
+        break;
+      } catch (insertErr: any) {
+        if (attempt === 2) throw insertErr;
+        globalNumber = await getNextGlobalStudentNumber(prisma);
+      }
+    }
 
     // Handle optional repeatable parent phone numbers (§7.2)
     if (data.parentPhoneNumbers && Array.isArray(data.parentPhoneNumbers)) {
@@ -3161,7 +3184,10 @@ export async function searchCatchUpCandidatesAction(
           where: {
             lessonId: { not: currentLessonId },
             lesson: {
-              classId: { in: matchingClassIds },
+              OR: [
+                { classId: { in: matchingClassIds } },
+                { lessonGroups: { some: { classId: { in: matchingClassIds } } } },
+              ],
             },
           },
           select: {
@@ -3172,6 +3198,10 @@ export async function searchCatchUpCandidatesAction(
               select: {
                 id: true,
                 startsAt: true,
+                isFree: true,
+                isTeacherAbsent: true,
+                classId: true,
+                lessonGroups: { select: { classId: true } },
                 class: {
                   select: { id: true, name: true },
                 },
@@ -3186,7 +3216,7 @@ export async function searchCatchUpCandidatesAction(
               startsAt: "desc",
             },
           },
-          take: 30,
+          take: 50,
         },
         family: {
           include: {
@@ -3209,8 +3239,18 @@ export async function searchCatchUpCandidatesAction(
         catchUpAttendances: {
           select: {
             missedLessonId: true,
+            catchUpLessonId: true,
+            recordedAt: true,
+            recordedBy: true,
             missedLesson: {
-              select: { classId: true },
+              select: {
+                id: true,
+                classId: true,
+                startsAt: true,
+                isFree: true,
+                isTeacherAbsent: true,
+                lessonGroups: { select: { classId: true } },
+              },
             },
           },
         },
@@ -3222,10 +3262,17 @@ export async function searchCatchUpCandidatesAction(
             },
           },
           select: {
+            status: true,
             payerStatus: true,
             creditResetOffset: true,
             transfersFrom: true,
-            transfersTo: true,
+            transfersTo: {
+              include: {
+                fromEnrollment: {
+                  include: { class: { select: { id: true, pricePerCycle: true } } },
+                },
+              },
+            },
             class: {
               select: {
                 id: true,
@@ -3365,9 +3412,16 @@ export async function searchCatchUpCandidatesAction(
         const vTuition = (s.vouchers || []).filter(
           (v: any) => v.classId === cls.id || !v.classId
         );
-        const vAtts = (s.attendances || []).filter((a: any) => a.lesson.class.id === cls.id);
+        const vAtts = (s.attendances || []).filter(
+          (a: any) =>
+            (a.lesson.class.id === cls.id ||
+              a.lesson.lessonGroups?.some((lg: any) => lg.classId === cls.id)) &&
+            isLessonApplicableToEnrollment(a.lesson, cls.id, enr)
+        );
         const vCatchUps = (s.catchUpAttendances || []).filter(
-          (cu: any) => cu.missedLesson?.classId === cls.id
+          (cu: any) =>
+            cu.missedLesson?.classId === cls.id ||
+            cu.missedLesson?.lessonGroups?.some((lg: any) => lg.classId === cls.id)
         );
         const teacherClassOverride = (cls.teacherClassRates as any[])?.find(
           (tcr: any) => tcr.teacherId === cls.teacher?.id
@@ -3758,37 +3812,65 @@ export async function removeCatchUpAttendanceAction(
 
     const catchUpRecord = await prisma.catchUpAttendance.findUnique({
       where: { id: catchUpAttendanceId },
-      include: { missedLesson: true },
+      include: { missedLesson: true, catchUpLesson: true },
     });
 
     if (!catchUpRecord) {
       return { success: false, error: true, message: "سجل الاستدراك غير موجود." };
     }
 
-    const { missedLessonId, studentId, missedLesson } = catchUpRecord;
+    const { missedLessonId, studentId, missedLesson, catchUpLesson } = catchUpRecord;
 
     await prisma.$transaction(async (tx) => {
       await tx.catchUpAttendance.delete({
         where: { id: catchUpAttendanceId },
       });
 
-      // If the missed lesson is in the future (startsAt > now), and there were no other attendances taken for it,
-      // clean up the placeholder attendance record
-      if (missedLesson && missedLesson.startsAt > new Date()) {
-        const otherAttendancesCount = await tx.attendance.count({
-          where: {
-            lessonId: missedLessonId,
-            studentId: { not: studentId },
-          },
-        });
-        if (otherAttendancesCount === 0) {
+      // Clean up any pre-filled ABSENT record on a future missed lesson (or anticipatory catch-up placeholder)
+      if (missedLesson) {
+        const isFutureMissedLesson = new Date(missedLesson.startsAt).getTime() > Date.now();
+        const wasRecordedInAdvance =
+          new Date(missedLesson.startsAt).getTime() > new Date(catchUpRecord.recordedAt).getTime();
+
+        if (isFutureMissedLesson) {
           await tx.attendance.deleteMany({
             where: {
               lessonId: missedLessonId,
               studentId,
+              status: "ABSENT",
             },
           });
+        } else if (wasRecordedInAdvance) {
+          // If the lesson time passed but no PRESENT attendances were ever recorded on that lesson,
+          // also clean up the "استدراك مسبق" placeholder ABSENT row
+          const anyPresentInLesson = await tx.attendance.count({
+            where: {
+              lessonId: missedLessonId,
+              status: "PRESENT",
+            },
+          });
+          if (anyPresentInLesson === 0) {
+            await tx.attendance.deleteMany({
+              where: {
+                lessonId: missedLessonId,
+                studentId,
+                status: "ABSENT",
+              },
+            });
+          }
         }
+      }
+
+      // If this was an in-group catch-up where recordCatchUpAttendanceAction auto-created a PRESENT row on catchUpLessonId,
+      // remove that linked PRESENT row so no ghost attendance remains
+      if (missedLesson && catchUpLesson && missedLesson.classId === catchUpLesson.classId) {
+        await tx.attendance.deleteMany({
+          where: {
+            lessonId: catchUpRecord.catchUpLessonId,
+            studentId,
+            status: "PRESENT",
+          },
+        });
       }
     });
 
@@ -5773,10 +5855,20 @@ export const transferEnrollmentCredit = async (
       where: { id: fromEnrollmentId },
       include: {
         class: { include: { lessons: true, branch: true } },
-        student: true,
+        student: {
+          include: {
+            enrollments: { select: { classId: true, status: true } },
+          },
+        },
         academicYear: true,
         transfersFrom: true,
-        transfersTo: true,
+        transfersTo: {
+          include: {
+            fromEnrollment: {
+              include: { class: { select: { id: true, pricePerCycle: true } } },
+            },
+          },
+        },
       },
     });
     if (!fromEnrollment) {
@@ -5850,43 +5942,28 @@ export const transferEnrollmentCredit = async (
         orderBy: { issuedAt: "desc" },
       });
 
-      // Calculate purchased sessions
-      const cyclePriceFrom = Number(fromEnrollment.class.pricePerCycle || 0);
-      const lessonPriceFrom = cyclePriceFrom > 0 ? cyclePriceFrom / 4 : 0;
-      let purchasedSessionsFrom = 0;
-      if (lessonPriceFrom > 0) {
-        const totalTuitionFrom = studentVouchers.reduce((sum, v) => {
-          const vRefunded = (v.refunds || []).reduce((rSum, r) => rSum + Number(r.amount || 0), 0);
-          return sum + Math.max(0, Number(v.amount || 0) - vRefunded);
-        }, 0);
-        purchasedSessionsFrom = Math.floor(totalTuitionFrom / lessonPriceFrom);
-      } else {
-        studentVouchers.forEach((v) => {
-          const vAmount = Number(v.amount || 0);
-          const vRefunded = (v.refunds || []).reduce((rSum, r) => rSum + Number(r.amount || 0), 0);
-          const refundedSessions = vAmount > 0 ? Math.floor(vRefunded / (vAmount / 4)) : 0;
-          purchasedSessionsFrom += Math.max(0, 4 - refundedSessions);
-        });
-      }
-
-      const transferredInFrom = (fromEnrollment.transfersTo || []).reduce((sum, t) => sum + t.transferredSessions, 0);
-      const transferredOutFrom = (fromEnrollment.transfersFrom || []).reduce((sum, t) => sum + t.transferredSessions, 0);
-      const offsetFrom = Number(fromEnrollment.creditResetOffset || 0);
-
-      // Fetch lesson attendance history for source class
-      const fromLessons = await tx.lesson.findMany({
+      // Fetch lesson attendance history for source class (including multi-group lessons)
+      const rawFromLessons = await tx.lesson.findMany({
         where: {
-          classId: fromEnrollment.classId,
+          OR: [
+            { classId: fromEnrollment.classId },
+            { lessonGroups: { some: { classId: fromEnrollment.classId } } },
+          ],
           isFree: false,
           attendances: { some: {} },
         },
-        select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+        select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
         orderBy: { startsAt: "asc" },
       });
+      const fromLessons = rawFromLessons.filter((l) =>
+        isLessonApplicableToEnrollment(l, fromEnrollment.classId, fromEnrollment as any)
+      );
+      const fromLessonIds = fromLessons.map((l) => l.id);
+
       const fromAttendances = await tx.attendance.findMany({
         where: {
           studentId: studentId,
-          lesson: { classId: fromEnrollment.classId },
+          lessonId: { in: fromLessonIds.length > 0 ? fromLessonIds : [-1] },
         },
         select: {
           lessonId: true,
@@ -5896,40 +5973,41 @@ export const transferEnrollmentCredit = async (
       const fromCatchUps = await tx.catchUpAttendance.findMany({
         where: {
           studentId: studentId,
-          missedLesson: { classId: fromEnrollment.classId },
+          missedLesson: {
+            OR: [
+              { classId: fromEnrollment.classId },
+              { lessonGroups: { some: { classId: fromEnrollment.classId } } },
+            ],
+          },
         },
-        select: { missedLessonId: true, recordedAt: true },
+        select: {
+          missedLessonId: true,
+          catchUpLessonId: true,
+          recordedAt: true,
+          recordedBy: true,
+          missedLesson: {
+            select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
+          },
+        },
       });
 
-      const classifiedHistory = classifyStudentAttendanceHistory({
-        lessons: fromLessons,
+      const creditMetricsFrom = computeStudentCreditAndSessions({
+        pricePerCycle: Number(fromEnrollment.class.pricePerCycle || 0),
+        isFormation: Boolean(fromEnrollment.class.isFormation),
+        payerStatus: fromEnrollment.payerStatus || fromEnrollment.student?.payerStatus || "NORMAL",
+        tuitionVouchers: studentVouchers,
+        transfersIn: fromEnrollment.transfersTo || [],
+        transfersOut: fromEnrollment.transfersFrom || [],
+        creditResetOffset: Number(fromEnrollment.creditResetOffset || 0),
         attendances: fromAttendances,
+        lessons: fromLessons,
         catchUps: fromCatchUps,
-        referenceDate: new Date(),
       });
 
-      // Settled consumed sessions (PRESENT, INTERLEAVED_ABSENCE, FORFEITED_DROPOUT) are non-refundable and non-transferable.
-      // Unresolved trailing absences (TRAILING_ABSENCE_HELD), pre-start absences, and unconsumed sessions remain fully transferable per refund logic!
-      const settledConsumedSessions = classifiedHistory.filter(
-        (h) =>
-          h.isConsumedCredit &&
-          (h.classification === "PRESENT" ||
-            h.classification === "INTERLEAVED_ABSENCE" ||
-            h.classification === "FORFEITED_DROPOUT")
-      ).length;
+      const availableSessionsFrom = Math.max(0, creditMetricsFrom.transferableSessions);
+      const requestedSessions = Number(transferredSessions ?? 0);
 
-      const availableSessionsFrom = Math.max(
-        0,
-        purchasedSessionsFrom + transferredInFrom - transferredOutFrom + offsetFrom - settledConsumedSessions
-      );
-
-      if (availableSessionsFrom <= 0) {
-        throw new Error("لا يوجد رصيد متبقي قابل للتحويل في هذا الفوج. / Aucun solde restant transférable dans ce groupe.");
-      }
-
-      // User can transfer any amount of available credit of the student (1 to availableSessionsFrom)
-      const requestedSessions = Number(transferredSessions);
-      if (isNaN(requestedSessions) || requestedSessions < 1) {
+      if (isNaN(requestedSessions) || requestedSessions < 0) {
         throw new Error("يرجى إدخال عدد حصص صحيح للتحويل. / Veuillez spécifier un nombre valide de séances à transférer.");
       }
       if (requestedSessions > availableSessionsFrom) {
@@ -5958,15 +6036,38 @@ export const transferEnrollmentCredit = async (
       transferredAmount = Math.round(Number(finalTransferredSessions) * sessionPrice);
 
       // Count held trailing absences to document if open-ended absences were transferred
-      const heldSessions = classifiedHistory.filter((h) => h.isHeld).length;
-      const unheldRemaining = Math.max(
-        0,
-        purchasedSessionsFrom + transferredInFrom - transferredOutFrom + offsetFrom - classifiedHistory.filter((h) => h.isConsumedCredit).length
+      const heldSessions = creditMetricsFrom.openEndedHeldSessions;
+      const unheldRemaining = Math.max(0, creditMetricsFrom.netSessions);
+      const transferredHeldSessions = Math.min(
+        heldSessions,
+        Math.max(0, finalTransferredSessions - unheldRemaining)
       );
-      const transferredHeldSessions = Math.min(heldSessions, Math.max(0, finalTransferredSessions - unheldRemaining));
-      const autoNote = transferredHeldSessions > 0
-        ? `[تحويل يشمل ${transferredHeldSessions} حصة غياب مفتوح قابلة للاسترجاع / Transfert incluant ${transferredHeldSessions} absence(s) ouverte(s)]`
-        : "";
+
+      const isSameTeacher = Boolean(
+        fromClass.teacherId &&
+          toClass.teacherId &&
+          fromClass.teacherId === toClass.teacherId
+      );
+      const isDifferentPrice =
+        transferredAmount > 0 &&
+        Number(fromClass.pricePerCycle || 0) > 0 &&
+        Number(toClass.pricePerCycle || 0) > 0 &&
+        Math.abs(Number(fromClass.pricePerCycle) - Number(toClass.pricePerCycle)) >= 1;
+
+      const metaTags: string[] = [];
+      if (transferredHeldSessions > 0) {
+        metaTags.push(
+          `[تحويل يشمل ${transferredHeldSessions} حصة غياب مفتوح قابلة للاسترجاع / Transfert incluant ${transferredHeldSessions} absence(s) ouverte(s)]`
+        );
+        if (isSameTeacher) {
+          metaTags.push(`[SAME_TEACHER_HELD:${transferredHeldSessions}]`);
+        }
+      }
+      if (isDifferentPrice) {
+        metaTags.push(`[PRICE_DIFF_VIREMENT]`);
+      }
+
+      const autoNote = metaTags.join(" ");
       const finalNotes = notes ? (autoNote ? `${notes} ${autoNote}` : notes) : (autoNote || null);
 
       // Record EnrollmentTransfer with amount and notes
@@ -6216,26 +6317,50 @@ export const createRefund = async (
         }),
       ]);
 
+      const offsetDest = Number(transfer.toEnrollment.creditResetOffset || 0);
+      const latestInDest = (transfer.toEnrollment.transfersTo || []).reduce(
+        (maxMs: number | null, t: any) => {
+          const ms = t?.transferredAt ? new Date(t.transferredAt).getTime() : NaN;
+          return !isNaN(ms) ? (maxMs === null ? ms : Math.max(maxMs, ms)) : maxMs;
+        },
+        null
+      );
+
       const classifiedHistory = classifyStudentAttendanceHistory({
         lessons: classLessons,
         attendances: studentAttendances,
         catchUps: studentCatchUps,
         referenceDate: new Date(),
+        creditResetOffset: offsetDest,
+        postTransferStartAfter: latestInDest ? new Date(latestInDest) : null,
       });
 
       const trailingHeldLessonIds = classifiedHistory.filter((h) => h.isHeld).map((h) => h.lessonId);
-      const settledConsumedSessions = classifiedHistory.filter(
+      const sameTeacherHeldInDest = extractSameTeacherHeldFromTransfers(transfer.toEnrollment.transfersTo);
+      const hasPostTransferPresenceDest = classifiedHistory.some(
         (h) =>
-          h.classification === "PRESENT" ||
-          h.classification === "INTERLEAVED_ABSENCE" ||
-          h.classification === "FORFEITED_DROPOUT"
-      ).length;
+          h.isConsumedCredit &&
+          (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE")
+      );
+      const resolvedSameTeacherHeldDest = hasPostTransferPresenceDest ? sameTeacherHeldInDest : 0;
+
+      const settledConsumedSessions =
+        classifiedHistory.filter(
+          (h) =>
+            h.isConsumedCredit &&
+            (h.classification === "PRESENT" ||
+              h.classification === "INTERLEAVED_ABSENCE" ||
+              h.classification === "FORFEITED_DROPOUT" ||
+              h.classification === "CAUGHT_UP_ABSENCE" ||
+              h.classification === "SUSPENDED_ABSENCE")
+        ).length +
+        classifiedHistory.filter((h) => h.bothPresentAndCaughtUp).length +
+        resolvedSameTeacherHeldDest;
 
       const transferredOutDest =
         transfer.toEnrollment.transfersFrom?.reduce((sum, t) => sum + t.transferredSessions, 0) || 0;
       const transferredInDest =
         transfer.toEnrollment.transfersTo?.reduce((sum, t) => sum + t.transferredSessions, 0) || 0;
-      const offsetDest = Number(transfer.toEnrollment.creditResetOffset || 0);
 
       const destCyclePrice = Math.max(0, Number(transfer.toEnrollment.class.pricePerCycle || 0));
       const destLessonPrice = destCyclePrice > 0 ? destCyclePrice / 4 : 0;
@@ -6621,24 +6746,6 @@ export const createRefund = async (
         }),
       ]);
 
-      const classifiedHistory = classifyStudentAttendanceHistory({
-        lessons: classLessons,
-        attendances: studentAttendances,
-        catchUps: studentCatchUps,
-        referenceDate: new Date(),
-      });
-
-      trailingHeldLessonIds = classifiedHistory.filter((h) => h.isHeld).map((h) => h.lessonId);
-
-      // Settled consumed sessions (PRESENT, INTERLEAVED_ABSENCE, FORFEITED_DROPOUT) are non-refundable.
-      // Unresolved trailing absences (TRAILING_ABSENCE_HELD) and unconsumed sessions remain fully refund-eligible per Rule 5 & §7.22.
-      const settledConsumedSessions = classifiedHistory.filter(
-        (h) =>
-          h.classification === "PRESENT" ||
-          h.classification === "INTERLEAVED_ABSENCE" ||
-          h.classification === "FORFEITED_DROPOUT"
-      ).length;
-
       // Transfers
       const enrollment = await prisma.enrollment.findFirst({
         where: {
@@ -6653,6 +6760,46 @@ export const createRefund = async (
       const transferredOut = enrollment?.transfersFrom?.reduce((sum, t) => sum + t.transferredSessions, 0) || 0;
       const transferredIn = enrollment?.transfersTo?.reduce((sum, t) => sum + t.transferredSessions, 0) || 0;
       const offset = Number(enrollment?.creditResetOffset || 0);
+      const latestIn = (enrollment?.transfersTo || []).reduce(
+        (maxMs: number | null, t: any) => {
+          const ms = t?.transferredAt ? new Date(t.transferredAt).getTime() : NaN;
+          return !isNaN(ms) ? (maxMs === null ? ms : Math.max(maxMs, ms)) : maxMs;
+        },
+        null
+      );
+
+      const classifiedHistory = classifyStudentAttendanceHistory({
+        lessons: classLessons,
+        attendances: studentAttendances,
+        catchUps: studentCatchUps,
+        referenceDate: new Date(),
+        creditResetOffset: offset,
+        postTransferStartAfter: latestIn ? new Date(latestIn) : null,
+      });
+
+      trailingHeldLessonIds = classifiedHistory.filter((h) => h.isHeld).map((h) => h.lessonId);
+      const sameTeacherHeld = extractSameTeacherHeldFromTransfers(enrollment?.transfersTo);
+      const hasPostTransferPresence = classifiedHistory.some(
+        (h) =>
+          h.isConsumedCredit &&
+          (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE")
+      );
+      const resolvedSameTeacherHeld = hasPostTransferPresence ? sameTeacherHeld : 0;
+
+      // Settled consumed sessions (PRESENT, INTERLEAVED_ABSENCE, FORFEITED_DROPOUT, CAUGHT_UP_ABSENCE, SUSPENDED_ABSENCE) are non-refundable.
+      // Unresolved trailing absences (TRAILING_ABSENCE_HELD) and unconsumed sessions remain fully refund-eligible per Rule 5 & §7.22.
+      const settledConsumedSessions =
+        classifiedHistory.filter(
+          (h) =>
+            h.isConsumedCredit &&
+            (h.classification === "PRESENT" ||
+              h.classification === "INTERLEAVED_ABSENCE" ||
+              h.classification === "FORFEITED_DROPOUT" ||
+              h.classification === "CAUGHT_UP_ABSENCE" ||
+              h.classification === "SUSPENDED_ABSENCE")
+        ).length +
+        classifiedHistory.filter((h) => h.bothPresentAndCaughtUp).length +
+        resolvedSameTeacherHeld;
 
       const cyclePrice = Math.max(0, Number(voucher.class?.pricePerCycle || 0));
       const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
@@ -8276,7 +8423,7 @@ export const exportToExcel = async (
             });
 
             const classCatchUps = ((student as any).catchUpAttendances || []).filter(
-                (cu: any) => classData.lessons.some((l) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId)
+                (cu: any) => classData.lessons.some((l) => l.id === cu.missedLessonId)
             );
 
             const teacherClassOverride = (classData.teacherClassRates as any[])?.find(

@@ -1,7 +1,11 @@
 import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { normalizeDateToStartOfDay, upsertDailyLedger } from "./ledger";
-import { classifyStudentAttendanceHistory } from "./studentBilling";
+import {
+  classifyStudentAttendanceHistory,
+  isLessonApplicableToEnrollment,
+  extractSameTeacherHeldFromTransfers,
+} from "./studentBilling";
 
 export interface TeacherPayrollCalculation {
   teacherId: string;
@@ -176,13 +180,38 @@ function computeAllowedPaidSessions(
     totalPaidTuition += Math.max(0, vAmount - refundsSum);
   });
 
-  const purchasedSessions = effectiveLessonPrice > 0
-    ? Math.floor(totalPaidTuition / effectiveLessonPrice)
-    : 0;
+  let tIn = 0;
+  let crossPriceTransferAmount = 0;
+  const validTransfersIn = (enrollment.transfersTo || []).filter(
+    (t: any) => !t.transferredAt || new Date(t.transferredAt) <= referenceDate
+  );
 
-  const tIn = (enrollment.transfersTo || [])
-    .filter((t: any) => !t.transferredAt || new Date(t.transferredAt) <= referenceDate)
-    .reduce((s: number, t: any) => s + Number(t.transferredSessions || 0), 0);
+  for (const t of validTransfersIn) {
+    const fromPrice =
+      t?.fromEnrollment?.class?.pricePerCycle !== undefined &&
+      t?.fromEnrollment?.class?.pricePerCycle !== null
+        ? Number(t.fromEnrollment.class.pricePerCycle)
+        : null;
+    const isCrossPrice =
+      (typeof t?.notes === "string" && t.notes.includes("[PRICE_DIFF_VIREMENT]")) ||
+      (fromPrice !== null && fromPrice > 0 && cyclePrice > 0 && Math.abs(fromPrice - cyclePrice) > 0.01);
+
+    const tRefunded = (t.refunds || [])
+      .filter((r: any) => new Date(r.createdAt || r.date || t.transferredAt) <= referenceDate)
+      .reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
+
+    if (isCrossPrice && effectiveLessonPrice > 0) {
+      crossPriceTransferAmount += Math.max(0, Number(t.amount || 0) - tRefunded);
+    } else {
+      const refundedSessions = effectiveLessonPrice > 0 ? Math.round(tRefunded / effectiveLessonPrice) : 0;
+      tIn += Math.max(0, Number(t.transferredSessions || 0) - refundedSessions);
+    }
+  }
+
+  const totalMonetaryPoolForSessions = totalPaidTuition + crossPriceTransferAmount;
+  const purchasedSessions = effectiveLessonPrice > 0
+    ? Math.floor(totalMonetaryPoolForSessions / effectiveLessonPrice)
+    : 0;
 
   const tOut = (enrollment.transfersFrom || [])
     .filter((t: any) => !t.transferredAt || new Date(t.transferredAt) <= referenceDate)
@@ -328,21 +357,71 @@ export async function calculateTeacherPayroll(
     return true;
   });
 
-  // Get all unique class IDs taught by this teacher in or before this period to compute attendance histories
+  // Fetch Catch-Up visitors hosted in any lesson taught by this teacher in this period (Rule 8)
+  const lessonIds = lessons.map((l) => l.id);
+  const catchUpVisitors = lessonIds.length > 0
+    ? await prisma.catchUpAttendance.findMany({
+        where: {
+          catchUpLessonId: { in: lessonIds },
+          NOT: { recordedBy: "transfer" },
+        },
+        include: {
+          missedLesson: {
+            select: {
+              id: true,
+              classId: true,
+              startsAt: true,
+            },
+          },
+          student: {
+            select: {
+              id: true,
+              name: true,
+              family: {
+                select: {
+                  payerStudentId: true,
+                  discountPercentage: true,
+                },
+              },
+              enrollments: {
+                where: { class: { teacherId: teacher.id } },
+                select: { classId: true, status: true, payerStatus: true },
+              },
+            },
+          },
+        },
+      })
+    : [];
+
+  // Get all unique class IDs taught by this teacher in or before this period (including catch-up home classes)
+  const teacherClasses = await prisma.class.findMany({
+    where: { teacherId: teacher.id },
+    select: { id: true, isFormation: true },
+  });
+  const filteredTeacherClassIds = teacherClasses
+    .filter((tc) => {
+      if (groupFilter === "normal") return tc.isFormation !== true;
+      if (groupFilter === "formation") return tc.isFormation === true;
+      return true;
+    })
+    .map((tc) => tc.id);
+
   const classIds = Array.from(
     new Set([
       ...lessons.map((l) => l.classId),
       ...lessons.flatMap((l) => (l as any).lessonGroups?.map((lg: any) => lg.classId) || []),
+      ...catchUpVisitors.map((cv) => cv.missedLesson?.classId),
+      ...filteredTeacherClassIds,
     ].filter(Boolean))
-  );
+  ) as number[];
 
   // For each class, fetch all historical non-free lessons and attendances up to endDate
   const classHistoryMap = new Map<
     number,
     {
-      lessons: Array<{ id: number; startsAt: Date; isFree: boolean; isTeacherAbsent?: boolean }>;
+      lessons: Array<{ id: number; classId: number; startsAt: Date; isFree: boolean; isTeacherAbsent?: boolean; lessonGroups?: Array<{ classId: number }> }>;
       attendances: Array<{ lessonId: number; studentId: string; status: string }>;
-      catchUps: Array<{ studentId: string; missedLessonId: number; recordedAt: Date }>;
+      catchUps: Array<{ studentId: string; missedLessonId: number; catchUpLessonId?: number; recordedAt: Date; recordedBy?: string | null; catchUpLesson?: { id: number; startsAt: Date; classId: number } | null }>;
       classInfo: any;
       vouchers: any[];
     }
@@ -368,7 +447,14 @@ export async function calculateTeacherPayroll(
           ],
           startsAt: { lte: endDate },
         },
-        select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+        select: {
+          id: true,
+          classId: true,
+          startsAt: true,
+          isFree: true,
+          isTeacherAbsent: true,
+          lessonGroups: { select: { classId: true } },
+        },
         orderBy: { startsAt: "asc" },
       }),
       prisma.attendance.findMany({
@@ -393,18 +479,30 @@ export async function calculateTeacherPayroll(
           },
           recordedAt: { lte: endDate },
         },
-        select: { studentId: true, missedLessonId: true, recordedAt: true },
+        select: {
+          studentId: true,
+          missedLessonId: true,
+          catchUpLessonId: true,
+          recordedAt: true,
+          recordedBy: true,
+          catchUpLesson: { select: { id: true, startsAt: true, classId: true } },
+        },
       }),
       prisma.class.findUnique({
         where: { id: cid },
         select: {
           id: true,
           name: true,
+          branchId: true,
           pricePerCycle: true,
           isFormation: true,
           enrollments: {
             include: {
-              transfersTo: true,
+              transfersTo: {
+                include: {
+                  fromEnrollment: { select: { class: { select: { id: true, pricePerCycle: true } } } },
+                },
+              },
               transfersFrom: true,
               student: { select: { id: true, family: true } },
             },
@@ -434,77 +532,189 @@ export async function calculateTeacherPayroll(
   }
 
   // Pre-calculate classification and voucher-payment status for all students in all classes as of endDate and startDate
-  // studentClassStatusAtEnd: Map<`${studentId}_${lessonId}`, StudentAttendanceHistoryItem>
   const studentStatusAtEnd = new Map<string, any>();
   const studentStatusAtStart = new Map<string, any>();
   const studentPaidSessionAtEnd = new Map<string, boolean>();
   const studentPaidSessionAtStart = new Map<string, boolean>();
+  const studentResolvedTransferHeldAtEnd = new Map<string, number>();
+  const studentResolvedTransferHeldAtStart = new Map<string, number>();
 
   for (const [cid, historyData] of classHistoryMap.entries()) {
     const enrolledStudents = historyData.classInfo?.enrollments || [];
     const enrolledStudentIds = new Set(enrolledStudents.map((e: any) => e.studentId));
 
     const studentIds = Array.from(
-      new Set(
-        historyData.attendances
-          .map((a: any) => a.studentId)
-          .filter((sid: string) => enrolledStudentIds.has(sid))
-      )
+      new Set([
+        ...historyData.attendances.map((a: any) => a.studentId),
+        ...historyData.catchUps.map((c: any) => c.studentId),
+        ...enrolledStudents.map((e: any) => e.studentId),
+      ].filter((sid: string) => enrolledStudentIds.has(sid)))
     ) as string[];
 
     for (const sid of studentIds) {
-      const studentAtts = historyData.attendances.filter((a: any) => a.studentId === sid);
-      const studentCatchUps = historyData.catchUps.filter((c: any) => c.studentId === sid);
       const enrollment = enrolledStudents.find((e: any) => e.studentId === sid);
       const creditResetOffset = Number(enrollment?.creditResetOffset || 0);
 
+      const studentLessons = historyData.lessons.filter((l: any) =>
+        isLessonApplicableToEnrollment(l, cid, enrollment)
+      );
+      const studentLessonIds = new Set(studentLessons.map((l: any) => l.id));
+      const studentAtts = historyData.attendances.filter(
+        (a: any) => a.studentId === sid && studentLessonIds.has(a.lessonId)
+      );
+      const studentCatchUps = historyData.catchUps.filter(
+        (c: any) => c.studentId === sid && c.recordedBy !== "transfer" && studentLessonIds.has(c.missedLessonId)
+      );
+
+      const validTransfersInAtEnd = (enrollment?.transfersTo || []).filter(
+        (t: any) => !t.transferredAt || new Date(t.transferredAt) <= endDate
+      );
+      const latestTransferInTimeAtEnd =
+        validTransfersInAtEnd.length > 0
+          ? Math.max(...validTransfersInAtEnd.map((t: any) => new Date(t.transferredAt).getTime()))
+          : null;
+
       // Classification as of endDate
       const classifiedAtEnd = classifyStudentAttendanceHistory({
-        lessons: historyData.lessons,
+        lessons: studentLessons,
         attendances: studentAtts,
         catchUps: studentCatchUps,
         referenceDate: endDate,
         creditResetOffset,
+        postTransferStartAfter: latestTransferInTimeAtEnd ? new Date(latestTransferInTimeAtEnd) : null,
       });
       classifiedAtEnd.forEach((item) => {
         studentStatusAtEnd.set(`${sid}_${cid}_${item.lessonId}`, item);
         studentStatusAtEnd.set(`${sid}_${item.lessonId}`, item);
       });
 
+      const sameTeacherHeldAtEnd = extractSameTeacherHeldFromTransfers(validTransfersInAtEnd);
+      const postTransferStartBoundAtEnd =
+        latestTransferInTimeAtEnd !== null ? latestTransferInTimeAtEnd - 2 * 60 * 60 * 1000 : null;
+      const hasPostTransferPresenceAtEnd =
+        postTransferStartBoundAtEnd !== null &&
+        classifiedAtEnd.some(
+          (h) =>
+            new Date(h.startsAt).getTime() >= postTransferStartBoundAtEnd &&
+            (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE")
+        );
+
       // Calculate paid session coverage as of endDate
       const allowedAtEnd = computeAllowedPaidSessions(sid, historyData.classInfo, historyData.vouchers, endDate);
+      let consumedSlotAtEnd = 0;
+      let paidTransferHeldAtEnd = 0;
+      if (sameTeacherHeldAtEnd > 0 && hasPostTransferPresenceAtEnd) {
+        for (let k = 0; k < sameTeacherHeldAtEnd; k++) {
+          consumedSlotAtEnd += 1;
+          if (consumedSlotAtEnd <= allowedAtEnd) {
+            paidTransferHeldAtEnd += 1;
+          }
+        }
+      }
+      studentResolvedTransferHeldAtEnd.set(`${sid}_${cid}`, paidTransferHeldAtEnd);
+
       const consumingLessonsAtEnd = classifiedAtEnd
-        .filter((h) => h.classification === "PRESENT" || h.classification === "INTERLEAVED_ABSENCE")
+        .filter(
+          (h) =>
+            h.classification === "PRESENT" ||
+            h.classification === "INTERLEAVED_ABSENCE" ||
+            (h.classification === "CAUGHT_UP_ABSENCE" && h.isConsumedCredit)
+        )
         .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
-      consumingLessonsAtEnd.forEach((item, idx) => {
-        studentPaidSessionAtEnd.set(`${sid}_${cid}_${item.lessonId}`, idx + 1 <= allowedAtEnd);
-        studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}`, idx + 1 <= allowedAtEnd);
+      consumingLessonsAtEnd.forEach((item) => {
+        consumedSlotAtEnd += 1;
+        const isCoveredPrimary = consumedSlotAtEnd <= allowedAtEnd;
+        studentPaidSessionAtEnd.set(`${sid}_${cid}_${item.lessonId}`, isCoveredPrimary);
+        studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}`, isCoveredPrimary);
+
+        if (item.bothPresentAndCaughtUp) {
+          consumedSlotAtEnd += 1;
+          const isCoveredExtraCatchUp = consumedSlotAtEnd <= allowedAtEnd;
+          studentPaidSessionAtEnd.set(`${sid}_${cid}_${item.lessonId}_catchup`, isCoveredExtraCatchUp);
+          studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}_catchup`, isCoveredExtraCatchUp);
+        } else if (item.classification === "CAUGHT_UP_ABSENCE") {
+          studentPaidSessionAtEnd.set(`${sid}_${cid}_${item.lessonId}_catchup`, isCoveredPrimary);
+          studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}_catchup`, isCoveredPrimary);
+        }
       });
 
       // Classification & paid status as of startDate (for retroactive payouts)
-      const priorLessons = historyData.lessons.filter((l: any) => new Date(l.startsAt) < startDate);
-      if (priorLessons.length > 0) {
+      const priorLessons = studentLessons.filter((l: any) => new Date(l.startsAt) < startDate);
+      const validTransfersInAtStart = (enrollment?.transfersTo || []).filter(
+        (t: any) => !t.transferredAt || new Date(t.transferredAt) < startDate
+      );
+      const latestTransferInTimeAtStart =
+        validTransfersInAtStart.length > 0
+          ? Math.max(...validTransfersInAtStart.map((t: any) => new Date(t.transferredAt).getTime()))
+          : null;
+
+      if (priorLessons.length > 0 || validTransfersInAtStart.length > 0) {
         const classifiedAtStart = classifyStudentAttendanceHistory({
           lessons: priorLessons,
           attendances: studentAtts.filter((a: any) => priorLessons.some((pl: any) => pl.id === a.lessonId)),
-          catchUps: studentCatchUps.filter((c: any) => priorLessons.some((pl: any) => pl.id === c.missedLessonId)),
+          catchUps: studentCatchUps.filter(
+            (c: any) =>
+              priorLessons.some((pl: any) => pl.id === c.missedLessonId) &&
+              new Date(c.recordedAt) < startDate
+          ),
           referenceDate: startDate,
           creditResetOffset,
+          postTransferStartAfter: latestTransferInTimeAtStart ? new Date(latestTransferInTimeAtStart) : null,
         });
         classifiedAtStart.forEach((item) => {
           studentStatusAtStart.set(`${sid}_${cid}_${item.lessonId}`, item);
           studentStatusAtStart.set(`${sid}_${item.lessonId}`, item);
         });
 
+        const sameTeacherHeldAtStart = extractSameTeacherHeldFromTransfers(validTransfersInAtStart);
+        const postTransferStartBoundAtStart =
+          latestTransferInTimeAtStart !== null ? latestTransferInTimeAtStart - 2 * 60 * 60 * 1000 : null;
+        const hasPostTransferPresenceAtStart =
+          postTransferStartBoundAtStart !== null &&
+          classifiedAtStart.some(
+            (h) =>
+              new Date(h.startsAt).getTime() >= postTransferStartBoundAtStart &&
+              (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE")
+          );
+
         const allowedAtStart = computeAllowedPaidSessions(sid, historyData.classInfo, historyData.vouchers, startDate);
+        let consumedSlotAtStart = 0;
+        let paidTransferHeldAtStart = 0;
+        if (sameTeacherHeldAtStart > 0 && hasPostTransferPresenceAtStart) {
+          for (let k = 0; k < sameTeacherHeldAtStart; k++) {
+            consumedSlotAtStart += 1;
+            if (consumedSlotAtStart <= allowedAtStart) {
+              paidTransferHeldAtStart += 1;
+            }
+          }
+        }
+        studentResolvedTransferHeldAtStart.set(`${sid}_${cid}`, paidTransferHeldAtStart);
+
         const consumingLessonsAtStart = classifiedAtStart
-          .filter((h) => h.classification === "PRESENT" || h.classification === "INTERLEAVED_ABSENCE")
+          .filter(
+            (h) =>
+              h.classification === "PRESENT" ||
+              h.classification === "INTERLEAVED_ABSENCE" ||
+              (h.classification === "CAUGHT_UP_ABSENCE" && h.isConsumedCredit)
+          )
           .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
-        consumingLessonsAtStart.forEach((item, idx) => {
-          studentPaidSessionAtStart.set(`${sid}_${cid}_${item.lessonId}`, idx + 1 <= allowedAtStart);
-          studentPaidSessionAtStart.set(`${sid}_${item.lessonId}`, idx + 1 <= allowedAtStart);
+        consumingLessonsAtStart.forEach((item) => {
+          consumedSlotAtStart += 1;
+          const isCoveredPrimary = consumedSlotAtStart <= allowedAtStart;
+          studentPaidSessionAtStart.set(`${sid}_${cid}_${item.lessonId}`, isCoveredPrimary);
+          studentPaidSessionAtStart.set(`${sid}_${item.lessonId}`, isCoveredPrimary);
+
+          if (item.bothPresentAndCaughtUp) {
+            consumedSlotAtStart += 1;
+            const isCoveredExtraCatchUp = consumedSlotAtStart <= allowedAtStart;
+            studentPaidSessionAtStart.set(`${sid}_${cid}_${item.lessonId}_catchup`, isCoveredExtraCatchUp);
+            studentPaidSessionAtStart.set(`${sid}_${item.lessonId}_catchup`, isCoveredExtraCatchUp);
+          } else if (item.classification === "CAUGHT_UP_ABSENCE") {
+            studentPaidSessionAtStart.set(`${sid}_${cid}_${item.lessonId}_catchup`, isCoveredPrimary);
+            studentPaidSessionAtStart.set(`${sid}_${item.lessonId}_catchup`, isCoveredPrimary);
+          }
         });
       }
     }
@@ -537,38 +747,15 @@ export async function calculateTeacherPayroll(
     });
   });
 
-  // Fetch Catch-Up visitors hosted in any lesson taught by this teacher in this period (Rule 8)
-  const lessonIds = lessons.map((l) => l.id);
-  const catchUpVisitors = lessonIds.length > 0
-    ? await prisma.catchUpAttendance.findMany({
-        where: { catchUpLessonId: { in: lessonIds } },
-        include: {
-          student: {
-            select: {
-              id: true,
-              name: true,
-              family: {
-                select: {
-                  payerStudentId: true,
-                  discountPercentage: true,
-                },
-              },
-              enrollments: {
-                where: { class: { teacherId: teacher.id } },
-                select: { payerStatus: true },
-              },
-            },
-          },
-        },
-      })
-    : [];
-
   // Track catch-up records where lessons taught in this period were the MISSED lessons.
-  // If a student already caught up for lesson X in another group (as a visitor),
+  // If a student already caught up for lesson X in another group (as a visitor) AND was not also PRESENT in lesson X,
   // they must NOT be counted as paying or present in lesson X to prevent double compensation.
   const catchUpsForMissedLessons = lessonIds.length > 0
     ? await prisma.catchUpAttendance.findMany({
-        where: { missedLessonId: { in: lessonIds } },
+        where: {
+          missedLessonId: { in: lessonIds },
+          NOT: { recordedBy: "transfer" },
+        },
         select: { studentId: true, missedLessonId: true },
       })
     : [];
@@ -663,14 +850,13 @@ export async function calculateTeacherPayroll(
     const visitorsInLesson = catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id);
     const caughtUpElsewhereStudents = missedLessonCatchUpMap.get(lesson.id);
 
-    // Regular present count excludes any student already counted as a catch-up visitor or who caught up elsewhere to prevent double counting
+    // Regular present count excludes any student already counted as a catch-up visitor in this same lesson
     const regularPresentStudentIds = new Set(
       lesson.attendances
         .filter(
           (a) =>
             a.status === "PRESENT" &&
-            !visitorStudentIds.has(a.studentId) &&
-            (!caughtUpElsewhereStudents || !caughtUpElsewhereStudents.has(a.studentId))
+            !visitorStudentIds.has(a.studentId)
         )
         .map((a) => a.studentId)
     );
@@ -724,8 +910,8 @@ export async function calculateTeacherPayroll(
       lesson.attendances.forEach((att) => {
         // If this student is hosted as a visitor in this lesson, skip here (handled in visitorsInLesson)
         if (visitorStudentIds.has(att.studentId)) return;
-        // If this student already caught up for this missed lesson elsewhere, skip here (paid in host lesson)
-        if (caughtUpElsewhereStudents?.has(att.studentId)) return;
+        // If this student already caught up for this missed lesson elsewhere AND was not PRESENT in this lesson, skip here (paid in host lesson)
+        if (caughtUpElsewhereStudents?.has(att.studentId) && att.status !== "PRESENT") return;
         // Skip duplicate student attendance records to guarantee accurate calculation
         if (countedPayingStudentIds.has(att.studentId)) return;
 
@@ -808,20 +994,44 @@ export async function calculateTeacherPayroll(
         }
       });
 
-      // Catch-up visitors hosted in this lesson are paid as PRESENT (Rule 8)
+      // Catch-up visitors hosted in this lesson are paid as PRESENT ONLY if covered by paid credits in their home group (Rule 8)
       visitorsInLesson.forEach((cv) => {
         if (countedPayingStudentIds.has(cv.studentId)) return;
-        countedPayingStudentIds.add(cv.studentId);
 
-        const vPayerStatus = cv.student?.enrollments?.[0]?.payerStatus || "NORMAL";
+        const missedClassId = cv.missedLesson?.classId || lesson.classId;
+        const homeClassHistory = classHistoryMap.get(missedClassId);
+        const homeEnrollment =
+          homeClassHistory?.classInfo?.enrollments?.find((e: any) => e.studentId === cv.studentId) ||
+          cv.student?.enrollments?.find((e: any) => e.classId === missedClassId) ||
+          cv.student?.enrollments?.[0];
+
+        const vPayerStatus = homeEnrollment?.payerStatus || "NORMAL";
         if (vPayerStatus === "NON_PAYER" || vPayerStatus === "SCHOOL_FEES_ONLY") return;
+
+        const isSameGroupCatchUp = missedClassId === lesson.classId;
+        const isCatchUpPaid = isSameGroupCatchUp
+          ? (studentPaidSessionAtEnd.get(`${cv.studentId}_${lesson.classId}_${lesson.id}`) ??
+             studentPaidSessionAtEnd.get(`${cv.studentId}_${lesson.id}`) ??
+             false)
+          : (studentPaidSessionAtEnd.get(`${cv.studentId}_${missedClassId}_${cv.missedLessonId}_catchup`) ??
+             studentPaidSessionAtEnd.get(`${cv.studentId}_${cv.missedLessonId}_catchup`) ??
+             studentPaidSessionAtEnd.get(`${cv.studentId}_${missedClassId}_${cv.missedLessonId}`) ??
+             false);
+
+        if (!isCatchUpPaid) {
+          // Unpaid catch-up (debt in home group): held until student pays in home group
+          return;
+        }
+
+        countedPayingStudentIds.add(cv.studentId);
 
         const fam = cv.student?.family;
         const payerId = fam?.payerStudentId;
+        const homeEnrollments = homeClassHistory?.classInfo?.enrollments || lesson.class?.enrollments || [];
         const isPayerInClass = Boolean(
           payerId &&
           payerId !== cv.student.id &&
-          lesson.class?.enrollments?.some(
+          homeEnrollments.some(
             (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
           )
         );
@@ -1038,6 +1248,51 @@ export async function calculateTeacherPayroll(
         }
       }
 
+      // Condition C: Late tuition settlement for cross-group catch-up visits that occurred before startDate
+      const plCatchUps = historyData.catchUps.filter(
+        (c) =>
+          c.missedLessonId === pl.id &&
+          c.recordedBy !== "transfer" &&
+          c.catchUpLesson &&
+          c.catchUpLesson.classId !== cid &&
+          new Date(c.catchUpLesson.startsAt) >= previousMonthStart &&
+          new Date(c.catchUpLesson.startsAt) < startDate
+      );
+      for (const cu of plCatchUps) {
+        const wasCatchUpPaidAtStart =
+          studentPaidSessionAtStart.get(`${cu.studentId}_${cid}_${pl.id}_catchup`) ??
+          studentPaidSessionAtStart.get(`${cu.studentId}_${pl.id}_catchup`) ??
+          false;
+        const isCatchUpPaidAtEnd =
+          studentPaidSessionAtEnd.get(`${cu.studentId}_${cid}_${pl.id}_catchup`) ??
+          studentPaidSessionAtEnd.get(`${cu.studentId}_${pl.id}_catchup`) ??
+          false;
+
+        if (!wasCatchUpPaidAtStart && isCatchUpPaidAtEnd) {
+          const enrollment = historyData.classInfo?.enrollments?.find(
+            (e: any) => e.studentId === cu.studentId
+          );
+          const pStatus = enrollment?.payerStatus || "NORMAL";
+          if (pStatus !== "NON_PAYER" && pStatus !== "SCHOOL_FEES_ONLY") {
+            const fam = enrollment?.student?.family;
+            const payerId = fam?.payerStudentId;
+            const isPayerInClass = Boolean(
+              payerId &&
+              payerId !== cu.studentId &&
+              historyData.classInfo?.enrollments?.some(
+                (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+              )
+            );
+            const siblingDiscountPct = isPayerInClass ? Number(fam?.discountPercentage ?? 50) : 0;
+            if (siblingDiscountPct < 100) {
+              const weight = siblingDiscountPct > 0 ? (1 - siblingDiscountPct / 100) : 1;
+              eligiblePayingWeight += weight;
+              lateTuitionSettlementCount++;
+            }
+          }
+        }
+      }
+
       if (eligiblePayingWeight > 0) {
         const lessonRecord = await prisma.lesson.findUnique({
           where: { id: pl.id },
@@ -1109,6 +1364,100 @@ export async function calculateTeacherPayroll(
             });
           }
         }
+      }
+    }
+
+    // Condition D: Same-teacher transfer held absences ([SAME_TEACHER_HELD:N]) that resolved and became paid during [startDate, endDate]
+    let newlyResolvedTransferWeight = 0;
+    let newlyResolvedTransferCount = 0;
+    for (const enr of historyData.classInfo?.enrollments || []) {
+      const paidHeldAtStart = studentResolvedTransferHeldAtStart.get(`${enr.studentId}_${cid}`) || 0;
+      const paidHeldAtEnd = studentResolvedTransferHeldAtEnd.get(`${enr.studentId}_${cid}`) || 0;
+      const newlyPaidCount = Math.max(0, paidHeldAtEnd - paidHeldAtStart);
+      if (newlyPaidCount > 0) {
+        const pStatus = enr.payerStatus || "NORMAL";
+        if (pStatus !== "NON_PAYER" && pStatus !== "SCHOOL_FEES_ONLY") {
+          const fam = enr.student?.family;
+          const payerId = fam?.payerStudentId;
+          const isPayerInClass = Boolean(
+            payerId &&
+            payerId !== enr.studentId &&
+            historyData.classInfo?.enrollments?.some(
+              (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
+            )
+          );
+          const siblingDiscountPct = isPayerInClass ? Number(fam?.discountPercentage ?? 50) : 0;
+          if (siblingDiscountPct < 100) {
+            const weight = siblingDiscountPct > 0 ? (1 - siblingDiscountPct / 100) : 1;
+            newlyResolvedTransferWeight += newlyPaidCount * weight;
+            newlyResolvedTransferCount += newlyPaidCount;
+          }
+        }
+      }
+    }
+
+    if (newlyResolvedTransferWeight > 0) {
+      const pricePerCycle = historyData.classInfo?.pricePerCycle
+        ? Number(historyData.classInfo.pricePerCycle)
+        : 0;
+      const sessionPrice = pricePerCycle > 0 ? pricePerCycle / 4 : 0;
+      const retroGroupPercentage = classRateMap.has(cid)
+        ? classRateMap.get(cid)!
+        : (percentageOfSessionFee ?? null);
+      const teacherRatePerStudent =
+        retroGroupPercentage !== null && retroGroupPercentage > 0
+          ? (sessionPrice * retroGroupPercentage) / 100
+          : defaultSessionRate;
+
+      const totalTeacherCut = Math.round(newlyResolvedTransferWeight * teacherRatePerStudent * 100) / 100;
+      const totalRetroTuition = Math.round(newlyResolvedTransferWeight * sessionPrice * 100) / 100;
+      const totalRetroSchoolCut = Math.max(0, totalRetroTuition - totalTeacherCut);
+
+      if (totalTeacherCut > 0) {
+        totalTuitionGross += totalRetroTuition;
+        schoolGrossAmount += totalRetroSchoolCut;
+        calculatedGross += totalTeacherCut;
+
+        const targetBranchId = historyData.classInfo?.branchId || teacher.TeacherBranch[0]?.branchId || 1;
+        const resolvedBranchName =
+          branchSessionsMap.get(targetBranchId)?.branchName ||
+          teacher.TeacherBranch.find((tb) => tb.branchId === targetBranchId)?.Branch.name ||
+          "Siège";
+
+        const bEntry = branchSessionsMap.get(targetBranchId) || {
+          branchName: resolvedBranchName,
+          totalSessions: 0,
+          freeSessions: 0,
+          amount: 0,
+          totalTuition: 0,
+          schoolAmount: 0,
+          totalPresentAttendances: 0,
+        };
+        bEntry.amount += totalTeacherCut;
+        bEntry.totalTuition = (bEntry.totalTuition || 0) + totalRetroTuition;
+        bEntry.schoolAmount = (bEntry.schoolAmount || 0) + totalRetroSchoolCut;
+        branchSessionsMap.set(targetBranchId, bEntry);
+
+        const refLesson = historyData.lessons[historyData.lessons.length - 1];
+        sessionDetails.push({
+          lessonId: refLesson?.id || 0,
+          startsAt: refLesson ? new Date(refLesson.startsAt) : new Date(endDate),
+          className: historyData.classInfo?.name || "فوج",
+          branchName: resolvedBranchName,
+          presentCount: 0,
+          payingCount: Math.round(newlyResolvedTransferWeight * 100) / 100,
+          pricePerCycle,
+          sessionPrice,
+          teacherCut: teacherRatePerStudent,
+          schoolCut: totalRetroSchoolCut,
+          appliedPercentage: retroGroupPercentage !== null ? retroGroupPercentage : undefined,
+          lessonAmount: totalTeacherCut,
+          isFree: false,
+          isExtra: false,
+          isCatchUp: false,
+          isRetroactive: true,
+          retroactiveNote: `تسوية غياب محول من فوج سابق لنفس الأستاذ (${newlyResolvedTransferCount})`,
+        });
       }
     }
   }

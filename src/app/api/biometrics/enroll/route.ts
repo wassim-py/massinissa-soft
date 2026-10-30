@@ -10,6 +10,7 @@ import {
   deleteStudentFingerprintAction,
   enrollStudentFingerprintAction,
 } from "@/lib/biometricActions";
+import { verifyBiometricApiAuth } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +18,15 @@ export const dynamic = "force-dynamic";
  * GET /api/biometrics/enroll
  * Polls the live 3-tap fingerprint enrollment progress from the ZKTeco K50 Pro.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const authCheck = await verifyBiometricApiAuth(request);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized biometric API access" },
+        { status: 401 }
+      );
+    }
     const status = getK50Status();
     return NextResponse.json({
       success: true,
@@ -39,6 +47,13 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
+    const authCheck = await verifyBiometricApiAuth(request);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { success: false, message: "Unauthorized biometric API access" },
+        { status: 401 }
+      );
+    }
     const body = await request.json();
     const mode = body.mode ? String(body.mode) : "hardware";
     let globalNumber = body.globalNumber ? Number(body.globalNumber) : 0;
@@ -110,17 +125,29 @@ export async function POST(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const authCheck = await verifyBiometricApiAuth(request);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { success: false, message: "Unauthorized biometric API access" },
+        { status: 401 }
+      );
+    }
     const { searchParams } = new URL(request.url);
     const mode = searchParams.get("mode") || "cancel";
     const globalNumber = Number(searchParams.get("globalNumber") || 0);
     const studentId = searchParams.get("studentId");
+    const fingerIndexParam = searchParams.get("fingerIndex");
+    const fingerIndex =
+      fingerIndexParam !== null && fingerIndexParam !== "" && !isNaN(Number(fingerIndexParam))
+        ? Number(fingerIndexParam)
+        : undefined;
 
     if (mode === "delete") {
       if (globalNumber > 0) {
-        await deleteK50HardwareUser(globalNumber);
+        await deleteK50HardwareUser(globalNumber, fingerIndex);
       }
       if (studentId) {
-        const dbRes = await deleteStudentFingerprintAction(studentId);
+        const dbRes = await deleteStudentFingerprintAction(studentId, fingerIndex);
         return NextResponse.json(dbRes);
       }
       return NextResponse.json({

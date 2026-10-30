@@ -100,8 +100,9 @@ async function main() {
       });
     }
 
-    // 4. Test scan at a far-future timestamp where no lesson is active -> State 3 (NO_UPCOMING_GROUP)
+    // 4. Test scan at a far-future timestamp (03:00 AM Algiers) where no lesson is active -> State 3 (NO_UPCOMING_GROUP)
     const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    farFuture.setUTCHours(2, 0, 0, 0);
     const noGroupScan = await processBiometricScan({
       globalNumber: student.globalNumber,
       branchId: student.registeredBranchId,

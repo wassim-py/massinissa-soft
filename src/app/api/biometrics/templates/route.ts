@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { verifyBiometricApiAuth } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -8,8 +9,15 @@ export const dynamic = "force-dynamic";
  * Returns all registered student fingerprints so every branch's K50 device
  * stays synced with all students' globalNumber and biometric templates.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const authCheck = await verifyBiometricApiAuth(request);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized biometric API access" },
+        { status: 401 }
+      );
+    }
     const [fingerprints, tombstones] = await Promise.all([
       prisma.studentFingerprint.findMany({
         include: {
@@ -58,6 +66,13 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
+    const authCheck = await verifyBiometricApiAuth(request);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized biometric API access" },
+        { status: 401 }
+      );
+    }
     const body = await request.json();
     const globalNumber = Number(body.globalNumber);
     const fingerIndex = body.fingerIndex !== undefined ? Number(body.fingerIndex) : 0;

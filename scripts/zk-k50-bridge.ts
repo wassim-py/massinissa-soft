@@ -152,7 +152,11 @@ async function forwardScanToApp(payload: {
   try {
     const res = await fetch(`${APP_URL}/api/biometrics/scan`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-zk-bridge-key": process.env.ZK_BRIDGE_SECRET || "massinissa-zk-bridge-v4-key",
+        "User-Agent": "Massinissa-ZK-Bridge/4.0",
+      },
       body: JSON.stringify({
         branchId: BRANCH_ID,
         deviceIp: DEVICE_IP,

@@ -523,6 +523,10 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         <span>{t("legendCaughtUp")}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-indigo-600 ring-1 ring-indigo-300 inline-block shadow-2xs"></span>
+                        <span>{locale === "ar" ? "استدراك زائر (قبل التحويل)" : "Rattrapage visiteur (avant transfert)"}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded-full bg-rose-500 inline-block shadow-2xs"></span>
                         <span>{locale === "ar" ? "أستاذ غائب (محفوظ)" : "Prof absent (préservé)"}</span>
                     </div>
@@ -776,6 +780,52 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                             }`}
                                                             title={locale === "ar" ? "أستاذ غائب (الرصيد غير مخصوم) - انقر للتعديل" : "Professeur absent (crédit préservé) - Cliquer pour modifier"}
                                                         />
+                                                    </td>
+                                                );
+                                            }
+
+                                            if (record.visitorCatchUp) {
+                                                const vTooltipText =
+                                                    locale === "ar"
+                                                        ? `حضور استدراكي كزائر (قبل التحويل) لتعويض حصة من فوج ${record.visitorCatchUp.homeGroupName}${
+                                                              record.visitorCatchUp.missedLessonDate
+                                                                  ? ` بتاريخ ${formatCatchUpDate(record.visitorCatchUp.missedLessonDate)}`
+                                                                  : ""
+                                                          }`
+                                                        : `Présence en rattrapage visiteur (avant transfert) pour une séance du groupe ${record.visitorCatchUp.homeGroupName}${
+                                                              record.visitorCatchUp.missedLessonDate
+                                                                  ? ` du ${formatCatchUpDate(record.visitorCatchUp.missedLessonDate)}`
+                                                                  : ""
+                                                          }`;
+
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <div className="relative group/visitorcu inline-flex items-center justify-center">
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                                className={`w-5 h-5 rounded-full bg-indigo-600 hover:bg-indigo-700 ring-2 ring-indigo-300 ring-offset-1 transition-all hover:scale-125 cursor-pointer shadow-xs focus:outline-none block ${
+                                                                    isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                                }`}
+                                                                title={vTooltipText}
+                                                            />
+                                                            <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/visitorcu:flex flex-col items-center z-40 min-w-[190px] max-w-xs transition-all">
+                                                                <div className="bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-xl text-center font-normal">
+                                                                    <div className="font-bold text-indigo-300 mb-0.5 flex items-center justify-center gap-1.5">
+                                                                        <span>
+                                                                            {locale === "ar" ? "استدراك (قبل التحويل)" : "Rattrapage (avant transfert)"}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="text-[11px] text-gray-200 leading-snug">
+                                                                        {vTooltipText}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />
+                                                            </div>
+                                                        </div>
                                                     </td>
                                                 );
                                             }

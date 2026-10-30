@@ -521,6 +521,8 @@ const AttendanceRoster = ({
   }, [activeStudents]);
 
   // §7.5 Live Biometric Scan Auto-Update on open Attendance Roster
+  const [biometricScanTimes, setBiometricScanTimes] = useState<Record<string, string>>({});
+
   useEffect(() => {
     const handleBiometricScan = (event: Event) => {
       const customEvent = event as CustomEvent;
@@ -534,6 +536,18 @@ const AttendanceRoster = ({
         const matchesClass = Number(scan.classId) === Number(lesson.class?.id);
         const matchesStudent = activeStudents.some((s) => s.id === scan.studentId);
         if (matchesLesson || (matchesClass && matchesStudent)) {
+          const scanDate =
+            scan.scannedAt || scan.scanTime
+              ? new Date(scan.scannedAt || scan.scanTime)
+              : new Date();
+          const hhmm = scanDate.toLocaleTimeString("fr-FR", {
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+          setBiometricScanTimes((prev) => ({
+            ...prev,
+            [String(scan.studentId)]: hhmm,
+          }));
           setAttendance((prev) => ({
             ...prev,
             [String(scan.studentId)]: "PRESENT",
@@ -1342,6 +1356,20 @@ const AttendanceRoster = ({
                         {student.className && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs">
                             {student.className}
+                          </span>
+                        )}
+
+                        {currentStatus === "PRESENT" && biometricScanTimes[student.id] && (
+                          <span
+                            title={
+                              locale === "ar"
+                                ? "تم تسجيل الحضور عبر جهاز البصمة K50 Pro"
+                                : "Présence enregistrée par empreinte biométrique K50 Pro"
+                            }
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs"
+                          >
+                            <span>🫆</span>
+                            <span>{biometricScanTimes[student.id]}</span>
                           </span>
                         )}
 

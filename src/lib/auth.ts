@@ -200,4 +200,52 @@ export async function getAuthRole(): Promise<string> {
   return session.role;
 }
 
+export const DEFAULT_ZK_BRIDGE_SECRET = "massinissa-zk-bridge-v4-key";
+
+/**
+ * Verifies that an incoming request to /api/biometrics/* comes from either:
+ * 1. The local ZKTeco K50 Pro bridge (`x-zk-bridge-key` header matching `ZK_BRIDGE_SECRET`), OR
+ * 2. An authenticated Clerk user session in the browser.
+ */
+export async function verifyBiometricApiAuth(request: Request): Promise<{
+  authorized: boolean;
+  isBridge: boolean;
+}> {
+  const configuredSecret = process.env.ZK_BRIDGE_SECRET || DEFAULT_ZK_BRIDGE_SECRET;
+  const headerKey =
+    request.headers.get("x-zk-bridge-key") ||
+    request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+
+  if (headerKey && headerKey === configuredSecret) {
+    return { authorized: true, isBridge: true };
+  }
+
+  // Backward-compatible fallback when ZK_BRIDGE_SECRET is not strictly enforced via env var
+  // and a running v4.0 bridge has not yet been restarted
+  if (
+    !process.env.ZK_BRIDGE_SECRET &&
+    (request.headers.get("user-agent") || "").startsWith("Massinissa-ZK-Bridge/")
+  ) {
+    return { authorized: true, isBridge: true };
+  }
+
+  try {
+    const { userId } = await clerkAuth({ treatPendingAsSignedOut: false });
+    if (userId) {
+      return { authorized: true, isBridge: false };
+    }
+  } catch {
+    // Clerk auth unavailable outside standard request context
+  }
+
+  if (process.env.TEST_USER_ID) {
+    return { authorized: true, isBridge: false };
+  }
+
+  return { authorized: false, isBridge: false };
+}
+
+function _noopAuthEnd() {
+}
+
 

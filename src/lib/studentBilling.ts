@@ -213,6 +213,7 @@ export interface StudentAttendanceHistoryItem {
   startsAt: Date;
   status: "PRESENT" | "ABSENT" | "NOT_DEFINED";
   isCatchUp: boolean;
+  bothPresentAndCaughtUp?: boolean;
   classification: AttendanceClassification;
   isConsumedCredit: boolean;
   isTeacherPayable: boolean;
@@ -238,6 +239,7 @@ export function classifyStudentAttendanceHistory({
   catchUps = [],
   referenceDate = new Date(),
   creditResetOffset = 0,
+  postTransferStartAfter = null,
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
@@ -245,11 +247,12 @@ export function classifyStudentAttendanceHistory({
     missedLessonId: number;
     catchUpLessonId?: number;
     recordedAt?: Date | string;
-    recordedBy?: string;
+    recordedBy?: string | null;
     isTransferCatchUp?: boolean;
   }>;
   referenceDate?: Date;
   creditResetOffset?: number;
+  postTransferStartAfter?: Date | string | null;
 }): StudentAttendanceHistoryItem[] {
   // Sort lessons chronologically
   const sortedLessons = [...lessons]
@@ -278,6 +281,13 @@ export function classifyStudentAttendanceHistory({
 
   const lessonIdSet = new Set(sortedLessons.map((l) => l.id));
 
+  // If the student transferred into this group, any lesson on or after the transfer timestamp
+  // (with a 2-hour grace window for a lesson already in progress when transferring at the desk)
+  // immediately counts toward attendance/absence tracking without waiting for a first PRESENT.
+  const transferStartThresholdMs = postTransferStartAfter
+    ? new Date(postTransferStartAfter).getTime() - 2 * 60 * 60 * 1000
+    : null;
+
   // Determine presence at each lesson (teacher absent lessons are never treated as student presence or normal sessions)
   const presenceArray: boolean[] = sortedLessons.map((l) => {
     if (l.isTeacherAbsent) return false;
@@ -295,7 +305,11 @@ export function classifyStudentAttendanceHistory({
   })();
 
   const lastPresenceDate =
-    lastPresenceIndex >= 0 ? new Date(sortedLessons[lastPresenceIndex].startsAt) : null;
+    lastPresenceIndex >= 0
+      ? new Date(sortedLessons[lastPresenceIndex].startsAt)
+      : postTransferStartAfter
+      ? new Date(postTransferStartAfter)
+      : null;
 
   // Count trailing unexcused absences from lastPresenceIndex to end (excluding teacher absent lessons)
   const trailingAbsenceCount =
@@ -324,7 +338,7 @@ export function classifyStudentAttendanceHistory({
   if (creditResetOffset && creditResetOffset > 0) {
     let scanStartIndex = sortedLessons.length - 1;
     // If student returned after an absence gap, start scan immediately before the return presence
-    for (let i = sortedLessons.length - 1; i > firstPresenceIndex; i--) {
+    for (let i = sortedLessons.length - 1; i > Math.max(0, firstPresenceIndex); i--) {
       if (presenceArray[i] && !presenceArray[i - 1]) {
         scanStartIndex = i - 1;
         break;
@@ -338,9 +352,12 @@ export function classifyStudentAttendanceHistory({
       const rawStatus = attendanceMap.get(l.id);
       const hasCatchUp = catchUpSet.has(l.id);
       const isPresent = rawStatus === "PRESENT" || hasCatchUp;
+      const isPostTransfer =
+        transferStartThresholdMs !== null &&
+        new Date(l.startsAt).getTime() >= transferStartThresholdMs;
 
-      // Only evaluate lessons on or after first presence
-      if (firstPresenceIndex !== -1 && i > firstPresenceIndex) {
+      // Only evaluate lessons on or after first presence (or post-transfer start)
+      if ((firstPresenceIndex !== -1 && i > firstPresenceIndex) || isPostTransfer) {
         if (!isPresent && rawStatus === "ABSENT") {
           suspendedLessonIdSet.add(l.id);
           remaining--;
@@ -375,17 +392,18 @@ export function classifyStudentAttendanceHistory({
     }
 
     // Visiting student attending a catch-up in this host class from a different group (§2.12):
-    // Does NOT consume credit in this host class (0 credit deducted, teacher paid for visitor).
+    // Does NOT consume credit in this host class (0 credit deducted in host class).
+    // Only if they weren't regularly PRESENT as an enrolled member of this class.
     const missedLessonForVisitor = catchUpToMissedMap.get(lesson.id);
-    if (missedLessonForVisitor && !lessonIdSet.has(missedLessonForVisitor)) {
+    if (missedLessonForVisitor && !lessonIdSet.has(missedLessonForVisitor) && rawStatus !== "PRESENT") {
       history.push({
         lessonId: lesson.id,
         startsAt,
-        status: rawStatus === "PRESENT" ? "PRESENT" : "ABSENT",
+        status: "ABSENT",
         isCatchUp: true,
-        classification: "PRESENT",
+        classification: "PRE_START_ABSENCE",
         isConsumedCredit: false,
-        isTeacherPayable: true,
+        isTeacherPayable: false,
         isRefundable: false,
         isHeld: false,
       });
@@ -417,8 +435,9 @@ export function classifyStudentAttendanceHistory({
       const catchUpAttStatus = isCatchUpInThisList && cLessonId ? attendanceMap.get(cLessonId) : null;
       const isCatchUpAttendedInThisList = isCatchUpInThisList && catchUpAttStatus === "PRESENT";
 
-      if (isCatchUpAttendedInThisList) {
-        // In-group catch-up attended: the catch-up lesson will consume 1 credit when its iteration runs.
+      if (isCatchUpAttendedInThisList && rawStatus !== "PRESENT") {
+        // In-group catch-up attended (and student was absent on the original lesson):
+        // The catch-up lesson will consume 1 credit when its iteration runs.
         // This missed lesson is neutralized (0 credit deducted, teacher not paid twice).
         history.push({
           lessonId: lesson.id,
@@ -434,14 +453,16 @@ export function classifyStudentAttendanceHistory({
         continue;
       }
 
-      // Cross-group catch-up (attended in another group with same teacher and level):
-      // If student was also marked PRESENT in this home lesson (attended both sessions):
+      // If student did an anticipatory catch-up AND ALSO attended the original lesson (rawStatus === "PRESENT"):
+      // For in-group: both lesson.id and cLessonId have rawStatus === "PRESENT" in sortedLessons, so each consumes 1 credit (2 total).
+      // For cross-group (!isCatchUpInThisList): lesson.id consumes 1 credit as PRESENT AND 1 extra credit for the cross-group catch-up visit (bothPresentAndCaughtUp: true => 2 total).
       if (rawStatus === "PRESENT") {
         history.push({
           lessonId: lesson.id,
           startsAt,
           status: "PRESENT",
           isCatchUp: true,
+          bothPresentAndCaughtUp: !isCatchUpInThisList,
           classification: "PRESENT",
           isConsumedCredit: true,
           isTeacherPayable: true,
@@ -500,7 +521,11 @@ export function classifyStudentAttendanceHistory({
 
     // Otherwise, rawStatus === "ABSENT"
     // 1. Check if this absence is before student's very first presence in this group
-    if (firstPresenceIndex === -1 || i < firstPresenceIndex) {
+    //    (UNLESS the student transferred into this group and the lesson is on/after the transfer timestamp)
+    const isPostTransferLesson =
+      transferStartThresholdMs !== null && startsAt.getTime() >= transferStartThresholdMs;
+
+    if (!isPostTransferLesson && (firstPresenceIndex === -1 || i < firstPresenceIndex)) {
       history.push({
         lessonId: lesson.id,
         startsAt,
@@ -600,7 +625,7 @@ export function computeStudentConsumedSessions({
     missedLessonId: number;
     catchUpLessonId?: number;
     recordedAt?: Date | string;
-    recordedBy?: string;
+    recordedBy?: string | null;
     isTransferCatchUp?: boolean;
   }>;
 }): number {
@@ -617,7 +642,7 @@ export function computeStudentConsumedSessions({
   });
   const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
   const lessonIds = new Set(lessons.map((l) => l.id));
-  let extraCatchUp = 0;
+  let extraCatchUp = history.filter((h) => h.bothPresentAndCaughtUp).length;
   (catchUps || []).forEach((c: any) => {
     if (c.isTransferCatchUp || c.recordedBy === "transfer") {
       return;
@@ -764,8 +789,20 @@ export interface ComputeStudentCreditParams {
     status?: string | null;
     refunds?: Array<{ amount?: any }>;
   }>;
-  transfersIn?: Array<{ transferredSessions: number }> | number;
-  transfersOut?: Array<{ transferredSessions: number }> | number;
+  transfersIn?: Array<{
+    transferredSessions: number;
+    amount?: any;
+    notes?: string | null;
+    transferredAt?: Date | string | null;
+    fromEnrollment?: any;
+  }> | number;
+  transfersOut?: Array<{
+    transferredSessions: number;
+    amount?: any;
+    notes?: string | null;
+    transferredAt?: Date | string | null;
+    toEnrollment?: any;
+  }> | number;
   creditResetOffset?: number | null;
   attendances?: Array<{
     lessonId: number;
@@ -799,6 +836,8 @@ export interface StudentCreditResult {
   transferableSessions: number;
   openEndedHeldSessions: number;
   refundableAmount: number;
+  partialTransferPaidDzd?: number;
+  partialTransferRemainderDzd?: number;
   isFormation: boolean;
   isNonPayer: boolean;
   isSiblingWaived: boolean;
@@ -1144,15 +1183,36 @@ export function isSiblingDiscountEligibleInClass({
 }
 
 /**
+ * Helper to extract same-teacher held trailing absences carried over via transfer.
+ */
+export function extractSameTeacherHeldFromTransfers(
+  transfersIn?: Array<{
+    notes?: string | null;
+    fromEnrollment?: any;
+  }> | number | null
+): number {
+  if (!Array.isArray(transfersIn)) return 0;
+  let total = 0;
+  for (const t of transfersIn) {
+    const notes = String(t?.notes || "");
+    const match = notes.match(/\[SAME_TEACHER_HELD:(\d+)\]/);
+    if (match && match[1]) {
+      total += parseInt(match[1], 10);
+    }
+  }
+  return total;
+}
+
+/**
  * Determines if a lesson (especially a multi-group lesson) applies to a student's enrollment in a target class.
  *
  * Rules:
- * 1. Primary lesson (lesson.classId === targetClassId):
- *    - If the student transferred OUT of targetClassId before the lesson occurred, it does not apply.
- * 2. Multi-group lesson from another class (lesson.classId !== targetClassId):
- *    - If the student is UNENROLLED, INACTIVE, or TRANSFERRED in targetClassId, it does not apply.
- *    - If the student is ALSO actively enrolled in the lesson's primary class, it belongs to the primary class (prevents double charging).
- *    - If the student transferred from lesson.classId into targetClassId, and the lesson occurred BEFORE the transfer date, it belongs to the prior class.
+ * 1. Any lesson (even a merged multi-group lesson) occurring on or before a transfer-out timestamp belongs
+ *    to the source group the student was enrolled in at that time.
+ * 2. Lessons occurring in the target group before the student transferred in (with a 2-hour grace window for
+ *    an ongoing primary lesson at the moment of transfer) do NOT belong to the post-transfer enrollment.
+ * 3. If a student transfers A -> B -> A, lessons in Group A during the away window (between transferring out
+ *    to B and transferring back into A) are excluded from Group A.
  */
 export function isLessonApplicableToEnrollment(
   lesson: { id?: number; classId?: number; startsAt?: Date | string },
@@ -1185,68 +1245,101 @@ export function isLessonApplicableToEnrollment(
   if (!enrollment) return true;
 
   const lessonTime = new Date(lesson.startsAt || 0).getTime();
+  const isPrimaryLesson = !lesson.classId || lesson.classId === targetClassId;
 
-  // 1. Primary lesson of this target class:
-  if (!lesson.classId || lesson.classId === targetClassId) {
-    if (enrollment.status === "TRANSFERRED" || enrollment.status === "UNENROLLED") {
-      const transferOut = (enrollment.transfersFrom || []).find(
-        (t: any) =>
-          t.toEnrollment?.classId ||
-          t.toEnrollment?.class?.id ||
-          t.toEnrollmentId
-      );
-      const transferOutTime = transferOut?.transferredAt
-        ? new Date(transferOut.transferredAt).getTime()
-        : enrollment.transferredAt
-        ? new Date(enrollment.transferredAt).getTime()
-        : null;
+  // Collect chronological transfer-out and transfer-in timestamps for this enrollment
+  const outTimes: number[] = [];
+  if (Array.isArray(enrollment.transfersFrom) && enrollment.transfersFrom.length > 0) {
+    for (const t of enrollment.transfersFrom) {
+      if (t?.transferredAt) {
+        const ms = new Date(t.transferredAt).getTime();
+        if (!isNaN(ms)) outTimes.push(ms);
+      }
+    }
+  } else if (enrollment.transferredAt) {
+    const ms = new Date(enrollment.transferredAt).getTime();
+    if (!isNaN(ms)) outTimes.push(ms);
+  }
+  outTimes.sort((a, b) => a - b);
 
-      if (transferOutTime && lessonTime > transferOutTime) {
+  const inTimes: number[] = [];
+  if (Array.isArray(enrollment.transfersTo) && enrollment.transfersTo.length > 0) {
+    for (const t of enrollment.transfersTo) {
+      if (t?.transferredAt) {
+        const ms = new Date(t.transferredAt).getTime();
+        if (!isNaN(ms)) inTimes.push(ms);
+      }
+    }
+  } else if (enrollment.transferredInAt) {
+    const ms = new Date(enrollment.transferredInAt).getTime();
+    if (!isNaN(ms)) inTimes.push(ms);
+  }
+  inTimes.sort((a, b) => a - b);
+
+  // 1. If the student entered this group via transfer (earliest transfer event is an IN event):
+  //    Exclude lessons that took place before the transfer into this group.
+  if (inTimes.length > 0 && (outTimes.length === 0 || inTimes[0] < outTimes[0])) {
+    const firstInTime = inTimes[0];
+    if (!isPrimaryLesson) {
+      // Multi-group lesson hosted by another class before the transfer into targetClassId
+      if (lessonTime < firstInTime) {
+        return false;
+      }
+    } else {
+      // Primary lesson of targetClassId: allow 2-hour grace window for a lesson already in progress when transferring
+      if (lessonTime < firstInTime - 2 * 60 * 60 * 1000) {
         return false;
       }
     }
-    return true;
   }
 
-  // 2. Multi-group lesson created under another class (lesson.classId !== targetClassId):
-  // If the student is not active in this target class, multi-group lessons from other classes do not apply
-  if (
-    enrollment.status === "UNENROLLED" ||
-    enrollment.status === "INACTIVE" ||
-    enrollment.status === "TRANSFERRED"
-  ) {
-    return false;
+  // 2. Check transfer-out windows (both final transfer-out and A -> B -> A away windows):
+  for (const outTime of outTimes) {
+    const returnInTime = inTimes.find((inMs) => inMs > outTime);
+    if (returnInTime !== undefined) {
+      // Student transferred out at outTime and later transferred back in at returnInTime:
+      // Any lesson during the away gap (outTime, returnInTime) does not apply to this group.
+      const returnThreshold = isPrimaryLesson ? returnInTime - 2 * 60 * 60 * 1000 : returnInTime;
+      if (lessonTime > outTime && lessonTime < returnThreshold) {
+        return false;
+      }
+    } else {
+      // Student transferred out at outTime and has not transferred back after outTime:
+      if (
+        (enrollment.status === "TRANSFERRED" ||
+          enrollment.status === "UNENROLLED" ||
+          inTimes.every((inMs) => inMs <= outTime)) &&
+        lessonTime > outTime
+      ) {
+        return false;
+      }
+    }
   }
 
-  // If the student is ALSO actively enrolled in the lesson's primary class,
-  // the lesson belongs to the primary class to avoid double-charging
-  const isStudentActiveInPrimaryClass = enrollment.student?.enrollments?.some(
-    (e: any) =>
-      (e.classId === lesson.classId || e.class?.id === lesson.classId) &&
-      (e.status === "ACTIVE" || !e.status)
-  );
-  if (isStudentActiveInPrimaryClass) {
-    return false;
-  }
+  // 3. Multi-group lesson created under another class (lesson.classId !== targetClassId):
+  if (!isPrimaryLesson) {
+    if (enrollment.status === "UNENROLLED" || enrollment.status === "INACTIVE") {
+      return false;
+    }
 
-  // Find if this student transferred from the lesson's primary class into targetClassId
-  const transferFromLessonClass = (enrollment.transfersTo || []).find(
-    (t: any) =>
-      t.fromEnrollment?.classId === lesson.classId ||
-      t.fromEnrollment?.class?.id === lesson.classId
-  );
+    // If the student was no longer active in targetClassId and had no transferOut timestamp recorded,
+    // fall back to excluding multi-group lessons if status is TRANSFERRED and outTimes is empty.
+    if (enrollment.status === "TRANSFERRED" && outTimes.length === 0) {
+      return false;
+    }
 
-  const transferTime = transferFromLessonClass?.transferredAt
-    ? new Date(transferFromLessonClass.transferredAt).getTime()
-    : (enrollment.transferredFromClassId === lesson.classId && enrollment.transferredInAt)
-    ? new Date(enrollment.transferredInAt).getTime()
-    : null;
-
-  // If the student transferred from lesson.classId into targetClassId,
-  // and this joint lesson occurred BEFORE the transfer took place:
-  // this lesson was attended in the source class and must NOT be attributed to targetClassId!
-  if (transferTime && lessonTime < transferTime) {
-    return false;
+    // If the student is ALSO actively enrolled in the lesson's primary class (and both are currently active),
+    // the lesson belongs to the primary class to avoid double-charging.
+    if (enrollment.status === "ACTIVE" || !enrollment.status) {
+      const isStudentActiveInPrimaryClass = enrollment.student?.enrollments?.some(
+        (e: any) =>
+          (e.classId === lesson.classId || e.class?.id === lesson.classId) &&
+          (e.status === "ACTIVE" || !e.status)
+      );
+      if (isStudentActiveInPrimaryClass) {
+        return false;
+      }
+    }
   }
 
   return true;
@@ -1339,10 +1432,78 @@ export function computeStudentCreditAndSessions({
     }
   }
 
-  const tIn =
-    typeof transfersIn === "number"
-      ? transfersIn
-      : (transfersIn || []).reduce((sum, t) => sum + Number(t.transferredSessions || 0), 0);
+  let latestTransferInTime: number | null = null;
+  let sameTeacherHeldFromTransfers = 0;
+  let crossPriceTransferAmount = 0;
+  let samePriceTransferredSessions = 0;
+
+  if (typeof transfersIn === "number") {
+    samePriceTransferredSessions = transfersIn;
+  } else if (Array.isArray(transfersIn)) {
+    for (const t of transfersIn) {
+      if (t?.transferredAt) {
+        const ms = new Date(t.transferredAt).getTime();
+        if (!isNaN(ms)) {
+          latestTransferInTime = latestTransferInTime === null ? ms : Math.max(latestTransferInTime, ms);
+        }
+      }
+      const notes = String(t?.notes || "");
+      const heldMatch = notes.match(/\[SAME_TEACHER_HELD:(\d+)\]/);
+      if (heldMatch && heldMatch[1]) {
+        sameTeacherHeldFromTransfers += parseInt(heldMatch[1], 10);
+      }
+
+      const hasPriceDiffTag = notes.includes("[PRICE_DIFF_VIREMENT]");
+      const fromCyclePrice =
+        t?.fromEnrollment?.class?.pricePerCycle !== undefined
+          ? Number(t.fromEnrollment.class.pricePerCycle)
+          : null;
+      const isDifferentCyclePrice =
+        hasPriceDiffTag ||
+        (fromCyclePrice !== null &&
+          fromCyclePrice > 0 &&
+          cyclePrice > 0 &&
+          Math.abs(fromCyclePrice - cyclePrice) >= 1);
+
+      const tAmount = Number(t?.amount || 0);
+      if (isDifferentCyclePrice && tAmount > 0 && effectiveLessonPrice > 0 && !isForm && !isNonPayer && !isSiblingWaived100) {
+        crossPriceTransferAmount += tAmount;
+      } else {
+        samePriceTransferredSessions += Number(t?.transferredSessions || 0);
+      }
+    }
+  }
+
+  let tIn = samePriceTransferredSessions;
+  let partialTransferPaidDzd: number | undefined = undefined;
+  let partialTransferRemainderDzd: number | undefined = undefined;
+
+  if (crossPriceTransferAmount > 0 && effectiveLessonPrice > 0 && !isForm && !isNonPayer && !isSiblingWaived100) {
+    const combinedTuitionAndTransfer = totalPaidTuition + crossPriceTransferAmount;
+    const totalCoveredSessions = Math.floor(combinedTuitionAndTransfer / effectiveLessonPrice);
+    const crossPriceSessions = Math.max(0, totalCoveredSessions - purchasedSessions);
+    tIn = samePriceTransferredSessions + crossPriceSessions;
+
+    const effectiveCycleCost = effectiveLessonPrice * 4;
+    if (effectiveCycleCost > 0 && combinedTuitionAndTransfer % effectiveCycleCost !== 0) {
+      partialTransferPaidDzd = Math.round(combinedTuitionAndTransfer % effectiveCycleCost);
+      partialTransferRemainderDzd = Math.round(effectiveCycleCost - partialTransferPaidDzd);
+    }
+  }
+
+  let earliestTransferOutTime: number | null = null;
+  if (Array.isArray(transfersOut)) {
+    for (const t of transfersOut) {
+      if (t?.transferredAt) {
+        const ms = new Date(t.transferredAt).getTime();
+        if (!isNaN(ms)) {
+          earliestTransferOutTime =
+            earliestTransferOutTime === null ? ms : Math.min(earliestTransferOutTime, ms);
+        }
+      }
+    }
+  }
+
   const tOut =
     typeof transfersOut === "number"
       ? transfersOut
@@ -1362,9 +1523,29 @@ export function computeStudentCreditAndSessions({
     if (c.catchUpLessonId) catchUpSet.add(c.catchUpLessonId);
   });
 
+  const postTransferThresholdMs =
+    latestTransferInTime !== null ? latestTransferInTime - 2 * 60 * 60 * 1000 : null;
+  const isReturnTransfer =
+    earliestTransferOutTime !== null &&
+    latestTransferInTime !== null &&
+    earliestTransferOutTime < latestTransferInTime;
+
+  const isExcludedByTransferWindow = (dateVal?: Date | string | null) => {
+    if (!dateVal || postTransferThresholdMs === null) return false;
+    const ms = new Date(dateVal).getTime();
+    if (isNaN(ms)) return false;
+    if (isReturnTransfer && earliestTransferOutTime !== null) {
+      return ms > earliestTransferOutTime && ms < postTransferThresholdMs;
+    }
+    return ms < postTransferThresholdMs;
+  };
+
   if (lessons && lessons.length > 0) {
     lessons.forEach((l) => {
       if (l.isFree) return;
+      if (isExcludedByTransferWindow(l.startsAt)) {
+        return;
+      }
       const st = attendanceMap.get(l.id);
       const hasCatchUp = catchUpSet.has(l.id);
       if (st || hasCatchUp) {
@@ -1376,6 +1557,9 @@ export function computeStudentCreditAndSessions({
     const seenLessonIds = new Set<number>();
     attendances.forEach((a) => {
       if (a.lesson && !a.lesson.isFree) {
+        if (isExcludedByTransferWindow(a.lesson.startsAt)) {
+          return;
+        }
         if (seenLessonIds.has(a.lesson.id)) return;
         seenLessonIds.add(a.lesson.id);
         relevantLessons.push({
@@ -1391,6 +1575,13 @@ export function computeStudentCreditAndSessions({
     (catchUps || []).forEach((c: any) => {
       const ml = c.missedLesson;
       const mlId = c.missedLessonId;
+      // Do not inject foreign missed lessons if this class is the host of the catch-up
+      if (c.catchUpLessonId && seenLessonIds.has(c.catchUpLessonId) && !seenLessonIds.has(mlId)) {
+        return;
+      }
+      if (isExcludedByTransferWindow(ml?.startsAt)) {
+        return;
+      }
       if (mlId && !seenLessonIds.has(mlId)) {
         seenLessonIds.add(mlId);
         relevantLessons.push({
@@ -1411,12 +1602,13 @@ export function computeStudentCreditAndSessions({
           attendances: relevantAttendances,
           catchUps,
           creditResetOffset: offset,
+          postTransferStartAfter: latestTransferInTime ? new Date(latestTransferInTime) : null,
         })
       : [];
 
   const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
   const relevantLessonIds = new Set(relevantLessons.map((l) => l.id));
-  let extraCatchUpConsumed = 0;
+  let extraCatchUpConsumed = history.filter((h) => h.bothPresentAndCaughtUp).length;
   (catchUps || []).forEach((c: any) => {
     if (c.isTransferCatchUp || c.recordedBy === "transfer") {
       return;
@@ -1424,6 +1616,9 @@ export function computeStudentCreditAndSessions({
     // Visiting student attending catch-up in this host class from another group:
     // Does NOT consume credit in this host class.
     if (c.catchUpLessonId && relevantLessonIds.has(c.catchUpLessonId) && !relevantLessonIds.has(c.missedLessonId)) {
+      return;
+    }
+    if (isExcludedByTransferWindow(c.missedLesson?.startsAt)) {
       return;
     }
     const missedAccounted = accountedCatchUps.has(c.missedLessonId);
@@ -1435,8 +1630,25 @@ export function computeStudentCreditAndSessions({
     }
   });
 
-  const attendedSessions = history.filter((h) => h.isConsumedCredit).length + extraCatchUpConsumed;
-  const heldSessions = history.filter((h) => h.isHeld).length;
+  // Same-teacher group transfer rule:
+  // If trailing absences were transferred from a previous group taught by the SAME teacher:
+  // - Before the student attends any session in this new group, those trailing absences remain held in suspense.
+  // - Once the student attends (PRESENT or CAUGHT_UP_ABSENCE) in this new group, those trailing absences resolve
+  //   into consumed sessions (INTERLEAVED_ABSENCE) deducted from this new group's balance.
+  const hasPostTransferPresence = history.some(
+    (h) =>
+      h.isConsumedCredit &&
+      (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE") &&
+      (postTransferThresholdMs === null || h.startsAt.getTime() >= postTransferThresholdMs)
+  );
+  const resolvedSameTeacherHeld = hasPostTransferPresence ? sameTeacherHeldFromTransfers : 0;
+  const pendingSameTeacherHeld = hasPostTransferPresence ? 0 : sameTeacherHeldFromTransfers;
+
+  const attendedSessions =
+    history.filter((h) => h.isConsumedCredit).length +
+    extraCatchUpConsumed +
+    sameTeacherHeldFromTransfers;
+  const heldSessions = history.filter((h) => h.isHeld).length + pendingSameTeacherHeld;
   const settledConsumedSessions =
     history.filter(
       (h) =>
@@ -1444,8 +1656,11 @@ export function computeStudentCreditAndSessions({
         (h.classification === "PRESENT" ||
           h.classification === "INTERLEAVED_ABSENCE" ||
           h.classification === "FORFEITED_DROPOUT" ||
-          h.classification === "SUSPENDED_ABSENCE")
-    ).length + extraCatchUpConsumed;
+          h.classification === "SUSPENDED_ABSENCE" ||
+          h.classification === "CAUGHT_UP_ABSENCE")
+    ).length +
+    extraCatchUpConsumed +
+    resolvedSameTeacherHeld;
 
   // Group transfer & refund alignment rule:
   // Held sessions (open-ended trailing absences where teacher was NOT paid) are fully refundable AND transferable.
@@ -1477,7 +1692,8 @@ export function computeStudentCreditAndSessions({
         0,
         Math.round(
           totalPaidTuition +
-            (tIn - tOut - settledConsumedSessions + offset) * effectiveLessonPrice
+            crossPriceTransferAmount +
+            (samePriceTransferredSessions - tOut - settledConsumedSessions + offset) * effectiveLessonPrice
         )
       );
     } else {
@@ -1518,6 +1734,8 @@ export function computeStudentCreditAndSessions({
     transferableSessions,
     openEndedHeldSessions: heldSessions,
     refundableAmount,
+    partialTransferPaidDzd,
+    partialTransferRemainderDzd,
     isFormation: isForm,
     isNonPayer,
     isSiblingWaived: isSiblingWaived100,

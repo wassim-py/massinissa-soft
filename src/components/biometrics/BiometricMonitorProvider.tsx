@@ -177,64 +177,70 @@ function InscriptionStatusBadge({
   );
 }
 
+let sharedBiometricAudioCtx: AudioContext | null = null;
+
+function getSharedAudioContext(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+  const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!sharedBiometricAudioCtx || sharedBiometricAudioCtx.state === "closed") {
+    sharedBiometricAudioCtx = new AudioCtx();
+  }
+  if (sharedBiometricAudioCtx.state === "suspended") {
+    sharedBiometricAudioCtx.resume().catch(() => {});
+  }
+  return sharedBiometricAudioCtx;
+}
+
 // 4 Distinct Web Audio API Sound Effects for the 4 Biometric States
 function playBiometricTone(
   type: "SUCCESS" | "NO_CREDITS" | "NO_UPCOMING_GROUP" | "UNRECOGNIZED"
 ) {
   try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
-    if (type === "SUCCESS") {
+    const scheduleTone = (
+      oscType: OscillatorType,
+      startFreq: number,
+      endFreq: number | null,
+      freqChangeOffset: number,
+      gainVal: number,
+      startTime: number,
+      duration: number
+    ) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(523.25, now);
-      osc.frequency.setValueAtTime(783.99, now + 0.1);
-      gain.gain.setValueAtTime(0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+      osc.type = oscType;
+      osc.frequency.setValueAtTime(startFreq, startTime);
+      if (endFreq !== null) {
+        osc.frequency.setValueAtTime(endFreq, startTime + freqChangeOffset);
+      }
+      gain.gain.setValueAtTime(gainVal, startTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.35);
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch {}
+      };
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    };
+
+    if (type === "SUCCESS") {
+      scheduleTone("sine", 523.25, 783.99, 0.1, 0.18, now, 0.35);
     } else if (type === "NO_CREDITS") {
       for (let i = 0; i < 2; i++) {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "sawtooth";
-        osc.frequency.setValueAtTime(310, now + i * 0.18);
-        gain.gain.setValueAtTime(0.2, now + i * 0.18);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.18 + 0.14);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now + i * 0.18);
-        osc.stop(now + i * 0.18 + 0.14);
+        scheduleTone("sawtooth", 310, null, 0, 0.2, now + i * 0.18, 0.14);
       }
     } else if (type === "NO_UPCOMING_GROUP") {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(660, now);
-      osc.frequency.setValueAtTime(440, now + 0.15);
-      gain.gain.setValueAtTime(0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.35);
+      scheduleTone("triangle", 660, 440, 0.15, 0.18, now, 0.35);
     } else {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "square";
-      osc.frequency.setValueAtTime(190, now);
-      gain.gain.setValueAtTime(0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.28);
+      scheduleTone("square", 190, null, 0, 0.15, now, 0.28);
     }
   } catch {
     // Ignore audio context autoplay restrictions
@@ -572,9 +578,10 @@ export default function BiometricMonitorProvider({
                 const resData = await res.json();
                 if (resData?.success && resData.scan) {
                   ingestDirectScanResult(resData.scan);
-                  // Self-heal deleted student from K50 Pro flash memory
+                  // Self-heal tombstoned/deleted student from K50 Pro flash memory
                   if (
                     resData.scan.status === "UNRECOGNIZED" &&
+                    resData.scan.isTombstoned &&
                     msg.globalNumber &&
                     Number(msg.globalNumber) > 0
                   ) {
@@ -600,7 +607,7 @@ export default function BiometricMonitorProvider({
             es = null;
           }
           if (!isCancelled) {
-            retryTimer = setTimeout(connectLocalSse, 15000);
+            retryTimer = setTimeout(connectLocalSse, 2000);
           }
         };
       } catch {
@@ -625,6 +632,20 @@ export default function BiometricMonitorProvider({
     let isMounted = true;
     let interval: NodeJS.Timeout | null = null;
 
+    const fetchWithTimeout = async (
+      url: string,
+      options: RequestInit,
+      timeoutMs: number
+    ) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
     const pollFeed = async () => {
       if (isPollingRef.current) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
@@ -635,9 +656,10 @@ export default function BiometricMonitorProvider({
       try {
         const lessonQuery = openLessonId ? `&openLessonId=${openLessonId}` : "";
         const bridgeQuery = "&bridgeActive=1";
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `/api/biometrics/scan?sinceId=${lastSeenIdRef.current}${lessonQuery}${bridgeQuery}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
+          6000
         );
         if (!res.ok) return;
         const data = await res.json();
@@ -656,13 +678,17 @@ export default function BiometricMonitorProvider({
           typeof window !== "undefined" &&
           (localSseConnectedRef.current ||
             (!data.hardwareConnected &&
-              nowMs - lastLocalBridgeFailAtRef.current > 15000))
+              nowMs - lastLocalBridgeFailAtRef.current > 4000))
         ) {
           try {
             const bridgeUrl = `http://127.0.0.1:4375/status?appUrl=${encodeURIComponent(
               window.location.origin
             )}&branchId=${data.branchId || 1}&openLessonId=${openLessonId || ""}`;
-            const bridgeRes = await fetch(bridgeUrl, { cache: "no-store" });
+            const bridgeRes = await fetchWithTimeout(
+              bridgeUrl,
+              { cache: "no-store" },
+              1500
+            );
             if (bridgeRes.ok) {
               lastLocalBridgeFailAtRef.current = 0;
               const bridgeData = await bridgeRes.json();
@@ -679,15 +705,19 @@ export default function BiometricMonitorProvider({
                 bridgeData.pendingScans.length > 0
               ) {
                 for (const ev of bridgeData.pendingScans) {
-                  const postRes = await fetch("/api/biometrics/scan", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      ...ev,
-                      branchId: data.branchId || 1,
-                      openLessonId: openLessonId || null,
-                    }),
-                  });
+                  const postRes = await fetchWithTimeout(
+                    "/api/biometrics/scan",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        ...ev,
+                        branchId: data.branchId || 1,
+                        openLessonId: openLessonId || null,
+                      }),
+                    },
+                    6000
+                  );
                   if (postRes.ok) {
                     const postData = await postRes.json();
                     if (postData?.success && postData.scan) {
@@ -700,7 +730,7 @@ export default function BiometricMonitorProvider({
               lastLocalBridgeFailAtRef.current = nowMs;
             }
           } catch {
-            // Local bridge not running on 127.0.0.1:4375 — wait 15s before retrying
+            // Local bridge not running on 127.0.0.1:4375 — wait 4s before retrying
             lastLocalBridgeFailAtRef.current = nowMs;
           }
         }

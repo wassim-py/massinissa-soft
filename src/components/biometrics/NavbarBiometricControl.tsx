@@ -29,6 +29,7 @@ export default function NavbarBiometricControl() {
     pinnedAlerts,
     handleResolveAlert,
     openCatchUpModalForScan,
+    openPaymentModalForScan,
   } = useBiometricMonitor();
 
   const [isHoverOpen, setIsHoverOpen] = useState(false);
@@ -281,7 +282,7 @@ export default function NavbarBiometricControl() {
                               type="button"
                               onClick={() => {
                                 setIsHoverOpen(false);
-                                router.push(`/list/students/${item.studentId}`);
+                                openPaymentModalForScan(item);
                               }}
                               className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
                             >

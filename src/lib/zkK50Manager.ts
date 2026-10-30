@@ -590,10 +590,10 @@ async function handleK50RealTimeEvent(
         globalNumber,
         openLessonId: st.openLessonId,
       });
-      // Self-healing: if this globalNumber was deleted from the DB, immediately wipe it from K50 Pro flash memory!
-      if (res?.scan?.status === "UNRECOGNIZED") {
+      // Self-healing: if this globalNumber was tombstoned/deleted from the DB, immediately wipe it from K50 Pro flash memory!
+      if (res?.scan?.status === "UNRECOGNIZED" && res?.scan?.isTombstoned) {
         console.log(
-          `[K50 Pro Self-Heal] Student #${globalNumber} no longer exists in DB -> Wiping from K50 Pro hardware!`
+          `[K50 Pro Self-Heal] Student #${globalNumber} is tombstoned in DB -> Wiping from K50 Pro hardware!`
         );
         await deleteK50HardwareUser(globalNumber);
       }
@@ -692,8 +692,10 @@ function handleSocketData(chunk: Buffer) {
         const maskBuf = Buffer.alloc(4);
         maskBuf.writeUInt32LE(EVENT_MASK, 0);
         sendZkCommand(CMD_REG_EVENT, maskBuf);
-        sendZkCommand(CMD_ENABLEDEVICE);
-        sendZkCommand(CMD_STARTVERIFY);
+        if (!st.enrollment.active) {
+          sendZkCommand(CMD_ENABLEDEVICE);
+          sendZkCommand(CMD_STARTVERIFY);
+        }
         touchDeviceHeartbeat(true);
       }
     } else if (cmd === CMD_REG_EVENT) {
@@ -1061,7 +1063,7 @@ async function waitForConnection(
   const st = getState();
   if (
     forceFreshIfIdle &&
-    (!st.isConnected || Date.now() - st.lastHeartbeatAt > 6000)
+    (!st.isConnected || Date.now() - st.lastHeartbeatAt > 14000)
   ) {
     ensureK50Connected(undefined, undefined, true);
   } else if (st.isConnected && st.socket && !st.socket.destroyed) {
@@ -1106,26 +1108,6 @@ export async function startK50HardwareEnrollment(params: {
   const fingerIndex = Number(params.fingerIndex ?? 0);
   const studentName = params.studentName || `Student #${globalNumber}`;
 
-  sendZkCommand(CMD_CANCELCAPTURE);
-
-  const userPkt = buildUser72Packet(
-    globalNumber,
-    studentName,
-    String(globalNumber)
-  );
-  sendZkCommand(CMD_USER_WRQ, userPkt);
-
-  const delTempBuf = Buffer.alloc(25, 0);
-  delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
-  delTempBuf.writeUInt8(fingerIndex, 24);
-  sendZkCommand(CMD_DELETE_USERTEMP, delTempBuf);
-
-  const enrollBuf = Buffer.alloc(26, 0);
-  enrollBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
-  enrollBuf.writeUInt8(fingerIndex, 24);
-  enrollBuf.writeUInt8(1, 25);
-  sendZkCommand(CMD_STARTENROLL, enrollBuf);
-
   st.enrollment = {
     active: true,
     deviceIp: st.deviceIp,
@@ -1139,6 +1121,29 @@ export async function startK50HardwareEnrollment(params: {
     startedAt: Date.now(),
     updatedAt: Date.now(),
   };
+
+  sendZkCommand(CMD_CANCELCAPTURE);
+  await new Promise((r) => setTimeout(r, 40));
+
+  const userPkt = buildUser72Packet(
+    globalNumber,
+    studentName,
+    String(globalNumber)
+  );
+  sendZkCommand(CMD_USER_WRQ, userPkt);
+  await new Promise((r) => setTimeout(r, 60));
+
+  const delTempBuf = Buffer.alloc(25, 0);
+  delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
+  delTempBuf.writeUInt8(fingerIndex, 24);
+  sendZkCommand(CMD_DELETE_USERTEMP, delTempBuf);
+  await new Promise((r) => setTimeout(r, 50));
+
+  const enrollBuf = Buffer.alloc(26, 0);
+  enrollBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
+  enrollBuf.writeUInt8(fingerIndex, 24);
+  enrollBuf.writeUInt8(1, 25);
+  sendZkCommand(CMD_STARTENROLL, enrollBuf);
 
   // Put every OTHER reader of the branch back into attendance mode so
   // enrollment on this one does not interrupt their scanning.
@@ -1174,7 +1179,8 @@ export async function cancelK50HardwareEnrollment(): Promise<{
 }
 
 export async function deleteK50HardwareUser(
-  globalNumber: number
+  globalNumber: number,
+  fingerIndex?: number
 ): Promise<boolean> {
   const st = getState();
   const connected = await waitForConnection(2500, true);
@@ -1182,11 +1188,26 @@ export async function deleteK50HardwareUser(
     return false;
   }
 
-  // 1. Delete fingerprint template for fingerIndex 0
-  const delTempBuf = Buffer.alloc(25, 0);
-  delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
-  delTempBuf.writeUInt8(0, 24);
-  sendZkCommand(CMD_DELETE_USERTEMP, delTempBuf);
+  if (typeof fingerIndex === "number") {
+    // Delete only the requested fingerIndex template
+    const delTempBuf = Buffer.alloc(25, 0);
+    delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
+    delTempBuf.writeUInt8(fingerIndex & 0x0f, 24);
+    sendZkCommand(CMD_DELETE_USERTEMP, delTempBuf);
+    sendZkCommand(CMD_REFRESHDATA);
+    console.log(
+      `[K50 Pro Hardware] Deleted fingerprint #${globalNumber} (finger=${fingerIndex}) from device flash memory.`
+    );
+    return true;
+  }
+
+  // 1. Delete all possible fingerprint templates (fingerIndex 0..9)
+  for (let fi = 0; fi < 10; fi++) {
+    const delTempBuf = Buffer.alloc(25, 0);
+    delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
+    delTempBuf.writeUInt8(fi, 24);
+    sendZkCommand(CMD_DELETE_USERTEMP, delTempBuf);
+  }
 
   // 2. Delete user record by 2-byte internal UID
   const delBuf = Buffer.alloc(2);
@@ -1196,7 +1217,7 @@ export async function deleteK50HardwareUser(
   // 3. Refresh internal K50 Pro fingerprint cache
   sendZkCommand(CMD_REFRESHDATA);
   console.log(
-    `[K50 Pro Hardware] Deleted user & fingerprint #${globalNumber} from device flash memory.`
+    `[K50 Pro Hardware] Deleted user & all fingerprints #${globalNumber} from device flash memory.`
   );
   return true;
 }

@@ -15,7 +15,7 @@ import { DataTable, Column } from "@/components/ui/DataTable";
 import { StudentAvatar } from "@/components/ui/UserAvatar";
 import { serializeForClient } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
-import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
+import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit, isLessonApplicableToEnrollment } from "@/lib/studentBilling";
 import StudentPayerStatusControl from "@/components/students/StudentPayerStatusControl";
 import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 import { formatDZD, getAlgiersDateInfo } from "@/lib/algiersDate";
@@ -369,7 +369,9 @@ const SingleStudentPage = async (
 
       const enrStatus = enr.payerStatus || "NORMAL";
       const classCatchUps = (studentPaymentData?.catchUpAttendances || []).filter(
-        (cu: any) => cu.missedLesson?.classId === c.id
+        (cu: any) =>
+          cu.missedLesson?.classId === c.id ||
+          cu.missedLesson?.lessonGroups?.some((lg: any) => lg.classId === c.id)
       );
 
       const teacherClassOverride = (c.teacherClassRates as any[])?.find(
@@ -395,7 +397,13 @@ const SingleStudentPage = async (
         creditResetOffset: (enr as any).creditResetOffset,
         teacherPercentage,
         attendances: (studentPaymentData?.attendances || []).filter(
-          (att: any) => att.lesson && att.lesson.classId === c.id && !att.lesson.isFree
+          (att: any) => {
+            if (!att.lesson || att.lesson.isFree) return false;
+            const isDirectClass = att.lesson.classId === c.id;
+            const isGroupLesson = att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id);
+            if (!isDirectClass && !isGroupLesson) return false;
+            return isLessonApplicableToEnrollment(att.lesson, c.id, enr as any);
+          }
         ),
         catchUps: classCatchUps,
       });

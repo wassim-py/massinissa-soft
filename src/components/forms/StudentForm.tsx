@@ -225,6 +225,9 @@ const StudentForm = ({
   );
   const [fpPendingForNewStudent, setFpPendingForNewStudent] = useState<boolean>(false);
   const [fpTemplateData, setFpTemplateData] = useState<string | null>(null);
+  const [fpSelectedFingerIndex, setFpSelectedFingerIndex] = useState<number>(0);
+  const [fpEnrolledFingers, setFpEnrolledFingers] = useState<number[]>([]);
+  const [fpPendingTemplates, setFpPendingTemplates] = useState<Record<number, string | null>>({});
   const fpTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Multi-Device support: detect connected readers from local bridge
@@ -254,6 +257,36 @@ const StudentForm = ({
       getStudentFingerprintStatusAction(String(data.id)).then((res) => {
         if (res.enrolled) {
           setFpEnrolled(true);
+          setFpEnrolledFingers(
+            Array.isArray(res.fingerprints)
+              ? res.fingerprints.map((f: any) => Number(f.fingerIndex || 0))
+              : [0]
+          );
+        }
+      });
+    } else if (type === "create") {
+      fetch("/api/biometrics/enroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "next_number", globalNumber: 0 }),
+      })
+        .then((r) => r.json())
+        .then((numData) => {
+          if (numData?.globalNumber && Number(numData.globalNumber) > 0) {
+            setFpTargetGlobalNumber((prev) => (prev > 0 ? prev : Number(numData.globalNumber)));
+          }
+        })
+        .catch(() => {});
+    }
+    if (false && type === "update" && data?.id) {
+      getStudentFingerprintStatusAction(String(data.id)).then((res) => {
+        if (res.enrolled) {
+          setFpEnrolled(true);
+          setFpEnrolledFingers(
+            Array.isArray(res.fingerprints)
+              ? res.fingerprints.map((f: any) => Number(f.fingerIndex || 0))
+              : [0]
+          );
         }
       });
     }
@@ -301,6 +334,23 @@ const StudentForm = ({
       let startData: any = null;
 
       if (useLocalBridge) {
+        let targetGlobalNumber = Number(
+          data?.globalNumber || fpTargetGlobalNumber || 0
+        );
+        if (!targetGlobalNumber || targetGlobalNumber <= 0) {
+          const numRes = await fetch("/api/biometrics/enroll", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mode: "next_number",
+              studentId: currentStudentId,
+              globalNumber: 0,
+            }),
+          });
+          const numData = await numRes.json();
+          targetGlobalNumber = Number(numData?.globalNumber || 1);
+        }
+        if (false) {
         // Resolve the student's globalNumber from the cloud database first
         const numRes = await fetch("/api/biometrics/enroll", {
           method: "POST",
@@ -312,8 +362,9 @@ const StudentForm = ({
           }),
         });
         const numData = await numRes.json();
-        const targetGlobalNumber = Number(
-          numData?.globalNumber || data?.globalNumber || 1
+        const _unusedTargetGlobalNumber = 0;
+        }
+        if (false) Number(0
         );
 
         // Start 3-tap hardware enrollment on the School PC's targeted K50 Pro via 127.0.0.1:4375
@@ -324,7 +375,7 @@ const StudentForm = ({
             studentId: currentStudentId,
             globalNumber: targetGlobalNumber,
             studentName: fullName,
-            fingerIndex: 0,
+            fingerIndex: fpSelectedFingerIndex,
             deviceIp: selectedDeviceIp || undefined,
           }),
         });
@@ -339,7 +390,7 @@ const StudentForm = ({
             studentId: currentStudentId,
             globalNumber: data?.globalNumber ? Number(data.globalNumber) : 0,
             studentName: fullName,
-            fingerIndex: 0,
+            fingerIndex: fpSelectedFingerIndex,
           }),
         });
         startData = await startRes.json();
@@ -384,9 +435,16 @@ const StudentForm = ({
             setFpIsEnrolling(false);
             setFpEnrollingStep(0);
             setFpEnrolled(true);
+            setFpEnrolledFingers((prev) =>
+              prev.includes(fpSelectedFingerIndex) ? prev : [...prev, fpSelectedFingerIndex]
+            );
 
             if (enroll.templateData) {
               setFpTemplateData(enroll.templateData);
+              setFpPendingTemplates((prev) => ({
+                ...prev,
+                [fpSelectedFingerIndex]: enroll.templateData,
+              }));
             }
 
             // If using the School PC Local Bridge for an existing student, save the fingerprint record in the Cloud DB
@@ -398,7 +456,7 @@ const StudentForm = ({
                   mode: "save_db",
                   studentId: currentStudentId,
                   globalNumber: Number(enroll.globalNumber),
-                  fingerIndex: 0,
+                  fingerIndex: fpSelectedFingerIndex,
                   templateData: enroll.templateData || undefined,
                 }),
               }).catch(() => {});
@@ -476,6 +534,8 @@ const StudentForm = ({
     if (res.success) {
       setFpEnrolled(false);
       setFpPendingForNewStudent(false);
+      setFpEnrolledFingers([]);
+      setFpPendingTemplates({});
       toast.success(
         res.message ||
           (locale === "ar"
@@ -501,7 +561,13 @@ const StudentForm = ({
     try {
       const initialState = { success: false, error: false, message: "" };
       const res = await (type === "create"
-        ? createStudent(initialState, formData)
+        ? createStudent(initialState, {
+            ...formData,
+            reservedGlobalNumber:
+              fpPendingForNewStudent && fpTargetGlobalNumber > 0
+                ? fpTargetGlobalNumber
+                : undefined,
+          })
         : updateStudent(initialState, formData));
 
       if (res.success) {
@@ -516,8 +582,21 @@ const StudentForm = ({
           await enrollStudentFingerprintAction({
             studentId: String(createdStudent.id),
             globalNumber: Number(createdStudent.globalNumber),
-            fingerIndex: 0,
-            templateData: fpTemplateData || undefined,
+            fingerIndex: fpSelectedFingerIndex,
+            templateData:
+              fpPendingTemplates[fpSelectedFingerIndex] || fpTemplateData || undefined,
+          });
+          for (const fIdx of fpEnrolledFingers) {
+            if (fIdx !== fpSelectedFingerIndex) {
+              await enrollStudentFingerprintAction({
+                studentId: String(createdStudent.id),
+                globalNumber: Number(createdStudent.globalNumber),
+                fingerIndex: fIdx,
+                templateData: fpPendingTemplates[fIdx] || undefined,
+              });
+            }
+          }
+          if (false) await enrollStudentFingerprintAction({ studentId: "", globalNumber: 0,
           });
         }
 
@@ -1127,6 +1206,51 @@ const StudentForm = ({
                 ? "الأجهزة الأخرى ستواصل تسجيل الحضور تلقائياً"
                 : "Les autres lecteurs continuent la prise de présence"}
             </span>
+          </div>
+        )}
+
+        {/* Finger Selector: Primary Finger (0) + Backup Finger (1) */}
+        {!fpIsEnrolling && (
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
+            <span className="text-[11px] font-medium text-gray-600">
+              {locale === "ar" ? "الأصبع المختار للتسجيل:" : "Doigt à enregistrer :"}
+            </span>
+            <div className="inline-flex items-center gap-1.5">
+              {[
+                {
+                  idx: 0,
+                  labelFr: "Doigt 1 (Principal)",
+                  labelAr: "الأصبع 1 (الرئيسي)",
+                },
+                {
+                  idx: 1,
+                  labelFr: "Doigt 2 (Secours)",
+                  labelAr: "الأصبع 2 (احتياطي)",
+                },
+              ].map((fg) => {
+                const isThisFingerEnrolled = fpEnrolledFingers.includes(fg.idx);
+                const isSelected = fpSelectedFingerIndex === fg.idx;
+                return (
+                  <button
+                    key={fg.idx}
+                    type="button"
+                    onClick={() => setFpSelectedFingerIndex(fg.idx)}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium inline-flex items-center gap-1.5 border cursor-pointer transition-colors ${
+                      isSelected
+                        ? "bg-blue-50 border-blue-500 text-blue-700"
+                        : "bg-white border-gray-200 text-gray-600 hover:bg-gray-100"
+                    }`}
+                  >
+                    <span>{locale === "ar" ? fg.labelAr : fg.labelFr}</span>
+                    {isThisFingerEnrolled && (
+                      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-emerald-500 text-white text-[9px] font-bold">
+                        ✓
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 

@@ -15,6 +15,7 @@ import {
   computeStudentCreditAndSessions,
   resolvePayerCredit,
   computeEnrollmentInscriptionStatus,
+  isLessonApplicableToEnrollment,
 } from "@/lib/studentBilling";
 import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
 
@@ -305,13 +306,44 @@ const TakeAttendancePage = async (
           },
           attendances: {
             where: { lesson: { isFree: false } },
-            include: { lesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } } },
+            include: {
+              lesson: {
+                select: {
+                  id: true,
+                  startsAt: true,
+                  isFree: true,
+                  isTeacherAbsent: true,
+                  classId: true,
+                  lessonGroups: { select: { classId: true } },
+                },
+              },
+            },
           },
           enrollments: {
-            include: { transfersFrom: true, transfersTo: true },
+            include: {
+              transfersFrom: true,
+              transfersTo: {
+                include: {
+                  fromEnrollment: {
+                    include: { class: true },
+                  },
+                },
+              },
+            },
           },
           catchUpAttendances: {
-            include: { missedLesson: { select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true } } },
+            include: {
+              missedLesson: {
+                select: {
+                  id: true,
+                  startsAt: true,
+                  isFree: true,
+                  isTeacherAbsent: true,
+                  classId: true,
+                  lessonGroups: { select: { classId: true } },
+                },
+              },
+            },
           },
         },
       },
@@ -368,13 +400,23 @@ const TakeAttendancePage = async (
       (voucher: any) => voucher.paymentType === "TUITION_4SESSION" && !voucher.isVoided && !voucher.isRefund && (voucher.classId === missedClassId || !voucher.classId)
     );
 
-    const vAttendances = (s.attendances || []).filter(
-      (a: any) => a.lesson && a.lesson.classId === missedClassId
-    );
+    const vAttendances = (s.attendances || []).filter((a: any) => {
+      if (!a.lesson) return false;
+      const inMissedClass =
+        a.lesson.classId === missedClassId ||
+        a.lesson.lessonGroups?.some((lg: any) => lg.classId === missedClassId);
+      if (!inMissedClass) return false;
+      return isLessonApplicableToEnrollment(a.lesson, missedClassId, vEnr as any);
+    });
 
-    const vCatchUps = (s.catchUpAttendances || []).filter(
-      (cu: any) => cu.missedLesson && cu.missedLesson.classId === missedClassId
-    );
+    const vCatchUps = (s.catchUpAttendances || []).filter((cu: any) => {
+      if (!cu.missedLesson) return false;
+      const inMissedClass =
+        cu.missedLesson.classId === missedClassId ||
+        cu.missedLesson.lessonGroups?.some((lg: any) => lg.classId === missedClassId);
+      if (!inMissedClass) return false;
+      return isLessonApplicableToEnrollment(cu.missedLesson, missedClassId, vEnr as any);
+    });
 
     const vCredit = computeStudentCreditAndSessions({
       pricePerCycle: Number(v.missedLesson.class.pricePerCycle || 0),
@@ -805,7 +847,8 @@ const TakeAttendancePage = async (
         a.lesson.classId,
         ...(a.lesson.lessonGroups?.map((lg: any) => lg.classId) || []),
       ];
-      return lessonClassIds.includes(studentClassId);
+      if (!lessonClassIds.includes(studentClassId)) return false;
+      return isLessonApplicableToEnrollment(a.lesson, studentClassId, enrollment as any);
     });
     const sCatchUps = (details?.catchUpAttendances || []).filter((cu: any) => {
       if (!cu.missedLesson) return true;
@@ -813,7 +856,8 @@ const TakeAttendancePage = async (
         cu.missedLesson.classId,
         ...(cu.missedLesson.lessonGroups?.map((lg: any) => lg.classId) || []),
       ];
-      return missedLessonClassIds.includes(studentClassId);
+      if (!missedLessonClassIds.includes(studentClassId)) return false;
+      return isLessonApplicableToEnrollment(cu.missedLesson, studentClassId, enrollment as any);
     });
 
     return {

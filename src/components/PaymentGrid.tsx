@@ -425,9 +425,9 @@ export default function PaymentGrid({
 
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(
       (cu: any) =>
-        (cu.missedLesson && cu.missedLesson.classId === classData.id) ||
-        (cu.catchUpLesson && cu.catchUpLesson.classId === classData.id) ||
-        classData.lessons.some((l: any) => l.id === cu.missedLessonId || l.id === cu.catchUpLessonId)
+        cu.recordedBy !== "transfer" &&
+        ((cu.missedLesson && cu.missedLesson.classId === classData.id) ||
+          classData.lessons.some((l: any) => l.id === cu.missedLessonId))
     );
 
     const teacherClassOverride = (classData.teacherClassRates as any[])?.find(
@@ -550,6 +550,8 @@ export default function PaymentGrid({
       netRefundableSessions,
       transferableSessions: creditMetrics.transferableSessions,
       openEndedHeldSessions: creditMetrics.openEndedHeldSessions,
+      partialTransferPaidDzd: creditMetrics.partialTransferPaidDzd || 0,
+      partialTransferRemainderDzd: creditMetrics.partialTransferRemainderDzd || 0,
       refundableAmount,
       effectiveLessonPrice,
       status: computedStatus,
@@ -623,7 +625,7 @@ export default function PaymentGrid({
       openEndedHeldSessions: item.openEndedHeldSessions || 0,
       netSessions: item.netSessions,
     });
-    setSessionsToTransfer(Math.max(1, availableBalance));
+    setSessionsToTransfer(availableBalance);
     setTargetClassId("");
     setTransferNotes("");
   };
@@ -632,7 +634,8 @@ export default function PaymentGrid({
     if (
       !transferModal.enrollment ||
       !targetClassId ||
-      sessionsToTransfer < 1 ||
+      sessionsToTransfer < 0 ||
+      (transferModal.maxSessions > 0 && sessionsToTransfer < 1) ||
       sessionsToTransfer > transferModal.maxSessions
     ) {
       toast.error(t("invalidTransferError"));
@@ -1139,6 +1142,20 @@ export default function PaymentGrid({
                   {item.transferableSessions} {locale === "ar" ? "قابلة للتحويل" : "transférables"}
                 </span>
               )}
+              {item.partialTransferRemainderDzd > 0 && (
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-medium mt-0.5"
+                  title={
+                    locale === "ar"
+                      ? `رصيد محول جزئي (${item.partialTransferPaidDzd.toLocaleString("ar-DZ")} دج) — المتبقي لإكمال الدورة: ${item.partialTransferRemainderDzd.toLocaleString("ar-DZ")} دج`
+                      : `Transfert partiel (${item.partialTransferPaidDzd.toLocaleString("fr-DZ")} DZD) — Reste à payer: ${item.partialTransferRemainderDzd.toLocaleString("fr-DZ")} DZD`
+                  }
+                >
+                  {locale === "ar"
+                    ? `متبقي ${item.partialTransferRemainderDzd.toLocaleString("ar-DZ")} دج`
+                    : `Reste ${item.partialTransferRemainderDzd.toLocaleString("fr-DZ")} DZD`}
+                </span>
+              )}
               {item.isSchoolFeesOnly && (
                 <span className="text-[10px] text-amber-700 font-medium">
                   {locale === "ar" ? "حصة المدرسة" : "Part école"}
@@ -1215,7 +1232,7 @@ export default function PaymentGrid({
                 {t("voucherShort")}
               </Button>
             )}
-            {!isTransferred && (item.transferableSessions ?? item.netRefundableSessions ?? item.netSessions) > 0 && (
+            {!isTransferred && (
               <Button
                 variant="outline"
                 size="sm"
@@ -1559,7 +1576,7 @@ export default function PaymentGrid({
                         {t("voucherShort")}
                       </Button>
                     )}
-                    {!isTransferred && (item.transferableSessions ?? item.netRefundableSessions ?? item.netSessions) > 0 && (
+                    {!isTransferred && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1725,21 +1742,24 @@ export default function PaymentGrid({
                 <div className="relative flex items-center">
                   <Input
                     type="number"
-                    min="1"
-                    max={Math.max(1, transferModal.maxSessions)}
+                    min={transferModal.maxSessions > 0 ? "1" : "0"}
+                    max={transferModal.maxSessions}
                     value={sessionsToTransfer}
                     onChange={(e) => setSessionsToTransfer(Number(e.target.value))}
                     required
+                    disabled={transferModal.maxSessions === 0}
                     className="font-mono pe-16"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setSessionsToTransfer(Math.max(1, transferModal.maxSessions))}
-                    className="absolute end-1.5 px-2.5 py-1 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs"
-                    title={locale === "ar" ? "تحديد كامل الرصيد المتاح" : "Définir le maximum disponible"}
-                  >
-                    MAX
-                  </button>
+                  {transferModal.maxSessions > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSessionsToTransfer(transferModal.maxSessions)}
+                      className="absolute end-1.5 px-2.5 py-1 text-xs font-bold rounded-md bg-primary text-white hover:bg-primary-dark transition-colors cursor-pointer shadow-2xs"
+                      title={locale === "ar" ? "تحديد كامل الرصيد المتاح" : "Définir le maximum disponible"}
+                    >
+                      MAX
+                    </button>
+                  )}
                 </div>
               </FormField>
 
@@ -1767,7 +1787,13 @@ export default function PaymentGrid({
                   variant="primary"
                   size="md"
                   isLoading={isPending}
-                  disabled={isPending || !targetClassId || sessionsToTransfer < 1}
+                  disabled={
+                    isPending ||
+                    !targetClassId ||
+                    sessionsToTransfer < 0 ||
+                    (transferModal.maxSessions > 0 && sessionsToTransfer < 1) ||
+                    sessionsToTransfer > transferModal.maxSessions
+                  }
                 >
                   {isPending ? t("transferring") : t("confirmTransfer")}
                 </Button>

@@ -36,6 +36,10 @@ export type AttendanceCellDetail = {
         catchUpDate: string;
         catchUpGroupName: string;
     } | null;
+    visitorCatchUp?: {
+        missedLessonDate: string;
+        homeGroupName: string;
+    } | null;
 };
 
 const ClassAttendancePage = async (
@@ -67,8 +71,8 @@ const ClassAttendancePage = async (
                 },
             },
         }),
-        prisma.$queryRaw<Array<{ id: number; startsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean; isTeacherAbsent: boolean; branchId: number }>>`
-            SELECT l.id, l."startsAt", l."isExtra", l."isCatchUp", l."isFree", l."isTeacherAbsent", l."branchId"
+        prisma.$queryRaw<Array<{ id: number; classId: number; startsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean; isTeacherAbsent: boolean; branchId: number }>>`
+            SELECT l.id, l."classId", l."startsAt", l."isExtra", l."isCatchUp", l."isFree", l."isTeacherAbsent", l."branchId"
             FROM "Lesson" l
             WHERE l."classId" = ${classId}
                OR EXISTS (
@@ -407,6 +411,7 @@ const ClassAttendancePage = async (
                                             isFree: true,
                                             isTeacherAbsent: true,
                                             classId: true,
+                                            class: { select: { name: true } },
                                             lessonGroups: { select: { classId: true } },
                                         },
                                     },
@@ -435,6 +440,7 @@ const ClassAttendancePage = async (
             const formationPrice = Number(classHeader.FormationLevel?.lumpSumPrice || classHeader.pricePerCycle || 0);
             const classLessonsForBilling = allClassLessons.map((l) => ({
                 id: l.id,
+                classId: l.classId,
                 startsAt: l.startsAt,
                 isFree: Boolean(l.isFree),
                 isTeacherAbsent: Boolean(l.isTeacherAbsent),
@@ -537,13 +543,13 @@ const ClassAttendancePage = async (
                             isLessonApplicableToEnrollment(att.lesson, classId, enrollment as any)
                     );
 
-                    const classCatchUpsForStudent = (catchUpAttendances || []).filter(
-                        (cu: any) => cu.studentId === studentId
+                    const sCatchUps = (details?.catchUpAttendances || []).filter(
+                        (cu: any) =>
+                            cu.recordedBy !== "transfer" &&
+                            (cu.missedLesson?.classId === classId ||
+                                cu.missedLesson?.lessonGroups?.some((lg: any) => lg.classId === classId)) &&
+                            isLessonApplicableToEnrollment(cu.missedLesson, classId, enrollment as any)
                     );
-                    const sCatchUps = [
-                        ...(details?.catchUpAttendances || []),
-                        ...classCatchUpsForStudent,
-                    ];
 
                     const creditMetrics = computeStudentCreditAndSessions({
                         pricePerCycle: classPricePerCycle,
@@ -579,6 +585,7 @@ const ClassAttendancePage = async (
                 }
 
                 s.balance = balance;
+                s.billingDetails = details;
             }
 
             const sortedStudents = Array.from(studentMap.values()).sort((a, b) => {
@@ -731,8 +738,39 @@ const ClassAttendancePage = async (
     classData.students.forEach((student: any) => {
         const studentRecords = new Map<string, AttendanceCellDetail>();
         const studentCatchUps = catchUpsByStudent.get(student.id) || [];
+        const details = student.billingDetails;
+        const enrollment = details?.enrollments?.[0];
 
-        const studentLessons = (student.attendances || []).map((a: any) => ({
+        // Identify catch-up visits hosted in this class where the student was catching up a lesson from ANOTHER group (e.g. pre-transfer catch-up visitor)
+        const visitorCatchUpsByLessonId = new Map<number, any>();
+        (details?.catchUpAttendances || []).forEach((cu: any) => {
+            if (
+                cu.recordedBy !== "transfer" &&
+                cu.catchUpLessonId &&
+                (cu.catchUpLesson?.classId === classId ||
+                    cu.catchUpLesson?.lessonGroups?.some((lg: any) => lg.classId === classId)) &&
+                cu.missedLesson?.classId !== classId
+            ) {
+                visitorCatchUpsByLessonId.set(cu.catchUpLessonId, cu);
+            }
+        });
+
+        const validTransfersIn = (enrollment?.transfersTo || []).filter((t: any) => Boolean(t?.transferredAt));
+        const latestTransferInTime =
+            validTransfersIn.length > 0
+                ? Math.max(...validTransfersIn.map((t: any) => new Date(t.transferredAt).getTime()))
+                : null;
+
+        const applicableAttendances = (student.attendances || []).filter((a: any) => {
+            if (visitorCatchUpsByLessonId.has(a.lessonId)) return false;
+            return isLessonApplicableToEnrollment(
+                { id: a.lessonId, classId, startsAt: a.date },
+                classId,
+                enrollment as any
+            );
+        });
+
+        const studentLessons = applicableAttendances.map((a: any) => ({
             id: a.lessonId,
             startsAt: a.date,
             isFree: Boolean(a.isFree),
@@ -741,7 +779,7 @@ const ClassAttendancePage = async (
 
         const classified = classifyStudentAttendanceHistory({
             lessons: studentLessons,
-            attendances: (student.attendances || []).map((a: any) => ({
+            attendances: applicableAttendances.map((a: any) => ({
                 lessonId: a.lessonId,
                 status: a.status || (a.present ? "PRESENT" : "ABSENT"),
             })),
@@ -750,6 +788,7 @@ const ClassAttendancePage = async (
                 recordedBy: c.recordedBy,
                 isTransferCatchUp: c.isTransferCatchUp,
             })),
+            postTransferStartAfter: latestTransferInTime ? new Date(latestTransferInTime) : null,
         });
 
         const classificationMap = new Map<number, string>();
@@ -759,7 +798,15 @@ const ClassAttendancePage = async (
             const dateKey = getAlgiersDateInfo(record.date).dateStr;
             const instanceKey = `${record.lessonId}-${dateKey}`;
             const catchUpInfo = studentCatchUps.find((cu) => cu.missedLessonId === record.lessonId);
-            const isPreStart = classificationMap.get(record.lessonId) === "PRE_START_ABSENCE";
+            const visitorCu = visitorCatchUpsByLessonId.get(record.lessonId);
+            const isApplicable = isLessonApplicableToEnrollment(
+                { id: record.lessonId, classId, startsAt: record.date },
+                classId,
+                enrollment as any
+            );
+            const isPreStart =
+                !visitorCu &&
+                (!isApplicable || classificationMap.get(record.lessonId) === "PRE_START_ABSENCE");
             const isTeacherAbsent = Boolean(record.isTeacherAbsent) || classificationMap.get(record.lessonId) === "TEACHER_ABSENT";
 
             studentRecords.set(instanceKey, {
@@ -771,7 +818,36 @@ const ClassAttendancePage = async (
                     catchUpDate: catchUpInfo.catchUpDate,
                     catchUpGroupName: catchUpInfo.catchUpGroupName,
                 } : null,
+                visitorCatchUp: visitorCu ? {
+                    missedLessonDate: visitorCu.missedLesson?.startsAt
+                        ? new Date(visitorCu.missedLesson.startsAt).toISOString()
+                        : "",
+                    homeGroupName: visitorCu.missedLesson?.class?.name || (locale === "ar" ? "فوج سابق" : "Groupe précédent"),
+                } : null,
             });
+        });
+
+        // Ensure any visitor catch-up hosted in this class is represented in studentRecords even if no Attendance row was created on the host lesson
+        visitorCatchUpsByLessonId.forEach((visitorCu, hostLessonId) => {
+            if (visitorCu.catchUpLesson?.startsAt) {
+                const dateKey = getAlgiersDateInfo(visitorCu.catchUpLesson.startsAt).dateStr;
+                const instanceKey = `${hostLessonId}-${dateKey}`;
+                if (!studentRecords.has(instanceKey)) {
+                    studentRecords.set(instanceKey, {
+                        status: "PRESENT",
+                        justification: null,
+                        isPreStart: false,
+                        isTeacherAbsent: false,
+                        catchUp: null,
+                        visitorCatchUp: {
+                            missedLessonDate: visitorCu.missedLesson?.startsAt
+                                ? new Date(visitorCu.missedLesson.startsAt).toISOString()
+                                : "",
+                            homeGroupName: visitorCu.missedLesson?.class?.name || (locale === "ar" ? "فوج سابق" : "Groupe précédent"),
+                        },
+                    });
+                }
+            }
         });
 
         // Ensure every catch-up entry for this student is represented in studentRecords

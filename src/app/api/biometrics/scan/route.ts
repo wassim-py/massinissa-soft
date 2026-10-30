@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { getActiveBranchId, getAuthSession } from "@/lib/auth";
+import { getActiveBranchId, getAuthSession, verifyBiometricApiAuth } from "@/lib/auth";
 import {
   processBiometricScan,
   getBiometricLiveFeedAction,
@@ -17,6 +17,13 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request: NextRequest) {
   try {
+    const authCheck = await verifyBiometricApiAuth(request);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized biometric API access" },
+        { status: 401 }
+      );
+    }
     const { searchParams } = new URL(request.url);
     const branchIdParam = searchParams.get("branchId");
     const sinceIdParam = searchParams.get("sinceId");
@@ -33,7 +40,9 @@ export async function GET(request: NextRequest) {
     const isCloudOrBridge = Boolean(
       bridgeActive ||
         !isDirectConnect ||
+        process.env.NODE_ENV === "production" ||
         process.env.VERCEL ||
+        process.env.NETLIFY ||
         process.env.RAILWAY_ENVIRONMENT ||
         process.env.RENDER
     );
@@ -86,6 +95,13 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    const authCheck = await verifyBiometricApiAuth(request);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized biometric API access" },
+        { status: 401 }
+      );
+    }
     const body = await request.json();
     let deviceId = body.deviceId ? Number(body.deviceId) : null;
     let branchId = body.branchId ? Number(body.branchId) : null;

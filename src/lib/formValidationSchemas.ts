@@ -71,6 +71,7 @@ export const studentSchema = z.object({
   registeredBranchId: z.coerce.number().optional(),
   familyId: z.union([z.coerce.number(), z.literal(""), z.null()]).optional(),
   bypassDuplicateCheck: z.boolean().optional(),
+  reservedGlobalNumber: z.coerce.number().optional(),
 });
 
 export type StudentSchema = z.infer<typeof studentSchema>;
@@ -91,6 +92,7 @@ export const getStudentSchema = (t?: (key: string) => string) => {
     registeredBranchId: z.coerce.number().optional(),
     familyId: z.union([z.coerce.number(), z.literal(""), z.null()]).optional(),
     bypassDuplicateCheck: z.boolean().optional(),
+    reservedGlobalNumber: z.coerce.number().optional(),
   });
 };
 
