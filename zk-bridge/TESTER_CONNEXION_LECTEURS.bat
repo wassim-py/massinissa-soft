@@ -1,13 +1,23 @@
 @echo off
-title Diagnostic Reseau - ZKTeco K50 Pro
+setlocal EnableExtensions
+title Diagnostic Connexion ZKTeco K50 Pro - Massinissa Academy
 color 0B
-echo ============================================================================
-echo   MASSINISSA ACADEMY - DIAGNOSTIC RESEAU DES LECTEURS K50 PRO
-echo ============================================================================
+cd /d "%~dp0"
+
+echo ======================================================================
+echo   DIAGNOSTIC DU PONT ZKTECO K50 PRO (PORT LOCAL 4375 ^& LECTEURS 4370)
+echo ======================================================================
 echo.
+
 set "BRIDGE_DIR=%USERPROFILE%\MassinissaK50Bridge"
-echo Analyse des connexions reseau en cours...
-echo.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfgIps = '192.168.50.201'; $cfgBranch = 1; if (Test-Path '$env:USERPROFILE\MassinissaK50Bridge\bridge_config.json') { try { $json = Get-Content '$env:USERPROFILE\MassinissaK50Bridge\bridge_config.json' -Raw | ConvertFrom-Json; if ($json.deviceIps) { $cfgIps = $json.deviceIps }; if ($json.branchId) { $cfgBranch = $json.branchId } } catch {} }; Write-Host ('Site / Branche configure : #' + $cfgBranch); Write-Host ('Lecteur(s) configures   : ' + $cfgIps); Write-Host ''; $ips = $cfgIps.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }; $allOk = $true; foreach ($ip in $ips) { Write-Host ('Test du lecteur ' + $ip + ' (Port 4370) : ') -NoNewline; $sw = [System.Diagnostics.Stopwatch]::StartNew(); try { $client = New-Object System.Net.Sockets.TcpClient; $ar = $client.BeginConnect($ip, 4370, $null, $null); $wait = $ar.AsyncWaitHandle.WaitOne(2000, $false); $sw.Stop(); if ($wait -and $client.Connected) { $client.EndConnect($ar); $client.Close(); Write-Host ('[EN LIGNE] Connecte en ' + $sw.ElapsedMilliseconds + 'ms') -ForegroundColor Green } else { $client.Close(); $allOk = $false; Write-Host '[HORS LIGNE] Injoignable (Port 4370)' -ForegroundColor Red } } catch { $allOk = $false; Write-Host ('[ERREUR] ' + $_.Exception.Message) -ForegroundColor Red } }; Write-Host ''; Write-Host 'Test du Pont Local (127.0.0.1:4375) : ' -NoNewline; try { $res = Invoke-RestMethod -Uri 'http://127.0.0.1:4375/status' -TimeoutSec 2 -ErrorAction Stop; Write-Host '[ACTIF]' -ForegroundColor Green; Write-Host ('  -> Branche active dans le pont : #' + $res.branchId); Write-Host ('  -> Lecteurs declares          : ' + $res.deviceIp); foreach ($d in $res.devices) { $st = if ($d.connected) { 'CONNECTE' } else { 'DECONNECTE' }; $col = if ($d.connected) { 'Green' } else { 'Red' }; Write-Host ('     * Lecteur ' + $d.ip + ' -> ' + $st) -ForegroundColor $col } } catch { Write-Host '[INACTIF] Le pont ne repond pas' -ForegroundColor Red; $allOk = $false }; if (-not $allOk) { Write-Host ''; Write-Host 'CONSEILS DE DEPANNAGE :' -ForegroundColor Yellow; Write-Host '1. Verifiez que le lecteur K50 Pro est allume.' -ForegroundColor Yellow; Write-Host '2. Verifiez le cable RJ45 reliant le lecteur au switch ou PC.' -ForegroundColor Yellow; Write-Host '3. Sur l ecran du K50 Pro : Menu -> Comm. -> Ethernet' -ForegroundColor Yellow; Write-Host '   Verifiez que l adresse IP correspond.' -ForegroundColor Yellow; Write-Host '4. Verifiez que la cle de communication (Comm Key) est a 0.' -ForegroundColor Yellow }"
+if exist "%BRIDGE_DIR%\zk-bridge.js" (
+    node "%BRIDGE_DIR%\zk-bridge.js" --diag
+) else if exist "%~dp0zk-bridge.js" (
+    node "%~dp0zk-bridge.js" --diag
+) else (
+    echo [ERREUR] zk-bridge.js n est pas encore installe sur cet ordinateur.
+    echo Lancez INSTALLER_ET_DEMARRER_PONT_K50.bat pour l installer.
+)
+
 echo.
 pause

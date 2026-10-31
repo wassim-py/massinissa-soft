@@ -1,11 +1,22 @@
 @echo off
-title Arret du Pont Biometrique ZKTeco K50 Pro
-color 0C
-echo ============================================================================
-echo   MASSINISSA ACADEMY - ARRET DU PONT LOCAL ZKTECO K50 PRO
-echo ============================================================================
+setlocal EnableExtensions
+title Arret du Pont ZKTeco K50 Pro
+color 0E
+cd /d "%~dp0"
+
+echo ======================================================================
+echo   ARRET DU PONT ZKTECO K50 PRO EN ARRIERE-PLAN
+echo ======================================================================
 echo.
-echo Arret du service en cours...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -like '*zk-bridge.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
-echo [OK] Le pont local K50 Pro a ete arrete.
-ping -n 3 127.0.0.1 >nul
+
+set "BRIDGE_DIR=%USERPROFILE%\MassinissaK50Bridge"
+if exist "%BRIDGE_DIR%\zk-bridge.js" (
+    node "%BRIDGE_DIR%\zk-bridge.js" --stop
+) else if exist "%~dp0zk-bridge.js" (
+    node "%~dp0zk-bridge.js" --stop
+)
+
+echo.
+echo Pour le relancer, utilisez INSTALLER_ET_DEMARRER_PONT_K50.bat ou METTRE_A_JOUR_PONT.bat.
+echo.
+pause

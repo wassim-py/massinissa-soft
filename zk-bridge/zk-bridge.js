@@ -24,16 +24,54 @@ const https = require("https");
 const { URL } = require("url");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const BRIDGE_PORT = Number(process.env.ZK_BRIDGE_PORT || 4375);
 const DEVICE_PORT = Number(process.env.ZK_DEVICE_PORT || 4370);
 const COMM_KEY = Number(process.env.ZK_COMM_KEY || 0);
 const BRIDGE_SECRET = process.env.ZK_BRIDGE_SECRET || "massinissa-zk-bridge-v4-key";
+const DEFAULT_CLOUD_APP_URL = "https://classty-massinissa-school.vercel.app";
 
 // File Paths for Persistence
 const BRIDGE_CONFIG_FILE = path.join(__dirname, "bridge_config.json");
 const SYNC_CACHE_FILE = path.join(__dirname, "synced_templates.json");
 const PENDING_SCANS_FILE = path.join(__dirname, "pending_scans.json");
+const BRIDGE_LOG_FILE = path.join(__dirname, "bridge.log");
+
+// Tee console output to bridge.log so background service activity is always inspectable
+const origConsoleLog = console.log.bind(console);
+const origConsoleWarn = console.warn.bind(console);
+const origConsoleError = console.error.bind(console);
+let logLinesBuffer = [];
+
+function appendBridgeLog(level, args) {
+  try {
+    const msg = args
+      .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+      .join(" ");
+    const line = `[${new Date().toISOString()}] [${level}] ${msg}`;
+    logLinesBuffer.push(line);
+    if (logLinesBuffer.length > 300) {
+      logLinesBuffer = logLinesBuffer.slice(-250);
+      fs.writeFileSync(BRIDGE_LOG_FILE, logLinesBuffer.join("\r\n") + "\r\n", "utf8");
+    } else {
+      fs.appendFileSync(BRIDGE_LOG_FILE, line + "\r\n", "utf8");
+    }
+  } catch {}
+}
+
+console.log = (...args) => {
+  origConsoleLog(...args);
+  appendBridgeLog("INFO", args);
+};
+console.warn = (...args) => {
+  origConsoleWarn(...args);
+  appendBridgeLog("WARN", args);
+};
+console.error = (...args) => {
+  origConsoleError(...args);
+  appendBridgeLog("ERROR", args);
+};
 
 function loadBridgeConfig() {
   try {
@@ -52,31 +90,321 @@ function saveBridgeConfig(partial) {
   } catch {}
 }
 
+function scanSubnetsForK50(extraIps = "") {
+  return new Promise((resolve) => {
+    const subnets = new Set(["192.168.50", "192.168.1"]);
+    for (const ip of String(extraIps || "").split(",")) {
+      const p = ip.trim().split(".");
+      if (p.length === 4) subnets.add(`${p[0]}.${p[1]}.${p[2]}`);
+    }
+    try {
+      const nets = os.networkInterfaces();
+      for (const name of Object.keys(nets)) {
+        for (const info of nets[name] || []) {
+          if (info.family === "IPv4" && !info.internal && info.address) {
+            const p = info.address.split(".");
+            if (p.length === 4) subnets.add(`${p[0]}.${p[1]}.${p[2]}`);
+          }
+        }
+      }
+    } catch {}
+
+    const candidates = [];
+    for (const s of subnets) {
+      for (let h = 1; h <= 254; h++) {
+        candidates.push(`${s}.${h}`);
+      }
+    }
+    if (candidates.length === 0) return resolve([]);
+
+    const zkConnectProbe = Buffer.from("5050827d08000000e80317fc00000000", "hex");
+    const found = [];
+    let remaining = candidates.length;
+    for (const ip of candidates) {
+      const sock = new net.Socket();
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        try {
+          sock.destroy();
+        } catch {}
+        if (ok) found.push(ip);
+        remaining--;
+        if (remaining <= 0) resolve(found.sort());
+      };
+      sock.setTimeout(600);
+      sock.once("connect", () => {
+        try {
+          sock.write(zkConnectProbe);
+        } catch {
+          finish(false);
+        }
+      });
+      sock.on("data", (d) => {
+        if (d && d.length >= 4 && d[0] === 0x50 && d[1] === 0x50 && d[2] === 0x82 && d[3] === 0x7d) {
+          finish(true);
+        } else {
+          finish(false);
+        }
+      });
+      sock.once("timeout", () => finish(false));
+      sock.once("error", () => finish(false));
+      try {
+        sock.connect(DEVICE_PORT, ip);
+      } catch {
+        finish(false);
+      }
+    }
+  });
+}
+
+function writeWindowsStartupVbs(ipsStr, branchId) {
+  try {
+    const appData = process.env.APPDATA;
+    if (!appData) return;
+    const startupDir = path.join(
+      appData,
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Startup"
+    );
+    if (!fs.existsSync(startupDir)) return;
+    const vbsPath = path.join(startupDir, "MassinissaK50Bridge.vbs");
+    const jsPath = path.join(__dirname, "zk-bridge.js");
+    const vbsContent = [
+      'Set WshShell = CreateObject("WScript.Shell")',
+      `WshShell.CurrentDirectory = "${__dirname}"`,
+      `WshShell.Run "cmd /c node ""${jsPath}"" --ips=${ipsStr} --branch=${branchId}", 0, False`,
+      "",
+    ].join("\r\n");
+    fs.writeFileSync(vbsPath, vbsContent, "ascii");
+  } catch {}
+}
+
+function stopOtherBridgeProcesses() {
+  try {
+    const { execSync } = require("child_process");
+    const myPid = process.pid;
+    execSync(
+      `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.ProcessId -ne ${myPid} -and $_.CommandLine -like '*zk-bridge*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"`,
+      { stdio: "ignore", timeout: 5000 }
+    );
+  } catch {}
+}
+
+function ensureEthernetSubnet() {
+  try {
+    const { execSync } = require("child_process");
+    execSync(
+      `powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'SilentlyContinue'; $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and ($_.Name -match 'Ethernet|LAN|Local|Realtek|Intel' -or $_.InterfaceDescription -match 'Ethernet|Realtek|PCIe|Intel') }; foreach ($a in $adapters) { $ips = Get-NetIPAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4; $has50 = $ips | Where-Object { $_.IPAddress -like '192.168.50.*' }; if (-not $has50) { netsh interface ip add address name=$a.Name addr=192.168.50.100 mask=255.255.255.0 | Out-Null } }"`,
+      { stdio: "ignore", timeout: 5000 }
+    );
+  } catch {}
+}
+
+// CLI Utility Modes (--setup, --auto-config, --diag, --stop) for Batch Scripts
+if (
+  process.argv.includes("--setup") ||
+  process.argv.includes("--auto-config") ||
+  process.argv.includes("--diag") ||
+  process.argv.includes("--stop")
+) {
+  (async () => {
+    if (process.argv.includes("--stop")) {
+      stopOtherBridgeProcesses();
+      origConsoleLog("[OK] Le service zk-bridge en arriere-plan a ete arrete.");
+      process.exit(0);
+      return;
+    }
+
+    ensureEthernetSubnet();
+
+    const cfg = loadBridgeConfig();
+    const existingBranch = Number(cfg.branchId || 1);
+    const existingIps = String(cfg.deviceIps || "").trim();
+    const existingAppUrl = String(cfg.appUrl || DEFAULT_CLOUD_APP_URL).trim();
+
+    if (process.argv.includes("--diag")) {
+      const req = http.get(`http://127.0.0.1:${BRIDGE_PORT}/status`, { timeout: 3500 }, (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => {
+          try {
+            const data = JSON.parse(body);
+            const bNames = { 1: "ECOLE", 2: "ANNEX", 3: "AMPHI" };
+            origConsoleLog(`[OK] Service local zk-bridge ACTIF sur http://127.0.0.1:${BRIDGE_PORT}`);
+            origConsoleLog(`     Branche configuree  : ${data.branchId} (${bNames[data.branchId] || "Branche"})`);
+            origConsoleLog(`     Lecteurs configures : ${data.deviceIp}`);
+            origConsoleLog(`     Synchronisation     : ${data.isSyncing ? "En cours..." : "Pret (Temps reel actif)"}`);
+            origConsoleLog("");
+            for (const d of data.devices || []) {
+              if (d.connected) {
+                origConsoleLog(`  -> [CONNECTE]   Lecteur ${d.ip}:${d.port} (Pret a scanner)`);
+              } else {
+                origConsoleLog(`  -> [EN ATTENTE] Lecteur ${d.ip}:${d.port} (Verifiez le cable RJ45 / l alimentation)`);
+              }
+            }
+          } catch (e) {
+            origConsoleLog("[ERREUR] Reponse invalide du pont local :", e.message);
+          }
+          if (fs.existsSync(BRIDGE_LOG_FILE)) {
+            origConsoleLog("");
+            origConsoleLog("--- DERNIERS EVENEMENTS DU JOURNAL (bridge.log) ---");
+            const lines = fs
+              .readFileSync(BRIDGE_LOG_FILE, "utf8")
+              .split(/\r?\n/)
+              .filter(Boolean)
+              .slice(-18);
+            for (const l of lines) origConsoleLog("  " + l);
+          }
+          process.exit(0);
+        });
+      });
+      req.on("error", () => {
+        origConsoleLog("[ERREUR] Le pont zk-bridge ne tourne pas en arriere-plan !");
+        origConsoleLog("         Lancez INSTALLER_ET_DEMARRER_PONT_K50.bat ou METTRE_A_JOUR_PONT.bat.");
+        process.exit(1);
+      });
+      return;
+    }
+
+    origConsoleLog("  Recherche automatique des lecteurs ZKTeco K50 Pro sur le reseau (port 4370)...");
+    const discovered = await scanSubnetsForK50(existingIps);
+    if (discovered.length > 0) {
+      for (const ip of discovered) {
+        origConsoleLog(`  [+] Lecteur K50 Pro detecte sur le reseau : ${ip}:${DEVICE_PORT}`);
+      }
+    } else {
+      origConsoleLog("  [i] Aucun lecteur detecte instantanement (la detection auto continuera en arriere-plan).");
+    }
+
+    if (process.argv.includes("--auto-config")) {
+      const merged = Array.from(
+        new Set(
+          [
+            "192.168.50.201",
+            ...discovered,
+            ...existingIps.split(",").map((s) => s.trim()).filter((s) => s.length >= 7),
+          ]
+        )
+      );
+      const finalIps = merged.join(",");
+      saveBridgeConfig({
+        branchId: existingBranch,
+        isBranchExplicitlySet: true,
+        deviceIps: finalIps,
+        appUrl: existingAppUrl,
+      });
+      writeWindowsStartupVbs(finalIps, existingBranch);
+      origConsoleLog(`  [OK] Configuration mise a jour : Branche=${existingBranch} | Lecteurs=${finalIps}`);
+      process.exit(0);
+      return;
+    }
+
+    // Interactive --setup mode
+    const readline = require("readline");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q) => new Promise((r) => rl.question(q, r));
+
+    origConsoleLog("");
+    origConsoleLog("======================================================================");
+    origConsoleLog("  CHOISISSEZ LA BRANCHE (ECOLE) DE CET ORDINATEUR :");
+    origConsoleLog("    [1] ECOLE (Branche Principale)");
+    origConsoleLog("    [2] ANNEX");
+    origConsoleLog("    [3] AMPHI");
+    origConsoleLog("======================================================================");
+    const bAns = (await ask(`Entrez 1, 2 ou 3 [Par defaut: ${existingBranch}]: `)).trim();
+    const finalBranch = ["1", "2", "3"].includes(bAns) ? Number(bAns) : existingBranch;
+
+    const defaultIpSet = Array.from(
+      new Set([
+        "192.168.50.201",
+        ...discovered,
+        ...existingIps.split(",").map((s) => s.trim()).filter((s) => s.length >= 7),
+      ])
+    );
+    const defaultIps =
+      defaultIpSet.length > 1
+        ? defaultIpSet.join(",")
+        : "192.168.50.201,192.168.50.202";
+
+    origConsoleLog("");
+    origConsoleLog("======================================================================");
+    origConsoleLog("  ADRESSES IP DES LECTEURS ZKTECO K50 PRO :");
+    origConsoleLog(`  - Appuyez sur [Entree] pour utiliser : ${defaultIps}`);
+    origConsoleLog("  - Ou tapez les IPs separees par une virgule (ex: 192.168.50.201,192.168.50.202)");
+    origConsoleLog("======================================================================");
+    const ipAns = (await ask(`IP(s) des lecteurs [Par defaut: ${defaultIps}]: `)).trim();
+    rl.close();
+
+    const cleanedIps = Array.from(
+      new Set(
+        (ipAns || defaultIps)
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length >= 7)
+      )
+    );
+    if (cleanedIps.length === 0) cleanedIps.push("192.168.50.201");
+    const finalIps = cleanedIps.join(",");
+
+    saveBridgeConfig({
+      branchId: finalBranch,
+      isBranchExplicitlySet: true,
+      deviceIps: finalIps,
+      appUrl: existingAppUrl,
+    });
+    writeWindowsStartupVbs(finalIps, finalBranch);
+    origConsoleLog("");
+    origConsoleLog(`[OK] Configuration enregistree : Branche=${finalBranch} | Lecteurs=${finalIps}`);
+    process.exit(0);
+  })();
+  return;
+}
+
 const persistedConfig = loadBridgeConfig();
 
 // Resolve IPs: CLI > Env > Persisted > Default
-const cliIps = process.argv.find((a) => a.startsWith("--ips="))?.slice(6);
-const rawIps = cliIps || process.env.ZK_DEVICE_IP || persistedConfig.deviceIps || "192.168.50.201";
-const CONFIGURED_IPS = rawIps
-  .split(",")
-  .map((ip) => ip.trim())
-  .filter(Boolean);
+const cliIps = process.argv.find((a) => a.startsWith("--ips="))?.slice(6)?.trim();
+const rawIps =
+  (cliIps && cliIps.length >= 7 ? cliIps : "") ||
+  process.env.ZK_DEVICE_IP ||
+  persistedConfig.deviceIps ||
+  "192.168.50.201";
+const CONFIGURED_IPS = Array.from(
+  new Set(
+    rawIps
+      .split(",")
+      .map((ip) => ip.trim())
+      .filter((ip) => ip.length >= 7)
+  )
+);
+if (CONFIGURED_IPS.length === 0) {
+  CONFIGURED_IPS.push("192.168.50.201");
+}
 
 // Resolve Branch: CLI > Env > Persisted > Default 1
-const cliBranch = process.argv.find((a) => a.startsWith("--branch="))?.slice(9);
+const cliBranch = process.argv.find((a) => a.startsWith("--branch="))?.slice(9)?.trim();
 const parsedBranch = Number(cliBranch || process.env.BRANCH_ID || persistedConfig.branchId || 1);
 const resolvedBranchId = isNaN(parsedBranch) || parsedBranch <= 0 ? 1 : parsedBranch;
 
-// Resolve App URL: CLI > Env > Persisted > ""
-const cliAppUrl = process.argv.find((a) => a.startsWith("--app-url="))?.slice(10);
-const resolvedAppUrl = cliAppUrl || process.env.CLOUD_APP_URL || persistedConfig.appUrl || "";
+// Resolve App URL: CLI > Env > Persisted > Default Cloud URL
+const cliAppUrl = process.argv.find((a) => a.startsWith("--app-url="))?.slice(10)?.trim();
+const resolvedAppUrl =
+  cliAppUrl ||
+  process.env.CLOUD_APP_URL ||
+  persistedConfig.appUrl ||
+  DEFAULT_CLOUD_APP_URL;
 
 // Persist the active configuration so restarts without arguments remember everything
 saveBridgeConfig({
   deviceIps: CONFIGURED_IPS.join(","),
   branchId: resolvedBranchId,
   ...(cliBranch || process.env.BRANCH_ID ? { isBranchExplicitlySet: true } : {}),
-  ...(resolvedAppUrl ? { appUrl: resolvedAppUrl } : {}),
+  appUrl: resolvedAppUrl,
 });
 
 // ZKTeco Protocol Constants
@@ -518,13 +846,33 @@ function destroyDeviceSocket(dev, reason) {
   }
 }
 
-function deleteHardwareUserOnAllDevices(globalNumber, fingerIndex) {
+function reassertDeviceVerifyMode(dev) {
+  if (!dev || !dev.isConnected) return;
+  const maskBuf = Buffer.alloc(4);
+  maskBuf.writeUInt32LE(EVENT_MASK, 0);
+  sendToDevice(dev, CMD_REG_EVENT, maskBuf);
+  sendToDevice(dev, CMD_ENABLEDEVICE);
+  sendToDevice(dev, CMD_STARTVERIFY);
+}
+
+function reassertAllDevicesVerifyMode() {
+  for (const dev of devices.values()) {
+    if (dev.isConnected) {
+      reassertDeviceVerifyMode(dev);
+    }
+  }
+}
+
+function deleteHardwareUserOnAllDevices(globalNumber, fingerIndex, skipRefresh = false) {
   if (typeof fingerIndex === "number" && !isNaN(fingerIndex)) {
     const delTempBuf = Buffer.alloc(25, 0);
     delTempBuf.write(String(globalNumber).slice(0, 23), 0, 24, "ascii");
     delTempBuf.writeUInt8(fingerIndex & 0x0f, 24);
     sendToAllDevices(CMD_DELETE_USERTEMP, delTempBuf);
-    sendToAllDevices(CMD_REFRESHDATA);
+    if (!skipRefresh) {
+      sendToAllDevices(CMD_REFRESHDATA);
+      reassertAllDevicesVerifyMode();
+    }
     console.log(
       `[K50 Bridge] Deleted fingerprint #${globalNumber} (finger=${fingerIndex}) from K50 Pro flash memory.`
     );
@@ -541,7 +889,10 @@ function deleteHardwareUserOnAllDevices(globalNumber, fingerIndex) {
   const delBuf = Buffer.alloc(2);
   delBuf.writeUInt16LE(globalNumber & 0xffff, 0);
   sendToAllDevices(CMD_DELETE_USER, delBuf);
-  sendToAllDevices(CMD_REFRESHDATA);
+  if (!skipRefresh) {
+    sendToAllDevices(CMD_REFRESHDATA);
+    reassertAllDevicesVerifyMode();
+  }
   console.log(
     `[K50 Bridge] Deleted user & all fingerprints #${globalNumber} from K50 Pro flash memory.`
   );
@@ -731,7 +1082,7 @@ function fetchFromCloud(path) {
         if (req) req.destroy();
       } catch {}
       done(null);
-    }, 7500);
+    }, 18000);
 
     try {
       const targetUrl = new URL(path, state.appUrl);
@@ -739,7 +1090,7 @@ function fetchFromCloud(path) {
       req = client.get(
         targetUrl,
         {
-          timeout: 6500,
+          timeout: 15000,
           headers: {
             "x-zk-bridge-key": BRIDGE_SECRET,
             "User-Agent": "Massinissa-ZK-Bridge/4.0",
@@ -837,8 +1188,8 @@ function postToCloud(path, payload) {
 
 /**
  * Bi-directional Cloud Multi-Branch Synchronizer
- * 1. Backfill: If any student in cloud is missing their biometric template and local K50 has it, extract & push to cloud.
- * 2. Download: For all students in cloud, push User record + Template into local K50 Pro hardware.
+ * 1. Prune only newly tombstoned users (cached per device IP so we never flood the socket on startup).
+ * 2. Download templates to each connected K50 Pro reader while keeping CMD_REG_EVENT active after every student!
  */
 async function syncTemplatesWithCloud(force = false) {
   if (state.isSyncing) {
@@ -854,6 +1205,11 @@ async function syncTemplatesWithCloud(force = false) {
   state.isSyncing = true;
   console.log(`[K50 Cloud Sync] Starting multi-branch synchronization with ${state.appUrl}...`);
 
+  const cache = loadSyncCache();
+  if (!cache._prunedTombstones || typeof cache._prunedTombstones !== "object") {
+    cache._prunedTombstones = {};
+  }
+
   try {
     const cloudData = await fetchFromCloud("/api/biometrics/templates");
     if (!cloudData || !cloudData.success || !Array.isArray(cloudData.templates)) {
@@ -862,27 +1218,51 @@ async function syncTemplatesWithCloud(force = false) {
     }
 
     const templates = cloudData.templates;
-    const cache = loadSyncCache();
     let syncedCount = 0;
     let prunedCount = 0;
+    const connectedDevices = Array.from(devices.values()).filter((d) => d.isConnected);
+    const connectedIps = connectedDevices.map((d) => d.ip);
 
-    // Phase 1: PRUNE TOMBSTONED / DELETED HARDWARE USERS FROM FLASH MEMORY
-    if (Array.isArray(cloudData.deletedGlobalNumbers)) {
+    // Phase 1: PRUNE TOMBSTONED / DELETED HARDWARE USERS FROM FLASH MEMORY (Only un-pruned tombstones!)
+    if (Array.isArray(cloudData.deletedGlobalNumbers) && connectedDevices.length > 0) {
       for (const delNum of cloudData.deletedGlobalNumbers) {
+        if (state.enrollment.active) break;
         if (delNum > 0) {
-          deleteHardwareUserOnAllDevices(delNum);
+          const alreadyPrunedIps = Array.isArray(cache._prunedTombstones[delNum])
+            ? cache._prunedTombstones[delNum]
+            : [];
+          const targetDevs = force
+            ? connectedDevices
+            : connectedDevices.filter((d) => !alreadyPrunedIps.includes(d.ip));
+
+          if (targetDevs.length === 0) continue;
+
+          const delBuf = Buffer.alloc(2);
+          delBuf.writeUInt16LE(delNum & 0xffff, 0);
+          for (const d of targetDevs) {
+            if (d.isConnected) {
+              sendToDevice(d, CMD_DELETE_USER, delBuf);
+            }
+          }
           for (let fi = 0; fi <= 9; fi++) {
             delete cache[`${delNum}_${fi}`];
           }
+          cache._prunedTombstones[delNum] = Array.from(
+            new Set([...alreadyPrunedIps, ...targetDevs.map((d) => d.ip)])
+          );
           prunedCount++;
+          await new Promise((r) => setTimeout(r, 25));
         }
       }
       if (prunedCount > 0) {
-        console.log(`[K50 Cloud Sync] ✗ Pruned ${prunedCount} tombstoned users from K50 hardware flash.`);
+        sendToAllDevices(CMD_REFRESHDATA);
+        reassertAllDevicesVerifyMode();
+        saveSyncCache(cache);
+        console.log(`[K50 Cloud Sync] ✗ Pruned ${prunedCount} new tombstoned users from K50 hardware flash.`);
       }
     }
 
-    // Phase 2: DOWNLOAD TO HARDWARE
+    // Phase 2: DOWNLOAD TO HARDWARE (Per-device IP aware + non-blocking for live scans!)
     for (const t of templates) {
       if (state.enrollment.active) {
         console.log("[K50 Cloud Sync] Enrollment started — pausing background sync to prioritize 3-tap capture.");
@@ -890,58 +1270,80 @@ async function syncTemplatesWithCloud(force = false) {
       }
       if (!t.globalNumber || t.globalNumber <= 0) continue;
       const key = `${t.globalNumber}_${t.fingerIndex || 0}`;
-      const lastSyncedAt = cache[key]?.updatedAt;
+      const existingEntry = cache[key];
+      const lastSyncedAt = existingEntry?.updatedAt;
+      const prevSyncedIps = Array.isArray(existingEntry?.syncedIps)
+        ? existingEntry.syncedIps
+        : lastSyncedAt
+        ? [CONFIGURED_IPS[0] || "192.168.50.201"]
+        : [];
 
-      const needsSync =
+      const activeDevs = Array.from(devices.values()).filter((d) => d.isConnected);
+      if (activeDevs.length === 0) break;
+
+      const contentChanged =
         force ||
         !lastSyncedAt ||
         lastSyncedAt !== t.updatedAt ||
-        cache[key]?.studentName !== t.studentName;
-      if (!needsSync) continue;
+        existingEntry?.studentName !== t.studentName;
 
-      // Yield if a live attendance scan just happened so rush-hour scans never experience latency
-      if (Date.now() - state.lastAttLogAt < 2500) {
-        await new Promise((r) => setTimeout(r, 300));
+      const targetDevs = contentChanged
+        ? activeDevs
+        : activeDevs.filter((d) => !prevSyncedIps.includes(d.ip));
+
+      if (targetDevs.length === 0) continue;
+
+      // Yield immediately if a live attendance scan happened recently so student scans have 100% priority
+      if (Date.now() - state.lastAttLogAt < 5000) {
+        await new Promise((r) => setTimeout(r, 2000));
       }
 
       const hasRealTemplate = Boolean(
         t.templateData && !t.templateData.startsWith("ZK_K50_") && t.templateData.length > 20
       );
 
-      // 1. Write user record to all connected local K50 devices
       const userPkt = buildUser72Packet(t.globalNumber, t.studentName, String(t.globalNumber));
-      sendToAllDevices(CMD_USER_WRQ, userPkt);
+      const tplBuf = hasRealTemplate ? Buffer.from(t.templateData, "base64") : null;
+      const newlySyncedIps = [];
 
-      // 2. If real template exists, write it into the local K50 flash memory
-      if (hasRealTemplate) {
-        const tplBuf = Buffer.from(t.templateData, "base64");
-        for (const dev of devices.values()) {
-          if (!dev.isConnected) continue;
+      for (const dev of targetDevs) {
+        if (!dev.isConnected || state.enrollment.active) continue;
+        sendToDevice(dev, CMD_USER_WRQ, userPkt);
+        if (tplBuf) {
           await uploadTemplateToDevice(dev, t.globalNumber, t.fingerIndex || 0, tplBuf);
         }
+        // Immediately restore CMD_REG_EVENT + CMD_ENABLEDEVICE + CMD_STARTVERIFY after each student
+        // so the K50 Pro never misses a live finger scan during background sync!
+        reassertDeviceVerifyMode(dev);
+        newlySyncedIps.push(dev.ip);
       }
 
-      // Brief yield between templates so TCP socket event loop stays responsive
-      await new Promise((r) => setTimeout(r, 35));
+      // Yield between templates so live finger scans on any reader are processed in 0ms
+      await new Promise((r) => setTimeout(r, 90));
 
       cache[key] = {
         globalNumber: t.globalNumber,
         studentName: t.studentName,
         hasTemplate: hasRealTemplate,
         updatedAt: t.updatedAt,
+        syncedIps: Array.from(new Set([...(contentChanged ? [] : prevSyncedIps), ...newlySyncedIps])),
       };
       syncedCount++;
+
+      if (syncedCount % 15 === 0) {
+        saveSyncCache(cache);
+      }
+
       console.log(
         `[K50 Cloud Sync] ↓ Synced Student #${t.globalNumber} (${t.studentName}, template=${
           hasRealTemplate ? "YES" : "NO"
-        }) to local K50!`
+        }) to [${newlySyncedIps.join(", ")}]!`
       );
     }
 
     if (syncedCount > 0 || prunedCount > 0) {
       sendToAllDevices(CMD_REFRESHDATA);
-      sendToAllDevices(CMD_STARTVERIFY);
-      sendToAllDevices(CMD_ENABLEDEVICE);
+      reassertAllDevicesVerifyMode();
       saveSyncCache(cache);
     }
 
@@ -969,6 +1371,10 @@ async function syncTemplatesWithCloud(force = false) {
     return { success: false, message: err.message };
   } finally {
     state.isSyncing = false;
+    reassertAllDevicesVerifyMode();
+    try {
+      saveSyncCache(cache);
+    } catch {}
   }
 }
 
@@ -996,6 +1402,11 @@ async function dispatchScanEvent(scanPayload) {
         ...enrichedPayload,
       });
       if (cloudRes && cloudRes.success) {
+        console.log(
+          `[K50 Bridge] ✓ Scan posted to Cloud (Branch #${state.branchId}, Student=${
+            enrichedPayload.globalNumber || "UNRECOGNIZED"
+          }, Status=${cloudRes.scan?.status || "OK"})`
+        );
         if (
           cloudRes.scan?.status === "UNRECOGNIZED" &&
           cloudRes.scan?.isTombstoned &&
@@ -1012,6 +1423,11 @@ async function dispatchScanEvent(scanPayload) {
           });
         }
         return;
+      } else {
+        console.warn(
+          `[K50 Bridge] Cloud POST /api/biometrics/scan returned non-success:`,
+          cloudRes
+        );
       }
     } catch (err) {
       console.error("[K50 Bridge] Error posting scan to app:", err.message);
@@ -1126,8 +1542,7 @@ function handleRealTimeEvent(dev, eventType, payload) {
       const fingerIdx = state.enrollment.fingerIndex || 0;
 
       sendToDevice(dev, CMD_REFRESHDATA);
-      sendToDevice(dev, CMD_STARTVERIFY);
-      sendToDevice(dev, CMD_ENABLEDEVICE);
+      reassertDeviceVerifyMode(dev);
 
       if (enrollRes === 0) {
         state.enrollment.step = 3;
@@ -1152,6 +1567,9 @@ function handleRealTimeEvent(dev, eventType, payload) {
           } catch (e) {
             console.error(`[K50 Cloud Sync] Error extracting template after enroll:`, e.message);
           }
+
+          // Re-assert verify & real-time events on the enrolling device after template extraction
+          reassertDeviceVerifyMode(dev);
 
           // Finalize enrollment state now that templateData is populated
           state.enrollment.active = false;
@@ -1187,8 +1605,7 @@ function handleRealTimeEvent(dev, eventType, payload) {
                     sendToDevice(otherDev, CMD_USER_WRQ, userPkt);
                     await uploadTemplateToDevice(otherDev, enrolledNum, fingerIdx, extractedBuf);
                     sendToDevice(otherDev, CMD_REFRESHDATA);
-                    sendToDevice(otherDev, CMD_STARTVERIFY);
-                    sendToDevice(otherDev, CMD_ENABLEDEVICE);
+                    reassertDeviceVerifyMode(otherDev);
                     console.log(`[K50 Multi-Device] ✓ Instant sync of newly registered student #${enrolledNum} to sibling reader ${otherDev.ip}!`);
                   } catch (pushErr) {
                     console.warn(`[K50 Multi-Device] Could not push to sibling ${otherDev.ip}:`, pushErr.message);
@@ -1227,6 +1644,10 @@ function handleRealTimeEvent(dev, eventType, payload) {
       clearTimeout(state.verifyFailTimer);
       state.verifyFailTimer = null;
     }
+    if (state.verifySuccessFallbackTimer) {
+      clearTimeout(state.verifySuccessFallbackTimer);
+      state.verifySuccessFallbackTimer = null;
+    }
 
     let userIdStr = "";
     if (payload.length >= 32) {
@@ -1241,28 +1662,58 @@ function handleRealTimeEvent(dev, eventType, payload) {
         .toString("ascii")
         .replace(/\0.*$/g, "")
         .trim();
+    } else if (payload.length >= 2) {
+      userIdStr = String(payload.readUInt16LE(0));
     }
 
     const globalNumber = parseInt(userIdStr, 10);
     if (!isNaN(globalNumber) && globalNumber > 0) {
       console.log(
-        `[K50 Bridge] ✓ Finger Recognized on ${dev.ip} -> Student #${globalNumber} (Instant Push)`
+        `[K50 Bridge] ✓ Finger Recognized on ${dev.ip} (EF_ATTLOG, len=${payload.length}) -> Student #${globalNumber} (Instant Push)`
       );
       dispatchScanEvent({ globalNumber, deviceIp: dev.ip });
     } else {
       console.log(
-        `[K50 Bridge] ✗ Unrecognized Finger on ${dev.ip} -> Instant State 4`
+        `[K50 Bridge] ✗ Unrecognized Finger on ${dev.ip} (EF_ATTLOG raw="${userIdStr}", len=${payload.length}) -> Instant State 4`
       );
       dispatchScanEvent({ isUnrecognizedFinger: true, deviceIp: dev.ip });
     }
     return;
   }
 
+  // Handle EF_VERIFY (256): if K50 Pro internal AttLog flash is full or EF_ATTLOG is suppressed by firmware,
+  // EF_VERIFY still carries the verified 4-byte UID (> 0 on match, <= 0 on mismatch).
+  if (eventType === EF_VERIFY) {
+    const verifiedUid = payload.length >= 4 ? payload.readInt32LE(0) : -1;
+    if (verifiedUid > 0 && verifiedUid < 65535) {
+      if (state.verifyFailTimer) {
+        clearTimeout(state.verifyFailTimer);
+        state.verifyFailTimer = null;
+      }
+      if (state.verifySuccessFallbackTimer) {
+        clearTimeout(state.verifySuccessFallbackTimer);
+      }
+      const capturedIp = dev.ip;
+      state.verifySuccessFallbackTimer = setTimeout(() => {
+        state.verifySuccessFallbackTimer = null;
+        if (Date.now() - state.lastAttLogAt > 300) {
+          state.lastAttLogAt = Date.now();
+          console.log(
+            `[K50 Bridge] ✓ Finger Recognized on ${capturedIp} (EF_VERIFY UID=${verifiedUid} fallback) -> Student #${verifiedUid}`
+          );
+          dispatchScanEvent({ globalNumber: verifiedUid, deviceIp: capturedIp });
+        }
+      }, 150);
+      return;
+    }
+    scheduleUnrecognizedFingerCheck(240, dev.ip);
+    return;
+  }
+
   if (
     eventType === EF_ALARM ||
     eventType === EF_FPFTR ||
-    eventType === EF_FINGER ||
-    eventType === EF_VERIFY
+    eventType === EF_FINGER
   ) {
     const delayMs = eventType === EF_ALARM ? 120 : 240;
     scheduleUnrecognizedFingerCheck(delayMs, dev.ip);
@@ -1403,8 +1854,9 @@ function connectDevice(ip, force = false) {
             deviceIp: CONFIGURED_IPS.join(","),
           });
 
-          // Auto-trigger sync with cloud 2 seconds after connecting
-          if (state.appUrl && !state.hasInitialSynced) {
+          // Auto-trigger sync with cloud 2 seconds after this reader connects
+          if (state.appUrl && !dev.hasInitialSynced) {
+            dev.hasInitialSynced = true;
             state.hasInitialSynced = true;
             setTimeout(() => syncTemplatesWithCloud(false), 2000);
           }
@@ -1502,6 +1954,101 @@ async function ensureTargetDeviceReadyForEnroll(targetIp = null, timeoutMs = 250
   return null;
 }
 
+// Automatic Multi-Device Discovery on Local Subnets (finds .200-.206 K50 Pro readers automatically)
+let isAutoDiscovering = false;
+function autoDiscoverK50Devices() {
+  if (isAutoDiscovering || state.enrollment.active) return;
+  isAutoDiscovering = true;
+
+  const subnets = new Set(["192.168.50", "192.168.1"]);
+  for (const ip of CONFIGURED_IPS) {
+    const parts = ip.split(".");
+    if (parts.length === 4) {
+      subnets.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
+    }
+  }
+  try {
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const netInfo of nets[name] || []) {
+        if (netInfo.family === "IPv4" && !netInfo.internal && netInfo.address) {
+          const parts = netInfo.address.split(".");
+          if (parts.length === 4) {
+            subnets.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const candidates = [];
+  for (const subnet of subnets) {
+    for (let host = 190; host <= 225; host++) {
+      const candidateIp = `${subnet}.${host}`;
+      if (!CONFIGURED_IPS.includes(candidateIp)) {
+        candidates.push(candidateIp);
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    isAutoDiscovering = false;
+    return;
+  }
+
+  const zkConnectProbe = Buffer.from("5050827d08000000e80317fc00000000", "hex");
+  let pending = candidates.length;
+  const finishOne = () => {
+    pending--;
+    if (pending <= 0) {
+      isAutoDiscovering = false;
+    }
+  };
+
+  for (const candidateIp of candidates) {
+    const probe = new net.Socket();
+    let settled = false;
+    const done = (found) => {
+      if (settled) return;
+      settled = true;
+      try {
+        probe.destroy();
+      } catch {}
+      if (found && !CONFIGURED_IPS.includes(candidateIp)) {
+        CONFIGURED_IPS.push(candidateIp);
+        saveBridgeConfig({ deviceIps: CONFIGURED_IPS.join(",") });
+        console.log(
+          `[K50 Auto-Discovery] ✓ Discovered additional ZKTeco K50 Pro reader at ${candidateIp}:${DEVICE_PORT}! Active pool: ${CONFIGURED_IPS.join(", ")}`
+        );
+        connectDevice(candidateIp, false);
+      }
+      finishOne();
+    };
+    probe.setTimeout(650);
+    probe.once("connect", () => {
+      try {
+        probe.write(zkConnectProbe);
+      } catch {
+        done(false);
+      }
+    });
+    probe.on("data", (d) => {
+      if (d && d.length >= 4 && d[0] === 0x50 && d[1] === 0x50 && d[2] === 0x82 && d[3] === 0x7d) {
+        done(true);
+      } else {
+        done(false);
+      }
+    });
+    probe.once("timeout", () => done(false));
+    probe.once("error", () => done(false));
+    try {
+      probe.connect(DEVICE_PORT, candidateIp);
+    } catch {
+      done(false);
+    }
+  }
+}
+
 // 1. Reconnection & Zombie-Check Loop every 2.5 seconds
 setInterval(() => {
   for (const ip of CONFIGURED_IPS) {
@@ -1509,9 +2056,13 @@ setInterval(() => {
   }
 }, RECONNECT_LOOP_MS);
 
+// 1b. Multi-Device Auto-Discovery Loop every 25 seconds
+setTimeout(() => autoDiscoverK50Devices(), 1000);
+setInterval(() => autoDiscoverK50Devices(), 25000);
+
 // 2. Active ZKTeco Protocol Heartbeat Loop every 8 seconds (CMD_GET_TIME keepalive + periodic CMD_REG_EVENT refresh)
 // Keeps TCP tunnel open, keeps Realtek Ethernet awake, and re-asserts real-time event subscription
-// so router branches (e.g. AMPHI) never silently stop pushing live scan events!
+// so router branches and multi-device setups never silently stop pushing live scan events!
 let heartbeatTickCount = 0;
 setInterval(() => {
   heartbeatTickCount++;
@@ -1530,12 +2081,10 @@ setInterval(() => {
     if (enrollingIp && devices.has(enrollingIp)) {
       const d = devices.get(enrollingIp);
       sendToDevice(d, CMD_CANCELCAPTURE);
-      sendToDevice(d, CMD_STARTVERIFY);
-      sendToDevice(d, CMD_ENABLEDEVICE);
+      reassertDeviceVerifyMode(d);
     } else {
       sendToAllDevices(CMD_CANCELCAPTURE);
-      sendToAllDevices(CMD_STARTVERIFY);
-      sendToAllDevices(CMD_ENABLEDEVICE);
+      reassertAllDevicesVerifyMode();
     }
     broadcastSse({
       type: "enroll_progress",
@@ -1559,18 +2108,14 @@ setInterval(() => {
       connectDevice(dev.ip, false);
       continue;
     }
-    // Only send keepalive when no complex transaction (enrollment/sync/pending ACK) is active
+    // Keep real-time event subscription and TCP keepalive active whenever no packet ACK is currently in flight on this device
     if (
       !state.enrollment.active &&
-      !state.isSyncing &&
       (!dev.pendingAcks || dev.pendingAcks.size === 0)
     ) {
-      // Every 3rd heartbeat (~24s), re-assert CMD_REG_EVENT + CMD_ENABLEDEVICE so router connections never drop real-time events
-      if (heartbeatTickCount % 3 === 0) {
-        const maskBuf = Buffer.alloc(4);
-        maskBuf.writeUInt32LE(EVENT_MASK, 0);
-        sendToDevice(dev, CMD_REG_EVENT, maskBuf);
-        sendToDevice(dev, CMD_ENABLEDEVICE);
+      // Re-assert CMD_REG_EVENT + CMD_ENABLEDEVICE + CMD_STARTVERIFY so multi-device switches/routers never drop real-time events
+      if (heartbeatTickCount % 2 === 0) {
+        reassertDeviceVerifyMode(dev);
       }
       sendToDevice(dev, CMD_GET_TIME);
       dev.lastGetTimeReplyId = dev.replyId;

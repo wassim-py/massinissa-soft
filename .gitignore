@@ -46,3 +46,4 @@ CLAUDE.md
 
 # zk-bridge runtime cache
 zk-bridge/*.json
+zk-bridge/*.log
