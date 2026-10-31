@@ -237,13 +237,6 @@ const ClassAttendancePage = async (
                 for (const att of rawAttendances) {
                     const s = studentMap.get(att.studentId);
                     if (s) {
-                        if (!isLessonApplicableToEnrollment(
-                            { id: att.lessonId, classId: att.lessonClassId, startsAt: att.date },
-                            classId,
-                            s
-                        )) {
-                            continue;
-                        }
                         s.attendances.push({
                             id: att.attendanceId,
                             lessonId: att.lessonId,
@@ -540,7 +533,11 @@ const ClassAttendancePage = async (
                             (att.lesson.classId === classId ||
                                 att.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)) &&
                             !att.lesson.isFree &&
-                            isLessonApplicableToEnrollment(att.lesson, classId, enrollment as any)
+                            isLessonApplicableToEnrollment(
+                                { ...att.lesson, hasExplicitAttendance: Boolean(att.status) },
+                                classId,
+                                enrollment as any
+                            )
                     );
 
                     const sCatchUps = (details?.catchUpAttendances || []).filter(
@@ -765,7 +762,7 @@ const ClassAttendancePage = async (
         const applicableAttendances = (student.attendances || []).filter((a: any) => {
             if (visitorCatchUpsByLessonId.has(a.lessonId)) return false;
             return isLessonApplicableToEnrollment(
-                { id: a.lessonId, classId, startsAt: a.date },
+                { id: a.lessonId, classId, startsAt: a.date, hasExplicitAttendance: Boolean(a.status) },
                 classId,
                 enrollment as any
             );
@@ -801,19 +798,20 @@ const ClassAttendancePage = async (
             const catchUpInfo = studentCatchUps.find((cu) => cu.missedLessonId === record.lessonId);
             const visitorCu = visitorCatchUpsByLessonId.get(record.lessonId);
             const isApplicable = isLessonApplicableToEnrollment(
-                { id: record.lessonId, classId, startsAt: record.date },
+                { id: record.lessonId, classId, startsAt: record.date, hasExplicitAttendance: Boolean(record.status) },
                 classId,
                 enrollment as any
             );
             const isPreStart =
                 !visitorCu &&
+                record.status !== "PRESENT" &&
                 (!isApplicable || classificationMap.get(record.lessonId) === "PRE_START_ABSENCE");
             const isTeacherAbsent = Boolean(record.isTeacherAbsent) || classificationMap.get(record.lessonId) === "TEACHER_ABSENT";
 
             studentRecords.set(instanceKey, {
                 status: record.status || (record.present ? "PRESENT" : "ABSENT"),
                 justification: record.justification || null,
-                isPreStart,
+                isPreStart: record.status === "PRESENT" ? false : Boolean(isPreStart),
                 isTeacherAbsent,
                 catchUp: catchUpInfo ? {
                     catchUpDate: catchUpInfo.catchUpDate,

@@ -519,6 +519,10 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         <span>{locale === "ar" ? "غياب قبل البدء (محايد)" : "Absence pré-début (neutre)"}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-slate-100 border border-dashed border-slate-400 inline-block shadow-2xs"></span>
+                        <span>{locale === "ar" ? "قبل التحويل (قابل للتسجيل)" : "Avant transfert (enregistrable)"}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded-full bg-blue-600 inline-block shadow-2xs"></span>
                         <span>{t("legendCaughtUp")}</span>
                     </div>
@@ -723,18 +727,47 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 !rawRecord
                                             );
 
+                                            // Lessons before transfer-in date for transferred-in student without records
+                                            const isBeforeTransferIn = Boolean(
+                                                student.transferredInAt &&
+                                                new Date(instance.startsAt || `${instance.date}T00:00:00.000Z`).getTime() < new Date(student.transferredInAt).getTime() - 2 * 60 * 60 * 1000 &&
+                                                !rawRecord
+                                            );
+
                                             if (isAfterTransfer) {
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
                                                         className={`p-3 text-center border-b border-border ${cellBg}`}
                                                     >
-                                                        <div
-                                                            className="w-5 h-5 mx-auto flex items-center justify-center text-muted/40 font-mono text-xs select-none cursor-not-allowed"
-                                                            title={locale === "ar" ? "تم تحويل التلميذ قبل هذا الدرس" : "Élève transféré avant cette séance"}
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => handleCircleClick(e, student, instance)}
+                                                            className={`w-5 h-5 mx-auto flex items-center justify-center text-muted/50 hover:text-primary font-mono text-xs rounded hover:bg-surface-subtle transition-all cursor-pointer ${
+                                                                isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                            }`}
+                                                            title={locale === "ar" ? "تم تحويل التلميذ بعد هذا الدرس (انقر للتسجيل الاستثنائي)" : "Élève transféré après cette séance (Cliquer pour déroger/enregistrer)"}
                                                         >
                                                             —
-                                                        </div>
+                                                        </button>
+                                                    </td>
+                                                );
+                                            }
+
+                                            if (isBeforeTransferIn) {
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => handleCircleClick(e, student, instance)}
+                                                            className={`w-5 h-5 mx-auto rounded-full bg-slate-100 border border-dashed border-slate-400 hover:scale-125 hover:border-primary focus:outline-none transition-all cursor-pointer block shadow-2xs ${
+                                                                isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                            }`}
+                                                            title={locale === "ar" ? "قبل تاريخ التحويل للفوج (انقر للتسجيل الاستثنائي)" : "Avant la date de transfert dans ce groupe (Cliquer pour déroger/enregistrer)"}
+                                                        />
                                                     </td>
                                                 );
                                             }

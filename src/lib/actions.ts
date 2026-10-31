@@ -2862,26 +2862,26 @@ export const markSingleAttendanceAction = async (input: {
       } catch (autoErr) {
         console.warn("Auto-suspension evaluation error in markSingleAttendance:", autoErr);
       }
-
-      safeRevalidatePath("/admin");
-      safeRevalidatePath("/list/attendance");
-      const affectedClassIds = new Set<number>();
-      if (lessonInfo?.classId) affectedClassIds.add(lessonInfo.classId);
-      if (lessonInfo?.lessonGroups) {
-        for (const lg of lessonInfo.lessonGroups) {
-          affectedClassIds.add(lg.classId);
-        }
-      }
-      for (const cId of affectedClassIds) {
-        safeRevalidatePath(`/list/attendance/class/${cId}`);
-        safeRevalidatePath(`/list/payments/class/${cId}`);
-        safeRevalidatePath(`/list/formations/${cId}`);
-      }
-      if (affectedClassIds.size > 0) {
-        safeRevalidatePath("/list/formations");
-      }
-      safeRevalidatePath(`/list/students/${input.studentId}`);
     }
+
+    safeRevalidatePath("/admin");
+    safeRevalidatePath("/list/attendance");
+    const affectedClassIds = new Set<number>();
+    if (lessonInfo?.classId) affectedClassIds.add(lessonInfo.classId);
+    if (lessonInfo?.lessonGroups) {
+      for (const lg of lessonInfo.lessonGroups) {
+        affectedClassIds.add(lg.classId);
+      }
+    }
+    for (const cId of affectedClassIds) {
+      safeRevalidatePath(`/list/attendance/class/${cId}`);
+      safeRevalidatePath(`/list/payments/class/${cId}`);
+      safeRevalidatePath(`/list/formations/${cId}`);
+    }
+    if (affectedClassIds.size > 0) {
+      safeRevalidatePath("/list/formations");
+    }
+    safeRevalidatePath(`/list/students/${input.studentId}`);
 
     return {
       success: true,

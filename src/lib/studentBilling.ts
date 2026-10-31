@@ -1217,7 +1217,7 @@ export function extractSameTeacherHeldFromTransfers(
  *    to B and transferring back into A) are excluded from Group A.
  */
 export function isLessonApplicableToEnrollment(
-  lesson: { id?: number; classId?: number; startsAt?: Date | string },
+  lesson: { id?: number; classId?: number; startsAt?: Date | string; hasExplicitAttendance?: boolean },
   targetClassId: number,
   enrollment?: {
     status?: string | null;
@@ -1245,6 +1245,7 @@ export function isLessonApplicableToEnrollment(
   } | null
 ): boolean {
   if (!enrollment) return true;
+  if (lesson.hasExplicitAttendance) return true;
 
   const lessonTime = new Date(lesson.startsAt || 0).getTime();
   const isPrimaryLesson = !lesson.classId || lesson.classId === targetClassId;

@@ -21,7 +21,9 @@
     "merge:scan": "npx tsx scripts/merge-student.ts --scan",
     "credits:manage": "python scripts/manage_student_credits.py",
     "biometrics:bridge": "npx tsx scripts/zk-k50-bridge.ts",
-    "whatsapp:bridge": "npx tsx scripts/whatsapp-bridge.ts"
+    "whatsapp:bridge": "npx tsx scripts/whatsapp-bridge.ts",
+    "reconcile:transfers": "npx tsx scripts/reconcile_transferred_students.ts",
+    "reconcile:transfers:apply": "npx tsx scripts/reconcile_transferred_students.ts --apply"
   },
   "prisma": {
     "seed": "ts-node --compiler-options \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed.ts"
