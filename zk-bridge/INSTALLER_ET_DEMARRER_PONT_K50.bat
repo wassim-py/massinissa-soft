@@ -46,7 +46,9 @@ echo  ETAPE 3 / 3 : INSTALLATION DU FICHIER PONT zk-bridge.js
 echo ----------------------------------------------------------------------------
 if exist "%~dp0zk-bridge.js" (
     copy /Y "%~dp0zk-bridge.js" "%BRIDGE_DIR%\zk-bridge.js" >nul
-    echo [OK] Fichier zk-bridge.js local copie.
+    copy /Y "%~dp0*.bat" "%BRIDGE_DIR%\" >nul 2>nul
+    copy /Y "%~dp0TESTER_CONNEXION_LECTEURS.bat" "%USERPROFILE%\Desktop\TESTER_CONNEXION_LECTEURS.bat" >nul 2>nul
+    echo [OK] Fichiers installes dans %BRIDGE_DIR% et raccourci cree sur le Bureau.
 ) else (
     echo Telechargement direct de la derniere version depuis GitHub...
     powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object Net.WebClient; $wc.Headers.Add('User-Agent', 'Mozilla/5.0'); $wc.Headers.Add('Cache-Control', 'no-cache'); try { $wc.DownloadFile('https://raw.githubusercontent.com/wassim-py/massinissa-soft/main/zk-bridge/zk-bridge.js?t=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(), '$env:USERPROFILE\MassinissaK50Bridge\zk-bridge.js') } catch {}"
@@ -59,7 +61,7 @@ if not exist "%BRIDGE_DIR%\zk-bridge.js" (
     exit /b 1
 )
 echo [OK] Fichier zk-bridge.js pret.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfg = @{ deviceIps = '%DEVICE_IPS%'; branchId = [int]%BRANCH_ID%; isBranchExplicitlySet = $true; updatedAt = (Get-Date).ToString('o') }; [System.IO.File]::WriteAllText("$env:USERPROFILE\MassinissaK50Bridge\bridge_config.json", ($cfg | ConvertTo-Json))"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfg = @{ deviceIps = '%DEVICE_IPS%'; branchId = [int]%BRANCH_ID%; isBranchExplicitlySet = $true; updatedAt = (Get-Date).ToString('o') }; [System.IO.File]::WriteAllText(('{0}\MassinissaK50Bridge\bridge_config.json' -f $env:USERPROFILE), ($cfg | ConvertTo-Json))"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-NetAdapterAdvancedProperty -Name 'Ethernet*' -RegistryKeyword 'PowerSavingMode' -RegistryValue 0 -ErrorAction SilentlyContinue; Set-NetAdapterAdvancedProperty -Name 'Ethernet*' -RegistryKeyword 'EnableGreenEthernet' -RegistryValue 0 -ErrorAction SilentlyContinue; Set-NetAdapterAdvancedProperty -Name 'Ethernet*' -RegistryKeyword '*EEE' -RegistryValue 0 -ErrorAction SilentlyContinue; Disable-NetAdapterPowerManagement -Name 'Ethernet*' -ErrorAction SilentlyContinue" >nul 2>nul
 netsh advfirewall firewall add rule name="ZKTeco K50 Pro TCP 4370" dir=in action=allow protocol=TCP localport=4370 >nul 2>nul
 netsh advfirewall firewall add rule name="ZKTeco K50 Pro TCP 4370 Out" dir=out action=allow protocol=TCP remoteport=4370 >nul 2>nul
