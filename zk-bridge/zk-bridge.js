@@ -90,24 +90,26 @@ function saveBridgeConfig(partial) {
   } catch {}
 }
 
-function scanSubnetsForK50(branchId = 1, extraIps = "") {
+function scanSubnetsForK50(extraIps = "") {
   return new Promise((resolve) => {
-    // IMPORTANT: Branch 1 (ECOLE) and Branch 2 (ANNEX) use dedicated Ethernet (192.168.50.*).
-    // Branch 3 (AMPHI) has its reader on the shared 192.168.1.* Wi-Fi router (192.168.1.201).
-    // Never scan 192.168.1.* on Branch 1 or Branch 2, otherwise Branch 2's PC will connect over Wi-Fi to Branch 3's reader!
-    const subnets = new Set(["192.168.50"]);
-    if (Number(branchId) === 3) {
-      subnets.add("192.168.1");
-    }
+    const subnets = new Set(["192.168.50", "192.168.1"]);
     for (const ip of String(extraIps || "").split(",")) {
       const p = ip.trim().split(".");
       if (p.length === 4) {
-        const sub = `${p[0]}.${p[1]}.${p[2]}`;
-        if (Number(branchId) === 3 || sub !== "192.168.1") {
-          subnets.add(sub);
-        }
+        subnets.add(`${p[0]}.${p[1]}.${p[2]}`);
       }
     }
+    try {
+      const nets = os.networkInterfaces();
+      for (const name of Object.keys(nets)) {
+        for (const info of nets[name] || []) {
+          if (info.family === "IPv4" && !info.internal && info.address) {
+            const p = info.address.split(".");
+            if (p.length === 4) subnets.add(`${p[0]}.${p[1]}.${p[2]}`);
+          }
+        }
+      }
+    } catch {}
 
     const candidates = [];
     for (const s of subnets) {
@@ -157,6 +159,32 @@ function scanSubnetsForK50(branchId = 1, extraIps = "") {
       }
     }
   });
+}
+
+function readExistingStartupVbsConfig() {
+  try {
+    const appData = process.env.APPDATA;
+    if (!appData) return {};
+    const vbsPath = path.join(
+      appData,
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Startup",
+      "MassinissaK50Bridge.vbs"
+    );
+    if (!fs.existsSync(vbsPath)) return {};
+    const content = fs.readFileSync(vbsPath, "utf8");
+    const ipsMatch = content.match(/--ips=([^\s"]+)/);
+    const branchMatch = content.match(/--branch=(\d+)/);
+    return {
+      ips: ipsMatch && ipsMatch[1] ? ipsMatch[1].trim() : "",
+      branchId: branchMatch && branchMatch[1] ? Number(branchMatch[1]) : 0,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function writeWindowsStartupVbs(ipsStr, branchId) {
@@ -223,8 +251,9 @@ if (
     ensureEthernetSubnet();
 
     const cfg = loadBridgeConfig();
-    const existingBranch = Number(cfg.branchId || 1);
-    const existingIps = String(cfg.deviceIps || "").trim();
+    const vbsCfg = readExistingStartupVbsConfig();
+    const existingBranch = Number(cfg.branchId || vbsCfg.branchId || 1);
+    const existingIps = String(cfg.deviceIps || vbsCfg.ips || "").trim();
     const existingAppUrl = String(cfg.appUrl || DEFAULT_CLOUD_APP_URL).trim();
 
     if (process.argv.includes("--diag")) {
@@ -271,27 +300,14 @@ if (
       return;
     }
 
+    // --auto-config (used by METTRE_A_JOUR_PONT.bat):
+    // Preserves the exact IP(s) and Branch already configured on this PC without adding other branches' readers!
     if (process.argv.includes("--auto-config")) {
-      origConsoleLog("  Recherche automatique des lecteurs ZKTeco K50 Pro sur le reseau (port 4370)...");
-      const discovered = await scanSubnetsForK50(existingBranch, existingIps);
-      if (discovered.length > 0) {
-        for (const ip of discovered) {
-          origConsoleLog(`  [+] Lecteur K50 Pro detecte sur le reseau : ${ip}:${DEVICE_PORT}`);
-        }
-      }
-      const merged = Array.from(
-        new Set(
-          [
-            ...(existingBranch === 3 ? ["192.168.1.201"] : ["192.168.50.201"]),
-            ...discovered,
-            ...existingIps
-              .split(",")
-              .map((s) => s.trim())
-              .filter((s) => s.length >= 7 && (existingBranch === 3 || !s.startsWith("192.168.1."))),
-          ]
-        )
-      );
-      const finalIps = merged.join(",");
+      const preservedIps = existingIps
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 7);
+      const finalIps = preservedIps.length > 0 ? preservedIps.join(",") : "192.168.50.201";
       saveBridgeConfig({
         branchId: existingBranch,
         isBranchExplicitlySet: true,
@@ -299,12 +315,25 @@ if (
         appUrl: existingAppUrl,
       });
       writeWindowsStartupVbs(finalIps, existingBranch);
-      origConsoleLog(`  [OK] Configuration mise a jour : Branche=${existingBranch} | Lecteurs=${finalIps}`);
+      origConsoleLog(`  [OK] Configuration conservee : Branche=${existingBranch} | Lecteurs=${finalIps}`);
+      origConsoleLog(`       (Pour changer les IPs ou la Branche, lancez INSTALLER_ET_DEMARRER_PONT_K50.bat)`);
       process.exit(0);
       return;
     }
 
-    // Interactive --setup mode
+    // Interactive --setup mode (used by INSTALLER_ET_DEMARRER_PONT_K50.bat):
+    // Scans all networks to show available readers, then lets you freely choose the exact IP(s) for this PC!
+    origConsoleLog("  Recherche des lecteurs ZKTeco K50 Pro disponibles sur le reseau (port 4370)...");
+    const discovered = await scanSubnetsForK50(existingIps);
+    if (discovered.length > 0) {
+      origConsoleLog("  Lecteurs detectes sur le reseau local / Wi-Fi :");
+      discovered.forEach((ip, idx) => {
+        origConsoleLog(`    [${idx + 1}] ${ip}:${DEVICE_PORT}`);
+      });
+    } else {
+      origConsoleLog("  [i] Aucun lecteur detecte instantanement (vous pouvez saisir l'IP manuellement).");
+    }
+
     const readline = require("readline");
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const ask = (q) => new Promise((r) => rl.question(q, r));
@@ -319,41 +348,23 @@ if (
     const bAns = (await ask(`Entrez 1, 2 ou 3 [Par defaut: ${existingBranch}]: `)).trim();
     const finalBranch = ["1", "2", "3"].includes(bAns) ? Number(bAns) : existingBranch;
 
-    origConsoleLog("");
-    origConsoleLog("  Recherche automatique des lecteurs ZKTeco K50 Pro de cette branche...");
-    const discovered = await scanSubnetsForK50(finalBranch, existingIps);
-    if (discovered.length > 0) {
-      for (const ip of discovered) {
-        origConsoleLog(`  [+] Lecteur K50 Pro detecte : ${ip}:${DEVICE_PORT}`);
-      }
-    }
-
-    const defaultIpSet = Array.from(
-      new Set([
-        ...(finalBranch === 3 ? ["192.168.1.201"] : ["192.168.50.201"]),
-        ...discovered,
-        ...existingIps
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s.length >= 7 && (finalBranch === 3 || !s.startsWith("192.168.1."))),
-      ])
-    );
     const defaultIps =
-      defaultIpSet.length > 0
-        ? defaultIpSet.join(",")
-        : finalBranch === 1
-        ? "192.168.50.201,192.168.50.202"
-        : finalBranch === 3
-        ? "192.168.1.201"
+      existingIps.length >= 7
+        ? existingIps
+        : discovered.length === 1
+        ? discovered[0]
         : "192.168.50.201";
 
     origConsoleLog("");
     origConsoleLog("======================================================================");
-    origConsoleLog("  ADRESSES IP DES LECTEURS ZKTECO K50 PRO :");
+    origConsoleLog("  CHOISISSEZ L'ADRESSE IP (OU LES IPs) DU LECTEUR DE CETTE BRANCHE :");
+    if (discovered.length > 0) {
+      origConsoleLog(`  - Lecteurs visibles sur le reseau : ${discovered.join(", ")}`);
+    }
     origConsoleLog(`  - Appuyez sur [Entree] pour utiliser : ${defaultIps}`);
-    origConsoleLog("  - Ou tapez les IPs separees par une virgule (ex: 192.168.50.201,192.168.50.202)");
+    origConsoleLog("  - Ou tapez l'IP exacte (ou plusieurs separees par une virgule, ex: 192.168.50.201,192.168.50.202)");
     origConsoleLog("======================================================================");
-    const ipAns = (await ask(`IP(s) des lecteurs [Par defaut: ${defaultIps}]: `)).trim();
+    const ipAns = (await ask(`IP(s) pour cette branche [Par defaut: ${defaultIps}]: `)).trim();
     rl.close();
 
     const cleanedIps = Array.from(
@@ -364,7 +375,7 @@ if (
           .filter((s) => s.length >= 7)
       )
     );
-    if (cleanedIps.length === 0) cleanedIps.push(finalBranch === 3 ? "192.168.1.201" : "192.168.50.201");
+    if (cleanedIps.length === 0) cleanedIps.push("192.168.50.201");
     const finalIps = cleanedIps.join(",");
 
     saveBridgeConfig({
@@ -382,29 +393,33 @@ if (
 }
 
 const persistedConfig = loadBridgeConfig();
+const vbsFallback = readExistingStartupVbsConfig();
 
-// Resolve Branch: CLI > Env > Persisted > Default 1
+// Resolve Branch: CLI > Env > Persisted > VBS > Default 1
 const cliBranch = process.argv.find((a) => a.startsWith("--branch="))?.slice(9)?.trim();
-const parsedBranch = Number(cliBranch || process.env.BRANCH_ID || persistedConfig.branchId || 1);
+const parsedBranch = Number(
+  cliBranch || process.env.BRANCH_ID || persistedConfig.branchId || vbsFallback.branchId || 1
+);
 const resolvedBranchId = isNaN(parsedBranch) || parsedBranch <= 0 ? 1 : parsedBranch;
 
-// Resolve IPs: CLI > Env > Persisted > Default (with strict Branch 1/2 isolation from Branch 3's 192.168.1.* router reader)
+// Resolve IPs: CLI > Env > Persisted > VBS > Default 192.168.50.201 (100% flexible, connects strictly to what you configured)
 const cliIps = process.argv.find((a) => a.startsWith("--ips="))?.slice(6)?.trim();
 const rawIps =
   (cliIps && cliIps.length >= 7 ? cliIps : "") ||
   process.env.ZK_DEVICE_IP ||
   persistedConfig.deviceIps ||
-  (resolvedBranchId === 3 ? "192.168.1.201" : "192.168.50.201");
+  vbsFallback.ips ||
+  "192.168.50.201";
 const CONFIGURED_IPS = Array.from(
   new Set(
     rawIps
       .split(",")
       .map((ip) => ip.trim())
-      .filter((ip) => ip.length >= 7 && (resolvedBranchId === 3 || !ip.startsWith("192.168.1.")))
+      .filter((ip) => ip.length >= 7)
   )
 );
 if (CONFIGURED_IPS.length === 0) {
-  CONFIGURED_IPS.push(resolvedBranchId === 3 ? "192.168.1.201" : "192.168.50.201");
+  CONFIGURED_IPS.push("192.168.50.201");
 }
 
 // Resolve App URL: CLI > Env > Persisted > Default Cloud URL
@@ -1970,106 +1985,12 @@ async function ensureTargetDeviceReadyForEnroll(targetIp = null, timeoutMs = 250
   return null;
 }
 
-// Automatic Multi-Device Discovery on Local Subnets
-// Strictly isolated by branch: Branch 1 (ECOLE) & Branch 2 (ANNEX) ONLY scan 192.168.50.* (wired Ethernet)
-// so Branch 2 never connects over Wi-Fi to Branch 3 (AMPHI)'s router reader at 192.168.1.201!
-let isAutoDiscovering = false;
-function autoDiscoverK50Devices() {
-  if (isAutoDiscovering || state.enrollment.active) return;
-  isAutoDiscovering = true;
-
-  const subnets = new Set(["192.168.50"]);
-  if (Number(state.branchId) === 3) {
-    subnets.add("192.168.1");
-  }
-  for (const ip of CONFIGURED_IPS) {
-    const parts = ip.split(".");
-    if (parts.length === 4) {
-      const sub = `${parts[0]}.${parts[1]}.${parts[2]}`;
-      if (Number(state.branchId) === 3 || sub !== "192.168.1") {
-        subnets.add(sub);
-      }
-    }
-  }
-
-  const candidates = [];
-  for (const subnet of subnets) {
-    for (let host = 190; host <= 225; host++) {
-      const candidateIp = `${subnet}.${host}`;
-      if (!CONFIGURED_IPS.includes(candidateIp)) {
-        candidates.push(candidateIp);
-      }
-    }
-  }
-
-  if (candidates.length === 0) {
-    isAutoDiscovering = false;
-    return;
-  }
-
-  const zkConnectProbe = Buffer.from("5050827d08000000e80317fc00000000", "hex");
-  let pending = candidates.length;
-  const finishOne = () => {
-    pending--;
-    if (pending <= 0) {
-      isAutoDiscovering = false;
-    }
-  };
-
-  for (const candidateIp of candidates) {
-    const probe = new net.Socket();
-    let settled = false;
-    const done = (found) => {
-      if (settled) return;
-      settled = true;
-      try {
-        probe.destroy();
-      } catch {}
-      if (found && !CONFIGURED_IPS.includes(candidateIp)) {
-        CONFIGURED_IPS.push(candidateIp);
-        saveBridgeConfig({ deviceIps: CONFIGURED_IPS.join(",") });
-        console.log(
-          `[K50 Auto-Discovery] ✓ Discovered additional ZKTeco K50 Pro reader at ${candidateIp}:${DEVICE_PORT}! Active pool: ${CONFIGURED_IPS.join(", ")}`
-        );
-        connectDevice(candidateIp, false);
-      }
-      finishOne();
-    };
-    probe.setTimeout(650);
-    probe.once("connect", () => {
-      try {
-        probe.write(zkConnectProbe);
-      } catch {
-        done(false);
-      }
-    });
-    probe.on("data", (d) => {
-      if (d && d.length >= 4 && d[0] === 0x50 && d[1] === 0x50 && d[2] === 0x82 && d[3] === 0x7d) {
-        done(true);
-      } else {
-        done(false);
-      }
-    });
-    probe.once("timeout", () => done(false));
-    probe.once("error", () => done(false));
-    try {
-      probe.connect(DEVICE_PORT, candidateIp);
-    } catch {
-      done(false);
-    }
-  }
-}
-
-// 1. Reconnection & Zombie-Check Loop every 2.5 seconds
+// 1. Reconnection & Zombie-Check Loop every 2.5 seconds (strictly connects ONLY to your configured IP(s))
 setInterval(() => {
   for (const ip of CONFIGURED_IPS) {
     connectDevice(ip, false);
   }
 }, RECONNECT_LOOP_MS);
-
-// 1b. Multi-Device Auto-Discovery Loop every 25 seconds
-setTimeout(() => autoDiscoverK50Devices(), 1000);
-setInterval(() => autoDiscoverK50Devices(), 25000);
 
 // 2. Active ZKTeco Protocol Heartbeat Loop every 8 seconds (CMD_GET_TIME keepalive + periodic CMD_REG_EVENT refresh)
 // Keeps TCP tunnel open, keeps Realtek Ethernet awake, and re-asserts real-time event subscription
