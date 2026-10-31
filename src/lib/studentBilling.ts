@@ -525,7 +525,10 @@ export function classifyStudentAttendanceHistory({
     const isPostTransferLesson =
       transferStartThresholdMs !== null && startsAt.getTime() >= transferStartThresholdMs;
 
-    if (!isPostTransferLesson && (firstPresenceIndex === -1 || i < firstPresenceIndex)) {
+    if (
+      (!isPostTransferLesson && transferStartThresholdMs !== null) ||
+      (!isPostTransferLesson && (firstPresenceIndex === -1 || i < firstPresenceIndex))
+    ) {
       history.push({
         lessonId: lesson.id,
         startsAt,
@@ -1556,7 +1559,13 @@ export function computeStudentCreditAndSessions({
       postTransferThresholdMs !== null &&
       enrolledAtMs < postTransferThresholdMs);
 
-  const isExcludedByTransferWindow = (dateVal?: Date | string | null) => {
+  const isExcludedByTransferWindow = (dateVal?: Date | string | null, lessonId?: number, status?: string) => {
+    // If the student has an explicit attendance (PRESENT) or catch-up recorded for this lesson,
+    // they attended it, so it must not be excluded by the transfer window.
+    const effectiveStatus = status || (lessonId ? attendanceMap.get(lessonId) : undefined);
+    if (effectiveStatus === "PRESENT" || (lessonId && catchUpSet.has(lessonId))) {
+      return false;
+    }
     if (!dateVal || postTransferThresholdMs === null) return false;
     const ms = new Date(dateVal).getTime();
     if (isNaN(ms)) return false;
@@ -1574,7 +1583,7 @@ export function computeStudentCreditAndSessions({
   if (lessons && lessons.length > 0) {
     lessons.forEach((l) => {
       if (l.isFree) return;
-      if (isExcludedByTransferWindow(l.startsAt)) {
+      if (isExcludedByTransferWindow(l.startsAt, l.id)) {
         return;
       }
       const st = attendanceMap.get(l.id);
@@ -1588,7 +1597,7 @@ export function computeStudentCreditAndSessions({
     const seenLessonIds = new Set<number>();
     attendances.forEach((a) => {
       if (a.lesson && !a.lesson.isFree) {
-        if (isExcludedByTransferWindow(a.lesson.startsAt)) {
+        if (isExcludedByTransferWindow(a.lesson.startsAt, a.lessonId || a.lesson.id, a.status)) {
           return;
         }
         if (seenLessonIds.has(a.lesson.id)) return;
@@ -1610,7 +1619,7 @@ export function computeStudentCreditAndSessions({
       if (c.catchUpLessonId && seenLessonIds.has(c.catchUpLessonId) && !seenLessonIds.has(mlId)) {
         return;
       }
-      if (isExcludedByTransferWindow(ml?.startsAt)) {
+      if (isExcludedByTransferWindow(ml?.startsAt, mlId)) {
         return;
       }
       if (mlId && !seenLessonIds.has(mlId)) {
@@ -1652,7 +1661,7 @@ export function computeStudentCreditAndSessions({
     if (c.catchUpLessonId && relevantLessonIds.has(c.catchUpLessonId) && !relevantLessonIds.has(c.missedLessonId)) {
       return;
     }
-    if (isExcludedByTransferWindow(c.missedLesson?.startsAt)) {
+    if (isExcludedByTransferWindow(c.missedLesson?.startsAt, c.missedLessonId)) {
       return;
     }
     const missedAccounted = accountedCatchUps.has(c.missedLessonId);
@@ -1673,7 +1682,7 @@ export function computeStudentCreditAndSessions({
     (h) =>
       h.isConsumedCredit &&
       (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE") &&
-      (postTransferThresholdMs === null || isAlreadyEnrolledBeforeTransfer || h.startsAt.getTime() >= postTransferThresholdMs)
+      (postTransferThresholdMs === null || isAlreadyEnrolledBeforeTransfer || h.startsAt.getTime() >= postTransferThresholdMs || h.classification === "PRESENT")
   );
   const resolvedSameTeacherHeld = hasPostTransferPresence ? sameTeacherHeldFromTransfers : 0;
   const pendingSameTeacherHeld = hasPostTransferPresence ? 0 : sameTeacherHeldFromTransfers;

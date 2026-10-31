@@ -3416,7 +3416,11 @@ export async function searchCatchUpCandidatesAction(
           (a: any) =>
             (a.lesson.class.id === cls.id ||
               a.lesson.lessonGroups?.some((lg: any) => lg.classId === cls.id)) &&
-            isLessonApplicableToEnrollment(a.lesson, cls.id, enr)
+            isLessonApplicableToEnrollment(
+              { ...a.lesson, hasExplicitAttendance: Boolean(a.status) },
+              cls.id,
+              enr
+            )
         );
         const vCatchUps = (s.catchUpAttendances || []).filter(
           (cu: any) =>
@@ -7968,10 +7972,11 @@ export const exportToExcel = async (
             
             const studentAtts: Array<{ lessonId: number; status: string }> = [];
             classTarget.lessons.forEach(l => {
-              if (!isLessonApplicableToEnrollment(l as any, classTarget.id, enrollment as any)) {
+              const att = l.attendances.find(a => a.studentId === student.id);
+              const hasExplicitAttendance = Boolean(att?.status);
+              if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance } as any, classTarget.id, enrollment as any)) {
                 return;
               }
-              const att = l.attendances.find(a => a.studentId === student.id);
               if (att) {
                 studentAtts.push({ lessonId: l.id, status: att.status });
               }
@@ -8420,10 +8425,11 @@ export const exportToExcel = async (
 
             const studentAtts: Array<{ lessonId: number; status: string }> = [];
             classData.lessons.forEach((l) => {
-                if (!isLessonApplicableToEnrollment(l as any, classData.id, enrollment as any)) {
+                const att = l.attendances.find((a: any) => a.studentId === student.id);
+                const hasExplicitAttendance = Boolean(att?.status);
+                if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance } as any, classData.id, enrollment as any)) {
                     return;
                 }
-                const att = l.attendances.find((a: any) => a.studentId === student.id);
                 if (att) {
                     studentAtts.push({ lessonId: l.id, status: att.status });
                 }

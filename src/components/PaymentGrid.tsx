@@ -412,10 +412,11 @@ export default function PaymentGrid({
     // Consumed non-free sessions (accounting for Massinissa absence rules)
     const studentAtts: Array<{ lessonId: number; status: string }> = [];
     classData.lessons.forEach((l) => {
-      if (!isLessonApplicableToEnrollment(l as any, classData.id, enrollment as any)) {
+      const att = l.attendances.find((a) => a.studentId === student.id);
+      const hasExplicitAttendance = Boolean(att?.status);
+      if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance } as any, classData.id, enrollment as any)) {
         return;
       }
-      const att = l.attendances.find((a) => a.studentId === student.id);
       if (att) {
         studentAtts.push({ lessonId: l.id, status: att.status });
       }
