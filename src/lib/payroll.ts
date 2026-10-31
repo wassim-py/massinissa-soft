@@ -555,8 +555,17 @@ export async function calculateTeacherPayroll(
       const enrollment = enrolledStudents.find((e: any) => e.studentId === sid);
       const creditResetOffset = Number(enrollment?.creditResetOffset || 0);
 
+      const explicitLessonIds = new Set(
+        historyData.attendances
+          .filter((a: any) => a.studentId === sid && Boolean(a.status))
+          .map((a: any) => a.lessonId)
+      );
       const studentLessons = historyData.lessons.filter((l: any) =>
-        isLessonApplicableToEnrollment(l, cid, enrollment)
+        isLessonApplicableToEnrollment(
+          { ...l, hasExplicitAttendance: explicitLessonIds.has(l.id) },
+          cid,
+          enrollment
+        )
       );
       const studentLessonIds = new Set(studentLessons.map((l: any) => l.id));
       const studentAtts = historyData.attendances.filter(
