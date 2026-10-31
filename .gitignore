@@ -43,3 +43,6 @@ scratch/
 backups/
 ORIGINAL_REQUEST.md
 CLAUDE.md
+
+# zk-bridge runtime cache
+zk-bridge/*.json

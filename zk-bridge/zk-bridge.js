@@ -30,14 +30,54 @@ const DEVICE_PORT = Number(process.env.ZK_DEVICE_PORT || 4370);
 const COMM_KEY = Number(process.env.ZK_COMM_KEY || 0);
 const BRIDGE_SECRET = process.env.ZK_BRIDGE_SECRET || "massinissa-zk-bridge-v4-key";
 
-const CONFIGURED_IPS = (
-  process.env.ZK_DEVICE_IP ||
-  process.argv.find((a) => a.startsWith("--ips="))?.slice(6) ||
-  "192.168.50.201"
-)
+// File Paths for Persistence
+const BRIDGE_CONFIG_FILE = path.join(__dirname, "bridge_config.json");
+const SYNC_CACHE_FILE = path.join(__dirname, "synced_templates.json");
+const PENDING_SCANS_FILE = path.join(__dirname, "pending_scans.json");
+
+function loadBridgeConfig() {
+  try {
+    if (fs.existsSync(BRIDGE_CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(BRIDGE_CONFIG_FILE, "utf8")) || {};
+    }
+  } catch {}
+  return {};
+}
+
+function saveBridgeConfig(partial) {
+  try {
+    const current = loadBridgeConfig();
+    const updated = { ...current, ...partial, updatedAt: new Date().toISOString() };
+    fs.writeFileSync(BRIDGE_CONFIG_FILE, JSON.stringify(updated, null, 2), "utf8");
+  } catch {}
+}
+
+const persistedConfig = loadBridgeConfig();
+
+// Resolve IPs: CLI > Env > Persisted > Default
+const cliIps = process.argv.find((a) => a.startsWith("--ips="))?.slice(6);
+const rawIps = cliIps || process.env.ZK_DEVICE_IP || persistedConfig.deviceIps || "192.168.50.201";
+const CONFIGURED_IPS = rawIps
   .split(",")
   .map((ip) => ip.trim())
   .filter(Boolean);
+
+// Resolve Branch: CLI > Env > Persisted > Default 1
+const cliBranch = process.argv.find((a) => a.startsWith("--branch="))?.slice(9);
+const parsedBranch = Number(cliBranch || process.env.BRANCH_ID || persistedConfig.branchId || 1);
+const resolvedBranchId = isNaN(parsedBranch) || parsedBranch <= 0 ? 1 : parsedBranch;
+
+// Resolve App URL: CLI > Env > Persisted > ""
+const cliAppUrl = process.argv.find((a) => a.startsWith("--app-url="))?.slice(10);
+const resolvedAppUrl = cliAppUrl || process.env.CLOUD_APP_URL || persistedConfig.appUrl || "";
+
+// Persist the active configuration so restarts without arguments remember everything
+saveBridgeConfig({
+  deviceIps: CONFIGURED_IPS.join(","),
+  branchId: resolvedBranchId,
+  ...(cliBranch || process.env.BRANCH_ID ? { isBranchExplicitlySet: true } : {}),
+  ...(resolvedAppUrl ? { appUrl: resolvedAppUrl } : {}),
+});
 
 // ZKTeco Protocol Constants
 const TCP_MAGIC = Buffer.from([0x50, 0x50, 0x82, 0x7d]);
@@ -82,9 +122,6 @@ const CONNECT_TIMEOUT_MS = 2000;
 const HEARTBEAT_INTERVAL_MS = 8000;
 const ZOMBIE_TIMEOUT_MS = 14000;
 const RECONNECT_LOOP_MS = 2500;
-const SYNC_CACHE_FILE = path.join(__dirname, "synced_templates.json");
-const BRIDGE_CONFIG_FILE = path.join(__dirname, "bridge_config.json");
-const PENDING_SCANS_FILE = path.join(__dirname, "pending_scans.json");
 
 function loadPendingScans() {
   try {
@@ -148,28 +185,9 @@ function decodeZkTimeToUtcMs(zkTime) {
   return Date.UTC(year, month - 1, day, hour, minute, second) - 60 * 60 * 1000;
 }
 
-function loadBridgeConfig() {
-  try {
-    if (fs.existsSync(BRIDGE_CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(BRIDGE_CONFIG_FILE, "utf8")) || {};
-    }
-  } catch {}
-  return {};
-}
-
-function saveBridgeConfig(partial) {
-  try {
-    const current = loadBridgeConfig();
-    const updated = { ...current, ...partial, updatedAt: new Date().toISOString() };
-    fs.writeFileSync(BRIDGE_CONFIG_FILE, JSON.stringify(updated, null, 2), "utf8");
-  } catch {}
-}
-
-const persistedConfig = loadBridgeConfig();
-
 const state = {
-  appUrl: process.env.CLOUD_APP_URL || persistedConfig.appUrl || "",
-  branchId: Number(process.env.BRANCH_ID || persistedConfig.branchId || 1),
+  appUrl: resolvedAppUrl,
+  branchId: resolvedBranchId,
   openLessonId: null,
   lastAttLogAt: 0,
   lastUnrecognizedAt: 0,
@@ -957,6 +975,7 @@ async function syncTemplatesWithCloud(force = false) {
 async function dispatchScanEvent(scanPayload) {
   const enrichedPayload = {
     ...scanPayload,
+    branchId: state.branchId,
     scanTime: scanPayload.scanTime || new Date().toISOString(),
   };
 
@@ -1050,7 +1069,7 @@ async function flushPendingScansToCloud() {
   }
 }
 
-function scheduleUnrecognizedFingerCheck(delayMs = 220) {
+function scheduleUnrecognizedFingerCheck(delayMs = 220, deviceIp = null) {
   if (state.verifyFailTimer) clearTimeout(state.verifyFailTimer);
   state.verifyFailTimer = setTimeout(() => {
     state.verifyFailTimer = null;
@@ -1064,9 +1083,9 @@ function scheduleUnrecognizedFingerCheck(delayMs = 220) {
     }
     state.lastUnrecognizedAt = now;
     console.log(
-      `[K50 Bridge] ✗ Unrecognized Finger ("Try again") -> Instant State 4`
+      `[K50 Bridge] ✗ Unrecognized Finger on ${deviceIp || "reader"} ("Try again") -> Instant State 4`
     );
-    dispatchScanEvent({ isUnrecognizedFinger: true });
+    dispatchScanEvent({ isUnrecognizedFinger: true, deviceIp: deviceIp || undefined });
   }, delayMs);
 }
 
@@ -1227,11 +1246,14 @@ function handleRealTimeEvent(dev, eventType, payload) {
     const globalNumber = parseInt(userIdStr, 10);
     if (!isNaN(globalNumber) && globalNumber > 0) {
       console.log(
-        `[K50 Bridge] ✓ Finger Recognized -> Student #${globalNumber} (Instant Push)`
+        `[K50 Bridge] ✓ Finger Recognized on ${dev.ip} -> Student #${globalNumber} (Instant Push)`
       );
-      dispatchScanEvent({ globalNumber });
+      dispatchScanEvent({ globalNumber, deviceIp: dev.ip });
     } else {
-      dispatchScanEvent({ isUnrecognizedFinger: true });
+      console.log(
+        `[K50 Bridge] ✗ Unrecognized Finger on ${dev.ip} -> Instant State 4`
+      );
+      dispatchScanEvent({ isUnrecognizedFinger: true, deviceIp: dev.ip });
     }
     return;
   }
@@ -1243,7 +1265,7 @@ function handleRealTimeEvent(dev, eventType, payload) {
     eventType === EF_VERIFY
   ) {
     const delayMs = eventType === EF_ALARM ? 120 : 240;
-    scheduleUnrecognizedFingerCheck(delayMs);
+    scheduleUnrecognizedFingerCheck(delayMs, dev.ip);
   }
 }
 
@@ -1650,6 +1672,26 @@ const server = http.createServer((req, res) => {
     );
     const forceReconnect =
       parsedUrl.searchParams.get("forceReconnect") === "1";
+    const forceBranch = parsedUrl.searchParams.get("forceBranch") === "1";
+    const dynamicDeviceIps = parsedUrl.searchParams.get("deviceIp");
+
+    if (dynamicDeviceIps) {
+      const newIps = dynamicDeviceIps
+        .split(",")
+        .map((ip) => ip.trim())
+        .filter(Boolean);
+      let changed = false;
+      for (const ip of newIps) {
+        if (!CONFIGURED_IPS.includes(ip)) {
+          CONFIGURED_IPS.push(ip);
+          connectDevice(ip, true);
+          changed = true;
+        }
+      }
+      if (changed) {
+        saveBridgeConfig({ deviceIps: CONFIGURED_IPS.join(",") });
+      }
+    }
 
     if (appUrlParam && appUrlParam.startsWith("http")) {
       const wasEmpty = !state.appUrl;
@@ -1661,13 +1703,12 @@ const server = http.createServer((req, res) => {
         setTimeout(() => syncTemplatesWithCloud(false), 2000);
       }
     }
-    // Only adopt branchId from browser on initial auto-setup (when neither env BRANCH_ID nor bridge_config.json has locked the physical branch),
+    // Only adopt branchId from browser on initial auto-setup (when neither env BRANCH_ID nor explicit setup has locked the branch),
     // or when explicitly forced via ?forceBranch=1. Prevents an Owner switching branches in the web UI from hijacking the physical school PC's branchId!
-    const forceBranch = parsedUrl.searchParams.get("forceBranch") === "1";
     if (
       branchIdParam > 0 &&
       !process.env.BRANCH_ID &&
-      (!persistedConfig.branchId || forceBranch)
+      (!persistedConfig.isBranchExplicitlySet || forceBranch)
     ) {
       persistedConfig.branchId = branchIdParam;
       state.branchId = branchIdParam;
@@ -1859,10 +1900,28 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({ success: false, message: "Not Found" }));
 });
 
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `[K50 Bridge] [!] Port ${BRIDGE_PORT} is already in use by another running instance of zk-bridge.`
+    );
+    console.error(
+      `[K50 Bridge] Please run ARRETER_PONT_K50.bat to stop the existing instance, then try again.`
+    );
+    process.exit(1);
+  } else {
+    console.error(`[K50 Bridge] Server error:`, err);
+    process.exit(1);
+  }
+});
+
 server.listen(BRIDGE_PORT, "127.0.0.1", () => {
+  const BRANCH_NAMES = { 1: "ECOLE", 2: "ANNEX", 3: "AMPHI" };
+  const branchName = BRANCH_NAMES[state.branchId] || `Branch #${state.branchId}`;
   console.log("==============================================================");
-  console.log("  MASSINISSA ACADEMY — ZKTECO K50 PRO LOCAL BRIDGE (v4)");
+  console.log("  MASSINISSA ACADEMY — ZKTECO K50 PRO LOCAL BRIDGE (v4.2)");
   console.log(`  Local Server Active : http://127.0.0.1:${BRIDGE_PORT}`);
+  console.log(`  Site / Branch       : ${state.branchId} (${branchName})`);
   console.log(`  K50 Pro Reader(s)   : ${CONFIGURED_IPS.join(", ")}:${DEVICE_PORT}`);
   console.log("  Multi-Branch Sync   : Active (Auto-sync with Cloud Database)");
   console.log("==============================================================");
