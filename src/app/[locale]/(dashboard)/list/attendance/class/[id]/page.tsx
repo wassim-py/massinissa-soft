@@ -566,6 +566,7 @@ const ClassAttendancePage = async (
                         attendances: sAttendances,
                         lessons: classLessonsForBilling,
                         catchUps: sCatchUps,
+                        enrolledAt: enrollment?.enrolledAt,
                     });
 
                     let net = creditMetrics.netSessions;

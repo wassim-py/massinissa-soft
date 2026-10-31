@@ -681,8 +681,6 @@ export async function processBiometricScan(input: {
   const classId = enrollment ? enrollment.classId : enrolledClassId;
   const effectivePayerStatus =
     (enrollment as any)?.payerStatus || student.payerStatus || "NORMAL";
-  const siblingDiscountPct = (enrollment as any)?.siblingDiscountPercentage ?? null;
-  const isSiblingWaived = Boolean((enrollment as any)?.isSiblingWaived);
   const needsPayerSiblingCheck = Boolean(
     student.family?.payerStudentId &&
     student.family.payerStudentId !== student.id
@@ -813,6 +811,14 @@ export async function processBiometricScan(input: {
   }
 
   const isPayerSiblingPaid = payerRemainingCredit !== null ? payerRemainingCredit > 0 : true;
+  const isSiblingDiscountActive = Boolean(needsPayerSiblingCheck && isPayerInThisClass);
+  const siblingDiscountPct = isSiblingDiscountActive
+    ? Number(student.family?.discountPercentage ?? 50)
+    : ((enrollment as any)?.siblingDiscountPercentage ?? null);
+  const isSiblingWaived = Boolean(
+    (isSiblingDiscountActive && siblingDiscountPct != null && siblingDiscountPct >= 100) ||
+    (enrollment as any)?.isSiblingWaived
+  );
   const primaryRow = existingRows[0] || null;
 
   // Determine Inscription Fee Status for this student
@@ -1158,8 +1164,15 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
     log.isNonPayer
   );
 
+  const isFamilyDiscountWaived = Boolean(
+    log.student?.family?.payerStudentId &&
+    log.student.family.payerStudentId !== log.studentId &&
+    Number(log.student.family.discountPercentage || 0) >= 100
+  );
+
   const isSiblingWaived = Boolean(
     hasSiblingWaivedTag ||
+    isFamilyDiscountWaived ||
     enr?.isSiblingWaived ||
     log.isSiblingWaived
   );
@@ -1331,13 +1344,13 @@ export async function getBiometricLiveFeedAction(params?: {
           family: {
             select: {
               payerStudentId: true,
+              discountPercentage: true,
             },
           },
           enrollments: {
             select: {
               classId: true,
               payerStatus: true,
-              isSiblingWaived: true,
               feeOverriddenByOwner: true,
               inscriptionFeeCharged: true,
             },

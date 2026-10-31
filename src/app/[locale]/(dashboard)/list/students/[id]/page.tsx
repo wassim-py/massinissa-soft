@@ -406,6 +406,7 @@ const SingleStudentPage = async (
           }
         ),
         catchUps: classCatchUps,
+        enrolledAt: enr.enrolledAt,
       });
 
       const purchasedSessions = creditMetrics.purchasedSessions;

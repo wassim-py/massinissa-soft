@@ -5907,6 +5907,8 @@ export const transferEnrollmentCredit = async (
       },
     });
 
+    const isTargetAlreadyEnrolled = Boolean(toEnrollment && toEnrollment.status === "ACTIVE");
+
     let transferredAmount = 0;
     let finalTransferredSessions = 0;
 
@@ -6083,11 +6085,16 @@ export const transferEnrollmentCredit = async (
         },
       });
 
-      // Mark fromEnrollment as TRANSFERRED when transferring to avoid phantom attendances
-      await tx.enrollment.update({
-        where: { id: fromEnrollment.id },
-        data: { status: "TRANSFERRED" },
-      });
+      // Mark fromEnrollment as TRANSFERRED only if the student moved all credits to a class they were not already actively enrolled in.
+      // If transferring to an existing group where the student is concurrently enrolled, or if transferring partial credits,
+      // fromEnrollment remains ACTIVE.
+      const isFullTransfer = finalTransferredSessions >= availableSessionsFrom;
+      if (!isTargetAlreadyEnrolled && isFullTransfer) {
+        await tx.enrollment.update({
+          where: { id: fromEnrollment.id },
+          data: { status: "TRANSFERRED" },
+        });
+      }
     });
 
     try {

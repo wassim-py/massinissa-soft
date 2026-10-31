@@ -787,6 +787,7 @@ export interface ComputeStudentCreditParams {
     isVoided?: boolean;
     isRefund?: boolean;
     status?: string | null;
+    issuedAt?: Date | string | null;
     refunds?: Array<{ amount?: any }>;
   }>;
   transfersIn?: Array<{
@@ -820,6 +821,7 @@ export interface ComputeStudentCreditParams {
     catchUpLesson?: any;
   }>;
   payerRemainingCredit?: number | null;
+  enrolledAt?: Date | string | null;
 }
 
 export interface StudentCreditResult {
@@ -1280,15 +1282,21 @@ export function isLessonApplicableToEnrollment(
   //    Exclude lessons that took place before the transfer into this group.
   if (inTimes.length > 0 && (outTimes.length === 0 || inTimes[0] < outTimes[0])) {
     const firstInTime = inTimes[0];
-    if (!isPrimaryLesson) {
-      // Multi-group lesson hosted by another class before the transfer into targetClassId
-      if (lessonTime < firstInTime) {
-        return false;
-      }
-    } else {
-      // Primary lesson of targetClassId: allow 2-hour grace window for a lesson already in progress when transferring
-      if (lessonTime < firstInTime - 2 * 60 * 60 * 1000) {
-        return false;
+    const enrolledAtMs = enrollment.enrolledAt ? new Date(enrollment.enrolledAt).getTime() : null;
+    const isAlreadyEnrolledBeforeTransfer =
+      enrolledAtMs !== null && !isNaN(enrolledAtMs) && enrolledAtMs < firstInTime - 2 * 60 * 60 * 1000;
+
+    if (!isAlreadyEnrolledBeforeTransfer) {
+      if (!isPrimaryLesson) {
+        // Multi-group lesson hosted by another class before the transfer into targetClassId
+        if (lessonTime < firstInTime) {
+          return false;
+        }
+      } else {
+        // Primary lesson of targetClassId: allow 2-hour grace window for a lesson already in progress when transferring
+        if (lessonTime < firstInTime - 2 * 60 * 60 * 1000) {
+          return false;
+        }
       }
     }
   }
@@ -1367,6 +1375,7 @@ export function computeStudentCreditAndSessions({
   lessons,
   catchUps = [],
   payerRemainingCredit,
+  enrolledAt,
 }: ComputeStudentCreditParams): StudentCreditResult {
   const isForm = Boolean(isFormation);
   const normStatus = normalizePayerStatus(payerStatus);
@@ -1530,12 +1539,33 @@ export function computeStudentCreditAndSessions({
     latestTransferInTime !== null &&
     earliestTransferOutTime < latestTransferInTime;
 
+  // Check if student was already enrolled or had tuition vouchers in this class before the transfer
+  const hasPriorTuitionVouchers = validVouchers.some(
+    (v) =>
+      v.issuedAt &&
+      postTransferThresholdMs !== null &&
+      new Date(v.issuedAt).getTime() < postTransferThresholdMs
+  );
+
+  const enrolledAtMs = enrolledAt ? new Date(enrolledAt).getTime() : null;
+  const isAlreadyEnrolledBeforeTransfer =
+    hasPriorTuitionVouchers ||
+    (enrolledAtMs !== null &&
+      !isNaN(enrolledAtMs) &&
+      postTransferThresholdMs !== null &&
+      enrolledAtMs < postTransferThresholdMs);
+
   const isExcludedByTransferWindow = (dateVal?: Date | string | null) => {
     if (!dateVal || postTransferThresholdMs === null) return false;
     const ms = new Date(dateVal).getTime();
     if (isNaN(ms)) return false;
     if (isReturnTransfer && earliestTransferOutTime !== null) {
       return ms > earliestTransferOutTime && ms < postTransferThresholdMs;
+    }
+    // If the student was already enrolled / had vouchers in this group before the transfer,
+    // this transfer is a credit transfer into an existing group, not an entry into a new group.
+    if (isAlreadyEnrolledBeforeTransfer) {
+      return false;
     }
     return ms < postTransferThresholdMs;
   };
@@ -1602,7 +1632,10 @@ export function computeStudentCreditAndSessions({
           attendances: relevantAttendances,
           catchUps,
           creditResetOffset: offset,
-          postTransferStartAfter: latestTransferInTime ? new Date(latestTransferInTime) : null,
+          postTransferStartAfter:
+            !isAlreadyEnrolledBeforeTransfer && latestTransferInTime
+              ? new Date(latestTransferInTime)
+              : null,
         })
       : [];
 
@@ -1639,7 +1672,7 @@ export function computeStudentCreditAndSessions({
     (h) =>
       h.isConsumedCredit &&
       (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE") &&
-      (postTransferThresholdMs === null || h.startsAt.getTime() >= postTransferThresholdMs)
+      (postTransferThresholdMs === null || isAlreadyEnrolledBeforeTransfer || h.startsAt.getTime() >= postTransferThresholdMs)
   );
   const resolvedSameTeacherHeld = hasPostTransferPresence ? sameTeacherHeldFromTransfers : 0;
   const pendingSameTeacherHeld = hasPostTransferPresence ? 0 : sameTeacherHeldFromTransfers;

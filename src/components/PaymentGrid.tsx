@@ -454,6 +454,7 @@ export default function PaymentGrid({
       catchUps: classCatchUps,
       lessons: classData.lessons as any,
       teacherPercentage,
+      enrolledAt: enrollment.enrolledAt,
     });
 
     const purchasedSessions = creditMetrics.purchasedSessions;
