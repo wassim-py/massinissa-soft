@@ -90,24 +90,24 @@ function saveBridgeConfig(partial) {
   } catch {}
 }
 
-function scanSubnetsForK50(extraIps = "") {
+function scanSubnetsForK50(branchId = 1, extraIps = "") {
   return new Promise((resolve) => {
-    const subnets = new Set(["192.168.50", "192.168.1"]);
+    // IMPORTANT: Branch 1 (ECOLE) and Branch 2 (ANNEX) use dedicated Ethernet (192.168.50.*).
+    // Branch 3 (AMPHI) has its reader on the shared 192.168.1.* Wi-Fi router (192.168.1.201).
+    // Never scan 192.168.1.* on Branch 1 or Branch 2, otherwise Branch 2's PC will connect over Wi-Fi to Branch 3's reader!
+    const subnets = new Set(["192.168.50"]);
+    if (Number(branchId) === 3) {
+      subnets.add("192.168.1");
+    }
     for (const ip of String(extraIps || "").split(",")) {
       const p = ip.trim().split(".");
-      if (p.length === 4) subnets.add(`${p[0]}.${p[1]}.${p[2]}`);
-    }
-    try {
-      const nets = os.networkInterfaces();
-      for (const name of Object.keys(nets)) {
-        for (const info of nets[name] || []) {
-          if (info.family === "IPv4" && !info.internal && info.address) {
-            const p = info.address.split(".");
-            if (p.length === 4) subnets.add(`${p[0]}.${p[1]}.${p[2]}`);
-          }
+      if (p.length === 4) {
+        const sub = `${p[0]}.${p[1]}.${p[2]}`;
+        if (Number(branchId) === 3 || sub !== "192.168.1") {
+          subnets.add(sub);
         }
       }
-    } catch {}
+    }
 
     const candidates = [];
     for (const s of subnets) {
@@ -271,23 +271,23 @@ if (
       return;
     }
 
-    origConsoleLog("  Recherche automatique des lecteurs ZKTeco K50 Pro sur le reseau (port 4370)...");
-    const discovered = await scanSubnetsForK50(existingIps);
-    if (discovered.length > 0) {
-      for (const ip of discovered) {
-        origConsoleLog(`  [+] Lecteur K50 Pro detecte sur le reseau : ${ip}:${DEVICE_PORT}`);
-      }
-    } else {
-      origConsoleLog("  [i] Aucun lecteur detecte instantanement (la detection auto continuera en arriere-plan).");
-    }
-
     if (process.argv.includes("--auto-config")) {
+      origConsoleLog("  Recherche automatique des lecteurs ZKTeco K50 Pro sur le reseau (port 4370)...");
+      const discovered = await scanSubnetsForK50(existingBranch, existingIps);
+      if (discovered.length > 0) {
+        for (const ip of discovered) {
+          origConsoleLog(`  [+] Lecteur K50 Pro detecte sur le reseau : ${ip}:${DEVICE_PORT}`);
+        }
+      }
       const merged = Array.from(
         new Set(
           [
-            "192.168.50.201",
+            ...(existingBranch === 3 ? ["192.168.1.201"] : ["192.168.50.201"]),
             ...discovered,
-            ...existingIps.split(",").map((s) => s.trim()).filter((s) => s.length >= 7),
+            ...existingIps
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s.length >= 7 && (existingBranch === 3 || !s.startsWith("192.168.1."))),
           ]
         )
       );
@@ -319,17 +319,33 @@ if (
     const bAns = (await ask(`Entrez 1, 2 ou 3 [Par defaut: ${existingBranch}]: `)).trim();
     const finalBranch = ["1", "2", "3"].includes(bAns) ? Number(bAns) : existingBranch;
 
+    origConsoleLog("");
+    origConsoleLog("  Recherche automatique des lecteurs ZKTeco K50 Pro de cette branche...");
+    const discovered = await scanSubnetsForK50(finalBranch, existingIps);
+    if (discovered.length > 0) {
+      for (const ip of discovered) {
+        origConsoleLog(`  [+] Lecteur K50 Pro detecte : ${ip}:${DEVICE_PORT}`);
+      }
+    }
+
     const defaultIpSet = Array.from(
       new Set([
-        "192.168.50.201",
+        ...(finalBranch === 3 ? ["192.168.1.201"] : ["192.168.50.201"]),
         ...discovered,
-        ...existingIps.split(",").map((s) => s.trim()).filter((s) => s.length >= 7),
+        ...existingIps
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length >= 7 && (finalBranch === 3 || !s.startsWith("192.168.1."))),
       ])
     );
     const defaultIps =
-      defaultIpSet.length > 1
+      defaultIpSet.length > 0
         ? defaultIpSet.join(",")
-        : "192.168.50.201,192.168.50.202";
+        : finalBranch === 1
+        ? "192.168.50.201,192.168.50.202"
+        : finalBranch === 3
+        ? "192.168.1.201"
+        : "192.168.50.201";
 
     origConsoleLog("");
     origConsoleLog("======================================================================");
@@ -348,7 +364,7 @@ if (
           .filter((s) => s.length >= 7)
       )
     );
-    if (cleanedIps.length === 0) cleanedIps.push("192.168.50.201");
+    if (cleanedIps.length === 0) cleanedIps.push(finalBranch === 3 ? "192.168.1.201" : "192.168.50.201");
     const finalIps = cleanedIps.join(",");
 
     saveBridgeConfig({
@@ -367,29 +383,29 @@ if (
 
 const persistedConfig = loadBridgeConfig();
 
-// Resolve IPs: CLI > Env > Persisted > Default
+// Resolve Branch: CLI > Env > Persisted > Default 1
+const cliBranch = process.argv.find((a) => a.startsWith("--branch="))?.slice(9)?.trim();
+const parsedBranch = Number(cliBranch || process.env.BRANCH_ID || persistedConfig.branchId || 1);
+const resolvedBranchId = isNaN(parsedBranch) || parsedBranch <= 0 ? 1 : parsedBranch;
+
+// Resolve IPs: CLI > Env > Persisted > Default (with strict Branch 1/2 isolation from Branch 3's 192.168.1.* router reader)
 const cliIps = process.argv.find((a) => a.startsWith("--ips="))?.slice(6)?.trim();
 const rawIps =
   (cliIps && cliIps.length >= 7 ? cliIps : "") ||
   process.env.ZK_DEVICE_IP ||
   persistedConfig.deviceIps ||
-  "192.168.50.201";
+  (resolvedBranchId === 3 ? "192.168.1.201" : "192.168.50.201");
 const CONFIGURED_IPS = Array.from(
   new Set(
     rawIps
       .split(",")
       .map((ip) => ip.trim())
-      .filter((ip) => ip.length >= 7)
+      .filter((ip) => ip.length >= 7 && (resolvedBranchId === 3 || !ip.startsWith("192.168.1.")))
   )
 );
 if (CONFIGURED_IPS.length === 0) {
-  CONFIGURED_IPS.push("192.168.50.201");
+  CONFIGURED_IPS.push(resolvedBranchId === 3 ? "192.168.1.201" : "192.168.50.201");
 }
-
-// Resolve Branch: CLI > Env > Persisted > Default 1
-const cliBranch = process.argv.find((a) => a.startsWith("--branch="))?.slice(9)?.trim();
-const parsedBranch = Number(cliBranch || process.env.BRANCH_ID || persistedConfig.branchId || 1);
-const resolvedBranchId = isNaN(parsedBranch) || parsedBranch <= 0 ? 1 : parsedBranch;
 
 // Resolve App URL: CLI > Env > Persisted > Default Cloud URL
 const cliAppUrl = process.argv.find((a) => a.startsWith("--app-url="))?.slice(10)?.trim();
@@ -1954,32 +1970,27 @@ async function ensureTargetDeviceReadyForEnroll(targetIp = null, timeoutMs = 250
   return null;
 }
 
-// Automatic Multi-Device Discovery on Local Subnets (finds .200-.206 K50 Pro readers automatically)
+// Automatic Multi-Device Discovery on Local Subnets
+// Strictly isolated by branch: Branch 1 (ECOLE) & Branch 2 (ANNEX) ONLY scan 192.168.50.* (wired Ethernet)
+// so Branch 2 never connects over Wi-Fi to Branch 3 (AMPHI)'s router reader at 192.168.1.201!
 let isAutoDiscovering = false;
 function autoDiscoverK50Devices() {
   if (isAutoDiscovering || state.enrollment.active) return;
   isAutoDiscovering = true;
 
-  const subnets = new Set(["192.168.50", "192.168.1"]);
+  const subnets = new Set(["192.168.50"]);
+  if (Number(state.branchId) === 3) {
+    subnets.add("192.168.1");
+  }
   for (const ip of CONFIGURED_IPS) {
     const parts = ip.split(".");
     if (parts.length === 4) {
-      subnets.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
-    }
-  }
-  try {
-    const nets = os.networkInterfaces();
-    for (const name of Object.keys(nets)) {
-      for (const netInfo of nets[name] || []) {
-        if (netInfo.family === "IPv4" && !netInfo.internal && netInfo.address) {
-          const parts = netInfo.address.split(".");
-          if (parts.length === 4) {
-            subnets.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
-          }
-        }
+      const sub = `${parts[0]}.${parts[1]}.${parts[2]}`;
+      if (Number(state.branchId) === 3 || sub !== "192.168.1") {
+        subnets.add(sub);
       }
     }
-  } catch {}
+  }
 
   const candidates = [];
   for (const subnet of subnets) {
