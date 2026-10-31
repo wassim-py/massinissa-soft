@@ -199,7 +199,7 @@ function ensureEthernetSubnet() {
   try {
     const { execSync } = require("child_process");
     execSync(
-      `powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'SilentlyContinue'; $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and ($_.Name -match 'Ethernet|LAN|Local|Realtek|Intel' -or $_.InterfaceDescription -match 'Ethernet|Realtek|PCIe|Intel') }; foreach ($a in $adapters) { $ips = Get-NetIPAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4; $has50 = $ips | Where-Object { $_.IPAddress -like '192.168.50.*' }; if (-not $has50) { netsh interface ip add address name=$a.Name addr=192.168.50.100 mask=255.255.255.0 | Out-Null } }"`,
+      `powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'SilentlyContinue'; $cfgs = Get-NetIPConfiguration | Where-Object { $_.NetAdapter.Status -eq 'Up' -and -not $_.IPv4DefaultGateway -and ($_.InterfaceAlias -match 'Ethernet|LAN|Local' -or $_.NetAdapter.InterfaceDescription -match 'Realtek|PCIe|Intel|Ethernet') -and $_.NetAdapter.InterfaceDescription -notmatch 'VPN|TAP|Virtual|Bluetooth|Wi-Fi|Wireless' }; foreach ($c in $cfgs) { $has50 = $c.IPv4Address | Where-Object { $_.IPAddress -like '192.168.50.*' }; if (-not $has50) { netsh interface ip add address name=$c.InterfaceAlias addr=192.168.50.100 mask=255.255.255.0 | Out-Null } }"`,
       { stdio: "ignore", timeout: 5000 }
     );
   } catch {}
