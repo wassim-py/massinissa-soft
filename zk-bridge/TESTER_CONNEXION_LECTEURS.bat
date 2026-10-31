@@ -1,35 +1,13 @@
 @echo off
-setlocal enabledelayedexpansion
-chcp 65001 >nul
-title Diagnostic Réseau ZKTeco K50 Pro — Massinissa Academy
+title Diagnostic Reseau - ZKTeco K50 Pro
 color 0B
-
 echo ============================================================================
-echo   MASSINISSA ACADEMY — TEST DE DIAGNOSTIC DES LECTEURS K50 PRO
+echo   MASSINISSA ACADEMY - DIAGNOSTIC RESEAU DES LECTEURS K50 PRO
 echo ============================================================================
 echo.
-
 set "BRIDGE_DIR=%USERPROFILE%\MassinissaK50Bridge"
-set "DEVICE_IPS=192.168.50.201"
-set "BRANCH_ID=1"
-
-if exist "%BRIDGE_DIR%\bridge_config.json" (
-    for /f "usebackq tokens=*" %%A in (`powershell -NoProfile -Command "try { $c = Get-Content '%BRIDGE_DIR%\bridge_config.json' -Raw | ConvertFrom-Json; Write-Host $c.deviceIps; } catch {}"`) do (
-        if not "%%A"=="" set "DEVICE_IPS=%%A"
-    )
-    for /f "usebackq tokens=*" %%A in (`powershell -NoProfile -Command "try { $c = Get-Content '%BRIDGE_DIR%\bridge_config.json' -Raw | ConvertFrom-Json; Write-Host $c.branchId; } catch {}"`) do (
-        if not "%%A"=="" set "BRANCH_ID=%%A"
-    )
-)
-
-echo [CONFIGURATION DÉTECTÉE]
-echo  - Site / Branche : #%BRANCH_ID%
-echo  - Lecteur(s)     : %DEVICE_IPS%
+echo Analyse des connexions reseau en cours...
 echo.
-echo Test des connexions TCP (Port 4370) en cours...
-echo.
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ips = '%DEVICE_IPS%'.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }; $allOk = $true; foreach ($ip in $ips) { Write-Host ('Test du lecteur ' + $ip + ' :') -NoNewline; $sw = [System.Diagnostics.Stopwatch]::StartNew(); try { $client = New-Object System.Net.Sockets.TcpClient; $ar = $client.BeginConnect($ip, 4370, $null, $null); $wait = $ar.AsyncWaitHandle.WaitOne(2000, $false); $sw.Stop(); if ($wait -and $client.Connected) { $client.EndConnect($ar); $client.Close(); Write-Host ('  [✓ EN LIGNE] Connecté en ' + $sw.ElapsedMilliseconds + 'ms (Port 4370 OK)') -ForegroundColor Green } else { $client.Close(); $allOk = $false; Write-Host '  [✗ HORS LIGNE] Délai d''attente dépassé (Injoignable sur 4370)' -ForegroundColor Red } } catch { $allOk = $false; Write-Host ('  [✗ ERREUR] ' + $_.Exception.Message) -ForegroundColor Red } }; Write-Host ''; Write-Host 'Test du Pont Local (127.0.0.1:4375) :' -NoNewline; try { $res = Invoke-RestMethod -Uri 'http://127.0.0.1:4375/status' -TimeoutSec 2 -ErrorAction Stop; Write-Host '  [✓ ACTIF]' -ForegroundColor Green; Write-Host ('  -> Branche active dans le pont : #' + $res.branchId); Write-Host ('  -> Lecteur(s) géré(s) : ' + $res.deviceIp); Write-Host ('  -> Scans en attente de synchronisation : ' + $res.pendingScans.Count); foreach ($d in $res.devices) { $st = if ($d.connected) { 'EN LIGNE' } else { 'DÉCONNECTÉ' }; $color = if ($d.connected) { 'Green' } else { 'Red' }; Write-Host ('     • ' + $d.ip + ' -> ' + $st) -ForegroundColor $color } } catch { Write-Host '  [✗ INACTIF] Le pont ne répond pas sur le port 4375 !' -ForegroundColor Red; $allOk = $false }; if (-not $allOk) { Write-Host ''; Write-Host '================ CONSEILS DE DÉPANNAGE ================' -ForegroundColor Yellow; Write-Host '1. Vérifiez que le lecteur K50 Pro est allumé (écran bleu/vert visible).' -ForegroundColor Yellow; Write-Host '2. Vérifiez le câble Ethernet RJ45 reliant le lecteur au PC ou au Switch.' -ForegroundColor Yellow; Write-Host '3. Sur l''écran du K50 Pro, allez dans : Menu -> Comm. -> Ethernet' -ForegroundColor Yellow; Write-Host '   Vérifiez que l''adresse IP correspond bien à celle configurée.' -ForegroundColor Yellow; Write-Host '4. Vérifiez que la clé de communication (Comm Key) est à 0.' -ForegroundColor Yellow; Write-Host '========================================================' -ForegroundColor Yellow }"
-
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfgIps = '192.168.50.201'; $cfgBranch = 1; if (Test-Path '$env:USERPROFILE\MassinissaK50Bridge\bridge_config.json') { try { $json = Get-Content '$env:USERPROFILE\MassinissaK50Bridge\bridge_config.json' -Raw | ConvertFrom-Json; if ($json.deviceIps) { $cfgIps = $json.deviceIps }; if ($json.branchId) { $cfgBranch = $json.branchId } } catch {} }; Write-Host ('Site / Branche configure : #' + $cfgBranch); Write-Host ('Lecteur(s) configures   : ' + $cfgIps); Write-Host ''; $ips = $cfgIps.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }; $allOk = $true; foreach ($ip in $ips) { Write-Host ('Test du lecteur ' + $ip + ' (Port 4370) : ') -NoNewline; $sw = [System.Diagnostics.Stopwatch]::StartNew(); try { $client = New-Object System.Net.Sockets.TcpClient; $ar = $client.BeginConnect($ip, 4370, $null, $null); $wait = $ar.AsyncWaitHandle.WaitOne(2000, $false); $sw.Stop(); if ($wait -and $client.Connected) { $client.EndConnect($ar); $client.Close(); Write-Host ('[EN LIGNE] Connecte en ' + $sw.ElapsedMilliseconds + 'ms') -ForegroundColor Green } else { $client.Close(); $allOk = $false; Write-Host '[HORS LIGNE] Injoignable (Port 4370)' -ForegroundColor Red } } catch { $allOk = $false; Write-Host ('[ERREUR] ' + $_.Exception.Message) -ForegroundColor Red } }; Write-Host ''; Write-Host 'Test du Pont Local (127.0.0.1:4375) : ' -NoNewline; try { $res = Invoke-RestMethod -Uri 'http://127.0.0.1:4375/status' -TimeoutSec 2 -ErrorAction Stop; Write-Host '[ACTIF]' -ForegroundColor Green; Write-Host ('  -> Branche active dans le pont : #' + $res.branchId); Write-Host ('  -> Lecteurs declares          : ' + $res.deviceIp); foreach ($d in $res.devices) { $st = if ($d.connected) { 'CONNECTE' } else { 'DECONNECTE' }; $col = if ($d.connected) { 'Green' } else { 'Red' }; Write-Host ('     * Lecteur ' + $d.ip + ' -> ' + $st) -ForegroundColor $col } } catch { Write-Host '[INACTIF] Le pont ne repond pas' -ForegroundColor Red; $allOk = $false }; if (-not $allOk) { Write-Host ''; Write-Host 'CONSEILS DE DEPANNAGE :' -ForegroundColor Yellow; Write-Host '1. Verifiez que le lecteur K50 Pro est allume.' -ForegroundColor Yellow; Write-Host '2. Verifiez le cable RJ45 reliant le lecteur au switch ou PC.' -ForegroundColor Yellow; Write-Host '3. Sur l ecran du K50 Pro : Menu -> Comm. -> Ethernet' -ForegroundColor Yellow; Write-Host '   Verifiez que l adresse IP correspond.' -ForegroundColor Yellow; Write-Host '4. Verifiez que la cle de communication (Comm Key) est a 0.' -ForegroundColor Yellow }"
 echo.
 pause
