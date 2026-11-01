@@ -164,7 +164,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
               <Calendar className="w-4 h-4 text-primary shrink-0" />
               <span>{formattedSelectedDate}</span>
             </div>
-            <DailyLedgerDateFilter currentDate={targetDateStr} />
+            {isOwner && <DailyLedgerDateFilter currentDate={targetDateStr} />}
           </div>
         </div>
 
