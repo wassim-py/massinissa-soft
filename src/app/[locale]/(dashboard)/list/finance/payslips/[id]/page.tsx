@@ -173,6 +173,12 @@ export default async function PayslipDetailPage(props: PageProps) {
     bookRevenue: payrollCalc?.bookRevenue || 0,
     bookRevenueDetails: payrollCalc?.bookRevenueDetails || [],
     advances: Number(payslip.advances),
+    advanceDetails: salaryAdvances.map((adv) => ({
+      id: adv.id,
+      amount: Number(adv.amount),
+      date: adv.date,
+      remarque: adv.remarque || null,
+    })),
     photocopyDeductions: Number(payslip.photocopyDeductions),
     netAmount: Number(payslip.netAmount),
     branchLines: payslip.PayslipBranchLine.map((bl) => {

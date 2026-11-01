@@ -467,6 +467,7 @@ model SalaryAdvance {
   personId String
   amount   Decimal
   date     DateTime
+  remarque String?
 
   @@index([personId, date])
   @@index([date])

@@ -28,6 +28,11 @@ export interface OwnerTeacherConsolidationPrintData {
   totalSchoolCut: number;
   bonus?: number;
   salaryAdvances?: number;
+  salaryAdvanceDetails?: Array<{
+    amount: number;
+    date: string | Date;
+    remarque?: string | null;
+  }>;
   photocopyDeductions?: number;
   netTeacherPayout?: number;
   netSchoolRevenue?: number;
@@ -218,6 +223,51 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
           </tfoot>
         </table>
       </div>
+
+      {/* Salary Advances Breakdown with Remarque */}
+      {data.salaryAdvanceDetails && data.salaryAdvanceDetails.length > 0 && (
+        <div className="mb-6">
+          <p className="font-bold text-gray-800 text-xs uppercase mb-1.5 pb-1 border-b border-gray-200">
+            Détail des avances sur salaire déduites :
+          </p>
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className="bg-red-50 text-red-950 font-bold border border-red-200">
+                <th className="p-1.5 border border-red-200 text-center w-28">Date</th>
+                <th className="p-1.5 border border-red-200 text-left">Remarque / Motif</th>
+                <th className="p-1.5 border border-red-200 text-right w-36">Montant déduit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.salaryAdvanceDetails.map((adv, idx) => (
+                <tr key={idx} className="border border-gray-200">
+                  <td className="p-1.5 border border-gray-200 text-center font-mono">{formatDate(adv.date)}</td>
+                  <td className="p-1.5 border border-gray-200 text-gray-800">
+                    {adv.remarque ? (
+                      <span className="font-medium text-gray-900">{adv.remarque}</span>
+                    ) : (
+                      <span className="text-gray-400 italic">Avance sur salaire</span>
+                    )}
+                  </td>
+                  <td className="p-1.5 border border-gray-200 text-right font-mono text-red-700 font-bold">
+                    - {formatDZD(adv.amount)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-red-100 font-bold text-red-950">
+                <td colSpan={2} className="p-1.5 border border-red-200">
+                  Total des avances sur salaire
+                </td>
+                <td className="p-1.5 border border-red-200 text-right font-mono font-black text-red-700">
+                  - {formatDZD(advances)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
 
       {/* Financial Consolidation & Net Payout Summary (Strictly Owner) */}
       <div className="grid grid-cols-2 gap-4 mb-6">

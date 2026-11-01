@@ -250,6 +250,7 @@ export default async function FinancePage(props: PageProps) {
   let teachers: any[] = [];
   let photocopyCharges: any[] = [];
   let salaryAdvances: any[] = [];
+  let allSalaryAdvances: any[] = [];
   let branches: any[] = [];
   let financialReport: any = null;
   const teacherMap = new Map<string, string>();
@@ -265,7 +266,7 @@ export default async function FinancePage(props: PageProps) {
     endDate.setUTCHours(23, 59, 59, 999);
 
     if (currentTab === "runs") {
-      const [rawOverview, rawPayslips, teacherList] = await Promise.all([
+      const [rawOverview, rawPayslips, teacherList, rawAdvances] = await Promise.all([
         getOwnerPayrollOverview(startDate, endDate),
         prisma.payslip.findMany({
           where: { personType: "TEACHER" },
@@ -279,11 +280,21 @@ export default async function FinancePage(props: PageProps) {
           take: 100,
         }),
         prisma.teacher.findMany({ select: { id: true, name: true } }),
+        prisma.salaryAdvance.findMany({
+          where: {
+            date: {
+              gte: startDate,
+              lte: endDate,
+            },
+          },
+          orderBy: { date: "asc" },
+        }),
       ]);
 
       overviewData = rawOverview;
       payrollRuns = [];
       payslips = rawPayslips;
+      allSalaryAdvances = rawAdvances;
       financialReport = null;
       teacherList.forEach((tItem) => teacherMap.set(tItem.id, tItem.name));
     } else if (currentTab === "deductions") {
@@ -712,6 +723,14 @@ export default async function FinancePage(props: PageProps) {
               grossAmount: Number(p.grossAmount),
               bonus: Number((p as any).bonus || 0),
               advances: Number(p.advances),
+              advanceDetails: allSalaryAdvances
+                .filter((a) => a.personId === p.personId)
+                .map((a) => ({
+                  id: a.id,
+                  amount: Number(a.amount),
+                  date: a.date.toISOString(),
+                  remarque: a.remarque || null,
+                })),
               photocopyDeductions: Number(p.photocopyDeductions),
               netAmount: Number(p.netAmount),
               branchLines: p.PayslipBranchLine.map((bl: any) => ({
@@ -738,6 +757,7 @@ export default async function FinancePage(props: PageProps) {
               teacherName: teacherMap.get(a.personId) || a.personId,
               amount: Number(a.amount),
               date: a.date.toISOString(),
+              remarque: a.remarque || null,
             }))}
             teachers={teachers.map((tItem: any) => ({
               id: tItem.id,

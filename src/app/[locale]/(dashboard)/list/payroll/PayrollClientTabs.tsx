@@ -61,6 +61,12 @@ interface Props {
         grossAmount: number;
         bonus?: number;
         advances: number;
+        advanceDetails?: Array<{
+          id?: number;
+          amount: number;
+          date: string | Date;
+          remarque?: string | null;
+        }>;
         photocopyDeductions: number;
         netAmount: number;
         branchLines: Array<{
@@ -183,6 +189,12 @@ interface Props {
     grossAmount: number;
     bonus?: number;
     advances: number;
+    advanceDetails?: Array<{
+      id?: number;
+      amount: number;
+      date: string | Date;
+      remarque?: string | null;
+    }>;
     photocopyDeductions: number;
     netAmount: number;
     branchLines: Array<{
@@ -209,6 +221,7 @@ interface Props {
     teacherName: string;
     amount: number;
     date: string;
+    remarque?: string | null;
   }>;
   teachers: Array<{
     id: string;
@@ -302,6 +315,7 @@ export default function PayrollClientTabs({
   const [saTeacherId, setSaTeacherId] = useState(teachers[0]?.id || "");
   const [saAmount, setSaAmount] = useState(2000);
   const [saDate, setSaDate] = useState(new Date().toISOString().split("T")[0]);
+  const [saRemarque, setSaRemarque] = useState("");
 
   // 4. Teacher Rate form
   const [rateTeacherId, setRateTeacherId] = useState(teachers[0]?.id || "");
@@ -384,9 +398,11 @@ export default function PayrollClientTabs({
         personId: saTeacherId,
         amount: Number(saAmount),
         date: saDate,
+        remarque: saRemarque || undefined,
       });
       if (res.success) {
         setFeedbackMessage({ text: res.message, isError: false });
+        setSaRemarque("");
       } else {
         setFeedbackMessage({ text: res.message, isError: true });
       }
@@ -423,6 +439,7 @@ export default function PayrollClientTabs({
     personId: string;
     amount: number;
     date: string;
+    remarque: string;
   } | null>(null);
   const [advanceToDelete, setAdvanceToDelete] = useState<{
     id: number;
@@ -439,6 +456,7 @@ export default function PayrollClientTabs({
         personId: editingAdvance.personId,
         amount: Number(editingAdvance.amount),
         date: editingAdvance.date,
+        remarque: editingAdvance.remarque,
       });
       if (res.success) {
         setFeedbackMessage({ text: res.message, isError: false });
@@ -762,6 +780,7 @@ export default function PayrollClientTabs({
                                 sessionsCount: p.sessionsCount,
                                 grossAmount: p.grossAmount + (p.bonus || 0),
                                 advances: p.advances,
+                                advanceDetails: p.advanceDetails,
                                 photocopyDeductions: p.photocopyDeductions,
                                 netAmount: p.netAmount,
                                 branchLines: p.branchLines,
@@ -922,6 +941,7 @@ export default function PayrollClientTabs({
                               sessionsCount: p.sessionsCount,
                               grossAmount: p.grossAmount + (p.bonus || 0),
                               advances: p.advances,
+                              advanceDetails: p.advanceDetails,
                               photocopyDeductions: p.photocopyDeductions,
                               netAmount: p.netAmount,
                               branchLines: p.branchLines,
@@ -1076,7 +1096,7 @@ export default function PayrollClientTabs({
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="p-5">
-                  <form onSubmit={handleCreateSalaryAdvance} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                  <form onSubmit={handleCreateSalaryAdvance} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
                     <FormField label={`${t("teacher")}:`}>
                       <Select
                         value={saTeacherId}
@@ -1113,6 +1133,16 @@ export default function PayrollClientTabs({
                       />
                     </FormField>
 
+                    <FormField label={locale === "ar" ? "ملاحظة (اختياري):" : "Remarque (facultatif):"}>
+                      <Input
+                        type="text"
+                        value={saRemarque}
+                        onChange={(e) => setSaRemarque(e.target.value)}
+                        placeholder={locale === "ar" ? "أدخل ملاحظة..." : "Ajouter une remarque..."}
+                        className="text-xs"
+                      />
+                    </FormField>
+
                     <Button
                       type="submit"
                       variant="danger"
@@ -1144,6 +1174,7 @@ export default function PayrollClientTabs({
                       { header: t("teacher"), accessor: "teacherName" },
                       { header: t("advanceAmount"), accessor: "amount", align: "end" },
                       { header: t("date"), accessor: "date", align: "center" },
+                      { header: locale === "ar" ? "الملاحظة" : "Remarque", accessor: "remarque" },
                       { header: t("actions") || (locale === "ar" ? "إجراءات" : "Actions"), accessor: "actions", align: "center" },
                     ]}
                     data={salaryAdvances}
@@ -1155,6 +1186,9 @@ export default function PayrollClientTabs({
                           - {formatDZD(a.amount)}
                         </td>
                         <td className="p-3.5 text-center font-mono text-muted">{formatDate(a.date)}</td>
+                        <td className="p-3.5 text-xs text-gray-700 max-w-xs truncate" title={a.remarque || ""}>
+                          {a.remarque || <span className="text-muted/60">—</span>}
+                        </td>
                         <td className="p-3.5 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1.5">
                             <Button
@@ -1167,6 +1201,7 @@ export default function PayrollClientTabs({
                                   personId: a.personId,
                                   amount: a.amount,
                                   date: new Date(a.date).toISOString().split("T")[0],
+                                  remarque: a.remarque || "",
                                 })
                               }
                               title={locale === "ar" ? "تعديل التسبيق" : "Modifier l'avance"}
@@ -1436,6 +1471,16 @@ export default function PayrollClientTabs({
                   onChange={(e) => setEditingAdvance({ ...editingAdvance, date: e.target.value })}
                   className="text-xs font-mono"
                   required
+                />
+              </FormField>
+
+              <FormField label={locale === "ar" ? "ملاحظة (اختياري):" : "Remarque (facultatif):"}>
+                <Input
+                  type="text"
+                  value={editingAdvance.remarque}
+                  onChange={(e) => setEditingAdvance({ ...editingAdvance, remarque: e.target.value })}
+                  placeholder={locale === "ar" ? "أدخل ملاحظة..." : "Ajouter une remarque..."}
+                  className="text-xs"
                 />
               </FormField>
 

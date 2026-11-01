@@ -57,6 +57,12 @@ export interface PayslipPrintData {
     branchName?: string;
   }>;
   advances: number;
+  advanceDetails?: Array<{
+    id?: number;
+    amount: number;
+    date: string | Date;
+    remarque?: string | null;
+  }>;
   photocopyDeductions: number;
   netAmount: number;
   branchLines: Array<{
@@ -717,6 +723,51 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </div>
       )}
 
+      {/* Section 4c: Salary Advances Details */}
+      {data.advanceDetails && data.advanceDetails.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xs font-bold text-gray-700 mb-2">
+            Détail des avances sur salaire déduites :
+          </h2>
+          <table className="w-full border-collapse text-xs text-left">
+            <thead>
+              <tr className="bg-red-50 border border-red-200 text-red-900">
+                <th className="p-1.5 border border-red-200 text-center w-28">Date</th>
+                <th className="p-1.5 border border-red-200">Remarque / Motif</th>
+                <th className="p-1.5 border border-red-200 text-right w-36">Montant déduit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.advanceDetails.map((adv, idx) => (
+                <tr key={idx} className="border border-gray-200">
+                  <td className="p-1.5 border border-gray-200 text-center font-mono">{formatDate(adv.date)}</td>
+                  <td className="p-1.5 border border-gray-200 text-gray-800">
+                    {adv.remarque ? (
+                      <span className="font-medium text-gray-900">{adv.remarque}</span>
+                    ) : (
+                      <span className="text-gray-400 italic">Avance sur salaire</span>
+                    )}
+                  </td>
+                  <td className="p-1.5 border border-gray-200 font-mono text-red-700 text-right font-bold">
+                    - {formatDZD(Number(adv.amount))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-red-100 font-bold text-red-950">
+                <td colSpan={2} className="p-1.5 border border-red-200">
+                  Total des avances sur salaire déduites
+                </td>
+                <td className="p-1.5 border border-red-200 text-right font-mono font-black text-red-700">
+                  - {formatDZD(Number(data.advances))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
       {/* Section 5: Final Consolidated Net Calculation */}
       <div className="border-2 border-gray-900 rounded-lg p-4 bg-gray-50 mb-6">
         <h2 className="text-sm font-bold text-gray-900 mb-3 border-b border-gray-300 pb-1">
@@ -747,7 +798,12 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           </div>
 
           <div className="flex justify-between items-center text-red-700">
-            <span>2. Déduction des avances sur salaire :</span>
+            <div>
+              <span>2. Déduction des avances sur salaire :</span>
+              {data.advanceDetails && data.advanceDetails.length === 1 && data.advanceDetails[0].remarque && (
+                <span className="text-xs text-gray-600 ml-2 italic">({data.advanceDetails[0].remarque})</span>
+              )}
+            </div>
             <span className="font-mono font-semibold">
               - {formatDZD(Number(data.advances))}
             </span>

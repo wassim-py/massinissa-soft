@@ -9364,6 +9364,7 @@ export async function recordSalaryAdvanceAction(formData: {
   personId: string;
   amount: number;
   date?: string | Date;
+  remarque?: string | null;
 }) {
   try {
     const session = await getAuthSession();
@@ -9378,6 +9379,7 @@ export async function recordSalaryAdvanceAction(formData: {
         personId: formData.personId,
         amount: new Prisma.Decimal(formData.amount),
         date: advanceDate,
+        remarque: formData.remarque?.trim() || null,
       },
     });
 
@@ -9403,6 +9405,7 @@ export async function updateSalaryAdvanceAction(
     personId?: string;
     amount?: number;
     date?: string | Date;
+    remarque?: string | null;
   }
 ) {
   try {
@@ -9419,6 +9422,7 @@ export async function updateSalaryAdvanceAction(
         ...(formData.personId ? { personId: formData.personId } : {}),
         ...(formData.amount !== undefined ? { amount: new Prisma.Decimal(formData.amount) } : {}),
         ...(formData.date ? { date: new Date(formData.date) } : {}),
+        ...(formData.remarque !== undefined ? { remarque: formData.remarque?.trim() || null } : {}),
       },
     });
 
@@ -9636,6 +9640,17 @@ export async function getTeacherPayslipConsolidatedReportAction(payslipId: numbe
     const netTeacherPayout = Number(payslip.netAmount);
     const netSchoolRevenue = totalSchoolCut + photocopy;
 
+    const salaryAdvancesList = await prisma.salaryAdvance.findMany({
+      where: {
+        personId: payslip.personId,
+        date: {
+          gte: payslip.PayrollRun.periodStart,
+          lte: payslip.PayrollRun.periodEnd,
+        },
+      },
+      orderBy: { date: "asc" },
+    });
+
     const data = {
       id: payslip.id,
       periodStart: payslip.PayrollRun.periodStart.toISOString(),
@@ -9652,6 +9667,11 @@ export async function getTeacherPayslipConsolidatedReportAction(payslipId: numbe
       totalSchoolCut,
       bonus,
       salaryAdvances: advances,
+      salaryAdvanceDetails: salaryAdvancesList.map((a) => ({
+        amount: Number(a.amount),
+        date: a.date.toISOString(),
+        remarque: a.remarque || null,
+      })),
       photocopyDeductions: photocopy,
       netTeacherPayout,
       netSchoolRevenue,

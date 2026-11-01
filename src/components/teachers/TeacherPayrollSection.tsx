@@ -89,6 +89,7 @@ export default function TeacherPayrollSection({
   const [showAdvanceModal, setShowAdvanceModal] = useState(false);
   const [advanceAmount, setAdvanceAmount] = useState<string>("");
   const [advanceDate, setAdvanceDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
+  const [advanceRemarque, setAdvanceRemarque] = useState<string>("");
   const [isSubmittingAdvance, setIsSubmittingAdvance] = useState(false);
   const [isDeletingAdvanceId, setIsDeletingAdvanceId] = useState<number | null>(null);
   const [showAdvanceDetails, setShowAdvanceDetails] = useState(false);
@@ -238,11 +239,13 @@ export default function TeacherPayrollSection({
         personId: teacherId,
         amount: amt,
         date: advanceDate || new Date().toISOString().split("T")[0],
+        remarque: advanceRemarque || undefined,
       });
       setIsSubmittingAdvance(false);
       if (res.success) {
         setShowAdvanceModal(false);
         setAdvanceAmount("");
+        setAdvanceRemarque("");
         setFeedback({
           type: "success",
           message:
@@ -341,6 +344,12 @@ export default function TeacherPayrollSection({
         bookRevenue: currentPayroll.bookRevenue,
         bookRevenueDetails: currentPayroll.bookRevenueDetails,
         advances: currentPayroll.salaryAdvances,
+        advanceDetails: currentPayroll.salaryAdvanceDetails?.map((a) => ({
+          id: a.id,
+          amount: a.amount,
+          date: a.date,
+          remarque: a.remarque,
+        })),
         photocopyDeductions: currentPayroll.photocopyDeductions,
         netAmount: Math.max(0, currentPayroll.netAmount + savedBonus),
         branchLines: currentPayroll.branchBreakdown.map((b) => ({
@@ -405,6 +414,11 @@ export default function TeacherPayrollSection({
         totalSchoolCut: (currentPayroll.groupBreakdown || []).reduce((s, g) => s + (g.schoolAmount || 0), 0),
         bonus: savedBonus,
         salaryAdvances: currentPayroll.salaryAdvances,
+        salaryAdvanceDetails: currentPayroll.salaryAdvanceDetails?.map((a) => ({
+          amount: a.amount,
+          date: a.date,
+          remarque: a.remarque,
+        })),
         photocopyDeductions: currentPayroll.photocopyDeductions,
         netTeacherPayout: Math.max(0, currentPayroll.netAmount + savedBonus),
         netSchoolRevenue:
@@ -1015,6 +1029,11 @@ export default function TeacherPayrollSection({
                           <Calendar className="w-3 h-3 text-muted" />
                           <span>{formatDate(adv.date)}</span>
                         </div>
+                        {adv.remarque && (
+                          <span className="text-[11px] text-gray-700 mt-1 italic line-clamp-2" title={adv.remarque}>
+                            {adv.remarque}
+                          </span>
+                        )}
                       </div>
                       {isOwner && (
                         <button
@@ -1530,6 +1549,23 @@ export default function TeacherPayrollSection({
                     ? "💡 سيتم خصم هذا التسبيق تلقائياً وتحديث صافي المستحقات (Net à payer) فور الحفظ."
                     : "💡 Cette avance sera automatiquement déduite du calcul en cours et mettra à jour le net à payer immédiatement."}
                 </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-1.5">
+                  {locale === "ar" ? "ملاحظة (اختياري)" : "Remarque (facultatif)"}
+                </label>
+                <input
+                  type="text"
+                  value={advanceRemarque}
+                  onChange={(e) => setAdvanceRemarque(e.target.value)}
+                  placeholder={
+                    locale === "ar"
+                      ? "سبب التسبيق أو ملاحظة تظهر في كشف الراتب..."
+                      : "Motif ou remarque qui apparaîtra sur le bulletin de paie..."
+                  }
+                  className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-border bg-surface text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                />
               </div>
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">

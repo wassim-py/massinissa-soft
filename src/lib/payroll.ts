@@ -108,6 +108,7 @@ export interface TeacherPayrollCalculation {
     id: number;
     amount: number;
     date: Date;
+    remarque?: string | null;
   }>;
   photocopyChargeDetails: Array<{
     id: number;
@@ -1948,6 +1949,7 @@ export async function calculateTeacherPayroll(
       id: a.id,
       amount: Number(a.amount),
       date: a.date,
+      remarque: a.remarque || null,
     })),
     photocopyChargeDetails: photocopyChargesList.map((c) => ({
       id: c.id,
@@ -2612,6 +2614,12 @@ export async function getPayrollRunFinancialReport(
       grossAmount: saved ? Number(saved.grossAmount) : calc.grossAmount,
       bonus: saved ? Number((saved as any).bonus || 0) : 0,
       advances: saved ? Number(saved.advances) : calc.salaryAdvances,
+      advanceDetails: calc.salaryAdvanceDetails?.map((a) => ({
+        id: a.id,
+        amount: a.amount,
+        date: a.date,
+        remarque: a.remarque || null,
+      })),
       photocopyDeductions: saved ? Number(saved.photocopyDeductions) : calc.photocopyDeductions,
       netAmount: saved ? Number(saved.netAmount) : calc.netAmount,
       branchLines: calc.branchBreakdown.map((b) => ({
