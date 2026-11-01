@@ -167,6 +167,7 @@ export async function getDailyRevenueDashboardData(options?: {
           lte: endDate,
         },
         ...(targetBranchId ? { branchId: targetBranchId } : {}),
+        type: { not: "PAYROLL_OUT" },
       },
       include: {
         Branch: { select: { id: true, name: true } },
@@ -179,6 +180,7 @@ export async function getDailyRevenueDashboardData(options?: {
           gte: startDate,
           lte: endDate,
         },
+        type: { not: "PAYROLL_OUT" },
       },
       include: {
         Branch: { select: { id: true, name: true } },
@@ -263,12 +265,18 @@ export async function getDailyRevenueDashboardData(options?: {
 
     if (type === "REFUND") {
       summary.refunds += Math.abs(amount);
-    } else {
+    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION") {
+      summary.tuition += amount;
       summary.grossRevenue += amount;
-      if (type === "TUITION" || (type as string) === "EXTRA_SESSION") summary.tuition += amount;
-      else if (type === "INSCRIPTION") summary.inscription += amount;
-      else if (type === "BOOK") summary.book += amount;
-      else if (type === "ATELIER_FORMATION") summary.atelierFormation += amount;
+    } else if (type === "INSCRIPTION") {
+      summary.inscription += amount;
+      summary.grossRevenue += amount;
+    } else if (type === "BOOK") {
+      summary.book += amount;
+      summary.grossRevenue += amount;
+    } else if (type === "ATELIER_FORMATION") {
+      summary.atelierFormation += amount;
+      summary.grossRevenue += amount;
     }
   }
 
@@ -310,12 +318,18 @@ export async function getDailyRevenueDashboardData(options?: {
 
     if (type === "REFUND") {
       item.refunds += Math.abs(amount);
-    } else {
+    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION") {
+      item.tuition += amount;
       item.grossRevenue += amount;
-      if (type === "TUITION" || (type as string) === "EXTRA_SESSION") item.tuition += amount;
-      else if (type === "INSCRIPTION") item.inscription += amount;
-      else if (type === "BOOK") item.book += amount;
-      else if (type === "ATELIER_FORMATION") item.atelierFormation += amount;
+    } else if (type === "INSCRIPTION") {
+      item.inscription += amount;
+      item.grossRevenue += amount;
+    } else if (type === "BOOK") {
+      item.book += amount;
+      item.grossRevenue += amount;
+    } else if (type === "ATELIER_FORMATION") {
+      item.atelierFormation += amount;
+      item.grossRevenue += amount;
     }
     item.netRevenue = item.grossRevenue - item.refunds - item.missing + item.surplus;
   }
@@ -659,6 +673,7 @@ export async function getDailyBranchLedgerData(
       where: {
         branchId,
         date: { gte: startOfDay, lte: endOfDay },
+        type: { not: "PAYROLL_OUT" },
       },
     }),
     prisma.missingMoney.findMany({
@@ -751,12 +766,18 @@ export async function getDailyBranchLedgerData(
     const type = row.type as LedgerVoucherCategory;
     if (type === "REFUND") {
       summary.refunds += Math.abs(amount);
-    } else {
+    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION") {
+      summary.tuition += amount;
       summary.grossRevenue += amount;
-      if (type === "TUITION" || (type as string) === "EXTRA_SESSION") summary.tuition += amount;
-      else if (type === "INSCRIPTION") summary.inscription += amount;
-      else if (type === "BOOK") summary.book += amount;
-      else if (type === "ATELIER_FORMATION") summary.atelierFormation += amount;
+    } else if (type === "INSCRIPTION") {
+      summary.inscription += amount;
+      summary.grossRevenue += amount;
+    } else if (type === "BOOK") {
+      summary.book += amount;
+      summary.grossRevenue += amount;
+    } else if (type === "ATELIER_FORMATION") {
+      summary.atelierFormation += amount;
+      summary.grossRevenue += amount;
     }
   }
 

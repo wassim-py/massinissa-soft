@@ -2197,7 +2197,6 @@ export async function generatePayrollRun(
 
 /**
  * Updates a PayrollRun status (DRAFT -> VALIDATED -> PAID).
- * When marked PAID, writes PAYROLL_OUT entries to DailyLedger for each branch.
  */
 export async function updatePayrollRunStatus(
   payrollRunId: number,
@@ -2225,7 +2224,7 @@ export async function updatePayrollRunStatus(
       data: { status: newStatus },
     });
 
-    // If unmarking from PAID back to DRAFT/VALIDATED, clean up ledger entries
+    // If unmarking from PAID back to DRAFT/VALIDATED, clean up any legacy ledger entries
     if (run.status === "PAID" && newStatus !== "PAID") {
       await tx.dailyLedger.deleteMany({
         where: {
@@ -2233,32 +2232,6 @@ export async function updatePayrollRunStatus(
           date: run.periodEnd,
         },
       });
-    }
-
-    // If marked as PAID, post ledger expense per branch from PayslipBranchLine
-    // ONLY for TEACHER payslips (expenses paid out)
-    if (newStatus === "PAID") {
-      const branchTotals = new Map<number, number>();
-
-      run.Payslip.forEach((slip) => {
-        if (slip.personType === "TEACHER") {
-          slip.PayslipBranchLine.forEach((line) => {
-            const prev = branchTotals.get(line.branchId) || 0;
-            branchTotals.set(line.branchId, prev + Number(line.amount));
-          });
-        }
-      });
-
-      for (const [branchId, totalBranchPayroll] of branchTotals.entries()) {
-        if (totalBranchPayroll > 0) {
-          await upsertDailyLedger(tx, {
-            branchId,
-            date: run.periodEnd,
-            type: "PAYROLL_OUT" as any,
-            amount: totalBranchPayroll,
-          });
-        }
-      }
     }
 
     return updated;
