@@ -74,6 +74,8 @@ export interface PayslipPrintData {
   }>;
   groupLines?: PayslipGroupLine[];
   sessions?: PayslipSessionItem[];
+  retroactiveLessonsCount?: number;
+  retroactiveAmount?: number;
   photocopyDetails?: Array<{
     branchName: string;
     pages: number;
@@ -135,7 +137,19 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
   const absentLessons = allSessions.filter((s) => s.isTeacherAbsent);
   const freeLessons = allSessions.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive);
   const paidLessons = allSessions.filter((s) => !s.isFree && !s.isTeacherAbsent && !s.isRetroactive);
-  const retroactiveLessons = allSessions.filter((s) => s.isRetroactive);
+  const retroactiveLessons = React.useMemo(
+    () => allSessions.filter((s) => s.isRetroactive),
+    [allSessions]
+  );
+  const totalRetroactiveLessons = Math.round(
+    (data.retroactiveLessonsCount ??
+      retroactiveLessons.reduce((sum, s) => sum + Number(s.payingCount ?? 1), 0)) * 100
+  ) / 100;
+  const totalRetroactiveAmount = Math.round(
+    (data.retroactiveAmount ??
+      retroactiveLessons.reduce((sum, s) => sum + Number(s.lessonAmount || 0), 0)) * 100
+  ) / 100;
+  const paidLessonsAmount = paidLessons.reduce((sum, l) => sum + Number(l.lessonAmount || 0), 0);
   const totalFreeSessions = data.freeSessionsCount ?? freeLessons.length;
   const totalPaidSessions = data.paidSessionsCount ?? (
     allSessions.length > 0
@@ -238,8 +252,8 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </div>
       </div>
 
-      {/* Key Metrics Banner: Total Payable Lessons, Course Sessions, Gross, Net */}
-      <div className="grid grid-cols-4 gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center">
+      {/* Key Metrics Banner: Total Payable Lessons, Late Regulated (if any), Course Sessions, Gross, Net */}
+      <div className={`grid ${totalRetroactiveLessons > 0 ? 'grid-cols-5' : 'grid-cols-4'} gap-2.5 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center`}>
         <div className="bg-blue-50 border-2 border-blue-400 p-2.5 rounded-md">
           <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block">
             Séances Payables
@@ -248,9 +262,25 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
             {totalPayableLessons > 0 ? totalPayableLessons : totalPaidSessions}
           </span>
           <span className="text-[10px] text-blue-700 font-semibold block">
-            présences + absences
+            {totalRetroactiveLessons > 0
+              ? `dont ${totalRetroactiveLessons} régul. mois passé`
+              : "présences + absences"}
           </span>
         </div>
+
+        {totalRetroactiveLessons > 0 && (
+          <div className="bg-purple-50 border-2 border-purple-400 p-2.5 rounded-md">
+            <span className="text-[11px] font-bold text-purple-900 uppercase tracking-wide block">
+              Régul. Mois Passé
+            </span>
+            <span className="text-2xl font-black text-purple-950 font-mono block mt-0.5">
+              {totalRetroactiveLessons}
+            </span>
+            <span className="text-[10px] text-purple-700 font-semibold block">
+              séances payables
+            </span>
+          </div>
+        )}
 
         <div className="bg-white border border-gray-200 p-2.5 rounded-md">
           <span className="text-[11px] font-semibold text-gray-600 block">
@@ -518,11 +548,38 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                 <td className="p-2 border border-gray-300 text-center font-mono">{paidLessons.length}</td>
                 <td className="p-2 border border-gray-300 text-right font-mono">-</td>
                 <td className="p-2 border border-gray-300 text-right font-mono text-blue-900 font-bold">
-                  {formatDZD(Number(data.grossAmount))}
+                  {formatDZD(paidLessonsAmount)}
                 </td>
               </tr>
             </tfoot>
           </table>
+        </div>
+      )}
+
+      {/* Section 2b: Séances payables régularisées (Mois précédent) - Dans une case sans détails */}
+      {totalRetroactiveLessons > 0 && (
+        <div className="mb-6 border-2 border-purple-400 bg-purple-50/40 rounded-lg p-3.5 shadow-2xs">
+          <div className="flex justify-between items-center bg-purple-900 text-white font-bold px-3 py-2 rounded-md shadow-xs">
+            <span className="text-xs font-black uppercase tracking-wider">
+              Séances payables régularisées (Mois précédent)
+            </span>
+            <span className="bg-white text-purple-950 font-black px-2.5 py-0.5 text-xs rounded-full font-mono shadow-2xs">
+              {totalRetroactiveLessons} séance{totalRetroactiveLessons > 1 ? "s" : ""} payable{totalRetroactiveLessons > 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="flex justify-between items-center text-xs text-purple-950 px-3 py-2.5 font-semibold bg-white rounded border border-purple-200 mt-2">
+            <span>Total des séances payables du mois passé :</span>
+            <div className="text-right">
+              <span className="font-mono font-black text-sm text-purple-900">
+                {totalRetroactiveLessons} séance{totalRetroactiveLessons > 1 ? "s" : ""} payable{totalRetroactiveLessons > 1 ? "s" : ""}
+              </span>
+              {totalRetroactiveAmount > 0 && (
+                <span className="ml-2 font-mono font-bold text-emerald-800 text-xs">
+                  ({formatDZD(totalRetroactiveAmount)})
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

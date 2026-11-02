@@ -360,6 +360,12 @@ export default function TeacherPayrollSection({
           amount: b.amount,
         })),
         groupLines: currentPayroll.groupBreakdown,
+        retroactiveLessonsCount: currentPayroll.sessionDetails
+          ?.filter((s) => s.isRetroactive)
+          .reduce((sum, s) => sum + Number(s.payingCount ?? 1), 0),
+        retroactiveAmount: currentPayroll.sessionDetails
+          ?.filter((s) => s.isRetroactive)
+          .reduce((sum, s) => sum + Number(s.lessonAmount || 0), 0),
         sessions: currentPayroll.sessionDetails?.map((s) => ({
           lessonId: s.lessonId,
           startsAt: s.startsAt,

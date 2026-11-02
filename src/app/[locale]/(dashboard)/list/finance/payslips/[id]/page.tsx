@@ -120,6 +120,9 @@ export default async function PayslipDetailPage(props: PageProps) {
       isExtra: s.isExtra,
       isCatchUp: s.isCatchUp,
       isTeacherAbsent: s.isTeacherAbsent,
+      isRetroactive: s.isRetroactive,
+      retroactiveNote: s.retroactiveNote,
+      isFormation: s.isFormation,
     }));
   } else {
     const rawLessons = await prisma.lesson.findMany({
@@ -194,6 +197,12 @@ export default async function PayslipDetailPage(props: PageProps) {
     }),
     groupLines: payrollCalc?.groupBreakdown,
     sessions: sessionItems,
+    retroactiveLessonsCount: sessionItems
+      .filter((s) => s.isRetroactive)
+      .reduce((sum, s) => sum + Number(s.payingCount ?? 1), 0),
+    retroactiveAmount: sessionItems
+      .filter((s) => s.isRetroactive)
+      .reduce((sum, s) => sum + Number(s.lessonAmount || 0), 0),
     photocopyDetails: photocopyCharges.map((pc) => ({
       branchName: pc.Branch.name,
       pages: pc.pages,
