@@ -26,6 +26,22 @@ export interface OwnerTeacherConsolidationPrintData {
   totalPayableLessons: number;
   totalTeacherCut: number;
   totalSchoolCut: number;
+  // Selective reporting properties
+  includeRegularLessons?: boolean;
+  includeFormationCourses?: boolean;
+  includeBooks?: boolean;
+  formationGroups?: OwnerConsolidatedGroupLine[];
+  totalFormationLessons?: number;
+  totalFormationTeacherCut?: number;
+  totalFormationSchoolCut?: number;
+  books?: Array<{
+    title: string;
+    levelName?: string;
+    copiesSold: number;
+    totalRevenue: number;
+  }>;
+  totalBooksCopies?: number;
+  totalBooksFees?: number;
   bonus?: number;
   salaryAdvances?: number;
   salaryAdvanceDetails?: Array<{
@@ -91,12 +107,27 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
   const bonus = data.bonus || 0;
   const advances = data.salaryAdvances || 0;
   const photocopy = data.photocopyDeductions || 0;
+
+  const includeRegular = data.includeRegularLessons !== false;
+  const includeFormation = !!data.includeFormationCourses;
+  const includeBooks = !!data.includeBooks;
+
+  const regularTeacherCut = includeRegular ? data.totalTeacherCut : 0;
+  const regularSchoolCut = includeRegular ? data.totalSchoolCut : 0;
+
+  const formationTeacherCut = includeFormation ? (data.totalFormationTeacherCut || 0) : 0;
+  const formationSchoolCut = includeFormation ? (data.totalFormationSchoolCut || 0) : 0;
+
+  const booksTotalCut = includeBooks ? (data.totalBooksFees || 0) : 0;
+  const totalGrossPayout = regularTeacherCut + formationTeacherCut + booksTotalCut;
+
   const netTeacher = data.netTeacherPayout !== undefined
     ? data.netTeacherPayout
-    : Math.max(0, data.totalTeacherCut + bonus - advances - photocopy);
+    : Math.max(0, totalGrossPayout + bonus - advances - photocopy);
+
   const netSchool = data.netSchoolRevenue !== undefined
     ? data.netSchoolRevenue
-    : data.totalSchoolCut + photocopy;
+    : regularSchoolCut + formationSchoolCut + photocopy;
 
   return (
     <div style={containerStyle} className="owner-teacher-consolidation-container">
@@ -152,37 +183,105 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
         </div>
       </div>
 
-      {/* The 5 Columns Table */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wide">
-            Ventilation par Groupe (Rapport Consolidé Enseignant & École)
-          </h2>
-          <span className="text-xs text-gray-500 font-medium">
-            {data.groups.length} groupe(s) dispensé(s)
-          </span>
-        </div>
+      {/* 1. Regular Lessons Table (if included) */}
+      {includeRegular && (
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wide">
+              1. Ventilation Cours Réguliers (Rapport Consolidé Enseignant & École)
+            </h2>
+            <span className="text-xs text-gray-500 font-medium">
+              {data.groups.length} groupe(s) dispensé(s)
+            </span>
+          </div>
 
-        <table className="w-full border-collapse border border-gray-300 text-xs">
-          <thead>
-            <tr className="bg-gray-100 text-gray-800 uppercase font-bold text-[10px] tracking-wider">
-              <th className="border border-gray-300 p-2 text-left">1. Enseignant</th>
-              <th className="border border-gray-300 p-2 text-left">2. Groupe / Classe</th>
-              <th className="border border-gray-300 p-2 text-center">3. Séances Payables</th>
-              <th className="border border-gray-300 p-2 text-right">4. Part Enseignant</th>
-              <th className="border border-gray-300 p-2 text-right">5. Part École</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.groups.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="p-4 text-center text-gray-500 italic">
-                  Aucun groupe trouvé pour cette période.
+          <table className="w-full border-collapse border border-gray-300 text-xs">
+            <thead>
+              <tr className="bg-gray-100 text-gray-800 uppercase font-bold text-[10px] tracking-wider">
+                <th className="border border-gray-300 p-2 text-left">Enseignant</th>
+                <th className="border border-gray-300 p-2 text-left">Groupe / Classe</th>
+                <th className="border border-gray-300 p-2 text-center">Séances Payables</th>
+                <th className="border border-gray-300 p-2 text-right">Part Enseignant</th>
+                <th className="border border-gray-300 p-2 text-right">Part École</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.groups.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="p-4 text-center text-gray-500 italic">
+                    Aucun cours régulier pour cette période.
+                  </td>
+                </tr>
+              ) : (
+                data.groups.map((group, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50/50">
+                    <td className="border border-gray-300 p-2 font-bold text-gray-900">
+                      {group.teacherName || data.teacher.name}
+                    </td>
+                    <td className="border border-gray-300 p-2">
+                      <span className="font-semibold text-gray-900">{group.groupName}</span>
+                      {group.branchName && (
+                        <span className="text-[10px] text-gray-500 block">({group.branchName})</span>
+                      )}
+                    </td>
+                    <td className="border border-gray-300 p-2 text-center font-mono font-bold text-gray-800">
+                      {group.payableLessons}
+                    </td>
+                    <td className="border border-gray-300 p-2 text-right font-mono font-bold text-rose-700">
+                      {formatDZD(group.teacherCut)}
+                    </td>
+                    <td className="border border-gray-300 p-2 text-right font-mono font-bold text-emerald-700">
+                      {formatDZD(group.schoolCut)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-100 font-bold border-t-2 border-gray-400">
+                <td colSpan={2} className="border border-gray-300 p-2.5 text-gray-900 uppercase">
+                  Sous-total Cours Réguliers
+                </td>
+                <td className="border border-gray-300 p-2.5 text-center font-mono text-sm text-gray-900">
+                  {data.totalPayableLessons}
+                </td>
+                <td className="border border-gray-300 p-2.5 text-right font-mono text-sm text-rose-700">
+                  {formatDZD(data.totalTeacherCut)}
+                </td>
+                <td className="border border-gray-300 p-2.5 text-right font-mono text-sm text-emerald-700">
+                  {formatDZD(data.totalSchoolCut)}
                 </td>
               </tr>
-            ) : (
-              data.groups.map((group, idx) => (
-                <tr key={idx} className="hover:bg-gray-50/50">
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      {/* 2. Formation Lessons Table (if included) */}
+      {includeFormation && data.formationGroups && data.formationGroups.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wide">
+              2. Ventilation Formations & Dawarat
+            </h2>
+            <span className="text-xs text-gray-500 font-medium">
+              {data.formationGroups.length} groupe(s) de formation
+            </span>
+          </div>
+
+          <table className="w-full border-collapse border border-gray-300 text-xs">
+            <thead>
+              <tr className="bg-rose-50 text-rose-900 uppercase font-bold text-[10px] tracking-wider border border-rose-300">
+                <th className="border border-rose-300 p-2 text-left">Enseignant</th>
+                <th className="border border-rose-300 p-2 text-left">Groupe Formation / Atelier</th>
+                <th className="border border-rose-300 p-2 text-center">Séances Payables</th>
+                <th className="border border-rose-300 p-2 text-right">Part Enseignant</th>
+                <th className="border border-rose-300 p-2 text-right">Part École</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.formationGroups.map((group, idx) => (
+                <tr key={idx} className="hover:bg-rose-50/30">
                   <td className="border border-gray-300 p-2 font-bold text-gray-900">
                     {group.teacherName || data.teacher.name}
                   </td>
@@ -202,27 +301,79 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
                     {formatDZD(group.schoolCut)}
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-          <tfoot>
-            <tr className="bg-gray-100 font-bold border-t-2 border-gray-400">
-              <td colSpan={2} className="border border-gray-300 p-2.5 text-gray-900 uppercase">
-                Total Général Brut
-              </td>
-              <td className="border border-gray-300 p-2.5 text-center font-mono text-sm text-gray-900">
-                {data.totalPayableLessons}
-              </td>
-              <td className="border border-gray-300 p-2.5 text-right font-mono text-sm text-rose-700">
-                {formatDZD(data.totalTeacherCut)}
-              </td>
-              <td className="border border-gray-300 p-2.5 text-right font-mono text-sm text-emerald-700">
-                {formatDZD(data.totalSchoolCut)}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-rose-100/70 font-bold border-t-2 border-rose-300">
+                <td colSpan={2} className="border border-gray-300 p-2.5 text-gray-900 uppercase">
+                  Sous-total Formations & Dawarat
+                </td>
+                <td className="border border-gray-300 p-2.5 text-center font-mono text-sm text-gray-900">
+                  {data.totalFormationLessons || 0}
+                </td>
+                <td className="border border-gray-300 p-2.5 text-right font-mono text-sm text-rose-700">
+                  {formatDZD(data.totalFormationTeacherCut || 0)}
+                </td>
+                <td className="border border-gray-300 p-2.5 text-right font-mono text-sm text-emerald-700">
+                  {formatDZD(data.totalFormationSchoolCut || 0)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      {/* 3. Books Section (if included) */}
+      {includeBooks && data.books && data.books.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-bold text-gray-800 uppercase tracking-wide">
+              3. Ventes & Frais de Livres / Manuels
+            </h2>
+            <span className="text-xs text-gray-500 font-medium">
+              {data.books.length} manuel(s)
+            </span>
+          </div>
+
+          <table className="w-full border-collapse border border-gray-300 text-xs">
+            <thead>
+              <tr className="bg-indigo-50 text-indigo-950 uppercase font-bold text-[10px] tracking-wider border border-indigo-200">
+                <th className="border border-indigo-200 p-2 text-left">Titre du Manuel</th>
+                <th className="border border-indigo-200 p-2 text-left">Niveau / Section</th>
+                <th className="border border-indigo-200 p-2 text-center">Exemplaires Vendus</th>
+                <th className="border border-indigo-200 p-2 text-right">Montant Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.books.map((b, idx) => (
+                <tr key={idx} className="hover:bg-indigo-50/20">
+                  <td className="border border-gray-300 p-2 font-bold text-gray-900">{b.title}</td>
+                  <td className="border border-gray-300 p-2 text-gray-700">{b.levelName || "Général"}</td>
+                  <td className="border border-gray-300 p-2 text-center font-mono font-bold text-gray-800">
+                    {b.copiesSold}
+                  </td>
+                  <td className="border border-gray-300 p-2 text-right font-mono font-bold text-indigo-700">
+                    {formatDZD(b.totalRevenue)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-indigo-100/70 font-bold border-t-2 border-indigo-300">
+                <td colSpan={2} className="border border-gray-300 p-2.5 text-gray-900 uppercase">
+                  Sous-total Manuels & Livres
+                </td>
+                <td className="border border-gray-300 p-2.5 text-center font-mono text-sm text-gray-900">
+                  {data.totalBooksCopies || data.books.reduce((s, b) => s + b.copiesSold, 0)}
+                </td>
+                <td className="border border-gray-300 p-2.5 text-right font-mono text-sm text-indigo-700">
+                  {formatDZD(data.totalBooksFees || data.books.reduce((s, b) => s + b.totalRevenue, 0))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
 
       {/* Salary Advances Breakdown with Remarque */}
       {data.salaryAdvanceDetails && data.salaryAdvanceDetails.length > 0 && (
@@ -274,12 +425,30 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
         {/* Teacher Payout Summary */}
         <div className="bg-rose-50/40 border border-rose-200 rounded-lg p-3 text-xs">
           <p className="font-bold text-rose-950 uppercase mb-2 pb-1 border-b border-rose-200">
-            Masse Salariale Enseignant
+            Masse Salariale Enseignant (Sélectionnée)
           </p>
           <div className="space-y-1.5 font-mono">
-            <div className="flex justify-between">
-              <span className="text-gray-600 font-sans">Part Brute des Cours :</span>
-              <span className="font-bold text-gray-900">{formatDZD(data.totalTeacherCut)}</span>
+            {includeRegular && (
+              <div className="flex justify-between">
+                <span className="text-gray-600 font-sans">Part Cours Réguliers :</span>
+                <span className="font-bold text-gray-900">{formatDZD(regularTeacherCut)}</span>
+              </div>
+            )}
+            {includeFormation && (
+              <div className="flex justify-between text-rose-800 font-semibold">
+                <span className="font-sans">Part Formations & Dawarat :</span>
+                <span>{formatDZD(formationTeacherCut)}</span>
+              </div>
+            )}
+            {includeBooks && (
+              <div className="flex justify-between text-indigo-800 font-semibold">
+                <span className="font-sans">Part Frais de Livres :</span>
+                <span>{formatDZD(booksTotalCut)}</span>
+              </div>
+            )}
+            <div className="flex justify-between border-t border-rose-200/60 pt-1 font-bold text-gray-950">
+              <span className="font-sans">Total Brut Enseignant :</span>
+              <span>{formatDZD(totalGrossPayout)}</span>
             </div>
             {bonus > 0 && (
               <div className="flex justify-between text-emerald-700 font-bold">
@@ -289,7 +458,7 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
             )}
             {bonus < 0 && (
               <div className="flex justify-between text-rose-700 font-bold">
-                <span className="font-sans">Déduction / Retenue exceptionnelle :</span>
+                <span className="font-sans">Déduction / Retenue :</span>
                 <span>- {formatDZD(Math.abs(bonus))}</span>
               </div>
             )}
@@ -305,7 +474,7 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
                 <span>- {formatDZD(photocopy)}</span>
               </div>
             )}
-            <div className="flex justify-between border-t border-rose-200 pt-1.5 text-sm font-black text-rose-800">
+            <div className="flex justify-between border-t border-rose-300 pt-1.5 text-sm font-black text-rose-800">
               <span className="font-sans">Net Réel à Décaisser :</span>
               <span>{formatDZD(netTeacher)}</span>
             </div>
@@ -318,10 +487,18 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
             Part École Consolidée
           </p>
           <div className="space-y-1.5 font-mono">
-            <div className="flex justify-between">
-              <span className="text-gray-600 font-sans">Part Brute École :</span>
-              <span className="font-bold text-gray-900">{formatDZD(data.totalSchoolCut)}</span>
-            </div>
+            {includeRegular && (
+              <div className="flex justify-between">
+                <span className="text-gray-600 font-sans">Part Cours Réguliers École :</span>
+                <span className="font-bold text-gray-900">{formatDZD(regularSchoolCut)}</span>
+              </div>
+            )}
+            {includeFormation && (
+              <div className="flex justify-between text-emerald-800 font-semibold">
+                <span className="font-sans">Part Formations École :</span>
+                <span>{formatDZD(formationSchoolCut)}</span>
+              </div>
+            )}
             {photocopy > 0 && (
               <div className="flex justify-between text-emerald-700">
                 <span className="font-sans">Photocopies récupérées :</span>

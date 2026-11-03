@@ -20,6 +20,9 @@ import {
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { DataTable } from "@/components/ui/DataTable";
+import { SectionTransferItem } from "@/lib/financeActions";
+import SectionTransfersHistoryTable from "./SectionTransfersHistoryTable";
+import SectionTransferModal from "./SectionTransferModal";
 
 export interface TransferredRecord {
   id: number | string;
@@ -44,18 +47,23 @@ export interface TransferredRecord {
 
 interface TransferredMoneySectionProps {
   transfers: TransferredRecord[];
+  sectionTransfers?: SectionTransferItem[];
   branches: Array<{ id: number; name: string }>;
   locale?: string;
 }
 
 export default function TransferredMoneySection({
   transfers,
+  sectionTransfers = [],
   branches,
   locale: propLocale,
 }: TransferredMoneySectionProps) {
   const t = useTranslations("finance");
   const hookLocale = useLocale();
   const locale = propLocale || hookLocale || "fr";
+
+  const [activeSubTab, setActiveSubTab] = useState<"STUDENTS" | "SECTIONS">("STUDENTS");
+  const [isSectionModalOpen, setIsSectionModalOpen] = useState(false);
 
   const [search, setSearch] = useState("");
   const [selectedBranch, setSelectedBranch] = useState<string>("ALL");
@@ -149,7 +157,8 @@ export default function TransferredMoneySection({
                   {t("transfersTitle")}
                 </h2>
                 <Badge variant="primary" size="sm">
-                  {transfers.length} {t("transfersCountUnit")}
+                  {activeSubTab === "STUDENTS" ? transfers.length : sectionTransfers.length}{" "}
+                  {t("transfersCountUnit")}
                 </Badge>
               </div>
               <p className="text-form-helper text-muted mt-0.5">
@@ -157,83 +166,122 @@ export default function TransferredMoneySection({
               </p>
             </div>
           </div>
-        </div>
 
-        {/* 4 Summary KPI Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-5">
-          {/* 1. Total Transferred Amount */}
-          <div className="p-4 rounded-xl border border-border/80 bg-surface-muted/50 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs text-muted font-semibold">
-              <span>{t("totalTransferredAmount")}</span>
-              <div className="p-1 rounded-md bg-primary-light/60 text-primary">
-                <Coins className="w-4 h-4" />
-              </div>
-            </div>
-            <div className="mt-3">
-              <p className="text-2xl font-bold font-mono text-gray-900">
-                {formatDZD(metrics.totalAmount)}
-              </p>
-              <p className="text-[11px] text-muted mt-0.5">
-                {t("totalTransferredAmountDesc")}
-              </p>
-            </div>
-          </div>
-
-          {/* 2. Cross-Branch Transferred Amount */}
-          <div className="p-4 rounded-xl border border-purple-200/80 bg-purple-50/40 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs text-purple-900 font-semibold">
-              <span>{t("crossBranchTransferredAmount")}</span>
-              <div className="p-1 rounded-md bg-purple-100 text-purple-700">
-                <Building2 className="w-4 h-4" />
-              </div>
-            </div>
-            <div className="mt-3">
-              <p className="text-2xl font-bold font-mono text-purple-950">
-                {formatDZD(metrics.totalCrossBranchAmount)}
-              </p>
-              <p className="text-[11px] text-purple-700/80 mt-0.5">
-                {metrics.crossBranchCount} {t("crossBranchTransfersCount")}
-              </p>
-            </div>
-          </div>
-
-          {/* 3. Total Sessions Transferred */}
-          <div className="p-4 rounded-xl border border-border/80 bg-surface-muted/50 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs text-muted font-semibold">
-              <span>{t("totalSessionsTransferred")}</span>
-              <div className="p-1 rounded-md bg-blue-100 text-blue-700">
-                <Layers className="w-4 h-4" />
-              </div>
-            </div>
-            <div className="mt-3">
-              <p className="text-2xl font-bold font-mono text-gray-900">
-                {metrics.totalSessions} {t("sessionsUnit")}
-              </p>
-              <p className="text-[11px] text-muted mt-0.5">
-                {t("totalSessionsTransferredDesc")}
-              </p>
-            </div>
-          </div>
-
-          {/* 4. Total Operations Count */}
-          <div className="p-4 rounded-xl border border-border/80 bg-surface-muted/50 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs text-muted font-semibold">
-              <span>{t("totalTransfersCount")}</span>
-              <div className="p-1 rounded-md bg-emerald-100 text-emerald-700">
-                <ArrowRightLeft className="w-4 h-4" />
-              </div>
-            </div>
-            <div className="mt-3">
-              <p className="text-2xl font-bold font-mono text-gray-900">
-                {metrics.totalCount}
-              </p>
-              <p className="text-[11px] text-muted mt-0.5">
-                {t("totalTransfersCountDesc")}
-              </p>
-            </div>
+          {/* Sub-tab switcher */}
+          <div className="flex items-center bg-surface-muted border border-border p-1 rounded-xl text-xs font-semibold shrink-0">
+            <button
+              type="button"
+              onClick={() => setActiveSubTab("STUDENTS")}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeSubTab === "STUDENTS"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900"
+              }`}
+            >
+              {locale === "ar" ? "تحويلات الطلاب والفروع" : "Transferts Étudiants & Branches"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab("SECTIONS")}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeSubTab === "SECTIONS"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900"
+              }`}
+            >
+              {locale === "ar" ? "تحويلات الأموال بين الأقسام" : "Transferts Inter-Sections"}
+            </button>
           </div>
         </div>
+
+        {/* 4 Summary KPI Cards (Students View) */}
+        {activeSubTab === "STUDENTS" && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-5">
+            {/* 1. Total Transferred Amount */}
+            <div className="p-4 rounded-xl border border-border/80 bg-surface-muted/50 flex flex-col justify-between">
+              <div className="flex items-center justify-between text-xs text-muted font-semibold">
+                <span>{t("totalTransferredAmount")}</span>
+                <div className="p-1 rounded-md bg-primary-light/60 text-primary">
+                  <Coins className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <p className="text-2xl font-bold font-mono text-gray-900">
+                  {formatDZD(metrics.totalAmount)}
+                </p>
+                <p className="text-[11px] text-muted mt-0.5">
+                  {t("totalTransferredAmountDesc")}
+                </p>
+              </div>
+            </div>
+
+            {/* 2. Cross-Branch Transferred Amount */}
+            <div className="p-4 rounded-xl border border-purple-200/80 bg-purple-50/40 flex flex-col justify-between">
+              <div className="flex items-center justify-between text-xs text-purple-900 font-semibold">
+                <span>{t("crossBranchTransferredAmount")}</span>
+                <div className="p-1 rounded-md bg-purple-100 text-purple-700">
+                  <Building2 className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <p className="text-2xl font-bold font-mono text-purple-950">
+                  {formatDZD(metrics.totalCrossBranchAmount)}
+                </p>
+                <p className="text-[11px] text-purple-700/80 mt-0.5">
+                  {metrics.crossBranchCount} {t("crossBranchTransfersCount")}
+                </p>
+              </div>
+            </div>
+
+            {/* 3. Total Sessions Transferred */}
+            <div className="p-4 rounded-xl border border-border/80 bg-surface-muted/50 flex flex-col justify-between">
+              <div className="flex items-center justify-between text-xs text-muted font-semibold">
+                <span>{t("totalSessionsTransferred")}</span>
+                <div className="p-1 rounded-md bg-blue-100 text-blue-700">
+                  <Layers className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <p className="text-2xl font-bold font-mono text-gray-900">
+                  {metrics.totalSessions} {t("sessionsUnit")}
+                </p>
+                <p className="text-[11px] text-muted mt-0.5">
+                  {t("totalSessionsTransferredDesc")}
+                </p>
+              </div>
+            </div>
+
+            {/* 4. Total Operations Count */}
+            <div className="p-4 rounded-xl border border-border/80 bg-surface-muted/50 flex flex-col justify-between">
+              <div className="flex items-center justify-between text-xs text-muted font-semibold">
+                <span>{t("totalTransfersCount")}</span>
+                <div className="p-1 rounded-md bg-emerald-100 text-emerald-700">
+                  <ArrowRightLeft className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <p className="text-2xl font-bold font-mono text-gray-900">
+                  {metrics.totalCount}
+                </p>
+                <p className="text-[11px] text-muted mt-0.5">
+                  {t("totalTransfersCountDesc")}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
+
+      {/* Conditionally render Section Transfers or Students View */}
+      {activeSubTab === "SECTIONS" ? (
+        <SectionTransfersHistoryTable
+          transfers={sectionTransfers}
+          branches={branches}
+          onOpenNewTransfer={() => setIsSectionModalOpen(true)}
+          locale={locale}
+        />
+      ) : (
+        <>
 
       {/* Filter and Search Bar */}
       <Card className="p-4 border-border/80 shadow-xs bg-surface">
@@ -422,6 +470,18 @@ export default function TransferredMoneySection({
           />
         )}
       </Card>
+    </>
+  )}
+
+  {/* Section Transfer Modal */}
+      {isSectionModalOpen && (
+        <SectionTransferModal
+          isOpen={isSectionModalOpen}
+          onClose={() => setIsSectionModalOpen(false)}
+          branches={branches}
+          locale={locale}
+        />
+      )}
     </div>
   );
 }

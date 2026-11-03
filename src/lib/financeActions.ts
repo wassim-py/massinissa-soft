@@ -976,3 +976,842 @@ export async function getBooksFinanceOverviewAction(): Promise<BooksFinanceOverv
     };
   }
 }
+
+// =================================================================
+// 6. SECTION-TO-SECTION MONEY TRANSFERS (TRANSFERTS INTER-SECTIONS)
+// =================================================================
+
+export interface SectionTransferItem {
+  id: number;
+  fromSection: string;
+  toSection: string;
+  amount: number;
+  date: string;
+  reason: string | null;
+  recordedBy: string;
+  branchId?: number | null;
+  caisseNoireTxId?: number | null;
+  createdAt: string;
+}
+
+import { FINANCE_SECTIONS } from "./financeConstants";
+
+export async function executeSectionTransferAction(data: {
+  fromSection: string;
+  toSection: string;
+  amount: number;
+  date?: string | Date;
+  reason?: string;
+  branchId?: number | null;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, message: "Action réservée au propriétaire / متاح للمالك فقط." };
+    }
+
+    const amount = Number(data.amount);
+    if (isNaN(amount) || amount <= 0) {
+      return { success: false, error: true, message: "Le montant doit être supérieur à 0 / يجب أن يكون المبلغ أكبر من 0." };
+    }
+
+    if (!data.fromSection || !data.toSection) {
+      return { success: false, error: true, message: "Veuillez sélectionner la section source et destination." };
+    }
+
+    if (data.fromSection === data.toSection) {
+      return { success: false, error: true, message: "La source et la destination ne peuvent pas être identiques." };
+    }
+
+    const transferDate = data.date ? new Date(data.date) : new Date();
+    const fromLabel = FINANCE_SECTIONS.find((s) => s.id === data.fromSection)?.labelFr || data.fromSection;
+    const toLabel = FINANCE_SECTIONS.find((s) => s.id === data.toSection)?.labelFr || data.toSection;
+    const cleanReason = (data.reason || "").trim();
+
+    let createdCaisseNoireTxId: number | null = null;
+
+    // 1. If destination is CAISSE_NOIRE, automatically add a DEPOSIT
+    if (data.toSection === "CAISSE_NOIRE") {
+      const depositDescription = `[Transfert depuis ${fromLabel}] ${cleanReason}`.trim();
+      const cnDeposit = await prisma.caisseNoireTransaction.create({
+        data: {
+          type: "DEPOSIT",
+          amount: new Prisma.Decimal(amount),
+          description: depositDescription,
+          date: transferDate,
+          recordedBy: session.userId || "owner",
+        },
+      });
+      createdCaisseNoireTxId = cnDeposit.id;
+    }
+
+    // 2. If source is CAISSE_NOIRE, automatically add a WITHDRAWAL
+    if (data.fromSection === "CAISSE_NOIRE") {
+      const withdrawalDescription = `[Transfert vers ${toLabel}] ${cleanReason}`.trim();
+      const cnWithdrawal = await prisma.caisseNoireTransaction.create({
+        data: {
+          type: "WITHDRAWAL",
+          amount: new Prisma.Decimal(amount),
+          description: withdrawalDescription,
+          date: transferDate,
+          recordedBy: session.userId || "owner",
+        },
+      });
+      createdCaisseNoireTxId = cnWithdrawal.id;
+    }
+
+    // 3. Record the SectionTransfer audit entry
+    const transfer = await prisma.sectionTransfer.create({
+      data: {
+        fromSection: data.fromSection,
+        toSection: data.toSection,
+        amount: new Prisma.Decimal(amount),
+        date: transferDate,
+        reason: cleanReason || null,
+        recordedBy: session.userId || "owner",
+        branchId: data.branchId ? Number(data.branchId) : null,
+        caisseNoireTxId: createdCaisseNoireTxId,
+      },
+    });
+
+    safeRevalidate("/list/finance");
+    safeRevalidate("/list/daily-ledger");
+    revalidateFinancialRoutes();
+
+    return {
+      success: true,
+      error: false,
+      message: `Transfert de ${amount.toLocaleString()} DZD effectué avec succès de [${fromLabel}] vers [${toLabel}].`,
+      transferId: transfer.id,
+      caisseNoireTxId: createdCaisseNoireTxId,
+    };
+  } catch (error: any) {
+    console.error("executeSectionTransferAction error:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "Erreur lors de l'exécution du transfert de fonds.",
+    };
+  }
+}
+
+export async function getSectionTransfersAction(filters?: {
+  fromSection?: string;
+  toSection?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.can("view", "finance") || !session.isOwner) {
+      return { success: false, error: true, message: "Accès refusé", transfers: [] };
+    }
+
+    const where: Prisma.SectionTransferWhereInput = {};
+    if (filters?.fromSection && filters.fromSection !== "ALL") {
+      where.fromSection = filters.fromSection;
+    }
+    if (filters?.toSection && filters.toSection !== "ALL") {
+      where.toSection = filters.toSection;
+    }
+    if (filters?.dateFrom || filters?.dateTo) {
+      where.date = {};
+      if (filters.dateFrom) where.date.gte = new Date(filters.dateFrom);
+      if (filters.dateTo) {
+        const dTo = new Date(filters.dateTo);
+        dTo.setUTCHours(23, 59, 59, 999);
+        where.date.lte = dTo;
+      }
+    }
+
+    const rawTransfers = await prisma.sectionTransfer.findMany({
+      where,
+      orderBy: { date: "desc" },
+      take: 200,
+    });
+
+    const transfers: SectionTransferItem[] = rawTransfers.map((t) => ({
+      id: t.id,
+      fromSection: t.fromSection,
+      toSection: t.toSection,
+      amount: Number(t.amount),
+      date: t.date.toISOString(),
+      reason: t.reason,
+      recordedBy: t.recordedBy,
+      branchId: t.branchId,
+      caisseNoireTxId: t.caisseNoireTxId,
+      createdAt: t.createdAt.toISOString(),
+    }));
+
+    return { success: true, transfers };
+  } catch (error: any) {
+    console.error("getSectionTransfersAction error:", error);
+    return { success: false, error: true, message: error?.message, transfers: [] };
+  }
+}
+
+export async function getPhotocopyTransferPoolAction(dateFrom?: string, dateTo?: string) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, totalCollected: 0, totalTransferred: 0, available: 0 };
+    }
+
+    const whereCharge: Prisma.PhotocopyChargeWhereInput = {};
+    const whereTransfer: Prisma.SectionTransferWhereInput = {
+      fromSection: "PHOTOCOPY_DEDUCTIONS",
+    };
+
+    if (dateFrom || dateTo) {
+      whereCharge.date = {};
+      whereTransfer.date = {};
+      if (dateFrom) {
+        whereCharge.date.gte = new Date(dateFrom);
+        whereTransfer.date.gte = new Date(dateFrom);
+      }
+      if (dateTo) {
+        const dTo = new Date(dateTo);
+        dTo.setUTCHours(23, 59, 59, 999);
+        whereCharge.date.lte = dTo;
+        whereTransfer.date.lte = dTo;
+      }
+    }
+
+    const [charges, transfers, payslips] = await Promise.all([
+      prisma.photocopyCharge.findMany({
+        where: whereCharge,
+        select: { costAmount: true },
+      }),
+      prisma.sectionTransfer.findMany({
+        where: whereTransfer,
+        select: { amount: true },
+      }),
+      prisma.payslip.findMany({
+        where: {
+          photocopyDeductions: { gt: 0 },
+        },
+        select: { photocopyDeductions: true },
+      }),
+    ]);
+
+    const totalFromCharges = charges.reduce((s, c) => s + Number(c.costAmount), 0);
+    const totalFromPayslips = payslips.reduce((s, p) => s + Number(p.photocopyDeductions), 0);
+    const totalCollected = Math.max(totalFromCharges, totalFromPayslips);
+    const totalTransferred = transfers.reduce((s, t) => s + Number(t.amount), 0);
+    const available = Math.max(0, totalCollected - totalTransferred);
+
+    return {
+      success: true,
+      totalCollected,
+      totalTransferred,
+      available,
+    };
+  } catch (error: any) {
+    console.error("getPhotocopyTransferPoolAction error:", error);
+    return { success: false, error: true, totalCollected: 0, totalTransferred: 0, available: 0 };
+  }
+}
+
+export async function deleteSectionTransferAction(id: number) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, message: "Action réservée au propriétaire." };
+    }
+
+    const transfer = await prisma.sectionTransfer.findUnique({
+      where: { id },
+    });
+
+    if (!transfer) {
+      return { success: false, error: true, message: "Transfert introuvable." };
+    }
+
+    // If it was linked to CaisseNoireTransaction, delete that too to keep balances pure
+    if (transfer.caisseNoireTxId) {
+      await prisma.caisseNoireTransaction.deleteMany({
+        where: { id: transfer.caisseNoireTxId },
+      });
+    }
+
+    await prisma.sectionTransfer.delete({
+      where: { id },
+    });
+
+    safeRevalidate("/list/finance");
+    safeRevalidate("/list/daily-ledger");
+    revalidateFinancialRoutes();
+
+    return { success: true, error: false, message: "Transfert annulé et supprimé." };
+  } catch (error: any) {
+    console.error("deleteSectionTransferAction error:", error);
+    return { success: false, error: true, message: error?.message || "Erreur lors de la suppression." };
+  }
+}
+
+// =================================================================
+// 7. SELECTIVE TEACHER REPORT DATA FETCHER
+// =================================================================
+
+export interface TeacherSelectiveReportData {
+  teacher: {
+    id: string;
+    name: string;
+    phone: string | null;
+  };
+  periodStart: string;
+  periodEnd: string;
+  regularLessons: {
+    groups: Array<{
+      className: string;
+      branchName?: string;
+      payableLessonsCount: number;
+      teacherAmount: number;
+      schoolAmount: number;
+      tuitionGross: number;
+    }>;
+    totalLessonsCount: number;
+    totalTeacherCut: number;
+    totalSchoolCut: number;
+  };
+  formationCourses: {
+    groups: Array<{
+      className: string;
+      branchName?: string;
+      payableLessonsCount: number;
+      teacherAmount: number;
+      schoolAmount: number;
+      tuitionGross: number;
+    }>;
+    totalLessonsCount: number;
+    totalTeacherCut: number;
+    totalSchoolCut: number;
+  };
+  booksFinance: {
+    books: Array<{
+      bookId?: number;
+      title: string;
+      levelName?: string;
+      copiesSold: number;
+      totalRevenue: number;
+    }>;
+    totalCopiesSold: number;
+    totalBooksFees: number;
+  };
+  salaryAdvances: {
+    total: number;
+    details: Array<{
+      amount: number;
+      date: string;
+      remarque?: string | null;
+    }>;
+  };
+  photocopyDeductions: {
+    total: number;
+    pages: number;
+  };
+  bonus: number;
+}
+
+export async function getTeacherSelectiveReportDataAction(
+  teacherId: string,
+  startDateStr: string,
+  endDateStr: string
+): Promise<{ success: boolean; error?: boolean; message?: string; data?: TeacherSelectiveReportData }> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return { success: false, error: true, message: "Action réservée au propriétaire." };
+    }
+
+    const { calculateTeacherPayroll } = await import("./payroll");
+    const startDate = new Date(startDateStr);
+    startDate.setUTCHours(0, 0, 0, 0);
+    const endDate = new Date(endDateStr);
+    endDate.setUTCHours(23, 59, 59, 999);
+
+    const teacher = await prisma.teacher.findUnique({
+      where: { id: teacherId },
+      select: { id: true, name: true, phone: true },
+    });
+
+    if (!teacher) {
+      return { success: false, error: true, message: "Enseignant introuvable." };
+    }
+
+    // 1. Calculate payroll for normal and formation scopes independently
+    const [normalCalc, formationCalc] = await Promise.all([
+      calculateTeacherPayroll(teacherId, startDate, endDate, "normal"),
+      calculateTeacherPayroll(teacherId, startDate, endDate, "formation"),
+    ]);
+
+    const regularGroupItems = (normalCalc?.groupBreakdown || []).map((g) => ({
+      className: g.className,
+      branchName: g.branchName,
+      payableLessonsCount: Number(g.payableLessonsCount || 0),
+      teacherAmount: Number(g.amount || 0),
+      schoolAmount: Number(g.schoolAmount || 0),
+      tuitionGross: Number(g.tuitionGross || 0),
+    }));
+
+    const formationGroupItems = (formationCalc?.groupBreakdown || []).map((g) => ({
+      className: g.className,
+      branchName: g.branchName,
+      payableLessonsCount: Number(g.payableLessonsCount || 0),
+      teacherAmount: Number(g.amount || 0),
+      schoolAmount: Number(g.schoolAmount || 0),
+      tuitionGross: Number(g.tuitionGross || 0),
+    }));
+
+    const regularLessons = {
+      groups: regularGroupItems,
+      totalLessonsCount: regularGroupItems.reduce((s, g) => s + g.payableLessonsCount, 0),
+      totalTeacherCut: regularGroupItems.reduce((s, g) => s + g.teacherAmount, 0),
+      totalSchoolCut: regularGroupItems.reduce((s, g) => s + g.schoolAmount, 0),
+    };
+
+    const formationCourses = {
+      groups: formationGroupItems,
+      totalLessonsCount: formationGroupItems.reduce((s, g) => s + g.payableLessonsCount, 0),
+      totalTeacherCut: formationGroupItems.reduce((s, g) => s + g.teacherAmount, 0),
+      totalSchoolCut: formationGroupItems.reduce((s, g) => s + g.schoolAmount, 0),
+    };
+
+    // 2. Fetch Books fees for this teacher in the selected period
+    const rawBookVouchers = await prisma.voucher.findMany({
+      where: {
+        paymentType: "BOOK",
+        isVoided: false,
+        issuedAt: { gte: startDate, lte: endDate },
+        class: { teacherId: teacher.id },
+      },
+      include: {
+        class: { select: { id: true, name: true, isFormation: true } },
+      },
+    });
+
+    const teacherBooks = await prisma.book.findMany({
+      where: { teacherId: teacher.id },
+      include: {
+        level: { select: { name: true } },
+        receipts: {
+          where: { receivedAt: { gte: startDate, lte: endDate } },
+        },
+      },
+    });
+
+    // Group vouchers by class/book
+    const bookMap = new Map<string, { title: string; levelName?: string; copiesSold: number; totalRevenue: number }>();
+
+    rawBookVouchers.forEach((v) => {
+      const title = v.class?.name ? `Manuel - ${v.class.name}` : "Manuel Scolaire";
+      const existing = bookMap.get(title) || { title, levelName: v.class?.isFormation ? "Formation" : "Régulier", copiesSold: 0, totalRevenue: 0 };
+      existing.copiesSold += 1;
+      existing.totalRevenue += Number(v.amount);
+      bookMap.set(title, existing);
+    });
+
+    teacherBooks.forEach((b) => {
+      if (b.receipts.length > 0 && !bookMap.has(b.title)) {
+        bookMap.set(b.title, {
+          title: b.title,
+          levelName: b.level?.name,
+          copiesSold: b.receipts.length,
+          totalRevenue: 0,
+        });
+      }
+    });
+
+    const bookItems = Array.from(bookMap.values());
+    const totalCopiesSold = bookItems.reduce((s, b) => s + b.copiesSold, 0);
+    const totalBooksFees = bookItems.reduce((s, b) => s + b.totalRevenue, 0);
+
+    const booksFinance = {
+      books: bookItems,
+      totalCopiesSold,
+      totalBooksFees,
+    };
+
+    // 3. Salary advances
+    const rawAdvances = await prisma.salaryAdvance.findMany({
+      where: {
+        personId: teacher.id,
+        date: { gte: startDate, lte: endDate },
+      },
+      orderBy: { date: "asc" },
+    });
+
+    const salaryAdvances = {
+      total: rawAdvances.reduce((s, a) => s + Number(a.amount), 0),
+      details: rawAdvances.map((a) => ({
+        amount: Number(a.amount),
+        date: a.date.toISOString(),
+        remarque: a.remarque,
+      })),
+    };
+
+    // 4. Photocopy charges
+    const rawPhotocopy = await prisma.photocopyCharge.findMany({
+      where: {
+        teacherId: teacher.id,
+        date: { gte: startDate, lte: endDate },
+      },
+    });
+
+    const photocopyDeductions = {
+      total: rawPhotocopy.reduce((s, p) => s + Number(p.costAmount), 0),
+      pages: rawPhotocopy.reduce((s, p) => s + Number(p.pages), 0),
+    };
+
+    return {
+      success: true,
+      data: {
+        teacher: {
+          id: teacher.id,
+          name: teacher.name,
+          phone: teacher.phone,
+        },
+        periodStart: startDate.toISOString(),
+        periodEnd: endDate.toISOString(),
+        regularLessons,
+        formationCourses,
+        booksFinance,
+        salaryAdvances,
+        photocopyDeductions,
+        bonus: 0,
+      },
+    };
+  } catch (error: any) {
+    console.error("getTeacherSelectiveReportDataAction error:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "Erreur lors de la récupération des données de l'enseignant.",
+    };
+  }
+}
+
+// =================================================================
+// 8. GLOBAL FINANCIAL REPORT DATA FETCHER (FOR THE 5 SELECTIVE STREAMS)
+// =================================================================
+
+export interface GlobalFinanceReportData {
+  periodStart: string;
+  periodEnd: string;
+  branchName: string;
+  generatedAt: string;
+  formationIncomes: {
+    total: number;
+    vouchersCount: number;
+    items: Array<{
+      title: string;
+      type: "CLASS" | "WORKSHOP";
+      branchName?: string;
+      studentsCount: number;
+      totalAmount: number;
+    }>;
+  };
+  inscriptionFees: {
+    total: number;
+    vouchersCount: number;
+    byBranch: Array<{
+      branchName: string;
+      count: number;
+      amount: number;
+    }>;
+  };
+  caisseNoire: {
+    initialBalance: number;
+    totalDeposited: number;
+    totalWithdrawn: number;
+    netChange: number;
+    endingBalance: number;
+    transactions: Array<{
+      id: number;
+      date: string;
+      type: string;
+      amount: number;
+      description: string;
+      recordedBy: string;
+    }>;
+  };
+  photocopyDeductions: {
+    totalAmount: number;
+    totalPages: number;
+    teachersCount: number;
+    teachers: Array<{
+      teacherName: string;
+      pages: number;
+      amount: number;
+    }>;
+  };
+  formationBooks: {
+    totalAmount: number;
+    totalCopies: number;
+    items: Array<{
+      title: string;
+      branchName?: string;
+      copies: number;
+      amount: number;
+    }>;
+  };
+}
+
+export async function getGlobalFinanceReportDataAction(options: {
+  dateFrom: string;
+  dateTo: string;
+  branchId?: number | "all";
+}): Promise<{ success: boolean; error?: boolean; message?: string; data?: GlobalFinanceReportData }> {
+  try {
+    const session = await getAuthSession();
+    if (!session.can("view", "finance") || !session.isOwner) {
+      return { success: false, error: true, message: "Action réservée au propriétaire." };
+    }
+
+    const startDate = new Date(options.dateFrom);
+    startDate.setUTCHours(0, 0, 0, 0);
+    const endDate = new Date(options.dateTo);
+    endDate.setUTCHours(23, 59, 59, 999);
+
+    const isAllBranches = !options.branchId || options.branchId === "all";
+    const branchFilterNum = isAllBranches ? null : Number(options.branchId);
+
+    // Branch name lookup
+    let branchName = "Toutes les branches (Siège consolidé)";
+    if (!isAllBranches && branchFilterNum) {
+      const bObj = await prisma.branch.findUnique({
+        where: { id: branchFilterNum },
+        select: { name: true },
+      });
+      if (bObj) branchName = bObj.name;
+    }
+
+    // Branch filters for queries
+    const branchTargetFilter = isAllBranches ? {} : { targetBranchId: branchFilterNum! };
+    const branchIdFilter = isAllBranches ? {} : { branchId: branchFilterNum! };
+
+    // 1. FORMATION INCOMES
+    // Look for vouchers with TUITION where class.isFormation is true or workshopId != null
+    const formationVouchers = await prisma.voucher.findMany({
+      where: {
+        isVoided: false,
+        issuedAt: { gte: startDate, lte: endDate },
+        ...branchTargetFilter,
+        OR: [
+          { class: { isFormation: true } },
+          { workshopId: { not: null } },
+        ],
+      },
+      include: {
+        class: { include: { branch: { select: { name: true } } } },
+        workshop: { include: { Branch: { select: { name: true } } } },
+      },
+    });
+
+    const formationMap = new Map<string, { title: string; type: "CLASS" | "WORKSHOP"; branchName?: string; studentsCount: number; totalAmount: number }>();
+    let totalFormationIncomes = 0;
+
+    formationVouchers.forEach((v) => {
+      const amt = Number(v.amount);
+      totalFormationIncomes += amt;
+      const isW = !!v.workshopId;
+      const title = isW
+        ? (v.workshop?.title || `Atelier #${v.workshopId}`)
+        : (v.class?.name || `Formation #${v.classId}`);
+      const bName = isW ? v.workshop?.Branch?.name : v.class?.branch?.name;
+      const key = `${isW ? "W" : "C"}-${title}-${bName || ""}`;
+
+      const existing = formationMap.get(key) || {
+        title,
+        type: isW ? "WORKSHOP" : "CLASS",
+        branchName: bName,
+        studentsCount: 0,
+        totalAmount: 0,
+      };
+      existing.studentsCount += 1;
+      existing.totalAmount += amt;
+      formationMap.set(key, existing);
+    });
+
+    const formationIncomes = {
+      total: totalFormationIncomes,
+      vouchersCount: formationVouchers.length,
+      items: Array.from(formationMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
+    };
+
+    // 2. INSCRIPTION FEES
+    const inscriptionVouchers = await prisma.voucher.findMany({
+      where: {
+        paymentType: "INSCRIPTION",
+        isVoided: false,
+        issuedAt: { gte: startDate, lte: endDate },
+        ...branchTargetFilter,
+      },
+      include: {
+        class: { include: { branch: { select: { name: true } } } },
+      },
+    });
+
+    const inscriptionBranchMap = new Map<string, { branchName: string; count: number; amount: number }>();
+    let totalInscription = 0;
+
+    inscriptionVouchers.forEach((v) => {
+      const amt = Number(v.amount);
+      totalInscription += amt;
+      const bName = v.class?.branch?.name || `Branche #${v.targetBranchId}`;
+      const existing = inscriptionBranchMap.get(bName) || { branchName: bName, count: 0, amount: 0 };
+      existing.count += 1;
+      existing.amount += amt;
+      inscriptionBranchMap.set(bName, existing);
+    });
+
+    const inscriptionFees = {
+      total: totalInscription,
+      vouchersCount: inscriptionVouchers.length,
+      byBranch: Array.from(inscriptionBranchMap.values()),
+    };
+
+    // 3. CAISSE NOIRE
+    // Initial balance before startDate
+    const priorCnTxs = await prisma.caisseNoireTransaction.findMany({
+      where: { date: { lt: startDate } },
+      select: { type: true, amount: true },
+    });
+    let initialCnBalance = 0;
+    priorCnTxs.forEach((tx) => {
+      const a = Number(tx.amount);
+      if (tx.type === "DEPOSIT") initialCnBalance += a;
+      else initialCnBalance -= a;
+    });
+
+    // Period transactions
+    const periodCnTxs = await prisma.caisseNoireTransaction.findMany({
+      where: {
+        date: { gte: startDate, lte: endDate },
+      },
+      orderBy: { date: "asc" },
+    });
+
+    let totalCnDeposits = 0;
+    let totalCnWithdrawals = 0;
+    periodCnTxs.forEach((tx) => {
+      const a = Number(tx.amount);
+      if (tx.type === "DEPOSIT") totalCnDeposits += a;
+      else totalCnWithdrawals += a;
+    });
+
+    const caisseNoire = {
+      initialBalance: initialCnBalance,
+      totalDeposited: totalCnDeposits,
+      totalWithdrawn: totalCnWithdrawals,
+      netChange: totalCnDeposits - totalCnWithdrawals,
+      endingBalance: initialCnBalance + totalCnDeposits - totalCnWithdrawals,
+      transactions: periodCnTxs.map((t) => ({
+        id: t.id,
+        date: t.date.toISOString(),
+        type: t.type,
+        amount: Number(t.amount),
+        description: t.description,
+        recordedBy: t.recordedBy,
+      })),
+    };
+
+    // 4. PHOTOCOPY DEDUCTIONS
+    const rawPhotocopyCharges = await prisma.photocopyCharge.findMany({
+      where: {
+        date: { gte: startDate, lte: endDate },
+        ...branchIdFilter,
+      },
+      include: {
+        Teacher: { select: { id: true, name: true } },
+      },
+    });
+
+    const photocopyTeacherMap = new Map<string, { teacherName: string; pages: number; amount: number }>();
+    let totalPhotocopyAmount = 0;
+    let totalPhotocopyPages = 0;
+
+    rawPhotocopyCharges.forEach((pc) => {
+      const amt = Number(pc.costAmount);
+      const pages = Number(pc.pages || 0);
+      totalPhotocopyAmount += amt;
+      totalPhotocopyPages += pages;
+      const tName = pc.Teacher?.name || `Enseignant #${pc.teacherId}`;
+
+      const existing = photocopyTeacherMap.get(tName) || { teacherName: tName, pages: 0, amount: 0 };
+      existing.pages += pages;
+      existing.amount += amt;
+      photocopyTeacherMap.set(tName, existing);
+    });
+
+    const photocopyDeductions = {
+      totalAmount: totalPhotocopyAmount,
+      totalPages: totalPhotocopyPages,
+      teachersCount: photocopyTeacherMap.size,
+      teachers: Array.from(photocopyTeacherMap.values()).sort((a, b) => b.amount - a.amount),
+    };
+
+    // 5. FORMATION BOOKS
+    const bookVouchers = await prisma.voucher.findMany({
+      where: {
+        paymentType: "BOOK",
+        isVoided: false,
+        issuedAt: { gte: startDate, lte: endDate },
+        ...branchTargetFilter,
+      },
+      include: {
+        class: {
+          include: {
+            branch: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    const booksMap = new Map<string, { title: string; branchName?: string; copies: number; amount: number }>();
+    let totalBooksAmount = 0;
+    let totalBooksCopies = 0;
+
+    bookVouchers.forEach((bv) => {
+      const amt = Number(bv.amount);
+      totalBooksAmount += amt;
+      totalBooksCopies += 1;
+      const title = bv.class?.name ? `Livre - ${bv.class.name}` : "Manuel de Formation";
+      const bName = bv.class?.branch?.name;
+      const key = `${title}-${bName || ""}`;
+
+      const existing = booksMap.get(key) || { title, branchName: bName, copies: 0, amount: 0 };
+      existing.copies += 1;
+      existing.amount += amt;
+      booksMap.set(key, existing);
+    });
+
+    const formationBooks = {
+      totalAmount: totalBooksAmount,
+      totalCopies: totalBooksCopies,
+      items: Array.from(booksMap.values()).sort((a, b) => b.amount - a.amount),
+    };
+
+    return {
+      success: true,
+      data: {
+        periodStart: startDate.toISOString(),
+        periodEnd: endDate.toISOString(),
+        branchName,
+        generatedAt: new Date().toISOString(),
+        formationIncomes,
+        inscriptionFees,
+        caisseNoire,
+        photocopyDeductions,
+        formationBooks,
+      },
+    };
+  } catch (error: any) {
+    console.error("getGlobalFinanceReportDataAction error:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "Erreur lors de la génération des données du rapport financier global.",
+    };
+  }
+}

@@ -9,6 +9,7 @@ import {
 } from "./printable/OwnerTeacherConsolidationReport";
 import { getTeacherPayslipConsolidatedReportAction } from "@/lib/actions";
 import { Printer, Loader2 } from "lucide-react";
+import TeacherReportConfigModal from "@/components/teachers/TeacherReportConfigModal";
 
 interface PrintOwnerConsolidationButtonProps {
   data?: OwnerTeacherConsolidationPrintData | null;
@@ -16,6 +17,7 @@ interface PrintOwnerConsolidationButtonProps {
   label?: string;
   className?: string;
   showIcon?: boolean;
+  enableSelectiveModal?: boolean;
 }
 
 function getLoadingHtml(isAr: boolean, locale: string) {
@@ -195,15 +197,24 @@ export const PrintOwnerConsolidationButton = ({
   label,
   className = "bg-slate-900 hover:bg-black text-white font-medium px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer",
   showIcon = true,
+  enableSelectiveModal = true,
 }: PrintOwnerConsolidationButtonProps) => {
   const locale = useLocale();
   const isAr = locale === "ar";
   const [isLoading, setIsLoading] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalData, setModalData] = useState<{
+    teacherId: string;
+    teacherName: string;
+    teacherPhone?: string | null;
+    startDate: string;
+    endDate: string;
+  } | null>(null);
 
   const defaultLabel = label || (isAr ? "المالك" : "Propriétaire");
   const buttonTitle = isAr
-    ? "تقرير المالك (5 أعمدة: الأستاذ، الفوج، الحصص، حصة الأستاذ، حصة المدرسة)"
-    : "Rapport consolidé propriétaire (5 colonnes : Enseignant, Groupe, Séances, Part Enseignant, Part École)";
+    ? "تقرير المالك (تحديد العناصر: الدروس، الكتب، التكوين، الاقتطاعات)"
+    : "Rapport consolidé propriétaire (Sélection des rubriques : cours, livres, formations)";
 
   const renderAndPrint = (dataToPrint: OwnerTeacherConsolidationPrintData, targetWindow: Window | null) => {
     const printContent = ReactDOMServer.renderToString(
@@ -227,7 +238,47 @@ export const PrintOwnerConsolidationButton = ({
     }
   };
 
-  const handlePrint = async () => {
+  const handleClick = async () => {
+    if (enableSelectiveModal) {
+      if (initialData) {
+        setModalData({
+          teacherId: initialData.teacher.id,
+          teacherName: initialData.teacher.name,
+          teacherPhone: initialData.teacher.phone,
+          startDate: new Date(initialData.periodStart).toISOString().split("T")[0],
+          endDate: new Date(initialData.periodEnd).toISOString().split("T")[0],
+        });
+        setIsModalOpen(true);
+        return;
+      }
+
+      if (payslipId) {
+        try {
+          setIsLoading(true);
+          const res = await getTeacherPayslipConsolidatedReportAction(payslipId);
+          if (res.success && res.data) {
+            setModalData({
+              teacherId: res.data.teacher.id,
+              teacherName: res.data.teacher.name,
+              teacherPhone: res.data.teacher.phone,
+              startDate: new Date(res.data.periodStart).toISOString().split("T")[0],
+              endDate: new Date(res.data.periodEnd).toISOString().split("T")[0],
+            });
+            setIsModalOpen(true);
+          } else {
+            alert(res.message || "Erreur lors de la récupération de la fiche.");
+          }
+        } catch (e: any) {
+          console.error("Fetch payslip error:", e);
+          alert("Erreur lors de la préparation du rapport.");
+        } finally {
+          setIsLoading(false);
+        }
+        return;
+      }
+    }
+
+    // Direct print fallback if selective modal is disabled
     let printWindow: Window | null = null;
     try {
       printWindow = window.open("", "_blank", "width=950,height=850");
@@ -276,20 +327,36 @@ export const PrintOwnerConsolidationButton = ({
   };
 
   return (
-    <button
-      type="button"
-      onClick={handlePrint}
-      disabled={isLoading}
-      className={className}
-      title={buttonTitle}
-    >
-      {isLoading ? (
-        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-      ) : showIcon ? (
-        <Printer className="w-3.5 h-3.5 shrink-0" />
-      ) : null}
-      <span>{isLoading ? (isAr ? "جاري التحميل..." : "Chargement...") : defaultLabel}</span>
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={isLoading}
+        className={className}
+        title={buttonTitle}
+      >
+        {isLoading ? (
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        ) : showIcon ? (
+          <Printer className="w-3.5 h-3.5 shrink-0" />
+        ) : null}
+        <span>{isLoading ? (isAr ? "جاري التحميل..." : "Chargement...") : defaultLabel}</span>
+      </button>
+
+      {isModalOpen && modalData && (
+        <TeacherReportConfigModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          teacherId={modalData.teacherId}
+          teacherName={modalData.teacherName}
+          teacherPhone={modalData.teacherPhone}
+          startDate={modalData.startDate}
+          endDate={modalData.endDate}
+          payslipId={payslipId}
+          locale={locale}
+        />
+      )}
+    </>
   );
 };
 

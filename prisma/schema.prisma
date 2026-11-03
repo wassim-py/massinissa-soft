@@ -751,17 +751,37 @@ model DailyExpense {
 }
 
 model CaisseNoireTransaction {
-  id          Int      @id @default(autoincrement())
-  type        String // "DEPOSIT" | "WITHDRAWAL"
-  amount      Decimal
-  description String
-  date        DateTime @default(now())
-  recordedBy  String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               Int               @id @default(autoincrement())
+  type             String // "DEPOSIT" | "WITHDRAWAL"
+  amount           Decimal
+  description      String
+  date             DateTime          @default(now())
+  recordedBy       String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  sectionTransfers SectionTransfer[]
 
   @@index([date])
   @@index([type])
+}
+
+model SectionTransfer {
+  id              Int                     @id @default(autoincrement())
+  fromSection     String // "PHOTOCOPY_DEDUCTIONS" | "FORMATION_INCOMES" | "INSCRIPTION_FEES" | "FORMATION_BOOKS" | "CAISSE_NOIRE" | "GENERAL_TREASURY"
+  toSection       String // "CAISSE_NOIRE" | "GENERAL_TREASURY" | ...
+  amount          Decimal
+  date            DateTime                @default(now())
+  reason          String?
+  recordedBy      String
+  branchId        Int?
+  caisseNoireTxId Int?
+  caisseNoireTx   CaisseNoireTransaction? @relation(fields: [caisseNoireTxId], references: [id], onDelete: SetNull)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@index([fromSection, date])
+  @@index([toSection, date])
+  @@index([date])
 }
 
 model StaffMember {

@@ -44,6 +44,7 @@ const TransferredMoneySection = nextDynamic(() => import("@/components/finance/T
 
 import { getTranslations, getLocale } from "next-intl/server";
 import { getCaisseNoireSummary } from "@/lib/financeActions";
+import GlobalFinanceTopActions from "@/components/finance/GlobalFinanceTopActions";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -129,6 +130,7 @@ export default async function FinancePage(props: PageProps) {
     rawStaffPayrolls,
     rawStaffAdvances,
     allBranchesData,
+    rawSectionTransfers,
   ] = await Promise.all([
     prisma.dailyExpense.findMany({
       include: { branch: { select: { id: true, name: true } } },
@@ -167,6 +169,10 @@ export default async function FinancePage(props: PageProps) {
     prisma.branch.findMany({
       select: { id: true, name: true },
       orderBy: { id: "asc" },
+    }),
+    prisma.sectionTransfer.findMany({
+      orderBy: { date: "desc" },
+      take: 100,
     }),
   ]);
 
@@ -220,6 +226,19 @@ export default async function FinancePage(props: PageProps) {
     year: a.year,
     notes: a.notes,
     recordedBy: a.recordedBy,
+  }));
+
+  const formattedSectionTransfers = rawSectionTransfers.map((st) => ({
+    id: st.id,
+    fromSection: st.fromSection,
+    toSection: st.toSection,
+    amount: Number(st.amount),
+    date: st.date.toISOString(),
+    reason: st.reason,
+    recordedBy: st.recordedBy,
+    branchId: st.branchId,
+    caisseNoireTxId: st.caisseNoireTxId,
+    createdAt: st.createdAt.toISOString(),
   }));
 
   const totalDailyExpensesSum = formattedExpenses.reduce((sum, e) => sum + e.amount, 0);
@@ -482,74 +501,83 @@ export default async function FinancePage(props: PageProps) {
           </div>
         </div>
 
-        {/* Primary Section Switcher */}
-        <div className="flex items-center bg-surface-muted border border-border p-1 rounded-xl shadow-xs text-xs font-semibold overflow-x-auto scrollbar-none w-full sm:w-auto">
-          <Link
-            href={`/list/finance?section=revenue`}
-            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
-              activeSection === "revenue"
-                ? "bg-primary text-white shadow-xs"
-                : "text-muted hover:text-gray-900 hover:bg-surface"
-            }`}
-          >
-            <TrendingUp className="w-4 h-4 shrink-0" />
-            <span>{t("revenueTab")}</span>
-          </Link>
-          <Link
-            href={`/list/finance?section=expenses`}
-            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
-              activeSection === "expenses"
-                ? "bg-primary text-white shadow-xs"
-                : "text-muted hover:text-gray-900 hover:bg-surface"
-            }`}
-          >
-            <Receipt className="w-4 h-4 shrink-0" />
-            <span>{t("expensesTab")}</span>
-          </Link>
-          <Link
-            href={`/list/finance?section=payroll&tab=runs`}
-            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
-              activeSection === "payroll"
-                ? "bg-primary text-white shadow-xs"
-                : "text-muted hover:text-gray-900 hover:bg-surface"
-            }`}
-          >
-            <GraduationCap className="w-4 h-4 shrink-0" />
-            <span>{t("payrollTab")}</span>
-          </Link>
-          <Link
-            href={`/list/finance?section=staff`}
-            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
-              activeSection === "staff"
-                ? "bg-primary text-white shadow-xs"
-                : "text-muted hover:text-gray-900 hover:bg-surface"
-            }`}
-          >
-            <Users className="w-4 h-4 shrink-0" />
-            <span>{t("staffPayrollTab")}</span>
-          </Link>
-          <Link
-            href={`/list/finance?section=caisseNoire`}
-            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
-              activeSection === "caisseNoire"
-                ? "bg-primary text-white shadow-xs"
-                : "text-muted hover:text-gray-900 hover:bg-surface"
-            }`}
-          >
-            <Wallet className="w-4 h-4 shrink-0" />
-            <span>{t("caisseNoireTab")}</span>
-          </Link>
-          <Link
-            href={`/list/finance?section=transfers`}
-            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
-              activeSection === "transfers"
-                ? "bg-primary text-white shadow-xs"
-                : "text-muted hover:text-gray-900 hover:bg-surface"
-            }`}
-          >
-            <ArrowRightLeft className="w-4 h-4 shrink-0" />
-            <span>{t("transfersTab")}</span>
-          </Link>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
+          {/* Action buttons: Global Report & Transfer Money */}
+          <GlobalFinanceTopActions
+            branches={allBranchesData}
+            initialBranchId={String(selectedBranchParam)}
+            locale={locale}
+          />
+
+          {/* Primary Section Switcher */}
+          <div className="flex items-center bg-surface-muted border border-border p-1 rounded-xl shadow-xs text-xs font-semibold overflow-x-auto scrollbar-none w-full sm:w-auto">
+            <Link
+              href={`/list/finance?section=revenue`}
+              className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+                activeSection === "revenue"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900 hover:bg-surface"
+              }`}
+            >
+              <TrendingUp className="w-4 h-4 shrink-0" />
+              <span>{t("revenueTab")}</span>
+            </Link>
+            <Link
+              href={`/list/finance?section=expenses`}
+              className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+                activeSection === "expenses"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900 hover:bg-surface"
+              }`}
+            >
+              <Receipt className="w-4 h-4 shrink-0" />
+              <span>{t("expensesTab")}</span>
+            </Link>
+            <Link
+              href={`/list/finance?section=payroll&tab=runs`}
+              className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+                activeSection === "payroll"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900 hover:bg-surface"
+              }`}
+            >
+              <GraduationCap className="w-4 h-4 shrink-0" />
+              <span>{t("payrollTab")}</span>
+            </Link>
+            <Link
+              href={`/list/finance?section=staff`}
+              className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+                activeSection === "staff"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900 hover:bg-surface"
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0" />
+              <span>{t("staffPayrollTab")}</span>
+            </Link>
+            <Link
+              href={`/list/finance?section=caisseNoire`}
+              className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+                activeSection === "caisseNoire"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900 hover:bg-surface"
+              }`}
+            >
+              <Wallet className="w-4 h-4 shrink-0" />
+              <span>{t("caisseNoireTab")}</span>
+            </Link>
+            <Link
+              href={`/list/finance?section=transfers`}
+              className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
+                activeSection === "transfers"
+                  ? "bg-primary text-white shadow-xs"
+                  : "text-muted hover:text-gray-900 hover:bg-surface"
+              }`}
+            >
+              <ArrowRightLeft className="w-4 h-4 shrink-0" />
+              <span>{t("transfersTab")}</span>
+            </Link>
+          </div>
         </div>
       </Card>
 
@@ -820,6 +848,7 @@ export default async function FinancePage(props: PageProps) {
       {activeSection === "transfers" && (
         <TransferredMoneySection
           transfers={formattedTransfers}
+          sectionTransfers={formattedSectionTransfers}
           branches={allBranchesData}
           locale={locale}
         />
