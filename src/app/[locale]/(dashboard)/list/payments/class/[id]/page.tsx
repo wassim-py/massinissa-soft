@@ -59,7 +59,7 @@ const ClassPaymentHistoryPage = async (
       enrollments: {
         where: {
           OR: [
-            { status: "ACTIVE", transfersFrom: { none: {} } },
+            { status: "ACTIVE" },
             { status: "TRANSFERRED" },
             { transfersFrom: { some: {} } },
           ],
@@ -180,6 +180,7 @@ const ClassPaymentHistoryPage = async (
         where: { isFree: false },
         include: {
           attendances: true,
+          lessonGroups: { select: { classId: true } },
         },
         orderBy: { startsAt: "asc" },
       },
@@ -199,6 +200,7 @@ const ClassPaymentHistoryPage = async (
     },
     include: {
       attendances: true,
+      lessonGroups: { select: { classId: true } },
     },
     orderBy: { startsAt: "asc" },
   });

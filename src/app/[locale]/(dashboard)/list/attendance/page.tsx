@@ -189,7 +189,6 @@ const AttendanceListPage = async (
               enrollments: {
                 where: {
                   status: "ACTIVE",
-                  transfersFrom: { none: {} },
                 },
               },
               lessons: true,
@@ -284,7 +283,6 @@ const AttendanceListPage = async (
                 enrollments: {
                   where: {
                     status: "ACTIVE",
-                    transfersFrom: { none: {} },
                   },
                 },
                 lessons: true,

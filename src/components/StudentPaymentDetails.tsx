@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { Voucher, VoucherEdit, Refund } from "@prisma/client";
@@ -12,7 +13,7 @@ import {
   formatPaymentTime,
   formatPaymentDateTime,
 } from "@/lib/voucherUtils";
-import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
+import { transferEnrollmentCredit, cancelEnrollmentTransfer, createRefund } from "@/lib/actions";
 import {
   computeStudentSessionFee,
   computeStudentConsumedSessions,
@@ -26,7 +27,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
-import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, ArrowRightLeft, ChevronDown, ChevronUp, Users } from "lucide-react";
+import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, ArrowRightLeft, RotateCcw, ChevronDown, ChevronUp, Users } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
 export type ExtendedTransferItem = {
@@ -258,10 +259,12 @@ export default function StudentPaymentDetails({
   const [isRefundPending, startRefundTransition] = useTransition();
 
   // Transfer state
+  const router = useRouter();
   const [targetClassId, setTargetClassId] = useState<number | "">("");
   const [sessionsToTransfer, setSessionsToTransfer] = useState<number>(1);
   const [transferNotes, setTransferNotes] = useState<string>("");
   const [isTransferPending, startTransferTransition] = useTransition();
+  const [cancellingTransferId, setCancellingTransferId] = useState<number | null>(null);
 
   // Sibling discount check: applies if primary payer is active and has at least one paid cycle
   const hasPayerSibling = Boolean(
@@ -546,7 +549,7 @@ export default function StudentPaymentDetails({
           const isGroupLesson = att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id);
           if (!isDirectClass && !isGroupLesson) return false;
 
-          if (!isLessonApplicableToEnrollment({ ...att.lesson, hasExplicitAttendance: Boolean(att.status) }, c.id, { ...enr, student } as any)) {
+          if (!isLessonApplicableToEnrollment({ ...att.lesson, hasExplicitAttendance: att.status === "PRESENT", status: att.status }, c.id, { ...enr, student } as any)) {
             return false;
           }
 
@@ -651,6 +654,8 @@ export default function StudentPaymentDetails({
       isSiblingWaived: enrIsSiblingWaived100,
       isPayerSiblingPaid: enrIsSiblingWaived100 ? enrPayerActiveAndPaid : true,
       siblingDiscountPct: enrSiblingDiscountPct,
+      isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
+      payerStatus: enrPayerStatus,
     };
   });
 
@@ -703,7 +708,6 @@ export default function StudentPaymentDetails({
       !transferModal.enrollment ||
       !targetClassId ||
       sessionsToTransfer < 0 ||
-      (transferModal.maxSessions > 0 && sessionsToTransfer < 1) ||
       sessionsToTransfer > transferModal.maxSessions
     ) {
       toast.error(t("transferSelectError"));
@@ -725,8 +729,35 @@ export default function StudentPaymentDetails({
       if (res.success) {
         toast.success(res.message);
         setTransferModal({ isOpen: false, maxSessions: 0 });
+        router.refresh();
       } else {
         toast.error(res.message);
+      }
+    });
+  };
+
+  const handleCancelTransfer = (trf: ExtendedTransferItem) => {
+    const fromName = trf.fromClass?.name || (locale === "ar" ? "الفوج المصدر" : "le groupe source");
+    const toName = trf.toClass?.name || (locale === "ar" ? "الفوج الهدف" : "le groupe cible");
+    const confirmMsg =
+      locale === "ar"
+        ? `هل أنت متأكد من إلغاء وحذف التحويل (#TRF-${trf.id}) من "${fromName}" إلى "${toName}" وإعادة الرصيد للتسجيل السابق؟`
+        : `Êtes-vous sûr de vouloir annuler et supprimer le transfert (#TRF-${trf.id}) de "${fromName}" vers "${toName}" ?`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setCancellingTransferId(trf.id);
+    startTransferTransition(async () => {
+      try {
+        const res = await cancelEnrollmentTransfer(trf.id);
+        if (res.success) {
+          toast.success(res.message);
+          setAuditModal({ isOpen: false });
+          router.refresh();
+        } else {
+          toast.error(res.message);
+        }
+      } finally {
+        setCancellingTransferId(null);
       }
     });
   };
@@ -1318,8 +1349,8 @@ export default function StudentPaymentDetails({
                             </Badge>
                           )}
                           {(cm.enrollment as any).payerStatus === "SCHOOL_FEES_ONLY" && (
-                            <Badge variant="warning" size="sm">
-                              <ShieldAlert className="w-3 h-3 text-warning" />
+                            <Badge variant="primary" size="sm" className="bg-sky-100 text-sky-900 border border-sky-300 font-semibold">
+                              <ShieldAlert className="w-3 h-3 text-sky-700" />
                               <span>
                                 {locale === "ar"
                                   ? `حصة المدرسة (${cm.feeCalc.schoolPercentage}%)`
@@ -1351,6 +1382,22 @@ export default function StudentPaymentDetails({
                             <Badge variant="danger" size="sm" withDot className="font-bold">
                               {locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)"}
                             </Badge>
+                          ) : (cm.enrollment as any).payerStatus === "SCHOOL_FEES_ONLY" || cm.isSchoolFeesOnly ? (
+                            isExpiring ? (
+                              <Badge variant="warning" size="sm" withDot className="font-bold">
+                                {locale === "ar" ? "حصة واحدة متبقية (حصة المدرسة)" : "1 séance restante (Part école)"}
+                              </Badge>
+                            ) : isPaid ? (
+                              <Badge variant="success" size="sm" withDot>
+                                {locale === "ar" ? `مدفوع (${cm.netSessions} حصص - حصة المدرسة)` : `Payé (${cm.netSessions} séa. - Part école)`}
+                              </Badge>
+                            ) : isUnpaid ? (
+                              <Badge variant="danger" size="sm" withDot>
+                                {locale === "ar"
+                                  ? (cm.netSessions < 0 ? `${cm.netSessions} حصة (دين - حصة المدرسة)` : "غير مدفوع (حصة المدرسة)")
+                                  : (cm.netSessions < 0 ? `${cm.netSessions} séa. (dette - Part école)` : "Non payé (Part école)")}
+                              </Badge>
+                            ) : null
                           ) : isExpiring ? (
                             <Badge variant="warning" size="sm" withDot className="font-bold">
                               {t("expiringWarningBadge")}
@@ -1392,6 +1439,11 @@ export default function StudentPaymentDetails({
                               ? (locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)")
                               : cm.netSessions}
                           </span>
+                          {((cm.enrollment as any).payerStatus === "SCHOOL_FEES_ONLY" || cm.isSchoolFeesOnly) && (
+                            <span className="block text-[10px] text-sky-800 font-semibold mt-0.5">
+                              {locale === "ar" ? "(حصة المدرسة)" : "(Part école)"}
+                            </span>
+                          )}
                           {cm.transferableSessions > cm.netSessions && (
                             <span
                               className="block text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded font-medium mt-1 mx-auto max-w-fit"
@@ -1689,7 +1741,7 @@ export default function StudentPaymentDetails({
                                 <span className="text-gray-800 font-medium">
                                   {trf.fromClass?.name || (locale === "ar" ? "فوج مصدر" : "Groupe source")}
                                 </span>
-                                <span className="text-purple-600 font-bold px-0.5">➔</span>
+                                <span className="text-purple-600 font-bold px-0.5 inline-block rtl:scale-x-[-1]">➔</span>
                                 <span className="text-purple-950 font-bold">
                                   {trf.toClass?.name || (locale === "ar" ? "فوج هدف" : "Groupe cible")}
                                 </span>
@@ -1758,6 +1810,18 @@ export default function StudentPaymentDetails({
                                   <ArrowRightLeft className="w-3 h-3 text-purple-700" />
                                   <span>{t("auditBtn")}</span>
                                 </button>
+                                {trfRefunds.length === 0 && (
+                                  <button
+                                    type="button"
+                                    disabled={isTransferPending && cancellingTransferId === trf.id}
+                                    onClick={() => handleCancelTransfer(trf)}
+                                    className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition-colors inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                    title={locale === "ar" ? "إلغاء وحذف التحويل وإعادة الرصيد للفوج السابق" : "Annuler et supprimer le transfert"}
+                                  >
+                                    <RotateCcw className="w-3 h-3 text-amber-700" />
+                                    <span>{locale === "ar" ? "إلغاء التحويل" : "Annuler"}</span>
+                                  </button>
+                                )}
                                 {canRefundTransfer && (
                                   <button
                                     type="button"
@@ -2105,11 +2169,10 @@ export default function StudentPaymentDetails({
                 <div className="relative flex items-center">
                   <input
                     type="number"
-                    min={transferModal.maxSessions > 0 ? "1" : "0"}
+                    min="0"
                     max={transferModal.maxSessions}
                     value={sessionsToTransfer}
                     onChange={(e) => setSessionsToTransfer(Number(e.target.value))}
-                    disabled={transferModal.maxSessions === 0}
                     className="w-full border border-border rounded p-2 text-xs font-mono pe-16"
                   />
                   {transferModal.maxSessions > 0 && (
@@ -2145,7 +2208,6 @@ export default function StudentPaymentDetails({
                     isTransferPending ||
                     !targetClassId ||
                     sessionsToTransfer < 0 ||
-                    (transferModal.maxSessions > 0 && sessionsToTransfer < 1) ||
                     sessionsToTransfer > transferModal.maxSessions
                   }
                 >
@@ -2346,6 +2408,25 @@ export default function StudentPaymentDetails({
                               }
                             >
                               {t("refundBtn")}
+                            </Button>
+                          </div>
+                        )}
+                        {trfRefunds.length === 0 && (
+                          <div className="pt-2 border-t border-border flex items-center justify-between gap-2">
+                            <span className="text-xs text-muted">
+                              {locale === "ar"
+                                ? "إلغاء هذا التحويل نهائياً وإعادة الحصص للفوج المصدر"
+                                : "Annuler définitivement ce transfert et restaurer le groupe source"}
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              disabled={isTransferPending && cancellingTransferId === trf.id}
+                              onClick={() => handleCancelTransfer(trf)}
+                              className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 me-1 inline" />
+                              {locale === "ar" ? "إلغاء وحذف التحويل" : "Annuler le transfert"}
                             </Button>
                           </div>
                         )}

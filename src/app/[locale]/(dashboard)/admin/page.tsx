@@ -333,6 +333,8 @@ const AdminPage = async () => {
         lessonTime: timeSlot,
         remainingSessions,
         status,
+        isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
+        payerStatus: enrPayerStatus,
         studentData: {
           id: student.id,
           name: student.name,

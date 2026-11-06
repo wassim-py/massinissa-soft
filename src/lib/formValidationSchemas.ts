@@ -63,7 +63,10 @@ export const studentSchema = z.object({
   surname: z.string().min(1, { message: "اللقب مطلوب!" }),
   phone: z.string().optional().or(z.literal("")),
   address: z.string().min(1, { message: "العنوان مطلوب!" }),
-  birthday: z.coerce.date({ message: "تاريخ الميلاد مطلوب!" }),
+  birthday: z.coerce
+    .date({ message: "تاريخ الميلاد مطلوب!" })
+    .min(new Date("1920-01-01"), { message: "تاريخ الميلاد غير صالح!" })
+    .max(new Date("2030-12-31"), { message: "تاريخ الميلاد غير صالح!" }),
   sex: z.enum(["MALE", "FEMALE"], { message: "الجنس مطلوب!" }),
   gradeId: z.coerce.number().min(1, { message: "المستوى مطلوب!" }),
   classes: z.array(z.number()).optional(),
@@ -84,7 +87,10 @@ export const getStudentSchema = (t?: (key: string) => string) => {
     surname: z.string().min(1, { message: t("errors.surnameRequired") }),
     phone: z.string().optional().or(z.literal("")),
     address: z.string().min(1, { message: t("errors.addressRequired") }),
-    birthday: z.coerce.date({ message: t("errors.birthdayRequired") }),
+    birthday: z.coerce
+      .date({ message: t("errors.birthdayRequired") })
+      .min(new Date("1920-01-01"), { message: t("errors.birthdayRequired") })
+      .max(new Date("2030-12-31"), { message: t("errors.birthdayRequired") }),
     sex: z.enum(["MALE", "FEMALE"], { message: t("errors.sexRequired") }),
     gradeId: z.coerce.number().min(1, { message: t("errors.gradeRequired") }),
     classes: z.array(z.number()).optional(),

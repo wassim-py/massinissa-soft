@@ -107,9 +107,12 @@ const StudentForm = ({
           parentPhoneNumbers: Array.isArray(data.parentPhoneNumbers)
             ? data.parentPhoneNumbers.map((p: any) => (typeof p === "string" ? p : p.phone))
             : [],
-          birthday: data.birthday && !isNaN(new Date(data.birthday).getTime())
-            ? new Date(data.birthday).toISOString().split("T")[0]
-            : undefined,
+          birthday: (() => {
+            if (!data.birthday) return undefined;
+            const d = new Date(data.birthday);
+            if (isNaN(d.getTime()) || d.getFullYear() < 1920 || d.getFullYear() > 2100) return undefined;
+            return d.toISOString().split("T")[0];
+          })(),
         }
       : {
           name: "",
@@ -898,6 +901,7 @@ const StudentForm = ({
           register={register}
           error={errors.birthday}
           type="date"
+          inputProps={{ min: "1940-01-01", max: "2030-12-31" }}
         />
 
         {/* GENDER SELECT */}
@@ -1459,9 +1463,13 @@ const StudentForm = ({
       {showDuplicateModal && duplicateCandidates.length > 0 && (() => {
         const activeCand = duplicateCandidates[selectedCandidateIndex] || duplicateCandidates[0];
         const inputFullName = [watchedSurname, watchedName].filter(Boolean).join(" ").trim() || "-";
-        const inputBirthdayStr = watchedBirthday
-          ? new Date(watchedBirthday).toISOString().split("T")[0]
-          : null;
+        const inputBirthdayStr = (() => {
+          if (!watchedBirthday) return null;
+          const d = new Date(watchedBirthday);
+          return !isNaN(d.getTime()) && d.getFullYear() >= 1920 && d.getFullYear() <= 2100
+            ? d.toISOString().split("T")[0]
+            : null;
+        })();
 
         return (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4 font-sans">

@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { Link } from "@/i18n/navigation";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -29,6 +29,8 @@ export interface StudentToWatchItem {
   lessonTime: string;
   remainingSessions: number;
   status: "EXPIRING" | "UNPAID" | "PAID";
+  isSchoolFeesOnly?: boolean;
+  payerStatus?: string;
   studentData: any;
   classData: any;
 }
@@ -38,6 +40,7 @@ interface StudentsToWatchProps {
 }
 
 export default function StudentsToWatch({ students }: StudentsToWatchProps) {
+  const locale = useLocale();
   const [filterMode, setFilterMode] = useState<"expiring_only" | "all">(
     "expiring_only"
   );
@@ -179,16 +182,24 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
                         {isUnpaid ? (
                           <Badge variant="danger" size="sm" withDot>
                             <AlertCircle className="w-3 h-3 mr-1 inline" />
-                            {t("unpaidSession")} ({item.remainingSessions})
+                            {item.isSchoolFeesOnly || item.payerStatus === "SCHOOL_FEES_ONLY"
+                              ? (locale === "ar" ? `غير مدفوع (حصة المدرسة) (${item.remainingSessions})` : `Non payé (Part école) (${item.remainingSessions})`)
+                              : `${t("unpaidSession")} (${item.remainingSessions})`}
                           </Badge>
                         ) : isLastSession ? (
                           <Badge variant="warning" size="sm" withDot>
                             <AlertTriangle className="w-3 h-3 mr-1 inline" />
-                            {t("lastPaidSession")}
+                            {item.isSchoolFeesOnly || item.payerStatus === "SCHOOL_FEES_ONLY"
+                              ? (locale === "ar" ? "جلسة واحدة متبقية (حصة المدرسة)" : "1 séance restante (Part école)")
+                              : t("lastPaidSession")}
                           </Badge>
                         ) : (
                           <Badge variant="success" size="sm">
-                            {item.remainingSessions > 1
+                            {item.isSchoolFeesOnly || item.payerStatus === "SCHOOL_FEES_ONLY"
+                              ? (locale === "ar"
+                                  ? `${item.remainingSessions} حصص (حصة المدرسة)`
+                                  : `${item.remainingSessions} séances (Part école)`)
+                              : item.remainingSessions > 1
                               ? t("remainingSessionsPlural", {
                                   count: item.remainingSessions,
                                 })
@@ -203,6 +214,11 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
                         <span className="font-medium text-gray-800">
                           {item.className}
                         </span>
+                        {(item.isSchoolFeesOnly || item.payerStatus === "SCHOOL_FEES_ONLY") && (
+                          <Badge variant="primary" size="sm" className="bg-sky-100 text-sky-900 border border-sky-300 font-semibold text-[10px] py-0 px-1.5 h-4.5">
+                            {locale === "ar" ? "حصة المدرسة" : "Part école"}
+                          </Badge>
+                        )}
                         <span>•</span>
                         <span>{item.teacherName}</span>
                         <span>•</span>

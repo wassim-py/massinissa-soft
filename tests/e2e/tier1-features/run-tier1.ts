@@ -11,9 +11,11 @@ import { runF09Tests } from "./f09-unified-revalidation-helper.test";
 import { runF10Tests } from "./f10-mutating-actions-revalidation.test";
 import { runF11Tests } from "./f11-schedules-attendance-timezone.test";
 import { runF12Tests } from "./f12-e2e-adversarial-hardening.test";
+import { runF13Tests } from "./f13-auto-save-ended-lesson-attendance.test";
+import { runF14Tests } from "./f14-daily-ledger-cross-payments.test";
 
 export async function runTier1() {
-  console.log("\n>>> STARTING TIER 1: FEATURE COVERAGE (F1 - F12) <<<\n");
+  console.log("\n>>> STARTING TIER 1: FEATURE COVERAGE (F1 - F14) <<<\n");
   await runF01Tests();
   await runF02Tests();
   await runF03Tests();
@@ -26,6 +28,8 @@ export async function runTier1() {
   await runF10Tests();
   await runF11Tests();
   await runF12Tests();
+  await runF13Tests();
+  await runF14Tests();
   await runner.runQueuedTests();
   return runner.getSummary();
 }

@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useTransition, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import { Class, Student, Voucher, Enrollment, EnrollmentTransfer, VoucherEdit, Refund } from "@prisma/client";
 import PaymentForm from "./forms/PaymentForm";
 import PrintTicketButton from "./PrintTicketButton";
-import { transferEnrollmentCredit, createRefund } from "@/lib/actions";
+import { transferEnrollmentCredit, cancelEnrollmentTransfer, createRefund } from "@/lib/actions";
 import {
   computeStudentSessionFee,
   computeStudentConsumedSessions,
@@ -26,7 +27,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { FormField, Input, Select } from "@/components/ui/FormField";
 import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
-import { ArrowRightLeft, X, Phone } from "lucide-react";
+import { ArrowRightLeft, RotateCcw, X, Phone } from "lucide-react";
 import BookStatusBadge, { BookStudentStatus, computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
 
 export type ExtendedEnrollment = Enrollment & {
@@ -81,6 +82,9 @@ type CombinedRecord = {
   rawTransfer?: any;
   badgeVariant: "success" | "warning" | "danger" | "primary" | "secondary" | "neutral";
   canRefund?: boolean;
+  canCancelTransfer?: boolean;
+  fromClassName?: string;
+  toClassName?: string;
   maxRefundable?: number;
   unconsumedInCycle?: number;
 };
@@ -250,10 +254,36 @@ export default function PaymentGrid({
   };
 
   // Transfer form state
+  const router = useRouter();
   const [targetClassId, setTargetClassId] = useState<number | "">("");
   const [sessionsToTransfer, setSessionsToTransfer] = useState<number>(1);
   const [transferNotes, setTransferNotes] = useState<string>("");
   const [isPending, startTransition] = useTransition();
+  const [cancellingTransferId, setCancellingTransferId] = useState<number | null>(null);
+
+  const handleCancelTransfer = (transferId: number, fromName?: string, toName?: string) => {
+    const confirmMsg =
+      locale === "ar"
+        ? `هل أنت متأكد من إلغاء وحذف التحويل (#TRF-${transferId}) من "${fromName || ""}" إلى "${toName || ""}" وإعادة الرصيد للفوج السابق؟`
+        : `Êtes-vous sûr de vouloir annuler et supprimer le transfert (#TRF-${transferId}) de "${fromName || ""}" vers "${toName || ""}" ?`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setCancellingTransferId(transferId);
+    startTransition(async () => {
+      try {
+        const res = await cancelEnrollmentTransfer(transferId);
+        if (res.success) {
+          toast.success(res.message);
+          setModificationModal({ isOpen: false, studentName: "", student: null, records: [] });
+          router.refresh();
+        } else {
+          toast.error(res.message);
+        }
+      } finally {
+        setCancellingTransferId(null);
+      }
+    });
+  };
 
   // Deduplicate enrollments by studentId defensively and exclude transferred-out students
   const uniqueEnrollmentsMap = new Map<string, typeof classData.enrollments[0]>();
@@ -413,8 +443,8 @@ export default function PaymentGrid({
     const studentAtts: Array<{ lessonId: number; status: string }> = [];
     classData.lessons.forEach((l) => {
       const att = l.attendances.find((a) => a.studentId === student.id);
-      const hasExplicitAttendance = Boolean(att?.status);
-      if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance } as any, classData.id, enrollment as any)) {
+      const hasExplicitAttendance = att?.status === "PRESENT";
+      if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance, status: att?.status } as any, classData.id, enrollment as any)) {
         return;
       }
       if (att) {
@@ -637,7 +667,6 @@ export default function PaymentGrid({
       !transferModal.enrollment ||
       !targetClassId ||
       sessionsToTransfer < 0 ||
-      (transferModal.maxSessions > 0 && sessionsToTransfer < 1) ||
       sessionsToTransfer > transferModal.maxSessions
     ) {
       toast.error(t("invalidTransferError"));
@@ -820,13 +849,17 @@ export default function PaymentGrid({
         records.push({
           id: `transfer-from-${tf.id}`,
           type: "TRANSFER",
-          title: t("recordTypeTransfer"),
+          title: `${t("recordTypeTransfer")} #TRF-${tf.id}`,
           subtitle: tf.notes || "",
           sessions: -tf.transferredSessions,
           date: tf.transferredAt,
           user: tf.transferredBy,
           badgeVariant: "warning",
           details: tf.notes,
+          rawTransfer: tf,
+          fromClassName: classData.name,
+          toClassName: tf.toEnrollment?.class?.name || (locale === "ar" ? "فوج هدف" : "Groupe cible"),
+          canCancelTransfer: true,
         });
       });
     }
@@ -840,8 +873,8 @@ export default function PaymentGrid({
           .filter((r: any) => typeof r.reason === "string" && r.reason.startsWith(tagPrefix));
         const totalRefunded = transferRefunds.reduce((sum: number, r: any) => sum + Number(r.amount), 0);
         const origAmount =
-          Number(tt.transferredAmount) > 0
-            ? Number(tt.transferredAmount)
+          Number(tt.transferredAmount || tt.amount) > 0
+            ? Number(tt.transferredAmount || tt.amount)
             : Math.round(tt.transferredSessions * (Number(classData.pricePerCycle) / 4));
         const remTransferAmount = Math.max(0, origAmount - totalRefunded);
         const sessionRate =
@@ -873,7 +906,10 @@ export default function PaymentGrid({
           badgeVariant: remTransferAmount <= 0 ? "danger" : "primary",
           details: tt.notes,
           rawTransfer: { ...tt, _origAmount: origAmount, _remAmount: remTransferAmount },
+          fromClassName: tt.fromEnrollment?.class?.name || (locale === "ar" ? "فوج مصدر" : "Groupe source"),
+          toClassName: classData.name,
           canRefund: canRefundTransfer,
+          canCancelTransfer: transferRefunds.length === 0,
           maxRefundable: maxRefundableTransfer,
           unconsumedInCycle: unconsumedTransferSessions,
         });
@@ -1002,8 +1038,8 @@ export default function PaymentGrid({
               </Badge>
             )}
             {((item.enrollment as any)?.payerStatus || (s as any)?.payerStatus) === "SCHOOL_FEES_ONLY" && (
-              <Badge variant="warning" size="sm">
-                {locale === "ar" ? "مستحقات المدرسة فقط" : "Frais école"}
+              <Badge variant="primary" size="sm" className="bg-sky-100 text-sky-900 border border-sky-300 font-semibold">
+                {locale === "ar" ? "حصة المدرسة فقط" : "Frais école seuls"}
               </Badge>
             )}
             {item.transferredIn > 0 && (
@@ -1128,9 +1164,15 @@ export default function PaymentGrid({
                 }
                 size="sm"
               >
-                {t("sessionsCount", {
-                  count: item.netSessions,
-                })}
+                {item.isSchoolFeesOnly
+                  ? item.netSessions >= 2
+                    ? locale === "ar" ? `${item.netSessions} حصص (حصة المدرسة)` : `${item.netSessions} séa. (Part école)`
+                    : item.netSessions === 1
+                    ? locale === "ar" ? "1 حصة (حصة المدرسة)" : "1 séa. (Part école)"
+                    : locale === "ar" ? (item.netSessions < 0 ? `${item.netSessions} حصة (حصة المدرسة)` : "غير مدفوع (حصة المدرسة)") : (item.netSessions < 0 ? `${item.netSessions} séa. (Part école)` : "Non payé (Part école)")
+                  : t("sessionsCount", {
+                      count: item.netSessions,
+                    })}
               </Badge>
               {item.transferableSessions > item.netSessions && (
                 <span
@@ -1159,7 +1201,7 @@ export default function PaymentGrid({
                 </span>
               )}
               {item.isSchoolFeesOnly && (
-                <span className="text-[10px] text-amber-700 font-medium">
+                <span className="text-[10px] text-sky-800 font-semibold">
                   {locale === "ar" ? "حصة المدرسة" : "Part école"}
                 </span>
               )}
@@ -1504,10 +1546,16 @@ export default function PaymentGrid({
                             }
                             size="sm"
                           >
-                            {t("sessionsCount", { count: item.netSessions })}
+                            {item.isSchoolFeesOnly
+                              ? item.netSessions >= 2
+                                ? locale === "ar" ? `${item.netSessions} حصص (حصة المدرسة)` : `${item.netSessions} séa. (Part école)`
+                                : item.netSessions === 1
+                                ? locale === "ar" ? "1 حصة (حصة المدرسة)" : "1 séa. (Part école)"
+                                : locale === "ar" ? (item.netSessions < 0 ? `${item.netSessions} حصة (حصة المدرسة)` : "غير مدفوع (حصة المدرسة)") : (item.netSessions < 0 ? `${item.netSessions} séa. (Part école)` : "Non payé (Part école)")
+                              : t("sessionsCount", { count: item.netSessions })}
                           </Badge>
                           {item.isSchoolFeesOnly && (
-                            <span className="text-[10px] text-amber-700 font-medium">
+                            <span className="text-[10px] text-sky-800 font-semibold">
                               {locale === "ar" ? "حصة المدرسة" : "Part école"}
                             </span>
                           )}
@@ -1744,12 +1792,11 @@ export default function PaymentGrid({
                 <div className="relative flex items-center">
                   <Input
                     type="number"
-                    min={transferModal.maxSessions > 0 ? "1" : "0"}
+                    min="0"
                     max={transferModal.maxSessions}
                     value={sessionsToTransfer}
                     onChange={(e) => setSessionsToTransfer(Number(e.target.value))}
                     required
-                    disabled={transferModal.maxSessions === 0}
                     className="font-mono pe-16"
                   />
                   {transferModal.maxSessions > 0 && (
@@ -1793,7 +1840,6 @@ export default function PaymentGrid({
                     isPending ||
                     !targetClassId ||
                     sessionsToTransfer < 0 ||
-                    (transferModal.maxSessions > 0 && sessionsToTransfer < 1) ||
                     sessionsToTransfer > transferModal.maxSessions
                   }
                 >
@@ -1865,6 +1911,13 @@ export default function PaymentGrid({
                             {record.title}
                           </span>
                         </div>
+                        {record.type === "TRANSFER" && (record.fromClassName || record.toClassName) && (
+                          <div className="flex items-center gap-1.5 flex-wrap text-xs pt-0.5">
+                            <span className="text-gray-800 font-medium">{record.fromClassName}</span>
+                            <span className="text-purple-600 font-bold px-0.5 inline-block rtl:scale-x-[-1]">➔</span>
+                            <span className="text-purple-950 font-bold">{record.toClassName}</span>
+                          </div>
+                        )}
                         {record.subtitle && (
                           <p className="text-xs text-muted">{record.subtitle}</p>
                         )}
@@ -1924,6 +1977,33 @@ export default function PaymentGrid({
                           }
                         >
                           {t("refundBtn")}
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Action: Cancel / Undo Transfer */}
+                    {record.type === "TRANSFER" && record.canCancelTransfer && record.rawTransfer?.id && (
+                      <div className="pt-2 border-t border-border/80 flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-xs text-muted">
+                          {locale === "ar"
+                            ? "إلغاء وحذف التحويل وإعادة الرصيد للفوج السابق"
+                            : "Annuler et supprimer le transfert"}
+                        </span>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={isPending && cancellingTransferId === record.rawTransfer.id}
+                          onClick={() =>
+                            handleCancelTransfer(
+                              record.rawTransfer.id,
+                              record.fromClassName,
+                              record.toClassName
+                            )
+                          }
+                          className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 me-1 inline" />
+                          {locale === "ar" ? "إلغاء التحويل" : "Annuler"}
                         </Button>
                       </div>
                     )}

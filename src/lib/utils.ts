@@ -60,7 +60,7 @@ export function serializeForClient<T>(val: T): T {
       return Number(val) as any;
     }
     if (val instanceof Date) {
-      return val;
+      return isNaN(val.getTime()) ? (null as any) : val;
     }
     if (Array.isArray(val)) {
       return val.map(serializeForClient) as any;

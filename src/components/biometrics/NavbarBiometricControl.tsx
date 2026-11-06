@@ -2,7 +2,7 @@
 
 import React, { useState, useRef } from "react";
 import { useLocale } from "next-intl";
-import { useRouter } from "@/i18n/navigation";
+import { Link } from "@/i18n/navigation";
 import {
   Fingerprint,
   ClipboardList,
@@ -14,12 +14,15 @@ import {
   User,
   X,
 } from "lucide-react";
-import { useBiometricMonitor } from "./BiometricMonitorProvider";
+import {
+  useBiometricMonitor,
+  BiometricGroupAndPaymentBadges,
+  BiometricRemainingLessonsBadge,
+} from "./BiometricMonitorProvider";
 
 export default function NavbarBiometricControl() {
   const locale = useLocale();
   const isAr = locale === "ar";
-  const router = useRouter();
 
   const {
     isEnabled,
@@ -28,6 +31,7 @@ export default function NavbarBiometricControl() {
     recentScans,
     pinnedAlerts,
     handleResolveAlert,
+    handleDismissPopup,
     openCatchUpModalForScan,
     openPaymentModalForScan,
   } = useBiometricMonitor();
@@ -205,126 +209,180 @@ export default function NavbarBiometricControl() {
                 </span>
               </div>
 
-              <div className="max-h-64 overflow-y-auto space-y-2">
-                {allPendingAlerts.map((item) => (
-                  <div
-                    key={item.id}
-                    className="p-2.5 rounded-lg border border-gray-200 bg-gray-50/60 hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-2 min-w-0">
-                      <span className="font-semibold text-gray-900 flex items-center gap-1.5 min-w-0 truncate">
-                        {item.status === "NO_CREDITS" ? (
-                          <span className="inline-flex h-2 w-2 rounded-full bg-red-600 shrink-0" />
+              <div className="max-h-72 overflow-y-auto space-y-2">
+                {allPendingAlerts.map((item) => {
+                  const exactCredits =
+                    item.isSiblingWaived && item.payerRemainingCredit != null
+                      ? Number(item.payerRemainingCredit)
+                      : Number(item.remainingCredits ?? 0);
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="p-2.5 rounded-lg border border-gray-200 bg-gray-50/60 hover:bg-gray-50 transition-colors space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2 min-w-0">
+                        {item.studentId ? (
+                          <Link
+                            href={`/list/students/${item.studentId}`}
+                            onClick={() => setIsHoverOpen(false)}
+                            className="font-semibold text-gray-900 flex items-center gap-1.5 min-w-0 truncate hover:text-blue-600 hover:underline cursor-pointer transition-colors"
+                            title={
+                              isAr
+                                ? "فتح الملف الشخصي للتلميذ"
+                                : "Ouvrir le profil de l'étudiant"
+                            }
+                          >
+                            {item.status === "NO_CREDITS" ? (
+                              <span className="inline-flex h-2 w-2 rounded-full bg-red-600 shrink-0" />
+                            ) : (
+                              <span className="inline-flex h-2 w-2 rounded-full biometric-dot-green-red shrink-0" />
+                            )}
+                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            <span className="truncate">
+                              {item.studentName || "—"}
+                            </span>
+                            <span className="text-gray-500 font-mono text-[11px] shrink-0">
+                              (#{item.globalNumber})
+                            </span>
+                          </Link>
                         ) : (
-                          <span className="inline-flex h-2 w-2 rounded-full biometric-dot-green-red shrink-0" />
+                          <span className="font-semibold text-gray-900 flex items-center gap-1.5 min-w-0 truncate">
+                            {item.status === "NO_CREDITS" ? (
+                              <span className="inline-flex h-2 w-2 rounded-full bg-red-600 shrink-0" />
+                            ) : (
+                              <span className="inline-flex h-2 w-2 rounded-full biometric-dot-green-red shrink-0" />
+                            )}
+                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            <span className="truncate">
+                              {item.studentName || "—"}
+                            </span>
+                            <span className="text-gray-500 font-mono text-[11px] shrink-0">
+                              (#{item.globalNumber})
+                            </span>
+                          </span>
                         )}
-                        <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span className="truncate">{item.studentName || "—"}</span>
-                        <span className="text-gray-500 font-mono text-[11px] shrink-0">
-                          (#{item.globalNumber})
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {item.inscriptionStatus === "UNPAID" ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shrink-0">
+                              {isAr ? "تسجيل غير مدفوع" : "Inscr. Impayée"}
+                            </span>
+                          ) : item.inscriptionStatus === "PAID" ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                              {isAr ? "تسجيل مدفوع" : "Inscr. Payée"}
+                            </span>
+                          ) : item.inscriptionStatus === "WAIVED" ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 shrink-0">
+                              {isAr ? "تسجيل معفى" : "Inscr. Exonérée"}
+                            </span>
+                          ) : null}
+                          <span
+                            className="text-[10px] font-mono text-gray-400"
+                            dir="ltr"
+                          >
+                            {formatTime(item.scannedAt)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-gray-600 flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 truncate">
+                          <BookOpen className="w-3 h-3 text-gray-400 shrink-0" />
+                          <span className="truncate font-medium text-gray-800">
+                            {item.className ||
+                              item.resolvedClassName ||
+                              (isAr
+                                ? "خارج التوقيت (حصة تعويض)"
+                                : "Hors créneau (Rattrapage)")}
+                          </span>
                         </span>
-                      </span>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {item.inscriptionStatus === "UNPAID" ? (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shrink-0">
-                            {isAr ? "تسجيل غير مدفوع" : "Inscr. Impayée"}
-                          </span>
-                        ) : item.inscriptionStatus === "PAID" ? (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                            {isAr ? "تسجيل مدفوع" : "Inscr. Payée"}
-                          </span>
-                        ) : item.inscriptionStatus === "WAIVED" ? (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 shrink-0">
-                            {isAr ? "تسجيل معفى" : "Inscr. Exonérée"}
-                          </span>
-                        ) : null}
                         <span
-                          className="text-[10px] font-mono text-gray-400"
-                          dir="ltr"
+                          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${
+                            item.status === "NO_CREDITS"
+                              ? "bg-red-50 text-red-700 border-red-200"
+                              : "bg-amber-50 text-amber-700 border-amber-200"
+                          }`}
                         >
-                          {formatTime(item.scannedAt)}
+                          {item.status === "NO_CREDITS"
+                            ? item.isFormation
+                              ? isAr
+                                ? "غير مسدد"
+                                : "Impayé"
+                              : isAr
+                              ? `${exactCredits} حصص`
+                              : `${exactCredits} séance(s)`
+                            : isAr
+                            ? "تعويض"
+                            : "Hors crén."}
                         </span>
                       </div>
-                    </div>
 
-                    <div className="text-gray-600 mt-1 flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-1.5 truncate">
-                        <BookOpen className="w-3 h-3 text-gray-400 shrink-0" />
-                        <span className="truncate">
-                          {item.className ||
-                            (isAr
-                              ? "خارج التوقيت (حصة تعويض)"
-                              : "Hors créneau (Rattrapage)")}
-                        </span>
-                      </span>
-                      <span
-                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${
-                          item.status === "NO_CREDITS"
-                            ? "bg-red-50 text-red-700 border-red-200"
-                            : "bg-amber-50 text-amber-700 border-amber-200"
-                        }`}
-                      >
-                        {item.status === "NO_CREDITS"
-                          ? isAr
-                            ? "0 حصص"
-                            : "0 séance"
-                          : isAr
-                          ? "تعويض"
-                          : "Hors crén."}
-                      </span>
-                    </div>
+                      <BiometricGroupAndPaymentBadges
+                        scan={item}
+                        isAr={isAr}
+                        compact
+                      />
 
-                    <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-gray-200/70">
-                      {item.status === "NO_CREDITS" ? (
-                        <>
-                          {item.studentId && (
+                      <div>
+                        <BiometricRemainingLessonsBadge
+                          scan={item}
+                          isAr={isAr}
+                          compact
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5 pt-1.5 border-t border-gray-200/70">
+                        {item.status === "NO_CREDITS" ? (
+                          <>
+                            {item.studentId && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsHoverOpen(false);
+                                  openPaymentModalForScan(item);
+                                }}
+                                className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <CreditCard className="w-3 h-3" />
+                                <span>{isAr ? "تسديد" : "Encaisser"}</span>
+                              </button>
+                            )}
                             <button
                               type="button"
-                              onClick={() => {
-                                setIsHoverOpen(false);
-                                openPaymentModalForScan(item);
-                              }}
-                              className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                              onClick={() =>
+                                handleResolveAlert(item.id, "ALLOW_PRESENT")
+                              }
+                              className="px-2.5 py-1 rounded-md bg-white hover:bg-gray-100 border border-gray-300 text-gray-700 font-medium text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
                             >
-                              <CreditCard className="w-3 h-3" />
-                              <span>{isAr ? "تسديد" : "Encaisser"}</span>
+                              <Check className="w-3 h-3" />
+                              <span>{isAr ? "سماح" : "Autoriser"}</span>
                             </button>
-                          )}
+                          </>
+                        ) : (
                           <button
                             type="button"
-                            onClick={() =>
-                              handleResolveAlert(item.id, "ALLOW_PRESENT")
-                            }
-                            className="px-2.5 py-1 rounded-md bg-white hover:bg-gray-100 border border-gray-300 text-gray-700 font-medium text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                            onClick={() => {
+                              setIsHoverOpen(false);
+                              openCatchUpModalForScan(item);
+                            }}
+                            className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
                           >
-                            <Check className="w-3 h-3" />
-                            <span>{isAr ? "سماح" : "Autoriser"}</span>
+                            <RefreshCw className="w-3 h-3" />
+                            <span>{isAr ? "تعويض" : "Rattrapage"}</span>
                           </button>
-                        </>
-                      ) : (
+                        )}
                         <button
                           type="button"
-                          onClick={() => {
-                            setIsHoverOpen(false);
-                            openCatchUpModalForScan(item);
-                          }}
-                          className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                          onClick={() => handleDismissPopup(item.id)}
+                          className="ms-auto p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-200/70 cursor-pointer transition-colors"
+                          title={isAr ? "إغلاق" : "Fermer"}
                         >
-                          <RefreshCw className="w-3 h-3" />
-                          <span>{isAr ? "تعويض" : "Rattrapage"}</span>
+                          <X className="w-3.5 h-3.5" />
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => handleResolveAlert(item.id, "DISMISS")}
-                        className="ms-auto p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-200/70 cursor-pointer transition-colors"
-                        title={isAr ? "حذف" : "Supprimer"}
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

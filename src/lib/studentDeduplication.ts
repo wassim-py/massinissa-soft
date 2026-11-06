@@ -298,12 +298,17 @@ export function evaluateDuplicateMatch({
   }
 
   // 3. Birthday Match Checks
-  const inputBirthdayStr = targetBirthday
-    ? new Date(targetBirthday).toISOString().split("T")[0]
-    : null;
-  const candBirthdayStr = candidate.birthday
-    ? new Date(candidate.birthday).toISOString().split("T")[0]
-    : null;
+  const toSafeIsoDate = (val?: Date | string | null): string | null => {
+    if (!val) return null;
+    const d = val instanceof Date ? val : new Date(val);
+    if (isNaN(d.getTime())) return null;
+    const year = d.getFullYear();
+    if (year < 1920 || year > 2100) return null;
+    return d.toISOString().split("T")[0];
+  };
+
+  const inputBirthdayStr = toSafeIsoDate(targetBirthday);
+  const candBirthdayStr = toSafeIsoDate(candidate.birthday);
 
   const hasBirthdayComparison = Boolean(inputBirthdayStr && candBirthdayStr);
   const isSameBirthday = hasBirthdayComparison && inputBirthdayStr === candBirthdayStr;

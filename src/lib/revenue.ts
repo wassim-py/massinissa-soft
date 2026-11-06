@@ -646,6 +646,27 @@ export interface DailyBranchLedgerData {
   }>;
   transfersInTotal: number;
   transfersOutTotal: number;
+  todayCrossPayments: Array<{
+    id: number;
+    voucherDisplay: string;
+    number: number;
+    studentId?: string | null;
+    studentName: string;
+    className: string;
+    issuingBranchId: number;
+    issuingBranchName: string;
+    targetBranchId: number;
+    targetBranchName: string;
+    paymentType: string;
+    amount: number;
+    issuedAt: Date;
+    issuedBy: string;
+    direction: "IN" | "OUT";
+    cashImpact: number;
+    isRefund?: boolean;
+  }>;
+  crossPaymentsInTotal: number;
+  crossPaymentsOutTotal: number;
 }
 
 /**
@@ -668,7 +689,7 @@ export async function getDailyBranchLedgerData(
   const endOfDay = dayBounds.endUtc;
 
   // Reads from the same ledger data as §1.1's revenue dashboard, just filtered to one day and one branch
-  const [ledgerRows, missingRecords, surplusRecords, todayVouchers, todayTransfers] = await Promise.all([
+  const [ledgerRows, missingRecords, surplusRecords, allDayVouchers, todayTransfers, allBranchesList] = await Promise.all([
     prisma.dailyLedger.findMany({
       where: {
         branchId,
@@ -692,10 +713,15 @@ export async function getDailyBranchLedgerData(
     }),
     prisma.voucher.findMany({
       where: {
-        issuingBranchId: branchId,
         issuedAt: { gte: startOfDay, lte: endOfDay },
         isVoided: false,
         amount: { gt: 0 },
+        OR: [
+          { issuingBranchId: branchId },
+          { targetBranchId: branchId },
+          { class: { branchId } },
+          { workshop: { branchId } },
+        ],
       },
       include: {
         student: { select: { id: true, name: true } },
@@ -745,7 +771,20 @@ export async function getDailyBranchLedgerData(
       },
       orderBy: { transferredAt: "desc" },
     }),
+    prisma.branch.findMany({
+      select: { id: true, name: true },
+      orderBy: { id: "asc" },
+    }),
   ]);
+
+  const branchMap = new Map<number, string>(allBranchesList.map((b) => [b.id, b.name]));
+  const todayVouchers = allDayVouchers.filter((v) => v.issuingBranchId === branchId);
+  const crossVouchers = allDayVouchers.filter((v) => {
+    const targetBId = v.targetBranchId || v.class?.branch?.id || v.workshop?.Branch?.id || v.issuingBranchId;
+    const isCross = v.issuingBranchId !== targetBId || (v.class?.branch?.id && v.class.branch.id !== v.issuingBranchId);
+    if (!isCross) return false;
+    return v.issuingBranchId === branchId || targetBId === branchId || v.class?.branch?.id === branchId;
+  });
 
   const summary = {
     tuition: 0,
@@ -888,6 +927,50 @@ export async function getDailyBranchLedgerData(
     transfersOutTotal: (todayTransfers || [])
       .filter((t) => t.fromEnrollment.class.branch.id === branchId && t.toEnrollment.class.branch.id !== branchId)
       .reduce((sum, t) => sum + Number(t.amount || 0), 0),
+    todayCrossPayments: crossVouchers.map((v) => {
+      const targetBId = v.targetBranchId || v.class?.branch?.id || v.workshop?.Branch?.id || v.issuingBranchId;
+      const issuingBId = v.issuingBranchId;
+      const issuingBranchName = branchMap.get(issuingBId) || v.series?.issuingBranch?.name || `Branche #${issuingBId}`;
+      const targetBranchName = branchMap.get(targetBId) || v.class?.branch?.name || v.series?.targetBranch?.name || `Branche #${targetBId}`;
+      const direction: "IN" | "OUT" = targetBId === branchId && issuingBId !== branchId ? "IN" : "OUT";
+      const amt = Number(v.amount);
+      const lvlName = v.class?.level?.name || v.series?.level?.name || null;
+
+      return {
+        id: v.id,
+        voucherDisplay: formatVoucherDisplay(v as any, {
+          branchName: issuingBranchName,
+          levelName: lvlName || undefined,
+        }),
+        number: v.number,
+        studentId: v.student?.id || v.studentId || null,
+        studentName: v.student?.name || "—",
+        className: v.class?.name || v.workshop?.title || "—",
+        issuingBranchId: issuingBId,
+        issuingBranchName,
+        targetBranchId: targetBId,
+        targetBranchName,
+        paymentType: v.paymentType,
+        amount: amt,
+        issuedAt: v.issuedAt,
+        issuedBy: v.issuedBy,
+        direction,
+        cashImpact: direction === "IN" ? 0 : amt,
+        isRefund: v.isRefund,
+      };
+    }),
+    crossPaymentsInTotal: crossVouchers
+      .filter((v) => {
+        const targetBId = v.targetBranchId || v.class?.branch?.id || v.workshop?.Branch?.id;
+        return (targetBId === branchId || v.class?.branch?.id === branchId) && v.issuingBranchId !== branchId;
+      })
+      .reduce((sum, v) => sum + Number(v.amount || 0), 0),
+    crossPaymentsOutTotal: crossVouchers
+      .filter((v) => {
+        const targetBId = v.targetBranchId || v.class?.branch?.id || v.workshop?.Branch?.id;
+        return v.issuingBranchId === branchId && targetBId !== branchId && targetBId !== undefined;
+      })
+      .reduce((sum, v) => sum + Number(v.amount || 0), 0),
   };
 }
 

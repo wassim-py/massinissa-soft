@@ -249,7 +249,7 @@ const PaymentsListPage = async (props: {
             enrollments: {
               where: {
                 status: "ACTIVE",
-                transfersFrom: { none: {} },
+
               },
             },
           },

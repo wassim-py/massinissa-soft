@@ -10,7 +10,7 @@ import React, {
   useMemo,
 } from "react";
 import { useLocale } from "next-intl";
-import { useRouter, usePathname } from "@/i18n/navigation";
+import { useRouter, usePathname, Link } from "@/i18n/navigation";
 import { toast } from "react-toastify";
 import {
   Fingerprint,
@@ -36,6 +36,7 @@ import {
   Users,
   ShieldAlert,
   AlertCircle,
+  GraduationCap,
 } from "lucide-react";
 import {
   type BiometricScanResult,
@@ -45,8 +46,29 @@ import {
   recordBiometricCatchUpAction,
   getBiometricPaymentDataAction,
 } from "@/lib/biometricActions";
+import {
+  getBiometricScansLiveBillingAction,
+  type BiometricScanLiveBillingInfo,
+} from "@/lib/actions";
 import PaymentForm from "@/components/forms/PaymentForm";
 import { formatDZD } from "@/lib/algiersDate";
+
+export type BiometricScanDisplayItem = BiometricScanResult & {
+  isFormation?: boolean;
+  formationPrice?: number;
+  totalPaidFormation?: number;
+  formationRemaining?: number;
+  isFormationPaidInFull?: boolean;
+  isFormationPartiallyPaid?: boolean;
+  isSchoolFeesOnly?: boolean;
+  hasSiblingDiscount?: boolean;
+  siblingDiscountPct?: number;
+  isPayerSiblingPaid?: boolean;
+  payerRemainingCredit?: number | null;
+  resolvedClassId?: number | null;
+  resolvedClassName?: string | null;
+  billingSynced?: boolean;
+};
 
 interface BiometricMonitorContextType {
   isEnabled: boolean;
@@ -55,19 +77,20 @@ interface BiometricMonitorContextType {
   setIsMuted: (val: boolean) => void;
   isDrawerOpen: boolean;
   setIsDrawerOpen: (val: boolean) => void;
-  recentScans: BiometricScanResult[];
-  pinnedAlerts: BiometricScanResult[];
-  liveStreamCard: BiometricScanResult | null;
+  recentScans: BiometricScanDisplayItem[];
+  pinnedAlerts: BiometricScanDisplayItem[];
+  liveStreamCard: BiometricScanDisplayItem | null;
   deviceConnected: boolean;
   handleResolveAlert: (
     scanId: number,
     mode: "DISMISS" | "ALLOW_PRESENT" | "RESOLVED_BY_PAYMENT" | "RESOLVED_BY_CATCHUP"
   ) => Promise<void>;
+  handleDismissPopup: (scanId: number) => Promise<void>;
   handleClearJournal: () => Promise<void>;
   handleSyncK50Devices: () => Promise<void>;
   isSyncingK50: boolean;
-  openCatchUpModalForScan: (scan: BiometricScanResult) => void;
-  openPaymentModalForScan: (scan: BiometricScanResult) => void;
+  openCatchUpModalForScan: (scan: BiometricScanDisplayItem) => void;
+  openPaymentModalForScan: (scan: BiometricScanDisplayItem) => void;
 }
 
 const BiometricMonitorContext = createContext<BiometricMonitorContextType>({
@@ -83,6 +106,7 @@ const BiometricMonitorContext = createContext<BiometricMonitorContextType>({
   deviceConnected: false,
   isSyncingK50: false,
   handleResolveAlert: async () => {},
+  handleDismissPopup: async () => {},
   handleClearJournal: async () => {},
   handleSyncK50Devices: async () => {},
   openCatchUpModalForScan: () => {},
@@ -173,6 +197,362 @@ function InscriptionStatusBadge({
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-bold text-[11px] shrink-0">
       <AlertCircle className="w-3 h-3 text-rose-600 shrink-0" />
       <span>{isAr ? "حقوق التسجيل: غير مسددة" : "Inscr. : Non payée"}</span>
+    </span>
+  );
+}
+
+/**
+ * Group Type (Formation vs Normal Group) & Student Payment Type Badges
+ */
+export function BiometricGroupAndPaymentBadges({
+  scan,
+  isAr,
+  compact = false,
+}: {
+  scan: BiometricScanDisplayItem;
+  isAr: boolean;
+  compact?: boolean;
+}) {
+  const hasGroup = Boolean(
+    scan.className ||
+      scan.resolvedClassName ||
+      scan.classId ||
+      scan.resolvedClassId ||
+      scan.isFormation !== undefined
+  );
+  const isFormation = Boolean(scan.isFormation);
+  const isNonPayer = Boolean(
+    scan.isNonPayer ||
+      scan.payerStatus === "NON_PAYER" ||
+      scan.payerStatus === "FREE_ALL" ||
+      scan.payerStatus === "FREE_TUITION"
+  );
+  const isSiblingWaived = Boolean(scan.isSiblingWaived);
+  const hasSiblingDiscount = Boolean(
+    !isSiblingWaived &&
+      (scan.hasSiblingDiscount || scan.hasPayerSibling)
+  );
+  const discountPct = Number(scan.siblingDiscountPct || 50);
+  const isSchoolFeesOnly = Boolean(
+    scan.isSchoolFeesOnly || scan.payerStatus === "SCHOOL_FEES_ONLY"
+  );
+
+  const badgeSize = compact
+    ? "px-1.5 py-0.5 text-[10px]"
+    : "px-2 py-0.5 text-[10px]";
+
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {hasGroup && (
+        <span
+          className={`inline-flex items-center gap-1 rounded font-semibold border shrink-0 ${badgeSize} ${
+            isFormation
+              ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+              : "bg-slate-100 text-slate-700 border-slate-200"
+          }`}
+        >
+          <GraduationCap className="w-3 h-3 shrink-0" />
+          <span>
+            {isFormation
+              ? isAr
+                ? "تكوين"
+                : "Formation"
+              : isAr
+              ? "فوج عادي"
+              : "Groupe normal"}
+          </span>
+        </span>
+      )}
+
+      {scan.studentId && (
+        <span
+          className={`inline-flex items-center gap-1 rounded font-semibold border shrink-0 ${badgeSize} ${
+            isNonPayer
+              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+              : isSiblingWaived
+              ? "bg-purple-50 text-purple-700 border-purple-200"
+              : hasSiblingDiscount
+              ? "bg-violet-50 text-violet-700 border-violet-200"
+              : isSchoolFeesOnly
+              ? "bg-sky-50 text-sky-800 border-sky-200"
+              : "bg-blue-50 text-blue-700 border-blue-200"
+          }`}
+        >
+          {isNonPayer ? (
+            <>
+              <Sparkles className="w-3 h-3 shrink-0" />
+              <span>{isAr ? "غير دافع (معفى)" : "Non-payeur (Exonéré)"}</span>
+            </>
+          ) : isSiblingWaived ? (
+            <>
+              <Users className="w-3 h-3 shrink-0" />
+              <span>
+                {isAr
+                  ? "أخ دافع (معفى 100%)"
+                  : "Frère/Sœur payeur (Exonéré 100%)"}
+              </span>
+            </>
+          ) : hasSiblingDiscount ? (
+            <>
+              <Users className="w-3 h-3 shrink-0" />
+              <span>
+                {isAr
+                  ? `خصم إخوة (-${discountPct}%)`
+                  : `Remise fratrie (-${discountPct}%)`}
+              </span>
+            </>
+          ) : isSchoolFeesOnly ? (
+            <>
+              <ShieldAlert className="w-3 h-3 shrink-0" />
+              <span>
+                {isAr ? "دافع حصة المدرسة فقط" : "Payeur part école seule"}
+              </span>
+            </>
+          ) : (
+            <>
+              <User className="w-3 h-3 shrink-0" />
+              <span>{isAr ? "دافع عادي" : "Payeur normal"}</span>
+            </>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Exact Remaining Lessons / Formation Payment Status Badge
+ * Shows exact remaining sessions even when negative (-1, -2, 0, 1, 2...)
+ */
+export function BiometricRemainingLessonsBadge({
+  scan,
+  isAr,
+  compact = false,
+}: {
+  scan: BiometricScanDisplayItem;
+  isAr: boolean;
+  compact?: boolean;
+}) {
+  if (!scan.studentId) return null;
+
+  const isFormation = Boolean(scan.isFormation);
+  const isNonPayer = Boolean(
+    scan.isNonPayer ||
+      scan.payerStatus === "NON_PAYER" ||
+      scan.payerStatus === "FREE_ALL" ||
+      scan.payerStatus === "FREE_TUITION"
+  );
+  const isSiblingWaived = Boolean(scan.isSiblingWaived);
+  const hasSiblingDiscount = Boolean(
+    !isSiblingWaived &&
+      (scan.hasSiblingDiscount || scan.hasPayerSibling)
+  );
+  const discountPct = Number(scan.siblingDiscountPct || 50);
+  const isSchoolFeesOnly = Boolean(
+    scan.isSchoolFeesOnly || scan.payerStatus === "SCHOOL_FEES_ONLY"
+  );
+
+  const badgeSize = compact
+    ? "px-2 py-0.5 text-[10px]"
+    : "px-2.5 py-1 text-[11px]";
+
+  if (isFormation) {
+    if (isNonPayer) {
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold shrink-0 ${badgeSize}`}
+        >
+          <Sparkles className="w-3 h-3 shrink-0 text-emerald-600" />
+          <span>
+            {isAr
+              ? "التكوين: معفى من الرسوم"
+              : "Formation : Exonéré des frais"}
+          </span>
+        </span>
+      );
+    }
+
+    if (isSiblingWaived) {
+      const siblingPaid = scan.isPayerSiblingPaid !== false;
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-md font-semibold border shrink-0 ${badgeSize} ${
+            siblingPaid
+              ? "bg-purple-50 text-purple-700 border-purple-200"
+              : "bg-red-50 text-red-700 border-red-200"
+          }`}
+        >
+          <Users className="w-3 h-3 shrink-0" />
+          <span>
+            {siblingPaid
+              ? isAr
+                ? "التكوين: معفى (أخ دافع مسدد)"
+                : "Formation : Exonéré (Fratrie payée)"
+              : isAr
+              ? "التكوين: غير مسدد (أخ دافع غير مسدد)"
+              : "Formation : Non payée (Fratrie impayée)"}
+          </span>
+        </span>
+      );
+    }
+
+    if (scan.isFormationPaidInFull) {
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold shrink-0 ${badgeSize}`}
+        >
+          <CheckCircle2 className="w-3 h-3 shrink-0 text-emerald-600" />
+          <span>
+            {isAr ? "التكوين: مسدد بالكامل" : "Formation : Payée en totalité"}
+          </span>
+        </span>
+      );
+    }
+
+    if (scan.isFormationPartiallyPaid) {
+      const remDzd = Number(scan.formationRemaining ?? 0);
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-semibold shrink-0 ${badgeSize}`}
+        >
+          <CreditCard className="w-3 h-3 shrink-0 text-amber-600" />
+          <span>
+            {isAr
+              ? `دفع جزئي للتكوين (المتبقي: ${remDzd.toLocaleString("ar-DZ")} دج)`
+              : `Paiement partiel (Reste : ${remDzd.toLocaleString("fr-DZ")} DZD)`}
+          </span>
+        </span>
+      );
+    }
+
+    const totalDzd = Number(scan.formationPrice ?? 0);
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-md bg-red-50 text-red-700 border border-red-200 font-semibold shrink-0 ${badgeSize}`}
+      >
+        <AlertTriangle className="w-3 h-3 shrink-0 text-red-600" />
+        <span>
+          {isAr
+            ? `التكوين غير مسدد${totalDzd > 0 ? ` (${totalDzd.toLocaleString("ar-DZ")} دج)` : ""}`
+            : `Formation non payée${totalDzd > 0 ? ` (${totalDzd.toLocaleString("fr-DZ")} DZD)` : ""}`}
+        </span>
+      </span>
+    );
+  }
+
+  // Normal Group (4-session cycle)
+  if (isNonPayer) {
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold shrink-0 ${badgeSize}`}
+      >
+        <Sparkles className="w-3 h-3 shrink-0 text-emerald-600" />
+        <span>
+          {isAr ? "الحصص: معفى من الرسوم" : "Séances : Exonéré des frais"}
+        </span>
+      </span>
+    );
+  }
+
+  if (isSiblingWaived) {
+    const payerRem =
+      scan.payerRemainingCredit !== undefined && scan.payerRemainingCredit !== null
+        ? Number(scan.payerRemainingCredit)
+        : scan.remainingCredits !== undefined && scan.remainingCredits !== null
+        ? Number(scan.remainingCredits)
+        : 0;
+    const isPositive = payerRem > 0 && scan.isPayerSiblingPaid !== false;
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-md font-semibold border shrink-0 ${badgeSize} ${
+          isPositive
+            ? "bg-purple-50 text-purple-700 border-purple-200"
+            : "bg-red-50 text-red-700 border-red-200"
+        }`}
+      >
+        <Users className="w-3 h-3 shrink-0" />
+        <span>
+          {isAr
+            ? `الحصص المتبقية (أخ دافع): ${payerRem} حصص`
+            : `Séances restantes (Fratrie) : ${payerRem} séance(s)`}
+        </span>
+      </span>
+    );
+  }
+
+  const exactRemaining =
+    scan.remainingCredits !== undefined && scan.remainingCredits !== null
+      ? Number(scan.remainingCredits)
+      : 0;
+  const isPositive = exactRemaining > 0;
+
+  if (hasSiblingDiscount) {
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-md font-semibold border shrink-0 ${badgeSize} ${
+          isPositive
+            ? "bg-violet-50 text-violet-800 border-violet-200"
+            : "bg-red-50 text-red-700 border-red-200"
+        }`}
+      >
+        <Users className="w-3 h-3 shrink-0" />
+        <span>
+          {isAr
+            ? `الحصص المتبقية: ${exactRemaining} حصص (خصم إخوة -${discountPct}%)`
+            : `Séances restantes : ${exactRemaining} séance(s) (Remise -${discountPct}%)`}
+        </span>
+      </span>
+    );
+  }
+
+  if (isSchoolFeesOnly) {
+    const isWarning = exactRemaining === 1;
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-md font-semibold border shrink-0 ${badgeSize} ${
+          exactRemaining <= 0
+            ? "bg-red-50 text-red-700 border-red-200"
+            : isWarning
+            ? "bg-amber-50 text-amber-800 border-amber-200"
+            : "bg-sky-50 text-sky-800 border-sky-200"
+        }`}
+      >
+        <ShieldAlert className="w-3 h-3 shrink-0" />
+        <span>
+          {isAr
+            ? exactRemaining <= 0
+              ? exactRemaining < 0
+                ? `الحصص المتبقية: ${exactRemaining} حصة (دين - حصة المدرسة)`
+                : "الحصص المتبقية: 0 حصة (حصة المدرسة)"
+              : exactRemaining === 1
+              ? "حصة واحدة متبقية (حصة المدرسة)"
+              : `الحصص المتبقية: ${exactRemaining} حصص (حصة المدرسة)`
+            : exactRemaining <= 0
+              ? exactRemaining < 0
+                ? `Séances restantes : ${exactRemaining} (dette - Part école)`
+                : "Séances restantes : 0 (Part école)"
+              : exactRemaining === 1
+              ? "1 séance restante (Part école)"
+              : `Séances restantes : ${exactRemaining} séance(s) (Part école)`}
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-md font-semibold border shrink-0 ${badgeSize} ${
+        isPositive
+          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+          : "bg-red-50 text-red-700 border-red-200"
+      }`}
+    >
+      <CreditCard className="w-3 h-3 shrink-0" />
+      <span>
+        {isAr
+          ? `الحصص المتبقية: ${exactRemaining} حصص`
+          : `Séances restantes : ${exactRemaining} séance(s)`}
+      </span>
     </span>
   );
 }
@@ -269,11 +649,16 @@ export default function BiometricMonitorProvider({
   const [isEnabled, setIsEnabledState] = useState<boolean>(true);
   const [isMuted, setIsMutedState] = useState<boolean>(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
-  const [recentScans, setRecentScans] = useState<BiometricScanResult[]>([]);
-  const [pinnedAlerts, setPinnedAlerts] = useState<BiometricScanResult[]>([]);
-  const [liveStreamCard, setLiveStreamCard] = useState<BiometricScanResult | null>(null);
+  const [recentScans, setRecentScans] = useState<BiometricScanDisplayItem[]>([]);
+  const [pinnedAlerts, setPinnedAlerts] = useState<BiometricScanDisplayItem[]>([]);
+  const [liveStreamCard, setLiveStreamCard] = useState<BiometricScanDisplayItem | null>(null);
   const [deviceConnected, setDeviceConnected] = useState<boolean>(false);
-  const [isHoveringActionZone, setIsHoveringActionZone] = useState<boolean>(false);
+  const [isHoveringActionZone, setIsHoveringActionZoneState] = useState<boolean>(false);
+  const isHoveringActionZoneRef = useRef<boolean>(false);
+  const setIsHoveringActionZone = useCallback((val: boolean) => {
+    isHoveringActionZoneRef.current = val;
+    setIsHoveringActionZoneState(val);
+  }, []);
   const [showAllPinnedInHud, setShowAllPinnedInHud] = useState<boolean>(false);
 
   // Drawer filter & search state
@@ -285,7 +670,7 @@ export default function BiometricMonitorProvider({
 
   // Catch-up (Rattrapage) Modal state for State 3 cards
   const [catchUpTargetScan, setCatchUpTargetScan] =
-    useState<BiometricScanResult | null>(null);
+    useState<BiometricScanDisplayItem | null>(null);
   const [catchUpOptions, setCatchUpOptions] = useState<{
     loading: boolean;
     activeBranchLessons: Array<{
@@ -314,7 +699,7 @@ export default function BiometricMonitorProvider({
 
   // Payment Modal state for State 2 cards
   const [paymentTargetScan, setPaymentTargetScan] =
-    useState<BiometricScanResult | null>(null);
+    useState<BiometricScanDisplayItem | null>(null);
   const [paymentLoading, setPaymentLoading] = useState<boolean>(false);
   const [paymentData, setPaymentData] = useState<{
     student: any;
@@ -334,6 +719,262 @@ export default function BiometricMonitorProvider({
   const liveCardTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMutedRef = useRef<boolean>(false);
 
+  // Persistent client-side tracking for dismissed popups & persistent journal
+  const dismissedAlertIdsRef = useRef<Set<number>>(new Set());
+  const dismissedStudentMaxScanIdRef = useRef<Map<string, number>>(new Map());
+  const removedJournalIdsRef = useRef<Set<number>>(new Set());
+  const clearedBeforeIdRef = useRef<number>(0);
+  const billingCacheRef = useRef<Map<number, BiometricScanLiveBillingInfo>>(new Map());
+
+  const getBranchStorageSuffix = useCallback((branchIdOverride?: number | null) => {
+    const bId =
+      branchIdOverride ??
+      currentBranchIdRef.current ??
+      (initialBranchId && !isNaN(Number(initialBranchId))
+        ? Number(initialBranchId)
+        : 1);
+    return String(bId);
+  }, [initialBranchId]);
+
+  const loadBranchPersistenceFromStorage = useCallback(
+    (branchIdOverride?: number | null) => {
+      if (typeof window === "undefined") return [];
+      const suffix = getBranchStorageSuffix(branchIdOverride);
+      try {
+        const rawDismissed = localStorage.getItem(
+          `massinissa_biometric_dismissed_alerts_v1_${suffix}`
+        );
+        if (rawDismissed) {
+          const parsed = JSON.parse(rawDismissed);
+          dismissedAlertIdsRef.current = new Set(
+            Array.isArray(parsed?.ids) ? parsed.ids.map(Number) : []
+          );
+          const studentMap = new Map<string, number>();
+          if (parsed?.byStudent && typeof parsed.byStudent === "object") {
+            for (const [k, v] of Object.entries(parsed.byStudent)) {
+              studentMap.set(k, Number(v));
+            }
+          }
+          dismissedStudentMaxScanIdRef.current = studentMap;
+        } else {
+          dismissedAlertIdsRef.current = new Set();
+          dismissedStudentMaxScanIdRef.current = new Map();
+        }
+      } catch {
+        dismissedAlertIdsRef.current = new Set();
+        dismissedStudentMaxScanIdRef.current = new Map();
+      }
+
+      try {
+        const rawRemoved = localStorage.getItem(
+          `massinissa_biometric_removed_journal_ids_v1_${suffix}`
+        );
+        if (rawRemoved) {
+          const arr = JSON.parse(rawRemoved);
+          removedJournalIdsRef.current = new Set(
+            Array.isArray(arr) ? arr.map(Number) : []
+          );
+        } else {
+          removedJournalIdsRef.current = new Set();
+        }
+      } catch {
+        removedJournalIdsRef.current = new Set();
+      }
+
+      try {
+        const rawClearedBefore = localStorage.getItem(
+          `massinissa_biometric_cleared_before_id_v1_${suffix}`
+        );
+        clearedBeforeIdRef.current = rawClearedBefore
+          ? Number(rawClearedBefore) || 0
+          : 0;
+      } catch {
+        clearedBeforeIdRef.current = 0;
+      }
+
+      try {
+        const rawJournal = localStorage.getItem(
+          `massinissa_biometric_journal_v1_${suffix}`
+        );
+        if (rawJournal) {
+          const parsedJournal = JSON.parse(rawJournal);
+          if (Array.isArray(parsedJournal)) {
+            return parsedJournal.filter(
+              (s: any) =>
+                s &&
+                typeof s.id === "number" &&
+                s.id > clearedBeforeIdRef.current &&
+                !removedJournalIdsRef.current.has(s.id)
+            ) as BiometricScanDisplayItem[];
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return [];
+    },
+    [getBranchStorageSuffix]
+  );
+
+  const saveDismissedAlertsToStorage = useCallback(
+    (branchIdOverride?: number | null) => {
+      if (typeof window === "undefined") return;
+      const suffix = getBranchStorageSuffix(branchIdOverride);
+      try {
+        const ids = Array.from(dismissedAlertIdsRef.current).slice(-500);
+        const byStudent: Record<string, number> = {};
+        dismissedStudentMaxScanIdRef.current.forEach((val, key) => {
+          byStudent[key] = val;
+        });
+        localStorage.setItem(
+          `massinissa_biometric_dismissed_alerts_v1_${suffix}`,
+          JSON.stringify({ ids, byStudent })
+        );
+      } catch {
+        // ignore
+      }
+    },
+    [getBranchStorageSuffix]
+  );
+
+  const saveRemovedJournalIdsToStorage = useCallback(
+    (branchIdOverride?: number | null) => {
+      if (typeof window === "undefined") return;
+      const suffix = getBranchStorageSuffix(branchIdOverride);
+      try {
+        const ids = Array.from(removedJournalIdsRef.current).slice(-500);
+        localStorage.setItem(
+          `massinissa_biometric_removed_journal_ids_v1_${suffix}`,
+          JSON.stringify(ids)
+        );
+      } catch {
+        // ignore
+      }
+    },
+    [getBranchStorageSuffix]
+  );
+
+  const saveJournalToStorage = useCallback(
+    (scans: BiometricScanDisplayItem[], branchIdOverride?: number | null) => {
+      if (typeof window === "undefined") return;
+      const suffix = getBranchStorageSuffix(branchIdOverride);
+      try {
+        localStorage.setItem(
+          `massinissa_biometric_journal_v1_${suffix}`,
+          JSON.stringify(scans.slice(0, 250))
+        );
+      } catch {
+        // ignore
+      }
+    },
+    [getBranchStorageSuffix]
+  );
+
+  const isAlertDismissed = useCallback((alert: BiometricScanResult) => {
+    if (!alert) return true;
+    if (alert.isResolved) return true;
+    if (alert.id <= clearedBeforeIdRef.current) return true;
+    if (dismissedAlertIdsRef.current.has(alert.id)) return true;
+    if (removedJournalIdsRef.current.has(alert.id)) return true;
+    if (alert.studentId) {
+      const dismissedMax = dismissedStudentMaxScanIdRef.current.get(alert.studentId);
+      if (dismissedMax !== undefined && alert.id <= dismissedMax) {
+        return true;
+      }
+    }
+    return false;
+  }, []);
+
+  const applyBillingInfoToScan = useCallback(
+    (
+      scan: BiometricScanDisplayItem,
+      info?: BiometricScanLiveBillingInfo
+    ): BiometricScanDisplayItem => {
+      const resolvedInfo = info || billingCacheRef.current.get(scan.id);
+      if (!resolvedInfo) return scan;
+      return {
+        ...scan,
+        studentName: resolvedInfo.studentName || scan.studentName,
+        globalNumber: resolvedInfo.globalNumber ?? scan.globalNumber,
+        classId: scan.classId ?? resolvedInfo.resolvedClassId,
+        className: scan.className || resolvedInfo.resolvedClassName,
+        resolvedClassId: resolvedInfo.resolvedClassId,
+        resolvedClassName: resolvedInfo.resolvedClassName,
+        isFormation: resolvedInfo.isFormation,
+        formationPrice: resolvedInfo.formationPrice,
+        totalPaidFormation: resolvedInfo.totalPaidFormation,
+        formationRemaining: resolvedInfo.formationRemaining,
+        isFormationPaidInFull: resolvedInfo.isFormationPaidInFull,
+        isFormationPartiallyPaid: resolvedInfo.isFormationPartiallyPaid,
+        payerStatus: resolvedInfo.payerStatus,
+        isNonPayer: resolvedInfo.isNonPayer,
+        isSchoolFeesOnly: resolvedInfo.isSchoolFeesOnly,
+        hasPayerSibling: resolvedInfo.hasPayerSibling,
+        isSiblingWaived: resolvedInfo.isSiblingWaived,
+        hasSiblingDiscount: resolvedInfo.hasSiblingDiscount,
+        siblingDiscountPct: resolvedInfo.siblingDiscountPct,
+        isPayerSiblingPaid: resolvedInfo.isPayerSiblingPaid,
+        payerRemainingCredit: resolvedInfo.payerRemainingCredit,
+        remainingCredits: resolvedInfo.remainingCredits,
+        inscriptionStatus:
+          resolvedInfo.inscriptionStatus ?? scan.inscriptionStatus,
+        billingSynced: true,
+      };
+    },
+    []
+  );
+
+  const syncScansWithLiveBilling = useCallback(
+    async (scansToSync: BiometricScanDisplayItem[]) => {
+      const validItems = scansToSync.filter(
+        (s) => s && typeof s.id === "number" && s.studentId
+      );
+      if (validItems.length === 0) return;
+
+      const queryItems = validItems.map((s) => ({
+        scanId: s.id,
+        studentId: s.studentId!,
+        classId: s.classId ?? s.resolvedClassId ?? null,
+        lessonId: s.lessonId ?? null,
+        status: s.status,
+        nextLessonInfo: s.nextLessonInfo ?? null,
+      }));
+
+      try {
+        const res = await getBiometricScansLiveBillingAction(queryItems);
+        if (!res?.success || !res.byScanId) return;
+
+        for (const [k, v] of Object.entries(res.byScanId)) {
+          billingCacheRef.current.set(Number(k), v);
+        }
+
+        setRecentScans((prev) => {
+          const updated = prev.map((s) =>
+            res.byScanId[s.id] ? applyBillingInfoToScan(s, res.byScanId[s.id]) : s
+          );
+          saveJournalToStorage(updated);
+          return updated;
+        });
+
+        setPinnedAlerts((prev) =>
+          prev.map((a) =>
+            res.byScanId[a.id] ? applyBillingInfoToScan(a, res.byScanId[a.id]) : a
+          )
+        );
+
+        setLiveStreamCard((curr) =>
+          curr && res.byScanId[curr.id]
+            ? applyBillingInfoToScan(curr, res.byScanId[curr.id])
+            : curr
+        );
+      } catch {
+        // ignore transient network errors
+      }
+    },
+    [applyBillingInfoToScan, saveJournalToStorage]
+  );
+
+  // Hydrate persistent journal & dismissed alerts on mount / branch change
   useEffect(() => {
     if (
       initialBranchId &&
@@ -342,7 +983,34 @@ export default function BiometricMonitorProvider({
     ) {
       currentBranchIdRef.current = Number(initialBranchId);
     }
-  }, [initialBranchId]);
+    const savedScans = loadBranchPersistenceFromStorage(
+      currentBranchIdRef.current
+    );
+    if (savedScans.length > 0) {
+      setRecentScans(savedScans);
+      const maxSavedId = Math.max(...savedScans.map((s) => s.id));
+      if (maxSavedId > lastSeenIdRef.current) {
+        lastSeenIdRef.current = maxSavedId;
+      }
+      syncScansWithLiveBilling(savedScans);
+    }
+  }, [initialBranchId, loadBranchPersistenceFromStorage, syncScansWithLiveBilling]);
+
+  // Re-sync live billing whenever the Journal Drawer is opened so any external payment/attendance changes are reflected
+  useEffect(() => {
+    if (isDrawerOpen && recentScans.length > 0) {
+      syncScansWithLiveBilling(recentScans);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDrawerOpen]);
+
+  // Reset hover lock when pinnedAlerts becomes empty
+  useEffect(() => {
+    if (pinnedAlerts.length === 0 && isHoveringActionZoneRef.current) {
+      isHoveringActionZoneRef.current = false;
+      setIsHoveringActionZoneState(false);
+    }
+  }, [pinnedAlerts.length]);
 
   useEffect(() => {
     try {
@@ -390,7 +1058,8 @@ export default function BiometricMonitorProvider({
 
   // Process incoming scan into the Two-Zone Split HUD
   const announceIncomingScan = useCallback(
-    (scan: BiometricScanResult) => {
+    (rawScan: BiometricScanDisplayItem) => {
+      const scan = applyBillingInfoToScan(rawScan);
       if (!isMutedRef.current) {
         playBiometricTone(
           scan.status === "NO_CREDITS"
@@ -418,7 +1087,7 @@ export default function BiometricMonitorProvider({
       // Zone B (Upper Pinned Action Zone): State 2 (NO_CREDITS) & State 3 (NO_UPCOMING_GROUP)
       if (
         (scan.status === "NO_CREDITS" || scan.status === "NO_UPCOMING_GROUP") &&
-        !scan.isResolved
+        !isAlertDismissed(scan)
       ) {
         setPinnedAlerts((prev) => {
           const filtered = prev.filter(
@@ -439,7 +1108,7 @@ export default function BiometricMonitorProvider({
         setLiveStreamCard((curr) => (curr?.id === scan.id ? null : curr));
       }, duration);
     },
-    [openLessonId, router]
+    [applyBillingInfoToScan, isAlertDismissed, openLessonId, router]
   );
 
   const isPollingRef = useRef<boolean>(false);
@@ -452,8 +1121,9 @@ export default function BiometricMonitorProvider({
 
   // Immediately ingests a BiometricScanResult returned directly from POST /api/biometrics/scan (0ms UI update!)
   const ingestDirectScanResult = useCallback(
-    (scan: BiometricScanResult) => {
-      if (!scan || !scan.id) return;
+    (rawScan: BiometricScanResult) => {
+      if (!rawScan || !rawScan.id) return;
+      const scan = applyBillingInfoToScan(rawScan);
       if (scan.id > lastSeenIdRef.current) {
         lastSeenIdRef.current = scan.id;
       }
@@ -473,7 +1143,9 @@ export default function BiometricMonitorProvider({
           }
           return true;
         });
-        return [scan, ...filtered].slice(0, 100);
+        const nextList = [scan, ...filtered].slice(0, 250);
+        saveJournalToStorage(nextList);
+        return nextList;
       });
 
       if (scan.status === "SUCCESS" && scan.studentId && scan.lessonId) {
@@ -490,8 +1162,16 @@ export default function BiometricMonitorProvider({
       }
 
       announceIncomingScan(scan);
+      if (scan.studentId) {
+        syncScansWithLiveBilling([scan]);
+      }
     },
-    [announceIncomingScan]
+    [
+      announceIncomingScan,
+      applyBillingInfoToScan,
+      saveJournalToStorage,
+      syncScansWithLiveBilling,
+    ]
   );
 
   // Instant 0ms Local Bridge SSE stream (http://127.0.0.1:4375/events) for Online Cloud Deployment
@@ -623,7 +1303,7 @@ export default function BiometricMonitorProvider({
       if (retryTimer) clearTimeout(retryTimer);
       if (es) es.close();
     };
-  }, [isEnabled, ingestDirectScanResult]);
+  }, [isEnabled, ingestDirectScanResult, initialBranchId]);
 
   // Background polling loop when isEnabled === true (pauses when tab is hidden)
   useEffect(() => {
@@ -751,45 +1431,110 @@ export default function BiometricMonitorProvider({
 
         if (!isInitializedRef.current) {
           isInitializedRef.current = true;
-          currentBranchIdRef.current = data.branchId
+          const resolvedBranchId = data.branchId
             ? Number(data.branchId)
             : 1;
-          const scans: BiometricScanResult[] = data.recentScans || [];
-          setRecentScans(scans);
-          setPinnedAlerts(data.pinnedAlerts || []);
-          if (scans.length > 0) {
-            lastSeenIdRef.current = Math.max(...scans.map((s) => s.id));
+          currentBranchIdRef.current = resolvedBranchId;
+          const savedJournal = loadBranchPersistenceFromStorage(resolvedBranchId);
+          const serverScans: BiometricScanDisplayItem[] = (
+            data.recentScans || []
+          ).filter(
+            (s: BiometricScanResult) =>
+              s &&
+              s.id > clearedBeforeIdRef.current &&
+              !removedJournalIdsRef.current.has(s.id)
+          );
+
+          // Merge serverScans with savedJournal so journal persists across refresh/restart/days until manually cleared
+          const byId = new Map<number, BiometricScanDisplayItem>();
+          for (const s of savedJournal) {
+            byId.set(s.id, applyBillingInfoToScan(s));
+          }
+          for (const s of serverScans) {
+            const existing = byId.get(s.id);
+            byId.set(
+              s.id,
+              applyBillingInfoToScan({
+                ...(existing || {}),
+                ...s,
+                isResolved: Boolean(existing?.isResolved || s.isResolved),
+              })
+            );
+          }
+
+          const mergedScans = Array.from(byId.values())
+            .sort((a, b) => b.id - a.id)
+            .slice(0, 250);
+
+          setRecentScans(mergedScans);
+          saveJournalToStorage(mergedScans, resolvedBranchId);
+
+          const serverAlerts = ((data.pinnedAlerts || []) as BiometricScanDisplayItem[])
+            .filter((a) => !isAlertDismissed(a))
+            .map((a) => applyBillingInfoToScan(a));
+          setPinnedAlerts(serverAlerts);
+
+          if (mergedScans.length > 0) {
+            lastSeenIdRef.current = Math.max(...mergedScans.map((s) => s.id));
+          }
+
+          const toSync = [...mergedScans, ...serverAlerts];
+          if (toSync.length > 0) {
+            syncScansWithLiveBilling(toSync);
           }
           return;
         }
 
         // Subsequent polls: detect newly arrived scans
-        const newScans: BiometricScanResult[] = data.recentScans || [];
+        const newScans: BiometricScanDisplayItem[] = (
+          data.recentScans || []
+        ).filter(
+          (s: BiometricScanResult) =>
+            s &&
+            s.id > clearedBeforeIdRef.current &&
+            !removedJournalIdsRef.current.has(s.id)
+        );
         if (newScans.length > 0) {
           const maxId = Math.max(...newScans.map((s) => s.id));
           if (maxId > lastSeenIdRef.current) {
             lastSeenIdRef.current = maxId;
           }
+          const enrichedNew = newScans.map((s) => applyBillingInfoToScan(s));
           setRecentScans((prev) => {
             const existingIds = new Set(prev.map((p) => p.id));
-            const uniqueNew = newScans.filter((s) => !existingIds.has(s.id));
+            const uniqueNew = enrichedNew.filter((s) => !existingIds.has(s.id));
             const hasNewUnrecognized = uniqueNew.some(
               (s) => s.status === "UNRECOGNIZED"
             );
             const basePrev = hasNewUnrecognized
               ? prev.filter((p) => p.status !== "UNRECOGNIZED")
               : prev;
-            return [...uniqueNew, ...basePrev].slice(0, 100);
+            const nextList = [...uniqueNew, ...basePrev].slice(0, 250);
+            saveJournalToStorage(nextList);
+            return nextList;
           });
 
-          const chronological = [...newScans].sort((a, b) => a.id - b.id);
+          const chronological = [...enrichedNew].sort((a, b) => a.id - b.id);
           for (const scan of chronological) {
             announceIncomingScan(scan);
           }
+
+          syncScansWithLiveBilling(enrichedNew);
         }
 
-        if (!isHoveringActionZone && data.pinnedAlerts) {
-          setPinnedAlerts(data.pinnedAlerts);
+        if (!isHoveringActionZoneRef.current && data.pinnedAlerts) {
+          const filteredAlerts = (
+            data.pinnedAlerts as BiometricScanDisplayItem[]
+          )
+            .filter((a) => !isAlertDismissed(a))
+            .map((a) => applyBillingInfoToScan(a));
+          setPinnedAlerts(filteredAlerts);
+          const unsyncedAlerts = filteredAlerts.filter(
+            (a) => !a.billingSynced && a.studentId
+          );
+          if (unsyncedAlerts.length > 0) {
+            syncScansWithLiveBilling(unsyncedAlerts);
+          }
         }
       } catch {
         // Silently retry on next interval
@@ -839,7 +1584,88 @@ export default function BiometricMonitorProvider({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
     };
-  }, [isEnabled, announceIncomingScan, ingestDirectScanResult, isHoveringActionZone, openLessonId, isDrawerOpen]);
+  }, [
+    isEnabled,
+    announceIncomingScan,
+    applyBillingInfoToScan,
+    ingestDirectScanResult,
+    isAlertDismissed,
+    loadBranchPersistenceFromStorage,
+    openLessonId,
+    isDrawerOpen,
+    saveJournalToStorage,
+    syncScansWithLiveBilling,
+  ]);
+
+  // Background heartbeat to automatically finalize and save attendance when lessons are up
+  useEffect(() => {
+    const runAutoSave = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      fetch("/api/attendance/auto-save", { method: "POST" }).catch(() => {
+        // Tolerated background heartbeat
+      });
+    };
+    const initialTimeout = setTimeout(runAutoSave, 4000);
+    const autoSaveInterval = setInterval(runAutoSave, 60000);
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(autoSaveInterval);
+    };
+  }, []);
+
+  // Dismiss only the popup card (X on HUD or Navbar popover) without deleting from Journal,
+  // and permanently mark it dismissed so polling never re-opens it unless the student scans again!
+  const handleDismissPopup = useCallback(
+    async (scanId: number) => {
+      const targetAlert =
+        pinnedAlerts.find((a) => a.id === scanId) ||
+        recentScans.find((s) => s.id === scanId);
+
+      dismissedAlertIdsRef.current.add(scanId);
+      if (targetAlert?.studentId) {
+        const prevMax =
+          dismissedStudentMaxScanIdRef.current.get(targetAlert.studentId) ?? 0;
+        dismissedStudentMaxScanIdRef.current.set(
+          targetAlert.studentId,
+          Math.max(prevMax, scanId)
+        );
+      }
+      saveDismissedAlertsToStorage();
+
+      setPinnedAlerts((prev) =>
+        prev.filter(
+          (a) =>
+            a.id !== scanId &&
+            !(
+              targetAlert?.studentId &&
+              a.studentId === targetAlert.studentId &&
+              a.id <= scanId
+            )
+        )
+      );
+
+      setRecentScans((prev) => {
+        const nextList = prev.map((s) =>
+          s.id === scanId ? { ...s, isResolved: true } : s
+        );
+        saveJournalToStorage(nextList);
+        return nextList;
+      });
+
+      // Mark isResolved = true in DB without deleting the row from BiometricScanLog
+      // and without marking attendance PRESENT
+      await resolveBiometricAlertAction({
+        scanId,
+        mode: "RESOLVED_BY_CATCHUP",
+      });
+    },
+    [
+      pinnedAlerts,
+      recentScans,
+      saveDismissedAlertsToStorage,
+      saveJournalToStorage,
+    ]
+  );
 
   // Resolve or dismiss a pinned alert or journal entry
   const handleResolveAlert = useCallback(
@@ -851,24 +1677,54 @@ export default function BiometricMonitorProvider({
         pinnedAlerts.find((a) => a.id === scanId) ||
         recentScans.find((s) => s.id === scanId);
 
-      setPinnedAlerts((prev) => prev.filter((a) => a.id !== scanId));
+      dismissedAlertIdsRef.current.add(scanId);
+      if (targetAlert?.studentId) {
+        const prevMax =
+          dismissedStudentMaxScanIdRef.current.get(targetAlert.studentId) ?? 0;
+        dismissedStudentMaxScanIdRef.current.set(
+          targetAlert.studentId,
+          Math.max(prevMax, scanId)
+        );
+      }
+      saveDismissedAlertsToStorage();
+
+      setPinnedAlerts((prev) =>
+        prev.filter(
+          (a) =>
+            a.id !== scanId &&
+            !(
+              targetAlert?.studentId &&
+              a.studentId === targetAlert.studentId &&
+              a.id <= scanId
+            )
+        )
+      );
+
       if (mode === "DISMISS") {
-        setRecentScans((prev) => prev.filter((s) => s.id !== scanId));
+        removedJournalIdsRef.current.add(scanId);
+        saveRemovedJournalIdsToStorage();
+        setRecentScans((prev) => {
+          const nextList = prev.filter((s) => s.id !== scanId);
+          saveJournalToStorage(nextList);
+          return nextList;
+        });
       } else {
-        setRecentScans((prev) =>
-          prev.map((s) =>
+        setRecentScans((prev) => {
+          const nextList = prev.map((s) =>
             s.id === scanId
               ? {
                   ...s,
                   isResolved: true,
                   status:
                     mode === "ALLOW_PRESENT" || mode === "RESOLVED_BY_PAYMENT"
-                      ? "SUCCESS"
+                      ? ("SUCCESS" as const)
                       : s.status,
                 }
               : s
-          )
-        );
+          );
+          saveJournalToStorage(nextList);
+          return nextList;
+        });
       }
 
       const res = await resolveBiometricAlertAction({ scanId, mode });
@@ -877,6 +1733,15 @@ export default function BiometricMonitorProvider({
         (mode === "ALLOW_PRESENT" || mode === "RESOLVED_BY_PAYMENT")
       ) {
         toast.success(res.message);
+        if (targetAlert && targetAlert.studentId) {
+          await syncScansWithLiveBilling([
+            {
+              ...targetAlert,
+              isResolved: true,
+              status: "SUCCESS",
+            },
+          ]);
+        }
         if (targetAlert && targetAlert.studentId && targetAlert.lessonId) {
           window.dispatchEvent(
             new CustomEvent("biometric-attendance-marked", {
@@ -892,11 +1757,39 @@ export default function BiometricMonitorProvider({
         }
       }
     },
-    [pinnedAlerts, recentScans, openLessonId, router]
+    [
+      pinnedAlerts,
+      recentScans,
+      openLessonId,
+      router,
+      saveDismissedAlertsToStorage,
+      saveJournalToStorage,
+      saveRemovedJournalIdsToStorage,
+      syncScansWithLiveBilling,
+    ]
   );
 
   // Clear the entire journal with 1 click so nothing stays stuck
   const handleClearJournal = useCallback(async () => {
+    const maxId = Math.max(
+      lastSeenIdRef.current,
+      ...recentScans.map((s) => s.id),
+      ...pinnedAlerts.map((a) => a.id),
+      0
+    );
+    clearedBeforeIdRef.current = maxId;
+    if (typeof window !== "undefined") {
+      const suffix = getBranchStorageSuffix();
+      try {
+        localStorage.setItem(
+          `massinissa_biometric_cleared_before_id_v1_${suffix}`,
+          String(maxId)
+        );
+        localStorage.removeItem(`massinissa_biometric_journal_v1_${suffix}`);
+      } catch {
+        // ignore
+      }
+    }
     setRecentScans([]);
     setPinnedAlerts([]);
     setLiveStreamCard(null);
@@ -906,7 +1799,7 @@ export default function BiometricMonitorProvider({
         isAr ? "تم مسح السجل بنجاح" : "Journal vidé avec succès"
       );
     }
-  }, [isAr]);
+  }, [getBranchStorageSuffix, isAr, pinnedAlerts, recentScans]);
 
   const [isSyncingK50, setIsSyncingK50] = useState<boolean>(false);
 
@@ -944,7 +1837,7 @@ export default function BiometricMonitorProvider({
   }, [isAr]);
 
   // Open Catch-Up (Rattrapage) modal for a State 3 card
-  const openCatchUpModalForScan = useCallback(async (scan: BiometricScanResult) => {
+  const openCatchUpModalForScan = useCallback(async (scan: BiometricScanDisplayItem) => {
     if (!scan.studentId) return;
     setCatchUpTargetScan(scan);
     setSelectedMissedLessonId("");
@@ -996,17 +1889,36 @@ export default function BiometricMonitorProvider({
       });
       if (res.success) {
         toast.success(res.message);
+        dismissedAlertIdsRef.current.add(catchUpTargetScan.id);
+        if (catchUpTargetScan.studentId) {
+          const prevMax =
+            dismissedStudentMaxScanIdRef.current.get(
+              catchUpTargetScan.studentId
+            ) ?? 0;
+          dismissedStudentMaxScanIdRef.current.set(
+            catchUpTargetScan.studentId,
+            Math.max(prevMax, catchUpTargetScan.id)
+          );
+        }
+        saveDismissedAlertsToStorage();
         setPinnedAlerts((prev) =>
           prev.filter((a) => a.id !== catchUpTargetScan.id)
         );
-        setRecentScans((prev) =>
-          prev.map((s) =>
-            s.id === catchUpTargetScan.id
-              ? { ...s, isResolved: true, status: "SUCCESS" }
-              : s
-          )
-        );
+        const updatedScan: BiometricScanDisplayItem = {
+          ...catchUpTargetScan,
+          isResolved: true,
+          status: "SUCCESS",
+          lessonId: Number(selectedCatchUpLessonId),
+        };
+        setRecentScans((prev) => {
+          const nextList = prev.map((s) =>
+            s.id === catchUpTargetScan.id ? updatedScan : s
+          );
+          saveJournalToStorage(nextList);
+          return nextList;
+        });
         setCatchUpTargetScan(null);
+        await syncScansWithLiveBilling([updatedScan]);
       } else {
         toast.error(res.message);
       }
@@ -1017,17 +1929,18 @@ export default function BiometricMonitorProvider({
 
   // Open Payment modal for a State 2 card
   const openPaymentModalForScan = useCallback(
-    async (scan: BiometricScanResult) => {
+    async (scan: BiometricScanDisplayItem) => {
       if (!scan.studentId) return;
+      const targetClassId = scan.classId ?? scan.resolvedClassId ?? null;
       setPaymentTargetScan(scan);
       setPaymentLoading(true);
       setPaymentData(null);
-      setSelectedPaymentClassId(scan.classId ? String(scan.classId) : "");
+      setSelectedPaymentClassId(targetClassId ? String(targetClassId) : "");
 
       try {
         const res = await getBiometricPaymentDataAction(
           scan.studentId,
-          scan.classId
+          targetClassId
         );
         if (res.success && res.student && res.classData) {
           setPaymentData({
@@ -1077,7 +1990,9 @@ export default function BiometricMonitorProvider({
         const matchName = s.studentName?.toLowerCase().includes(q);
         const matchNum =
           s.globalNumber !== null && String(s.globalNumber).includes(q);
-        const matchClass = s.className?.toLowerCase().includes(q);
+        const matchClass = (s.className || s.resolvedClassName)
+          ?.toLowerCase()
+          .includes(q);
         return Boolean(matchName || matchNum || matchClass);
       }
       return true;
@@ -1128,6 +2043,7 @@ export default function BiometricMonitorProvider({
         deviceConnected,
         isSyncingK50,
         handleResolveAlert,
+        handleDismissPopup,
         handleClearJournal,
         handleSyncK50Devices,
         openCatchUpModalForScan,
@@ -1177,8 +2093,13 @@ export default function BiometricMonitorProvider({
               )}
 
               {visiblePinnedAlerts.map((alert) => {
+                const exactAlertCredits =
+                  alert.isSiblingWaived && alert.payerRemainingCredit != null
+                    ? Number(alert.payerRemainingCredit)
+                    : Number(alert.remainingCredits ?? 0);
+
                 if (alert.status === "NO_CREDITS") {
-                  // STATE 2: LIGHT APPLICATION CARD WITH RED ACCENT (0 CREDITS LEFT)
+                  // STATE 2: LIGHT APPLICATION CARD WITH RED ACCENT (INSUFFICIENT / 0 / NEGATIVE CREDITS)
                   return (
                     <div
                       key={alert.id}
@@ -1188,9 +2109,13 @@ export default function BiometricMonitorProvider({
                         <div className="flex items-center gap-2">
                           <BiometricStatusDot variant="danger" />
                           <span className="text-xs font-semibold text-red-700">
-                            {isAr
-                              ? "تنبيه : الرصيد منتهي (0 حصص)"
-                              : "Solde épuisé (0 séance)"}
+                            {alert.isFormation
+                              ? isAr
+                                ? "تنبيه : مستحقات التكوين غير مسددة"
+                                : "Alerte : Formation non payée"
+                              : isAr
+                              ? `تنبيه : الرصيد غير كافٍ (${exactAlertCredits} حصص)`
+                              : `Solde insuffisant (${exactAlertCredits} séance(s))`}
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5">
@@ -1202,9 +2127,7 @@ export default function BiometricMonitorProvider({
                           </span>
                           <button
                             type="button"
-                            onClick={() =>
-                              handleResolveAlert(alert.id, "DISMISS")
-                            }
+                            onClick={() => handleDismissPopup(alert.id)}
                             className="p-1 rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-700 cursor-pointer transition-colors"
                             title={isAr ? "إغلاق" : "Fermer"}
                           >
@@ -1215,25 +2138,46 @@ export default function BiometricMonitorProvider({
 
                       <div className="space-y-1.5 text-xs">
                         <div className="font-semibold text-sm text-gray-900 flex items-center justify-between gap-2 min-w-0">
-                          <div className="flex items-center gap-1.5 min-w-0 truncate">
-                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                            <span className="truncate">{alert.studentName}</span>
-                            <span className="text-gray-500 font-mono text-xs shrink-0">
-                              (#{alert.globalNumber})
-                            </span>
-                          </div>
+                          {alert.studentId ? (
+                            <Link
+                              href={`/list/students/${alert.studentId}`}
+                              className="flex items-center gap-1.5 min-w-0 truncate hover:text-blue-600 hover:underline cursor-pointer transition-colors"
+                              title={
+                                isAr
+                                  ? "فتح الملف الشخصي للتلميذ"
+                                  : "Ouvrir le profil de l'étudiant"
+                              }
+                            >
+                              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span className="truncate">{alert.studentName}</span>
+                              <span className="text-gray-500 font-mono text-xs shrink-0">
+                                (#{alert.globalNumber})
+                              </span>
+                            </Link>
+                          ) : (
+                            <div className="flex items-center gap-1.5 min-w-0 truncate">
+                              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span className="truncate">{alert.studentName}</span>
+                              <span className="text-gray-500 font-mono text-xs shrink-0">
+                                (#{alert.globalNumber})
+                              </span>
+                            </div>
+                          )}
                           <InscriptionStatusBadge
                             status={alert.inscriptionStatus}
                             isAr={isAr}
                           />
                         </div>
+
                         <div className="text-gray-600 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                          <span className="inline-flex items-center gap-1 min-w-0">
-                            <BookOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                            <span className="font-medium text-gray-800 truncate">
-                              {alert.className}
+                          {(alert.className || alert.resolvedClassName) && (
+                            <span className="inline-flex items-center gap-1 min-w-0">
+                              <BookOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span className="font-medium text-gray-800 truncate">
+                                {alert.className || alert.resolvedClassName}
+                              </span>
                             </span>
-                          </span>
+                          )}
                           {alert.classroomName && (
                             <span className="inline-flex items-center gap-1 text-gray-500 shrink-0">
                               <DoorOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
@@ -1247,13 +2191,17 @@ export default function BiometricMonitorProvider({
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-1.5 text-red-700 bg-red-50/80 border border-red-100 rounded-md px-2.5 py-1.5 font-medium">
-                          <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0" />
-                          <span>
-                            {isAr
-                              ? "لم يتبق أي رصيد حصص مدفوع لهذا التلميذ."
-                              : "Aucune séance payée restante dans le cycle."}
-                          </span>
+
+                        <BiometricGroupAndPaymentBadges
+                          scan={alert}
+                          isAr={isAr}
+                        />
+
+                        <div className="pt-0.5 flex flex-wrap items-center justify-between gap-1.5">
+                          <BiometricRemainingLessonsBadge
+                            scan={alert}
+                            isAr={isAr}
+                          />
                         </div>
                       </div>
 
@@ -1324,9 +2272,7 @@ export default function BiometricMonitorProvider({
                         </span>
                         <button
                           type="button"
-                          onClick={() =>
-                            handleResolveAlert(alert.id, "DISMISS")
-                          }
+                          onClick={() => handleDismissPopup(alert.id)}
                           className="p-1 rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-700 cursor-pointer transition-colors"
                           title={isAr ? "إغلاق" : "Fermer"}
                         >
@@ -1337,32 +2283,73 @@ export default function BiometricMonitorProvider({
 
                     <div className="space-y-1.5 text-xs">
                       <div className="font-semibold text-sm text-gray-900 flex items-center justify-between gap-2 min-w-0">
-                        <div className="flex items-center gap-1.5 min-w-0 truncate">
-                          <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                          <span className="truncate">{alert.studentName}</span>
-                          <span className="text-emerald-600 font-mono text-xs shrink-0">
-                            (#{alert.globalNumber})
-                          </span>
-                        </div>
+                        {alert.studentId ? (
+                          <Link
+                            href={`/list/students/${alert.studentId}`}
+                            className="flex items-center gap-1.5 min-w-0 truncate hover:text-blue-600 hover:underline cursor-pointer transition-colors"
+                            title={
+                              isAr
+                                ? "فتح الملف الشخصي للتلميذ"
+                                : "Ouvrir le profil de l'étudiant"
+                            }
+                          >
+                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            <span className="truncate">{alert.studentName}</span>
+                            <span className="text-emerald-600 font-mono text-xs shrink-0">
+                              (#{alert.globalNumber})
+                            </span>
+                          </Link>
+                        ) : (
+                          <div className="flex items-center gap-1.5 min-w-0 truncate">
+                            <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            <span className="truncate">{alert.studentName}</span>
+                            <span className="text-emerald-600 font-mono text-xs shrink-0">
+                              (#{alert.globalNumber})
+                            </span>
+                          </div>
+                        )}
                         <InscriptionStatusBadge
                           status={alert.inscriptionStatus}
                           isAr={isAr}
                         />
                       </div>
+
+                      {(alert.className || alert.resolvedClassName) && (
+                        <div className="text-gray-600 flex items-center gap-1.5">
+                          <BookOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          <span className="font-medium text-gray-800 truncate">
+                            {alert.className || alert.resolvedClassName}
+                          </span>
+                        </div>
+                      )}
+
+                      <BiometricGroupAndPaymentBadges
+                        scan={alert}
+                        isAr={isAr}
+                      />
+
+                      <div className="pt-0.5">
+                        <BiometricRemainingLessonsBadge
+                          scan={alert}
+                          isAr={isAr}
+                        />
+                      </div>
+
                       <p className="text-gray-600">
                         {isAr
                           ? "التلميذ غير مسجل في أي فوج يدرس في هذا التوقيت."
                           : "Inscrit dans aucun groupe ayant cours dans ce créneau."}
                       </p>
-                      {alert.nextLessonInfo && (
-                        <div className="flex items-center gap-1.5 text-amber-800 bg-amber-50/80 border border-amber-200/70 rounded-md px-2.5 py-1.5 font-medium">
-                          <Calendar className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>
-                            {isAr ? "الحصة القادمة:" : "Prochaine séance:"}{" "}
-                            {alert.nextLessonInfo}
-                          </span>
-                        </div>
-                      )}
+                      {alert.nextLessonInfo &&
+                        !alert.nextLessonInfo.startsWith("INSC_") && (
+                          <div className="flex items-center gap-1.5 text-amber-800 bg-amber-50/80 border border-amber-200/70 rounded-md px-2.5 py-1.5 font-medium">
+                            <Calendar className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>
+                              {isAr ? "الحصة القادمة:" : "Prochaine séance:"}{" "}
+                              {alert.nextLessonInfo}
+                            </span>
+                          </div>
+                        )}
                     </div>
 
                     <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-gray-100">
@@ -1435,25 +2422,47 @@ export default function BiometricMonitorProvider({
 
                   <div className="space-y-1.5 text-xs">
                     <div className="font-semibold text-sm text-gray-900 flex items-center justify-between gap-2 min-w-0">
-                      <div className="flex items-center gap-1.5 min-w-0 truncate">
-                        <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span className="truncate">{liveStreamCard.studentName}</span>
-                        <span className="text-emerald-600 font-mono text-xs shrink-0">
-                          (#{liveStreamCard.globalNumber})
-                        </span>
-                      </div>
+                      {liveStreamCard.studentId ? (
+                        <Link
+                          href={`/list/students/${liveStreamCard.studentId}`}
+                          className="flex items-center gap-1.5 min-w-0 truncate hover:text-blue-600 hover:underline cursor-pointer transition-colors"
+                          title={
+                            isAr
+                              ? "فتح الملف الشخصي للتلميذ"
+                              : "Ouvrir le profil de l'étudiant"
+                          }
+                        >
+                          <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          <span className="truncate">{liveStreamCard.studentName}</span>
+                          <span className="text-emerald-600 font-mono text-xs shrink-0">
+                            (#{liveStreamCard.globalNumber})
+                          </span>
+                        </Link>
+                      ) : (
+                        <div className="flex items-center gap-1.5 min-w-0 truncate">
+                          <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          <span className="truncate">{liveStreamCard.studentName}</span>
+                          <span className="text-emerald-600 font-mono text-xs shrink-0">
+                            (#{liveStreamCard.globalNumber})
+                          </span>
+                        </div>
+                      )}
                       <InscriptionStatusBadge
                         status={liveStreamCard.inscriptionStatus}
                         isAr={isAr}
                       />
                     </div>
                     <div className="text-gray-600 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                      <span className="inline-flex items-center gap-1 min-w-0">
-                        <BookOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                        <span className="font-medium text-gray-800 truncate">
-                          {liveStreamCard.className}
+                      {(liveStreamCard.className ||
+                        liveStreamCard.resolvedClassName) && (
+                        <span className="inline-flex items-center gap-1 min-w-0">
+                          <BookOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          <span className="font-medium text-gray-800 truncate">
+                            {liveStreamCard.className ||
+                              liveStreamCard.resolvedClassName}
+                          </span>
                         </span>
-                      </span>
+                      )}
                       {liveStreamCard.classroomName && (
                         <span className="inline-flex items-center gap-1 text-gray-500 shrink-0">
                           <DoorOpen className="w-3.5 h-3.5 text-gray-400 shrink-0" />
@@ -1467,40 +2476,17 @@ export default function BiometricMonitorProvider({
                         </span>
                       )}
                     </div>
+
+                    <BiometricGroupAndPaymentBadges
+                      scan={liveStreamCard}
+                      isAr={isAr}
+                    />
+
                     <div className="pt-1 flex flex-wrap items-center justify-between gap-1.5">
-                      {liveStreamCard.isNonPayer || liveStreamCard.payerStatus === "NON_PAYER" ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px] shrink-0">
-                          <Sparkles className="w-3 h-3 shrink-0 text-emerald-600" />
-                          <span>
-                            {isAr ? "معفى من الرسوم" : "Non-payeur (Exonéré)"}
-                          </span>
-                        </span>
-                      ) : liveStreamCard.hasPayerSibling || liveStreamCard.isSiblingWaived ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 font-semibold text-[11px] shrink-0">
-                          <Users className="w-3 h-3 shrink-0 text-purple-600" />
-                          <span>
-                            {isAr ? "أخ دافع" : "Remise fratrie"}
-                          </span>
-                        </span>
-                      ) : liveStreamCard.payerStatus === "SCHOOL_FEES_ONLY" ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-semibold text-[11px] shrink-0">
-                          <ShieldAlert className="w-3 h-3 shrink-0 text-amber-600" />
-                          <span>
-                            {isAr
-                              ? `الرصيد المتبقي: ${liveStreamCard.remainingCredits ?? 0} حصص (حصة المدرسة)`
-                              : `Solde : ${liveStreamCard.remainingCredits ?? 0} séance(s) (Part école)`}
-                          </span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px] shrink-0">
-                          <CreditCard className="w-3 h-3 shrink-0" />
-                          <span>
-                            {isAr
-                              ? `الرصيد المتبقي: ${liveStreamCard.remainingCredits ?? 0} حصص`
-                              : `Solde : ${liveStreamCard.remainingCredits ?? 0} séance(s) restante(s)`}
-                          </span>
-                        </span>
-                      )}
+                      <BiometricRemainingLessonsBadge
+                        scan={liveStreamCard}
+                        isAr={isAr}
+                      />
                     </div>
                   </div>
                 </div>
@@ -1579,8 +2565,8 @@ export default function BiometricMonitorProvider({
                   </h2>
                   <p className="text-xs text-gray-500">
                     {isAr
-                      ? `${recentScans.length} عملية مسح نشطة`
-                      : `${recentScans.length} pointage(s) actif(s)`}
+                      ? `${recentScans.length} عملية مسح محفوظة`
+                      : `${recentScans.length} pointage(s) enregistré(s)`}
                   </p>
                 </div>
               </div>
@@ -1763,195 +2749,225 @@ export default function BiometricMonitorProvider({
                   </p>
                 </div>
               ) : (
-                filteredDrawerScans.map((scan) => (
-                  <div
-                    key={scan.id}
-                    className={`rounded-xl p-3 border text-xs bg-white shadow-2xs transition-all ${
-                      scan.status === "SUCCESS"
-                        ? "border-gray-200 border-s-4 border-s-emerald-500"
-                        : scan.status === "NO_CREDITS"
-                        ? "border-red-200 border-s-4 border-s-red-500"
-                        : scan.status === "NO_UPCOMING_GROUP"
-                        ? "border-amber-200 border-s-4 border-s-amber-500"
-                        : "border-gray-200"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2 mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <BiometricStatusDot
-                          variant={
-                            scan.status === "SUCCESS"
-                              ? "success"
-                              : scan.status === "NO_CREDITS"
-                              ? "danger"
-                              : scan.status === "NO_UPCOMING_GROUP"
-                              ? "green-red"
-                              : "red-green"
-                          }
-                          size="sm"
-                        />
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                            scan.status === "SUCCESS"
-                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                              : scan.status === "NO_CREDITS"
-                              ? "bg-red-50 text-red-700 border-red-200"
-                              : scan.status === "NO_UPCOMING_GROUP"
-                              ? "bg-amber-50 text-amber-800 border-amber-200"
-                              : "bg-gray-100 text-gray-700 border-gray-200"
-                          }`}
-                        >
-                          {scan.status === "SUCCESS"
-                            ? isAr
-                              ? "حاضر"
-                              : "Présent"
-                            : scan.status === "NO_CREDITS"
-                            ? isAr
-                              ? "رصيد منتهي (0)"
-                              : "Solde épuisé (0)"
-                            : scan.status === "NO_UPCOMING_GROUP"
-                            ? isAr
-                              ? "خارج التوقيت"
-                              : "Hors créneau"
-                            : isAr
-                            ? "غير معروفة"
-                            : "Non reconnue"}
-                        </span>
-                      </div>
+                filteredDrawerScans.map((scan) => {
+                  const exactScanCredits =
+                    scan.isSiblingWaived && scan.payerRemainingCredit != null
+                      ? Number(scan.payerRemainingCredit)
+                      : Number(scan.remainingCredits ?? 0);
 
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="text-[11px] font-mono text-gray-400"
-                          dir="ltr"
-                        >
-                          {formatTime(scan.scannedAt)}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleResolveAlert(scan.id, "DISMISS")}
-                          className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 cursor-pointer transition-colors"
-                          title={isAr ? "حذف من السجل" : "Retirer du journal"}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {scan.studentName ? (
-                      <div className="font-semibold text-gray-900 flex items-center justify-between gap-2 min-w-0">
-                        <div className="flex items-center gap-1.5 min-w-0 truncate">
-                          <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                          <span className="truncate">{scan.studentName}</span>
-                          <span className="text-gray-500 font-mono text-[11px] shrink-0">
-                            (#{scan.globalNumber})
+                  return (
+                    <div
+                      key={scan.id}
+                      className={`rounded-xl p-3 border text-xs bg-white shadow-2xs transition-all space-y-1.5 ${
+                        scan.status === "SUCCESS"
+                          ? "border-gray-200 border-s-4 border-s-emerald-500"
+                          : scan.status === "NO_CREDITS"
+                          ? "border-red-200 border-s-4 border-s-red-500"
+                          : scan.status === "NO_UPCOMING_GROUP"
+                          ? "border-amber-200 border-s-4 border-s-amber-500"
+                          : "border-gray-200"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <BiometricStatusDot
+                            variant={
+                              scan.status === "SUCCESS"
+                                ? "success"
+                                : scan.status === "NO_CREDITS"
+                                ? "danger"
+                                : scan.status === "NO_UPCOMING_GROUP"
+                                ? "green-red"
+                                : "red-green"
+                            }
+                            size="sm"
+                          />
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                              scan.status === "SUCCESS"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : scan.status === "NO_CREDITS"
+                                ? "bg-red-50 text-red-700 border-red-200"
+                                : scan.status === "NO_UPCOMING_GROUP"
+                                ? "bg-amber-50 text-amber-800 border-amber-200"
+                                : "bg-gray-100 text-gray-700 border-gray-200"
+                            }`}
+                          >
+                            {scan.status === "SUCCESS"
+                              ? isAr
+                                ? "حاضر"
+                                : "Présent"
+                              : scan.status === "NO_CREDITS"
+                              ? scan.isFormation
+                                ? isAr
+                                  ? "تكوين غير مسدد"
+                                  : "Formation impayée"
+                                : isAr
+                                ? `بدون رصيد (${exactScanCredits})`
+                                : `Solde (${exactScanCredits})`
+                              : scan.status === "NO_UPCOMING_GROUP"
+                              ? isAr
+                                ? "خارج التوقيت"
+                                : "Hors créneau"
+                              : isAr
+                              ? "غير معروفة"
+                              : "Non reconnue"}
                           </span>
                         </div>
-                        <InscriptionStatusBadge
-                          status={scan.inscriptionStatus}
-                          isAr={isAr}
-                        />
-                      </div>
-                    ) : (
-                      <div className="font-medium text-gray-500">
-                        {isAr
-                          ? "بصمة غير مسجلة في النظام"
-                          : "Empreinte non enregistrée"}
-                      </div>
-                    )}
 
-                    {scan.className && (
-                      <div className="text-gray-600 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span className="inline-flex items-center gap-1">
-                          <BookOpen className="w-3 h-3 text-gray-400 shrink-0" />
-                          <span>{scan.className}</span>
-                        </span>
-                        {scan.classroomName && (
-                          <span className="inline-flex items-center gap-1 text-gray-500">
-                            <DoorOpen className="w-3 h-3 text-gray-400 shrink-0" />
-                            <span>{scan.classroomName}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className="text-[11px] font-mono text-gray-400"
+                            dir="ltr"
+                          >
+                            {formatTime(scan.scannedAt)}
                           </span>
-                        )}
-                        {scan.isNonPayer || scan.payerStatus === "NON_PAYER" ? (
-                          <span className="font-semibold text-emerald-700">
-                            ({isAr ? "معفى من الرسوم" : "Exonéré"})
-                          </span>
-                        ) : scan.hasPayerSibling || scan.isSiblingWaived ? (
-                          <span className="font-semibold text-purple-700">
-                            ({isAr ? "أخ دافع" : "Remise fratrie"})
-                          </span>
-                        ) : scan.payerStatus === "SCHOOL_FEES_ONLY" ? (
-                          <span className="font-semibold text-amber-800">
-                            ({scan.remainingCredits ?? 0}{" "}
-                            {isAr ? "حصص (حصة المدرسة)" : "séances (Part école)"})
-                          </span>
-                        ) : scan.remainingCredits !== null ? (
-                          <span className="font-semibold text-gray-800">
-                            ({scan.remainingCredits}{" "}
-                            {isAr ? "حصص متبقية" : "séances rest."})
-                          </span>
-                        ) : null}
-                      </div>
-                    )}
-
-                    {/* Quick Action Buttons in Drawer */}
-                    {scan.status === "NO_CREDITS" && !scan.isResolved && (
-                      <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
-                        {scan.studentId && (
                           <button
                             type="button"
-                            onClick={() => {
-                              openPaymentModalForScan(scan);
-                            }}
-                            className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors"
+                            onClick={() => handleResolveAlert(scan.id, "DISMISS")}
+                            className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 cursor-pointer transition-colors"
+                            title={isAr ? "حذف من السجل" : "Retirer du journal"}
                           >
-                            <CreditCard className="w-3 h-3" />
-                            <span>{isAr ? "تسديد" : "Encaisser"}</span>
+                            <X className="w-3.5 h-3.5" />
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleResolveAlert(scan.id, "ALLOW_PRESENT")
-                          }
-                          className="px-2.5 py-1 rounded-md bg-white hover:bg-gray-50 border border-gray-300 text-gray-700 font-medium text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors"
-                        >
-                          <UserCheck className="w-3 h-3" />
-                          <span>
-                            {isAr ? "سماح بالحضور" : "Autoriser présence"}
+                        </div>
+                      </div>
+
+                      {scan.studentName ? (
+                        <div className="font-semibold text-gray-900 flex items-center justify-between gap-2 min-w-0">
+                          {scan.studentId ? (
+                            <Link
+                              href={`/list/students/${scan.studentId}`}
+                              onClick={() => setIsDrawerOpen(false)}
+                              className="flex items-center gap-1.5 min-w-0 truncate hover:text-blue-600 hover:underline cursor-pointer transition-colors"
+                              title={
+                                isAr
+                                  ? "فتح الملف الشخصي للتلميذ"
+                                  : "Ouvrir le profil de l'étudiant"
+                              }
+                            >
+                              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span className="truncate">{scan.studentName}</span>
+                              <span className="text-gray-500 font-mono text-[11px] shrink-0">
+                                (#{scan.globalNumber})
+                              </span>
+                            </Link>
+                          ) : (
+                            <div className="flex items-center gap-1.5 min-w-0 truncate">
+                              <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                              <span className="truncate">{scan.studentName}</span>
+                              <span className="text-gray-500 font-mono text-[11px] shrink-0">
+                                (#{scan.globalNumber})
+                              </span>
+                            </div>
+                          )}
+                          <InscriptionStatusBadge
+                            status={scan.inscriptionStatus}
+                            isAr={isAr}
+                          />
+                        </div>
+                      ) : (
+                        <div className="font-medium text-gray-500">
+                          {isAr
+                            ? "بصمة غير مسجلة في النظام"
+                            : "Empreinte non enregistrée"}
+                        </div>
+                      )}
+
+                      {(scan.className || scan.resolvedClassName) && (
+                        <div className="text-gray-600 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span className="inline-flex items-center gap-1">
+                            <BookOpen className="w-3 h-3 text-gray-400 shrink-0" />
+                            <span className="font-medium text-gray-800">
+                              {scan.className || scan.resolvedClassName}
+                            </span>
                           </span>
-                        </button>
-                        {scan.studentId && (
+                          {scan.classroomName && (
+                            <span className="inline-flex items-center gap-1 text-gray-500">
+                              <DoorOpen className="w-3 h-3 text-gray-400 shrink-0" />
+                              <span>{scan.classroomName}</span>
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {scan.studentId && (
+                        <>
+                          <BiometricGroupAndPaymentBadges
+                            scan={scan}
+                            isAr={isAr}
+                            compact
+                          />
+                          <div className="pt-0.5">
+                            <BiometricRemainingLessonsBadge
+                              scan={scan}
+                              isAr={isAr}
+                              compact
+                            />
+                          </div>
+                        </>
+                      )}
+
+                      {/* Quick Action Buttons in Drawer */}
+                      {scan.status === "NO_CREDITS" && !scan.isResolved && (
+                        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+                          {scan.studentId && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                openPaymentModalForScan(scan);
+                              }}
+                              className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors"
+                            >
+                              <CreditCard className="w-3 h-3" />
+                              <span>{isAr ? "تسديد" : "Encaisser"}</span>
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => {
-                              setIsDrawerOpen(false);
-                              router.push(`/list/students/${scan.studentId}`);
-                            }}
-                            className="p-1 rounded-md bg-white hover:bg-gray-50 border border-gray-300 text-gray-500 hover:text-gray-700 cursor-pointer transition-colors"
-                            title={isAr ? "الملف الشخصي" : "Profil"}
+                            onClick={() =>
+                              handleResolveAlert(scan.id, "ALLOW_PRESENT")
+                            }
+                            className="px-2.5 py-1 rounded-md bg-white hover:bg-gray-50 border border-gray-300 text-gray-700 font-medium text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors"
                           >
-                            <ExternalLink className="w-3 h-3" />
+                            <UserCheck className="w-3 h-3" />
+                            <span>
+                              {isAr ? "سماح بالحضور" : "Autoriser présence"}
+                            </span>
                           </button>
-                        )}
-                      </div>
-                    )}
+                          {scan.studentId && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsDrawerOpen(false);
+                                router.push(`/list/students/${scan.studentId}`);
+                              }}
+                              className="p-1 rounded-md bg-white hover:bg-gray-50 border border-gray-300 text-gray-500 hover:text-gray-700 cursor-pointer transition-colors"
+                              title={isAr ? "الملف الشخصي" : "Profil"}
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      )}
 
-                    {scan.status === "NO_UPCOMING_GROUP" && !scan.isResolved && (
-                      <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
-                        <button
-                          type="button"
-                          onClick={() => openCatchUpModalForScan(scan)}
-                          className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          <span>
-                            {isAr ? "تسجيل تعويض" : "Marquer rattrapage"}
-                          </span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))
+                      {scan.status === "NO_UPCOMING_GROUP" && !scan.isResolved && (
+                        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+                          <button
+                            type="button"
+                            onClick={() => openCatchUpModalForScan(scan)}
+                            className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            <span>
+                              {isAr ? "تسجيل تعويض" : "Marquer rattrapage"}
+                            </span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
 
@@ -2013,13 +3029,27 @@ export default function BiometricMonitorProvider({
                       : "Enregistrer un Rattrapage"}
                   </span>
                 </h3>
-                <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-gray-400" />
-                  <span>
-                    {catchUpTargetScan.studentName} (#
-                    {catchUpTargetScan.globalNumber})
-                  </span>
-                </p>
+                {catchUpTargetScan.studentId ? (
+                  <Link
+                    href={`/list/students/${catchUpTargetScan.studentId}`}
+                    onClick={() => setCatchUpTargetScan(null)}
+                    className="text-xs text-gray-600 mt-1 inline-flex items-center gap-1.5 hover:text-blue-600 hover:underline cursor-pointer transition-colors"
+                  >
+                    <User className="w-3.5 h-3.5 text-gray-400" />
+                    <span>
+                      {catchUpTargetScan.studentName} (#
+                      {catchUpTargetScan.globalNumber})
+                    </span>
+                  </Link>
+                ) : (
+                  <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-gray-400" />
+                    <span>
+                      {catchUpTargetScan.studentName} (#
+                      {catchUpTargetScan.globalNumber})
+                    </span>
+                  </p>
+                )}
               </div>
               <button
                 type="button"

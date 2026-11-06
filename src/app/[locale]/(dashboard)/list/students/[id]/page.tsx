@@ -34,6 +34,15 @@ import {
   User,
 } from "lucide-react";
 
+function parseValidBirthday(val: unknown): Date | null {
+  if (!val) return null;
+  const d = val instanceof Date ? val : new Date(val as string | number);
+  if (isNaN(d.getTime())) return null;
+  const year = d.getFullYear();
+  if (year < 1920 || year > 2100) return null;
+  return d;
+}
+
 function formatLessonDate(date: Date | string, locale: string) {
   const d = new Date(date);
   if (isNaN(d.getTime())) return "-";
@@ -49,6 +58,7 @@ function formatLessonDate(date: Date | string, locale: string) {
 function formatLessonTime(start: Date | string, end: Date | string) {
   const s = new Date(start);
   const e = new Date(end);
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) return "-";
   const fmt = (d: Date) =>
     d.toLocaleTimeString("fr-DZ", {
       hour: "2-digit",
@@ -557,6 +567,8 @@ const SingleStudentPage = async (
     const parentPhoneNumbers = (studentPaymentData?.parentPhoneNumbers || []).map((p: any) => p.phone);
     const studentLevelId = studentPaymentData?.enrollments?.find((e: any) => e.class?.levelId)?.class?.levelId;
 
+    const validBirthday = parseValidBirthday(s.birthday);
+
     const student = {
       id: s.id,
       globalNumber: s.globalNumber,
@@ -565,7 +577,7 @@ const SingleStudentPage = async (
       phone: s.phone || t("notAvailable"),
       address: s.address || t("branchPrefix", { branch: s.branchName || s.registeredBranchId || "ECOLE" }),
       parentPhoneNumbers,
-      birthday: s.birthday ? new Date(s.birthday) : new Date(2008, 0, 1),
+      birthday: validBirthday,
       sex: s.sex || "MALE",
       familyId: s.familyId,
       familyName: studentPaymentData?.family?.name || (s.familyId ? t("familyPrefix", { id: s.familyId }) : null),
@@ -702,7 +714,9 @@ const SingleStudentPage = async (
                 <div className="flex items-center gap-2 bg-surface-subtle p-2.5 rounded-lg border border-border">
                   <Calendar className="w-4 h-4 text-muted shrink-0" />
                   <span className="text-gray-700 text-xs">
-                    {new Intl.DateTimeFormat(locale === "ar" ? "ar-DZ" : "fr-DZ").format(student.birthday)}
+                    {validBirthday
+                      ? new Intl.DateTimeFormat(locale === "ar" ? "ar-DZ" : "fr-DZ").format(validBirthday)
+                      : t("notAvailable")}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 bg-surface-subtle p-2.5 rounded-lg border border-border sm:col-span-2">
@@ -826,8 +840,8 @@ const SingleStudentPage = async (
                                 </Badge>
                               )}
                               {g.payerStatus === "SCHOOL_FEES_ONLY" && (
-                                <Badge variant="warning" size="sm">
-                                  {t("schoolShareOnly", { percent: g.schoolPercentage })}
+                                <Badge variant="primary" size="sm" className="bg-sky-100 text-sky-900 border border-sky-300 font-semibold">
+                                  {locale === "ar" ? `حصة المدرسة (${g.schoolPercentage}%)` : `Part école (${g.schoolPercentage}%)`}
                                 </Badge>
                               )}
                             </div>
@@ -876,6 +890,22 @@ const SingleStudentPage = async (
                               <Badge variant="secondary" size="sm" withDot className="font-bold">
                                 {locale === "ar" ? "معفى (خصم إخوة)" : "Exonéré (Fratrie)"}
                               </Badge>
+                            ) : g.payerStatus === "SCHOOL_FEES_ONLY" ? (
+                              isOne ? (
+                                <Badge variant="warning" size="sm" withDot className="font-bold shadow-xs">
+                                  {locale === "ar" ? "حصة واحدة متبقية (حصة المدرسة)" : "1 séance restante (Part école)"}
+                                </Badge>
+                              ) : isPaid ? (
+                                <Badge variant="success" size="sm" withDot>
+                                  {locale === "ar" ? `مدفوع (${g.netSessions} حصص - حصة المدرسة)` : `Payé (${g.netSessions} séa. - Part école)`}
+                                </Badge>
+                              ) : isUnpaid ? (
+                                <Badge variant="danger" size="sm" withDot>
+                                  {locale === "ar"
+                                    ? (g.netSessions < 0 ? `${g.netSessions} حصة (دين - حصة المدرسة)` : "غير مدفوع (حصة المدرسة)")
+                                    : (g.netSessions < 0 ? `${g.netSessions} séa. (dette - Part école)` : "Non payé (Part école)")}
+                                </Badge>
+                              ) : null
                             ) : isOne ? (
                               <Badge variant="warning" size="sm" withDot className="font-bold shadow-xs">
                                 {t("statusOneSessionLeft")}

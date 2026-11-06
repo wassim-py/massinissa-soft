@@ -18,6 +18,7 @@ import {
   isLessonApplicableToEnrollment,
 } from "@/lib/studentBilling";
 import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
+import { autoSaveLessonAttendanceAction } from "@/lib/actions";
 
 // This is the Server Component that fetches all the necessary data for taking attendance.
 const TakeAttendancePage = async (
@@ -448,7 +449,7 @@ const TakeAttendancePage = async (
       missedStartsAt: v.missedLesson.startsAt,
       recordedAt: v.recordedAt,
       remainingCredits: Math.max(vCredit.netSessions, vCredit.transferableSessions),
-      payerStatus: vCredit.status,
+      payerStatus: vPayerStatus,
       isScenarioA,
       isScenarioB,
     };
@@ -506,6 +507,15 @@ const TakeAttendancePage = async (
   } catch (err) {
     console.error("Error fetching students:", err);
     rawStudents = [];
+  }
+
+  // If the lesson is up (time has ended), auto-finalize attendance so no student is left non-recorded
+  if (l.endsAt && new Date(l.endsAt) <= new Date() && !l.isTeacherAbsent) {
+    try {
+      await autoSaveLessonAttendanceAction(lessonId);
+    } catch (autoErr) {
+      console.warn("Auto-save on ended lesson in TakeAttendancePage warning:", autoErr);
+    }
   }
 
   let existingAttendance: any[] = [];

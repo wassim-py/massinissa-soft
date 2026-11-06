@@ -205,7 +205,7 @@ export default function SectionTransfersHistoryTable({
                   </td>
                   <td className="p-3 text-center">{getSectionBadge(t.fromSection)}</td>
                   <td className="p-3 text-center text-muted">
-                    <ArrowRight className="w-3.5 h-3.5 mx-auto" />
+                    <ArrowRight className="w-3.5 h-3.5 mx-auto rtl:rotate-180" />
                   </td>
                   <td className="p-3 text-center">{getSectionBadge(t.toSection)}</td>
                   <td className="p-3 text-right font-mono font-bold text-gray-900 text-sm">

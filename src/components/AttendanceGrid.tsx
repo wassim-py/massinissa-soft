@@ -17,6 +17,8 @@ export type StudentBalanceInfo = {
     isFormation: boolean;
     netSessions?: number;
     status?: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER";
+    isSchoolFeesOnly?: boolean;
+    payerStatus?: string;
     hasPayerSibling?: boolean;
     levelPrice?: number;
     totalPaidFormation?: number;
@@ -99,6 +101,49 @@ function BalanceBadge({ balance, locale }: { balance: StudentBalanceInfo; locale
                 title={locale === "ar" ? "إعفاء إخوة (أخ دافع)" : "Exonéré fratrie (Fratrie)"}
             >
                 {locale === "ar" ? "إعفاء إخوة" : "Remise fratrie"}
+            </Badge>
+        );
+    }
+
+    if (balance.isSchoolFeesOnly || balance.payerStatus === "SCHOOL_FEES_ONLY") {
+        const net = balance.netSessions ?? 0;
+        if (net >= 2) {
+            return (
+                <Badge
+                    variant="success"
+                    size="sm"
+                    withDot
+                    className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                    title={locale === "ar" ? `الرصيد المتبقي: ${net} حصص (حصة المدرسة)` : `Solde restant : ${net} séances (Part école)`}
+                >
+                    {locale === "ar" ? `${net} حصص (حصة المدرسة)` : `${net} séa. (Part école)`}
+                </Badge>
+            );
+        }
+        if (net === 1) {
+            return (
+                <Badge
+                    variant="warning"
+                    size="sm"
+                    withDot
+                    className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                    title={locale === "ar" ? "حصة واحدة متبقية (حصة المدرسة)" : "1 séance restante (Part école)"}
+                >
+                    {locale === "ar" ? "1 حصة (حصة المدرسة)" : "1 séa. (Part école)"}
+                </Badge>
+            );
+        }
+        return (
+            <Badge
+                variant="danger"
+                size="sm"
+                withDot
+                className="text-[10px] py-0 px-1.5 h-4.5 font-semibold leading-none shadow-2xs"
+                title={locale === "ar" ? (net < 0 ? `الرصيد: ${net} حصة (حصة المدرسة)` : "غير مدفوع (حصة المدرسة)") : (net < 0 ? `Solde : ${net} séance(s) (Part école)` : "Non payé (Part école)")}
+            >
+                {locale === "ar"
+                    ? (net < 0 ? `${net} حصة (حصة المدرسة)` : "غير مدفوع (حصة المدرسة)")
+                    : (net < 0 ? `${net} séa. (Part école)` : "Non payé (Part école)")}
             </Badge>
         );
     }
@@ -700,6 +745,11 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         ) : null}
                                                         {student.balance && (
                                                             <BalanceBadge balance={student.balance} locale={locale} />
+                                                        )}
+                                                        {(student.balance?.isSchoolFeesOnly || (student as any).payerStatus === "SCHOOL_FEES_ONLY") && (
+                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-100 text-sky-900 border border-sky-300 shadow-2xs leading-none">
+                                                                {locale === "ar" ? "حصة المدرسة" : "Part école"}
+                                                            </span>
                                                         )}
                                                     </div>
                                                 </div>

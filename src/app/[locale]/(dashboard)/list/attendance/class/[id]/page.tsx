@@ -14,6 +14,7 @@ import { getTranslations, getLocale } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit, isLessonApplicableToEnrollment } from "@/lib/studentBilling";
 import { getAlgiersDateInfo } from "@/lib/utils";
 import { StudentBalanceInfo } from "@/components/AttendanceGrid";
+import { autoSaveLessonAttendanceAction } from "@/lib/actions";
 
 // This type will represent a unique column in our grid
 export type LessonInstance = {
@@ -83,6 +84,21 @@ const ClassAttendancePage = async (
         `,
     ]);
     const latestLesson = allClassLessons[0] || null;
+
+    if (latestLesson && !latestLesson.isTeacherAbsent) {
+        try {
+            const latestLessonInfo = await prisma.lesson.findUnique({
+                where: { id: latestLesson.id },
+                select: { endsAt: true },
+            });
+            if (latestLessonInfo && new Date(latestLessonInfo.endsAt) <= new Date()) {
+                await autoSaveLessonAttendanceAction(latestLesson.id);
+            }
+        } catch {
+            // Non-blocking background auto-save
+        }
+    }
+
     const todayInfo = getAlgiersDateInfo(new Date());
     const todayMatchingLesson =
         allClassLessons.find((l) => getAlgiersDateInfo(l.startsAt).dateStr === todayInfo.dateStr) ||
@@ -534,7 +550,7 @@ const ClassAttendancePage = async (
                                 att.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)) &&
                             !att.lesson.isFree &&
                             isLessonApplicableToEnrollment(
-                                { ...att.lesson, hasExplicitAttendance: Boolean(att.status) },
+                                { ...att.lesson, hasExplicitAttendance: att.status === "PRESENT", status: att.status },
                                 classId,
                                 enrollment as any
                             )
@@ -579,9 +595,12 @@ const ClassAttendancePage = async (
                         netSessions: net,
                         status: computedStatus,
                         hasPayerSibling: Boolean(isPayerInClass && isSiblingDiscount),
+                        isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
+                        payerStatus: effectivePayerStatus,
                     };
                 }
 
+                s.payerStatus = details?.enrollments?.[0]?.payerStatus || details?.payerStatus || "NORMAL";
                 s.balance = balance;
                 s.billingDetails = details;
             }
@@ -762,7 +781,7 @@ const ClassAttendancePage = async (
         const applicableAttendances = (student.attendances || []).filter((a: any) => {
             if (visitorCatchUpsByLessonId.has(a.lessonId)) return false;
             return isLessonApplicableToEnrollment(
-                { id: a.lessonId, classId, startsAt: a.date, hasExplicitAttendance: Boolean(a.status) },
+                { id: a.lessonId, classId, startsAt: a.date, hasExplicitAttendance: a.status === "PRESENT", status: a.status },
                 classId,
                 enrollment as any
             );
@@ -798,7 +817,7 @@ const ClassAttendancePage = async (
             const catchUpInfo = studentCatchUps.find((cu) => cu.missedLessonId === record.lessonId);
             const visitorCu = visitorCatchUpsByLessonId.get(record.lessonId);
             const isApplicable = isLessonApplicableToEnrollment(
-                { id: record.lessonId, classId, startsAt: record.date, hasExplicitAttendance: Boolean(record.status) },
+                { id: record.lessonId, classId, startsAt: record.date, hasExplicitAttendance: record.status === "PRESENT", status: record.status },
                 classId,
                 enrollment as any
             );

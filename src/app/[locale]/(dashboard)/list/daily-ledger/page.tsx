@@ -121,9 +121,15 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
     surplusMoneyList,
     todayVouchers,
     todayTransfers,
+    todayCrossPayments,
     transfersInTotal,
     transfersOutTotal,
+    crossPaymentsInTotal,
+    crossPaymentsOutTotal,
   } = ledgerData;
+
+  const hasTransfers = Boolean(todayTransfers && todayTransfers.length > 0);
+  const hasCrossPayments = Boolean(todayCrossPayments && todayCrossPayments.length > 0);
 
   const discrepancies = [
     ...missingMoneyList.map((m) => ({ ...m, type: "MISSING" as const })),
@@ -584,33 +590,33 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
         </CardContent>
       </Card>
 
-      {/* SECTION 5: TODAY'S CREDIT TRANSFERS (NON-MONETARY) */}
-      {todayTransfers && todayTransfers.length > 0 && (
+      {/* SECTION 5: TODAY'S CROSS-BRANCH MOVEMENTS (TRANSFERS & CROSS PAYMENTS) */}
+      {(hasTransfers || hasCrossPayments) && (
         <Card className="border-border/80 shadow-xs bg-surface">
-          <CardContent className="p-5 sm:p-6 space-y-4">
+          <CardContent className="p-5 sm:p-6 space-y-5">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-border/80">
               <div>
                 <h3 className="text-section-title font-bold text-gray-900 flex items-center gap-2">
                   <ArrowRightLeft className="w-4 h-4 text-primary" />
                   <span>
                     {locale === "ar"
-                      ? "تحويلات الحصص البيداغوجية لهذا اليوم"
-                      : "Transferts de séances pédagogiques du jour"}
+                      ? "التحويلات والمدفوعات بين الفروع لهذا اليوم"
+                      : "Transferts & paiements inter-succursales du jour"}
                   </span>
                   <Badge variant="primary" size="sm">
-                    {todayTransfers.length}
+                    {(todayTransfers?.length || 0) + (todayCrossPayments?.length || 0)}
                   </Badge>
                 </h3>
                 <p className="text-form-helper text-muted mt-0.5">
                   {locale === "ar"
-                    ? "حركات الحصص التعليمية بين الأفواج — لا تؤثر على نقود الصندوق (أثر الصندوق: 0 دج)"
-                    : "Mouvements de séances entre groupes — n'affectent pas la caisse physique (impact caisse : 0 DZD)"}
+                    ? "حركات الحصص والمدفوعات بين الفروع — لا تؤثر على نقود صندوق هذا الفرع (أثر الصندوق: 0 دج للمدفوعات المسددة في فرع آخر)"
+                    : "Mouvements de séances et paiements inter-succursales — n'affectent pas la caisse physique de cette succursale (impact caisse : 0 DZD pour les paiements reçus ailleurs)"}
                 </p>
               </div>
 
               <div className="flex items-center gap-2 text-xs flex-wrap">
                 <Badge variant="secondary" size="sm">
-                  {locale === "ar" ? "أثر الصندوق: 0 دج (غير نقدي)" : "Impact caisse : 0 DZD (non monétaire)"}
+                  {locale === "ar" ? "أثر الصندوق الوارد: 0 دج (غير نقدي)" : "Paiements reçus ailleurs : 0 DZD en caisse"}
                 </Badge>
                 {isOwner && (
                   <Link
@@ -629,87 +635,245 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
               <div className="text-xs space-y-1">
                 <p className="font-bold text-gray-900">
                   {locale === "ar"
-                    ? "تنبيه لمسؤولي الصندوق: تحويلات الحصص هي عمليات بيداغوجية فقط (غير نقدية)"
-                    : "Avis aux caissiers : Les transferts de séances sont des opérations pédagogiques (non monétaires)"}
+                    ? "تنبيه لمسؤولي الصندوق: العمليات والمدفوعات بين الفروع معروضة للإشعار فقط"
+                    : "Avis aux caissiers : Opérations et paiements inter-succursales affichés à titre informatif"}
                 </p>
                 <p className="text-muted leading-relaxed">
                   {locale === "ar"
-                    ? "هذه العمليات تمثل نقل حصص دراسية بين الأفواج ولا تتضمن أي دفع أو استلام مبالغ نقدية في مكتب الاستقبال. صندوق الفرع لا يتأثر إطلاقاً بهذه العمليات (أثر الصندوق = 0 دج). التسوية المالية المتبادلة بين الفروع تظهر حصرياً للمالك في صفحة مالية المؤسسة (قسم التحويلات)."
-                    : "Ces opérations représentent le déplacement de cours entre groupes et n'impliquent aucun encaissement ni décaissement au guichet. La caisse physique n'est absolument pas affectée (impact caisse = 0 DZD). Le suivi financier inter-branches est géré par le propriétaire dans la section Finances (Transferts)."}
+                    ? "إذا قام تلميذ بدفع مستحقات فوج تابع لهذا الفرع في فرع آخر، تظهر العملية هنا للتأكيد والمتابعة دون إضافة أي مبالغ نقدية لصندوق هذا الفرع (أثر الصندوق = 0 دج)، حيث تبقى الأموال في صندوق الفرع الذي قام بالتحصيل الفعلي."
+                    : "Lorsqu'un élève règle dans une autre succursale pour un groupe de cette succursale, l'opération est affichée ici pour suivi sans modifier le solde de caisse de cette succursale (impact caisse : 0 DZD). Les espèces restent dans la caisse de la succursale d'encaissement."}
                 </p>
               </div>
             </div>
 
-            <DataTable
-              columns={[
-                { header: locale === "ar" ? "التلميذ" : "Élève", accessor: "studentName" },
-                { header: locale === "ar" ? "من" : "De", accessor: "fromClassName" },
-                { header: locale === "ar" ? "إلى" : "Vers", accessor: "toClassName" },
-                { header: locale === "ar" ? "نوع التحويل" : "Type", accessor: "direction", align: "center" },
-                { header: locale === "ar" ? "الحصص المحولة" : "Séances", accessor: "transferredSessions", align: "center" },
-                { header: locale === "ar" ? "قيمة الحصص" : "Valeur estimée", accessor: "amount", align: "end" },
-                { header: locale === "ar" ? "أثر الصندوق" : "Impact Caisse", accessor: "cashImpact", align: "center" },
-                { header: locale === "ar" ? "المسؤول" : "Par", accessor: "transferredBy" },
-              ]}
-              data={todayTransfers}
-              renderRow={(item) => (
-                <tr
-                  key={item.id}
-                  className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
-                >
-                  <td className="p-3.5 font-semibold text-gray-900">
-                    {item.studentId ? (
-                      <Link
-                        href={`/list/students/${item.studentId}`}
-                        className="hover:text-primary hover:underline transition-colors cursor-pointer"
-                      >
-                        {item.studentName}
-                      </Link>
-                    ) : (
-                      item.studentName
-                    )}
-                  </td>
-                  <td className="p-3.5 text-xs text-gray-700">
-                    <div>{item.fromClassName}</div>
-                    <div className="text-[11px] text-muted">{item.fromBranchName}</div>
-                  </td>
-                  <td className="p-3.5 text-xs text-gray-700">
-                    <div>{item.toClassName}</div>
-                    <div className="text-[11px] text-muted">{item.toBranchName}</div>
-                  </td>
-                  <td className="p-3.5 text-center">
-                    {item.direction === "IN" ? (
-                      <Badge variant="primary" size="sm">
-                        {locale === "ar" ? "وارد بيداغوجي" : "Entrant"}
-                      </Badge>
-                    ) : item.direction === "OUT" ? (
-                      <Badge variant="warning" size="sm">
-                        {locale === "ar" ? "صادر بيداغوجي" : "Sortant"}
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary" size="sm">
-                        {locale === "ar" ? "داخلي" : "Interne"}
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="p-3.5 text-center font-mono font-bold text-xs">
-                    {item.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
-                  </td>
-                  <td className="p-3.5 font-mono text-end text-xs text-gray-700">
-                    <div>{item.amount > 0 ? formatDZD(item.amount, locale) : "—"}</div>
-                    <div className="text-[10px] text-muted">{locale === "ar" ? "(رصيد حصص)" : "(crédit)"}</div>
-                  </td>
-                  <td className="p-3.5 text-center">
-                    <Badge variant="secondary" size="sm">
-                      {locale === "ar" ? "0 دج (غير نقدي)" : "0 DZD (non monétaire)"}
+            {/* Sub-block 1: Cross-Branch Payments */}
+            {hasCrossPayments && (
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-purple-600" />
+                    <h4 className="text-sm font-bold text-gray-900">
+                      {locale === "ar"
+                        ? "المدفوعات المتقاطعة بين الفروع (Cross Payments)"
+                        : "Paiements inter-succursales (Cross Payments)"}
+                    </h4>
+                    <Badge variant="neutral" size="sm" className="bg-purple-50 text-purple-700 border-purple-200">
+                      {todayCrossPayments.length}
                     </Badge>
-                  </td>
-                  <td className="p-3.5 text-xs text-muted">
-                    {item.transferredBy}
-                  </td>
-                </tr>
-              )}
-            />
+                  </div>
+                  <span className="text-xs text-muted">
+                    {locale === "ar"
+                      ? "مدفوعات تمت في فرع لفوج تابع لفرع آخر"
+                      : "Paiements effectués dans une succursale pour un groupe d'une autre"}
+                  </span>
+                </div>
+
+                <DataTable
+                  columns={[
+                    { header: locale === "ar" ? "رقم الوصل" : "N° Reçu", accessor: "number" },
+                    { header: locale === "ar" ? "التلميذ" : "Élève", accessor: "studentName" },
+                    { header: locale === "ar" ? "الفوج / الدورة" : "Groupe", accessor: "className" },
+                    { header: locale === "ar" ? "فرع الدفع" : "Payé à", accessor: "issuingBranchName" },
+                    { header: locale === "ar" ? "فرع الفوج" : "Groupe à", accessor: "targetBranchName" },
+                    { header: locale === "ar" ? "نوع العملية" : "Sens", accessor: "direction", align: "center" },
+                    { header: locale === "ar" ? "نوع الرسوم" : "Type", accessor: "paymentType" },
+                    { header: locale === "ar" ? "الوقت" : "Heure", accessor: "issuedAt" },
+                    { header: locale === "ar" ? "المبلغ" : "Montant", accessor: "amount", align: "end" },
+                    { header: locale === "ar" ? "أثر الصندوق" : "Impact Caisse", accessor: "cashImpact", align: "center" },
+                    { header: locale === "ar" ? "المسؤول" : "Par", accessor: "issuedBy" },
+                  ]}
+                  data={todayCrossPayments}
+                  renderRow={(item) => (
+                    <tr
+                      key={`cross-pay-${item.id}`}
+                      className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
+                    >
+                      <td className="p-3.5 font-mono text-xs font-bold text-primary whitespace-nowrap" dir="ltr">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{item.voucherDisplay}</span>
+                          {item.isRefund && (
+                            <Badge variant="danger" size="sm">
+                              {locale === "ar" ? "استرداد" : "Remboursement"}
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
+                      <td className="p-3.5 font-semibold text-gray-900">
+                        {item.studentId ? (
+                          <Link
+                            href={`/list/students/${item.studentId}`}
+                            className="hover:text-primary hover:underline transition-colors cursor-pointer"
+                          >
+                            {item.studentName}
+                          </Link>
+                        ) : (
+                          item.studentName
+                        )}
+                      </td>
+                      <td className="p-3.5 text-xs text-gray-700">
+                        <span className="font-medium text-gray-900">{item.className}</span>
+                      </td>
+                      <td className="p-3.5 text-xs text-gray-700">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-surface-muted border border-border/60 text-gray-800 font-medium">
+                          {item.issuingBranchName}
+                        </span>
+                      </td>
+                      <td className="p-3.5 text-xs text-gray-700">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-surface-muted border border-border/60 text-gray-800 font-medium">
+                          {item.targetBranchName}
+                        </span>
+                      </td>
+                      <td className="p-3.5 text-center">
+                        {item.direction === "IN" ? (
+                          <Badge variant="neutral" size="sm" className="bg-purple-50 text-purple-700 border-purple-200">
+                            {locale === "ar" ? "وارد من فرع آخر" : "Paiement entrant"}
+                          </Badge>
+                        ) : (
+                          <Badge variant="warning" size="sm">
+                            {locale === "ar" ? "صادر لفرع آخر" : "Paiement sortant"}
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="p-3.5">
+                        <Badge
+                          variant={
+                            item.isRefund
+                              ? "danger"
+                              : item.paymentType === "INSCRIPTION"
+                              ? "success"
+                              : item.paymentType === "BOOK"
+                              ? "warning"
+                              : item.paymentType === "WORKSHOP" || item.paymentType === "FORMATION"
+                              ? "secondary"
+                              : "primary"
+                          }
+                          size="sm"
+                        >
+                          {item.paymentType}
+                        </Badge>
+                      </td>
+                      <td className="p-3.5 text-muted text-xs">
+                        {formatPaymentTime(item.issuedAt)}
+                      </td>
+                      <td className={`p-3.5 font-mono font-bold text-end ${item.isRefund ? "text-danger" : "text-gray-900"}`}>
+                        {item.isRefund ? `-${formatDZD(item.amount, locale)}` : formatDZD(item.amount, locale)}
+                      </td>
+                      <td className="p-3.5 text-center">
+                        {item.direction === "IN" ? (
+                          <Badge variant="secondary" size="sm" className="text-gray-600 bg-gray-100 border-gray-200">
+                            {locale === "ar" ? "0 دج (غير نقدي هنا)" : "0 DZD (non monétaire)"}
+                          </Badge>
+                        ) : (
+                          <Badge variant="success" size="sm">
+                            {locale === "ar" ? `+${formatDZD(item.amount, locale)} (بالصندوق)` : `+${formatDZD(item.amount, locale)} (en caisse)`}
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="p-3.5 text-xs text-muted">
+                        {item.issuedBy}
+                      </td>
+                    </tr>
+                  )}
+                  emptyTitle={locale === "ar" ? "لا توجد مدفوعات متقاطعة اليوم" : "Aucun paiement inter-succursales aujourd'hui"}
+                  emptyDescription=""
+                />
+              </div>
+            )}
+
+            {/* Sub-block 2: Pedagogical Session Transfers */}
+            {hasTransfers && (
+              <div className={`space-y-3 ${hasCrossPayments ? "pt-5 border-t border-border/80" : ""}`}>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <ArrowRightLeft className="w-4 h-4 text-primary" />
+                    <h4 className="text-sm font-bold text-gray-900">
+                      {locale === "ar"
+                        ? "تحويلات الحصص البيداغوجية"
+                        : "Transferts de séances pédagogiques"}
+                    </h4>
+                    <Badge variant="primary" size="sm">
+                      {todayTransfers.length}
+                    </Badge>
+                  </div>
+                  <span className="text-xs text-muted">
+                    {locale === "ar"
+                      ? "حركات نقل الحصص التعليمية بين الأفواج"
+                      : "Mouvements de séances entre groupes"}
+                  </span>
+                </div>
+
+                <DataTable
+                  columns={[
+                    { header: locale === "ar" ? "التلميذ" : "Élève", accessor: "studentName" },
+                    { header: locale === "ar" ? "من" : "De", accessor: "fromClassName" },
+                    { header: locale === "ar" ? "إلى" : "Vers", accessor: "toClassName" },
+                    { header: locale === "ar" ? "نوع التحويل" : "Type", accessor: "direction", align: "center" },
+                    { header: locale === "ar" ? "الحصص المحولة" : "Séances", accessor: "transferredSessions", align: "center" },
+                    { header: locale === "ar" ? "قيمة الحصص" : "Valeur estimée", accessor: "amount", align: "end" },
+                    { header: locale === "ar" ? "أثر الصندوق" : "Impact Caisse", accessor: "cashImpact", align: "center" },
+                    { header: locale === "ar" ? "المسؤول" : "Par", accessor: "transferredBy" },
+                  ]}
+                  data={todayTransfers}
+                  renderRow={(item) => (
+                    <tr
+                      key={item.id}
+                      className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
+                    >
+                      <td className="p-3.5 font-semibold text-gray-900">
+                        {item.studentId ? (
+                          <Link
+                            href={`/list/students/${item.studentId}`}
+                            className="hover:text-primary hover:underline transition-colors cursor-pointer"
+                          >
+                            {item.studentName}
+                          </Link>
+                        ) : (
+                          item.studentName
+                        )}
+                      </td>
+                      <td className="p-3.5 text-xs text-gray-700">
+                        <div>{item.fromClassName}</div>
+                        <div className="text-[11px] text-muted">{item.fromBranchName}</div>
+                      </td>
+                      <td className="p-3.5 text-xs text-gray-700">
+                        <div>{item.toClassName}</div>
+                        <div className="text-[11px] text-muted">{item.toBranchName}</div>
+                      </td>
+                      <td className="p-3.5 text-center">
+                        {item.direction === "IN" ? (
+                          <Badge variant="primary" size="sm">
+                            {locale === "ar" ? "وارد بيداغوجي" : "Entrant"}
+                          </Badge>
+                        ) : item.direction === "OUT" ? (
+                          <Badge variant="warning" size="sm">
+                            {locale === "ar" ? "صادر بيداغوجي" : "Sortant"}
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" size="sm">
+                            {locale === "ar" ? "داخلي" : "Interne"}
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="p-3.5 text-center font-mono font-bold text-xs">
+                        {item.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
+                      </td>
+                      <td className="p-3.5 font-mono text-end text-xs text-gray-700">
+                        <div>{item.amount > 0 ? formatDZD(item.amount, locale) : "—"}</div>
+                        <div className="text-[10px] text-muted">{locale === "ar" ? "(رصيد حصص)" : "(crédit)"}</div>
+                      </td>
+                      <td className="p-3.5 text-center">
+                        <Badge variant="secondary" size="sm">
+                          {locale === "ar" ? "0 دج (غير نقدي)" : "0 DZD (non monétaire)"}
+                        </Badge>
+                      </td>
+                      <td className="p-3.5 text-xs text-muted">
+                        {item.transferredBy}
+                      </td>
+                    </tr>
+                  )}
+                />
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

@@ -16,7 +16,7 @@ import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
 import CatchUpVisitorModal from "./CatchUpVisitorModal";
-import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, UserX, Send } from "lucide-react";
+import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, UserX, Send, Clock, CheckCircle2 } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
 import BookStatusBadge, { computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
@@ -594,6 +594,86 @@ const AttendanceRoster = ({
   const formRef = useRef<HTMLFormElement>(null);
   const isConfirmedRef = useRef(false);
 
+  // Lesson end timestamp and automated attendance finalization when lesson is up
+  const lessonEndTime = useMemo(() => {
+    const raw = (lesson as any).endTime || (lesson as any).endsAt || lesson.endsAt;
+    return raw ? new Date(raw).getTime() : 0;
+  }, [lesson]);
+
+  const [timeRemainingSec, setTimeRemainingSec] = useState<number | null>(() => {
+    if (!lessonEndTime) return null;
+    return Math.floor((lessonEndTime - Date.now()) / 1000);
+  });
+  const hasAutoSavedRef = useRef<boolean>(false);
+  const isAutoSavingRef = useRef<boolean>(false);
+
+  const formatCountdown = useCallback((totalSec: number | null | undefined) => {
+    if (!totalSec || totalSec <= 0) return "00:00";
+    const hours = Math.floor(totalSec / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
+    }
+    return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  }, []);
+
+  const triggerAutoSave = useCallback(() => {
+    if (isAutoSavingRef.current || lesson.isTeacherAbsent) return;
+    isAutoSavingRef.current = true;
+
+    // Gracefully fallback any un-justified NOT_DEFINED to ABSENT so form submission is not blocked
+    setAttendance((prev) => {
+      const updated = { ...prev };
+      activeStudents.forEach((student) => {
+        if (updated[student.id] === "NOT_DEFINED" && !justifications[student.id]?.trim()) {
+          updated[student.id] = "ABSENT";
+        }
+        if (!updated[student.id]) {
+          updated[student.id] = "ABSENT";
+        }
+      });
+      return updated;
+    });
+
+    setTimeout(() => {
+      if (formRef.current) {
+        isConfirmedRef.current = true; // Auto-save bypasses modal blocking
+        formRef.current.requestSubmit();
+        toast.info(
+          locale === "ar"
+            ? "انتهت الحصة — تم حفظ الحضور تلقائياً ولم يُترك أي تلميذ دون تسجيل."
+            : "Séance terminée — Présences enregistrées automatiquement sans omission d'élève."
+        );
+      }
+    }, 150);
+  }, [activeStudents, justifications, lesson.isTeacherAbsent, locale]);
+
+  // Monitor lesson time and automatically trigger save when the lesson is up
+  useEffect(() => {
+    if (!lessonEndTime) return;
+
+    const checkTimer = () => {
+      const diffSec = Math.floor((lessonEndTime - Date.now()) / 1000);
+      setTimeRemainingSec(diffSec);
+
+      if (diffSec <= 0 && !hasAutoSavedRef.current) {
+        hasAutoSavedRef.current = true;
+        // Verify if any active student has not yet been recorded in existingRecords
+        const hasUnrecorded = activeStudents.some(
+          (s) => !existingRecords.some((r) => r.studentId === s.id)
+        );
+        if (hasUnrecorded) {
+          triggerAutoSave();
+        }
+      }
+    };
+
+    checkTimer();
+    const interval = setInterval(checkTimer, 1000);
+    return () => clearInterval(interval);
+  }, [lessonEndTime, activeStudents, existingRecords, triggerAutoSave]);
+
   const handleStatusChange = (studentId: string, status: AttendanceStatus) => {
     if (status === "PRESENT" && caughtUpMap.has(studentId)) {
       const cu = caughtUpMap.get(studentId);
@@ -638,23 +718,32 @@ const AttendanceRoster = ({
   };
 
   const handleFormSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    // Validate mandatory justification for any student marked NOT_DEFINED
+    // Validate mandatory justification for any student marked NOT_DEFINED during manual submit
     const missingJustification = activeStudents.find(
       (s) => attendance[s.id] === "NOT_DEFINED" && !justifications[s.id]?.trim()
     );
 
     if (missingJustification) {
-      e.preventDefault();
-      toast.error(t("justificationRequired"));
-      const inputEl = document.getElementById(`justification-${missingJustification.id}`);
-      inputEl?.focus();
-      return;
+      if (isAutoSavingRef.current) {
+        // Fallback gracefully to ABSENT during auto-save
+        setAttendance((prev) => ({ ...prev, [missingJustification.id]: "ABSENT" }));
+      } else {
+        e.preventDefault();
+        toast.error(t("justificationRequired"));
+        const inputEl = document.getElementById(`justification-${missingJustification.id}`);
+        inputEl?.focus();
+        return;
+      }
     }
 
     if (lesson.isFree && !isConfirmedRef.current) {
-      e.preventDefault();
-      setIsConfirmModalOpen(true);
-      return;
+      if (isAutoSavingRef.current) {
+        isConfirmedRef.current = true;
+      } else {
+        e.preventDefault();
+        setIsConfirmModalOpen(true);
+        return;
+      }
     }
     isConfirmedRef.current = false;
   };
@@ -836,6 +925,27 @@ const AttendanceRoster = ({
                 </span>
               ) : null}
             </Badge>
+            {!lesson.isTeacherAbsent && lessonEndTime > 0 && (
+              timeRemainingSec !== null && timeRemainingSec > 0 ? (
+                <Badge variant="warning" size="md" className="font-semibold flex items-center gap-1.5 shadow-xs">
+                  <Clock className="w-3.5 h-3.5 animate-pulse text-amber-600" />
+                  <span className="font-mono text-xs">
+                    {locale === "ar"
+                      ? `حفظ تلقائي عند انتهاء الحصة (${formatCountdown(timeRemainingSec)})`
+                      : `Enregistrement auto (${formatCountdown(timeRemainingSec)})`}
+                  </span>
+                </Badge>
+              ) : (
+                <Badge variant="success" size="md" className="font-semibold flex items-center gap-1.5 shadow-xs">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="text-xs">
+                    {locale === "ar"
+                      ? "الحصة منتهية — تم الحفظ التلقائي"
+                      : "Séance terminée — Enregistrement automatique actif"}
+                  </span>
+                </Badge>
+              )
+            )}
           </div>
         </div>
 
@@ -910,6 +1020,52 @@ const AttendanceRoster = ({
         <div className="p-3 mb-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-center gap-2 font-sans">
           <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded">{t("catchUpBadge")}</span>
           <span>{t("catchUpSessionNotice")}</span>
+        </div>
+      )}
+
+      {/* Automatic Attendance Save Banner */}
+      {!lesson.isTeacherAbsent && lessonEndTime > 0 && (
+        <div
+          className={`p-3.5 mb-4 rounded-xl flex items-center justify-between gap-3 text-xs sm:text-sm shadow-xs font-sans transition-colors ${
+            timeRemainingSec !== null && timeRemainingSec <= 0
+              ? "bg-emerald-50 border-2 border-emerald-300 text-emerald-950"
+              : "bg-blue-50/90 border-2 border-blue-200 text-blue-950"
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            {timeRemainingSec !== null && timeRemainingSec <= 0 ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            ) : (
+              <Clock className="w-5 h-5 text-blue-600 shrink-0 animate-pulse" />
+            )}
+            <div>
+              <strong className="font-bold">
+                {timeRemainingSec !== null && timeRemainingSec <= 0
+                  ? (locale === "ar" ? "انتهت الحصة :" : "Séance terminée :")
+                  : (locale === "ar" ? "حفظ الحضور التلقائي :" : "Enregistrement automatique :")}
+              </strong>{" "}
+              {timeRemainingSec !== null && timeRemainingSec <= 0
+                ? (locale === "ar"
+                    ? "تم حفظ الحضور تلقائياً عند انتهاء الحصة. يتم تسجيل كل تلميذ لم يتم تعديل حضوره كغائب تلقائياً لضمان عدم بقاء أي تلميذ دون تسجيل."
+                    : "Les présences sont automatiquement enregistrées à la fin de la séance. Tout élève non modifié est enregistré absent pour qu'aucun élève ne reste non enregistré.")
+                : (locale === "ar"
+                    ? `سيتم حفظ الحضور تلقائياً فور انتهاء وقت الحصة (خلال ${formatCountdown(timeRemainingSec)}). أي تلميذ لم يتم لمس حضوره سيُسجل كغائب تلقائياً.`
+                    : `L'appel sera automatiquement validé et enregistré à la fin de la séance (dans ${formatCountdown(timeRemainingSec)}). Tout élève non modifié sera enregistré absent.`)}
+            </div>
+          </div>
+          <div className="shrink-0">
+            {timeRemainingSec !== null && timeRemainingSec <= 0 ? (
+              <span className="bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-xs flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{locale === "ar" ? "محفوظ تلقائياً" : "Auto-enregistré"}</span>
+              </span>
+            ) : (
+              <span className="bg-blue-600 text-white text-xs font-mono font-bold px-3 py-1 rounded-full shadow-xs flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5" />
+                <span>{formatCountdown(timeRemainingSec || 0)}</span>
+              </span>
+            )}
+          </div>
         </div>
       )}
 
@@ -1152,7 +1308,7 @@ const AttendanceRoster = ({
             });
 
             const sessionsRemaining =
-              isSiblingDiscount && !isSiblingWaived100 && effectivePayerRemainingCredit !== undefined
+              isSiblingWaived100 && effectivePayerRemainingCredit !== undefined
                 ? effectivePayerRemainingCredit
                 : creditMetrics.netSessions;
             const sessionsConsumed = creditMetrics.attendedSessions;
@@ -1214,12 +1370,12 @@ const AttendanceRoster = ({
                   };
                 } else if (sessionsRemaining === 1) {
                   statusBubble = {
-                    text: locale === "ar" ? "جلسة واحدة متبقية للأخ" : "1 séance restante (Fratrie)",
+                    text: locale === "ar" ? `جلسة واحدة متبقية (-${siblingDiscountPct}%)` : `1 séance restante (-${siblingDiscountPct}%)`,
                     color: "bg-yellow-500",
                   };
                 } else {
                   statusBubble = {
-                    text: locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)",
+                    text: locale === "ar" ? `غير مدفوع (-${siblingDiscountPct}%)` : `Non payé (-${siblingDiscountPct}%)`,
                     color: "bg-red-500",
                   };
                 }
@@ -1238,7 +1394,9 @@ const AttendanceRoster = ({
                   };
                 } else {
                   statusBubble = {
-                    text: locale === "ar" ? "غير مدفوع (حصة المدرسة)" : "Non payé (Part école)",
+                    text: locale === "ar"
+                      ? (sessionsRemaining < 0 ? `${sessionsRemaining} حصة (دين - حصة المدرسة)` : "غير مدفوع (حصة المدرسة)")
+                      : (sessionsRemaining < 0 ? `${sessionsRemaining} séa. (dette - Part école)` : "Non payé (Part école)"),
                     color: "bg-red-500",
                   };
                 }
@@ -1478,8 +1636,12 @@ const AttendanceRoster = ({
                             <span>•</span>
                             <span className="font-semibold text-amber-800">
                               {locale === "ar"
-                                ? `${student.remainingCredits ?? 0} حصص متبقية في فوجه الأصلي`
-                                : `${student.remainingCredits ?? 0} séance(s) restante(s)`}
+                                ? isSchoolFeesOnly
+                                  ? `${student.remainingCredits ?? 0} حصص متبقية في فوجه الأصلي (حصة المدرسة)`
+                                  : `${student.remainingCredits ?? 0} حصص متبقية في فوجه الأصلي`
+                                : isSchoolFeesOnly
+                                  ? `${student.remainingCredits ?? 0} séance(s) restante(s) (Part école)`
+                                  : `${student.remainingCredits ?? 0} séance(s) restante(s)`}
                             </span>
                           </>
                         ) : !isFormation ? (
@@ -1490,16 +1652,28 @@ const AttendanceRoster = ({
                                 ? (locale === "ar" ? "معفى من رسوم الحصص" : "Exonéré des frais de cours")
                                 : isSiblingWaived100
                                 ? (isPayerSiblingPaid
-                                    ? (locale === "ar" ? "معفى (أخ دافع)" : "Exonéré (Fratrie)")
-                                    : (locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)"))
+                                    ? (locale === "ar"
+                                        ? `معفى (أخ دافع: ${sessionsRemaining} حصص)`
+                                        : `Exonéré (Fratrie : ${sessionsRemaining} séa.)`)
+                                    : (locale === "ar"
+                                        ? `غير مدفوع (أخ دافع: ${sessionsRemaining} حصص)`
+                                        : `Non payé (Fratrie : ${sessionsRemaining} séa.)`))
                                 : isSchoolFeesOnly
                                 ? (locale === "ar"
-                                    ? `${sessionsRemaining} حصة متبقية (حصة المدرسة)`
-                                    : `${sessionsRemaining} séance(s) restante(s) (Part école)`)
+                                    ? sessionsRemaining <= 0
+                                      ? sessionsRemaining < 0
+                                        ? `${sessionsRemaining} حصة (دين - حصة المدرسة)`
+                                        : "0 حصة متبقية (حصة المدرسة)"
+                                      : `${sessionsRemaining} حصة متبقية (حصة المدرسة)`
+                                    : sessionsRemaining <= 0
+                                      ? sessionsRemaining < 0
+                                        ? `${sessionsRemaining} séance(s) (dette - Part école)`
+                                        : "0 séance restante (Part école)"
+                                      : `${sessionsRemaining} séance(s) restante(s) (Part école)`)
                                 : isSiblingDiscount
                                 ? (locale === "ar"
-                                    ? `${sessionsRemaining} حصة متبقية (أخ دافع)`
-                                    : `${sessionsRemaining} séance(s) restante(s) (Fratrie)`)
+                                    ? `${sessionsRemaining} حصة متبقية (خصم إخوة -${siblingDiscountPct}%)`
+                                    : `${sessionsRemaining} séance(s) restante(s) (Remise -${siblingDiscountPct}%)`)
                                 : t("sessionsRemainingCount", { count: sessionsRemaining })}
                             </span>
                           </>
@@ -1764,23 +1938,26 @@ const AttendanceRoster = ({
 
       {/* Save Button */}
       <form ref={formRef} action={formAction} onSubmit={handleFormSubmit} className="mt-6 flex justify-stretch sm:justify-end">
-        {Object.entries(attendance).map(([studentId, status]) => {
+        <input type="hidden" name="isAutoSave" value={isAutoSavingRef.current ? "true" : "false"} />
+        {/* Render status for ALL active students to guarantee no student is ever omitted or left non-recorded */}
+        {activeStudents.map((student) => {
           // Skip catch-up visitors so their presence is strictly maintained via CatchUpAttendance,
           // avoiding duplicate/foreign Attendance records in saveAttendance.
-          if (catchUpVisitors.some((v) => v.studentId === studentId)) return null;
+          if (catchUpVisitors.some((v) => v.studentId === student.id)) return null;
 
+          const status = attendance[student.id] || "ABSENT";
           return (
-            <div key={studentId}>
+            <div key={student.id}>
               <input
                 type="hidden"
-                name={`attendance[${studentId}]`}
+                name={`attendance[${student.id}]`}
                 value={status}
               />
               {status === "NOT_DEFINED" && (
                 <input
                   type="hidden"
-                  name={`justification[${studentId}]`}
-                  value={justifications[studentId]?.trim() || ""}
+                  name={`justification[${student.id}]`}
+                  value={justifications[student.id]?.trim() || ""}
                 />
               )}
             </div>

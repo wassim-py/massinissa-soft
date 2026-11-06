@@ -434,7 +434,7 @@ export default function TransferredMoneySection({
                   {item.isCrossBranch ? (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-purple-100 text-purple-800 border border-purple-200">
                       <span>{item.fromBranchName}</span>
-                      <ArrowRight className="w-3 h-3 shrink-0" />
+                      <ArrowRight className="w-3 h-3 shrink-0 rtl:rotate-180" />
                       <span>{item.toBranchName}</span>
                     </span>
                   ) : (
