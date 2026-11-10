@@ -1557,7 +1557,7 @@ export default function StudentPaymentDetails({
                           >
                             {isExpiring ? t("issueVoucherNow") : t("issueVoucher")}
                           </Button>
-                          {!isInactive && (
+                          {(!isInactive || (cm.transferableSessions ?? cm.netSessions ?? 0) > 0) && (
                             <Button
                               size="sm"
                               variant="outline"

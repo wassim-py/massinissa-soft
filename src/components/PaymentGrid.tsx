@@ -1276,7 +1276,7 @@ export default function PaymentGrid({
                 {t("voucherShort")}
               </Button>
             )}
-            {!isTransferred && (
+            {(!isTransferred || (item.transferableSessions ?? item.netSessions ?? 0) > 0) && (
               <Button
                 variant="outline"
                 size="sm"
@@ -1626,7 +1626,7 @@ export default function PaymentGrid({
                         {t("voucherShort")}
                       </Button>
                     )}
-                    {!isTransferred && (
+                    {(!isTransferred || (item.transferableSessions ?? item.netSessions ?? 0) > 0) && (
                       <Button
                         variant="outline"
                         size="sm"
