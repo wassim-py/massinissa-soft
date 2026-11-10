@@ -407,7 +407,15 @@ const TakeAttendancePage = async (
         a.lesson.classId === missedClassId ||
         a.lesson.lessonGroups?.some((lg: any) => lg.classId === missedClassId);
       if (!inMissedClass) return false;
-      return isLessonApplicableToEnrollment(a.lesson, missedClassId, vEnr as any);
+      return isLessonApplicableToEnrollment(
+        {
+          ...a.lesson,
+          hasExplicitAttendance: a.status === "PRESENT",
+          status: a.status,
+        },
+        missedClassId,
+        { ...vEnr, student: s } as any
+      );
     });
 
     const vCatchUps = (s.catchUpAttendances || []).filter((cu: any) => {
@@ -416,7 +424,7 @@ const TakeAttendancePage = async (
         cu.missedLesson.classId === missedClassId ||
         cu.missedLesson.lessonGroups?.some((lg: any) => lg.classId === missedClassId);
       if (!inMissedClass) return false;
-      return isLessonApplicableToEnrollment(cu.missedLesson, missedClassId, vEnr as any);
+      return isLessonApplicableToEnrollment(cu.missedLesson, missedClassId, { ...vEnr, student: s } as any);
     });
 
     const vCredit = computeStudentCreditAndSessions({
@@ -431,6 +439,7 @@ const TakeAttendancePage = async (
       creditResetOffset: Number(vEnr?.creditResetOffset || 0),
       attendances: vAttendances,
       catchUps: vCatchUps,
+      enrolledAt: vEnr?.enrolledAt,
     });
 
     const isScenarioA = new Date(v.missedLesson.startsAt).getTime() < new Date(l.startsAt).getTime();
@@ -858,7 +867,15 @@ const TakeAttendancePage = async (
         ...(a.lesson.lessonGroups?.map((lg: any) => lg.classId) || []),
       ];
       if (!lessonClassIds.includes(studentClassId)) return false;
-      return isLessonApplicableToEnrollment(a.lesson, studentClassId, enrollment as any);
+      return isLessonApplicableToEnrollment(
+        {
+          ...a.lesson,
+          hasExplicitAttendance: a.status === "PRESENT",
+          status: a.status,
+        },
+        studentClassId,
+        { ...enrollment, student: details } as any
+      );
     });
     const sCatchUps = (details?.catchUpAttendances || []).filter((cu: any) => {
       if (!cu.missedLesson) return true;
@@ -867,7 +884,7 @@ const TakeAttendancePage = async (
         ...(cu.missedLesson.lessonGroups?.map((lg: any) => lg.classId) || []),
       ];
       if (!missedLessonClassIds.includes(studentClassId)) return false;
-      return isLessonApplicableToEnrollment(cu.missedLesson, studentClassId, enrollment as any);
+      return isLessonApplicableToEnrollment(cu.missedLesson, studentClassId, { ...enrollment, student: details } as any);
     });
 
     return {
@@ -878,6 +895,7 @@ const TakeAttendancePage = async (
       surname: "",
       className: studentClass?.name || s.className || "",
       enrolledClassId: studentClassId,
+      enrolledAt: enrollment?.enrolledAt,
       pricePerCycle: Number(studentClass?.pricePerCycle || 0),
       isFormation: Boolean(studentClass?.isFormation),
       payerStatus: effectivePayerStatus,

@@ -1114,8 +1114,8 @@ export default function PayrollClientTabs({
                     <FormField label={t("advanceAmountLabel")}>
                       <Input
                         type="number"
-                        min="100"
-                        step="100"
+                        min="0.01"
+                        step="any"
                         value={saAmount}
                         onChange={(e) => setSaAmount(Number(e.target.value))}
                         className="font-mono text-xs font-bold text-danger"
@@ -1456,7 +1456,8 @@ export default function PayrollClientTabs({
               <FormField label={`${t("advanceAmount")}:`}>
                 <Input
                   type="number"
-                  step="0.01"
+                  min="0.01"
+                  step="any"
                   value={editingAdvance.amount}
                   onChange={(e) => setEditingAdvance({ ...editingAdvance, amount: Number(e.target.value) })}
                   className="font-mono text-xs font-bold text-danger"

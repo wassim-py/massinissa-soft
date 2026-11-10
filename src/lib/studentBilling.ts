@@ -1227,6 +1227,13 @@ export function isLessonApplicableToEnrollment(
     hasExplicitAttendance?: boolean;
     status?: string | null;
     lessonGroups?: Array<{ classId: number }> | null;
+    lesson?: {
+      id?: number;
+      classId?: number;
+      startsAt?: Date | string;
+      lessonGroups?: Array<{ classId: number }> | null;
+      status?: string | null;
+    };
   },
   targetClassId: number,
   enrollment?: {
@@ -1256,12 +1263,22 @@ export function isLessonApplicableToEnrollment(
 ): boolean {
   if (!enrollment) return true;
 
-  const lessonTime = new Date(lesson.startsAt || 0).getTime();
-  const isPrimaryLesson = !lesson.classId || lesson.classId === targetClassId;
+  const lObj = (lesson as any)?.lesson || lesson;
+  const lessonTime = new Date(lObj?.startsAt || (lesson as any)?.date || 0).getTime();
+  const classId = lObj?.classId !== undefined ? lObj.classId : (lesson as any)?.classId;
+  const lessonGroups = lObj?.lessonGroups !== undefined ? lObj.lessonGroups : (lesson as any)?.lessonGroups;
+  const isPrimaryLesson = !classId || classId === targetClassId;
   const isMultiGroupLesson =
     !isPrimaryLesson ||
-    (Array.isArray(lesson.lessonGroups) &&
-      lesson.lessonGroups.some((lg) => lg.classId !== targetClassId));
+    (Array.isArray(lessonGroups) &&
+      lessonGroups.some((lg) => lg.classId !== targetClassId));
+
+  const rawStatus = (lesson as any)?.status || (lObj as any)?.status || null;
+  const hasExplicitAttendance =
+    lesson.hasExplicitAttendance !== undefined
+      ? Boolean(lesson.hasExplicitAttendance)
+      : rawStatus === "PRESENT";
+  const lessonStatus = rawStatus;
 
   // Collect chronological transfer-out and transfer-in timestamps for this enrollment
   const outTimes: number[] = [];
@@ -1333,7 +1350,7 @@ export function isLessonApplicableToEnrollment(
     if (!isPrimaryLesson && (enrollment.status === "ACTIVE" || !enrollment.status)) {
       const isStudentActiveInPrimaryClass = enrollment.student?.enrollments?.some(
         (e: any) =>
-          (e.classId === lesson.classId || e.class?.id === lesson.classId) &&
+          (e.classId === classId || e.class?.id === classId) &&
           (e.status === "ACTIVE" || !e.status)
       );
       if (isStudentActiveInPrimaryClass) {
@@ -1359,7 +1376,7 @@ export function isLessonApplicableToEnrollment(
       } else {
         // Single-group primary lesson of targetClassId: allow 2-hour grace window or explicit PRESENT override
         if (lessonTime < firstInTime - 2 * 60 * 60 * 1000) {
-          if (lesson.hasExplicitAttendance && (!lesson.status || lesson.status === "PRESENT")) {
+          if (hasExplicitAttendance && (!lessonStatus || lessonStatus === "PRESENT")) {
             return true;
           }
           return false;

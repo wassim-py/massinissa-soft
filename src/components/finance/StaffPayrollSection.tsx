@@ -420,7 +420,8 @@ export default function StaffPayrollSection({
   // Record Standalone Advance
   const handleRecordAdvance = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!advanceStaffId || !advanceAmount || Number(advanceAmount) <= 0) {
+    const parsedAmt = parseFloat(String(advanceAmount || "").trim().replace(/\s+/g, "").replace(",", "."));
+    if (!advanceStaffId || !advanceAmount || isNaN(parsedAmt) || parsedAmt <= 0) {
       toast.error(
         locale === "ar"
           ? "يرجى اختيار الموظف وتحديد مبلغ التسبيق."
@@ -435,7 +436,7 @@ export default function StaffPayrollSection({
       if (editingAdvanceId) {
         res = await updateStaffAdvanceAction(editingAdvanceId, {
           staffMemberId: Number(advanceStaffId),
-          amount: Number(advanceAmount),
+          amount: parsedAmt,
           date: advanceDate,
           month: Number(advanceMonth),
           year: Number(advanceYear),
@@ -444,7 +445,7 @@ export default function StaffPayrollSection({
       } else {
         res = await recordStaffAdvanceAction({
           staffMemberId: Number(advanceStaffId),
-          amount: Number(advanceAmount),
+          amount: parsedAmt,
           date: advanceDate,
           month: Number(advanceMonth),
           year: Number(advanceYear),
@@ -1225,7 +1226,7 @@ export default function StaffPayrollSection({
                   </label>
                   <input
                     type="number"
-                    step="0.01"
+                    step="any"
                     min="0"
                     value={payrollAdvance}
                     onChange={(e) => setPayrollAdvance(e.target.value)}
@@ -1405,7 +1406,8 @@ export default function StaffPayrollSection({
                 </label>
                 <input
                   type="number"
-                  step="0.01"
+                  min="0.01"
+                  step="any"
                   required
                   value={advanceAmount}
                   onChange={(e) => setAdvanceAmount(e.target.value)}

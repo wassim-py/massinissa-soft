@@ -102,6 +102,7 @@ type FullStudent = Student & {
   bookDetails?: Array<{ id: number; title: string; received: boolean; receivedAt?: string | Date | null }>;
   inscriptionStatus?: "PAID" | "WAIVED" | "UNPAID";
   creditResetOffset?: number;
+  enrolledAt?: Date | string | null;
   isVisitor?: boolean;
   visitorCatchUpId?: number;
   missedLessonId?: number;
@@ -866,6 +867,7 @@ const AttendanceRoster = ({
         attendances: liveStudentAttendances,
         catchUps: st.catchUps || [],
         teacherPercentage,
+        enrolledAt: st.enrolledAt,
       });
 
       map.set(st.id, metrics.netSessions);
@@ -1305,6 +1307,7 @@ const AttendanceRoster = ({
               attendances: liveStudentAttendances,
               catchUps: student.catchUps || [],
               teacherPercentage,
+              enrolledAt: student.enrolledAt,
             });
 
             const sessionsRemaining =

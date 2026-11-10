@@ -224,8 +224,9 @@ export default function TeacherPayrollSection({
 
   const handleCreateAdvance = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const amt = Number(advanceAmount);
-    if (!amt || amt <= 0) {
+    const cleaned = String(advanceAmount || "").trim().replace(/\s+/g, "").replace(",", ".");
+    const amt = parseFloat(cleaned);
+    if (isNaN(amt) || amt <= 0) {
       setFeedback({
         type: "error",
         message: locale === "ar" ? "يرجى إدخال مبلغ تسبيق صحيح" : "Veuillez saisir un montant d'avance valide",
@@ -1509,8 +1510,8 @@ export default function TeacherPayrollSection({
                 </label>
                 <input
                   type="number"
-                  min="100"
-                  step="100"
+                  min="0.01"
+                  step="any"
                   required
                   value={advanceAmount}
                   onChange={(e) => setAdvanceAmount(e.target.value)}

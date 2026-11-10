@@ -379,9 +379,12 @@ const SingleStudentPage = async (
 
       const enrStatus = enr.payerStatus || "NORMAL";
       const classCatchUps = (studentPaymentData?.catchUpAttendances || []).filter(
-        (cu: any) =>
-          cu.missedLesson?.classId === c.id ||
-          cu.missedLesson?.lessonGroups?.some((lg: any) => lg.classId === c.id)
+        (cu: any) => {
+          const isDirectClass = cu.missedLesson?.classId === c.id;
+          const isGroupLesson = cu.missedLesson?.lessonGroups?.some((lg: any) => lg.classId === c.id);
+          if (!isDirectClass && !isGroupLesson) return false;
+          return isLessonApplicableToEnrollment(cu.missedLesson, c.id, { ...enr, student: studentPaymentData } as any);
+        }
       );
 
       const teacherClassOverride = (c.teacherClassRates as any[])?.find(
@@ -412,7 +415,15 @@ const SingleStudentPage = async (
             const isDirectClass = att.lesson.classId === c.id;
             const isGroupLesson = att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id);
             if (!isDirectClass && !isGroupLesson) return false;
-            return isLessonApplicableToEnrollment(att.lesson, c.id, enr as any);
+            return isLessonApplicableToEnrollment(
+              {
+                ...att.lesson,
+                hasExplicitAttendance: att.status === "PRESENT",
+                status: att.status,
+              },
+              c.id,
+              { ...enr, student: studentPaymentData } as any
+            );
           }
         ),
         catchUps: classCatchUps,
