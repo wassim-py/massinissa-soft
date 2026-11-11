@@ -237,7 +237,7 @@ const AdminPage = async () => {
     })}`;
 
     for (const enr of cls.enrollments) {
-      if ((enr as any).status === "SUSPENDED" || (enr as any).status === "UNENROLLED" || (enr as any).status === "TRANSFERRED") {
+      if ((enr as any).status && (enr as any).status !== "ACTIVE") {
         continue;
       }
       const key = `${enr.studentId}-${cls.id}`;

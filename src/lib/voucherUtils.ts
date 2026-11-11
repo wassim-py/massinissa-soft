@@ -71,6 +71,7 @@ export interface VoucherDisplayData {
 
 export interface VoucherDisplayFallbackContext {
   branchName?: string;
+  branchMap?: Record<number, string>;
   levelName?: string;
   paymentType?: string;
   isWorkshop?: boolean;
@@ -153,7 +154,8 @@ export function formatVoucherDateTime(
  */
 export function resolvePaymentBranch(
   voucher: VoucherDisplayData,
-  fallbackBranchName?: string
+  fallbackBranchName?: string,
+  branchMap?: Record<number, string>
 ): string {
   if (voucher.branchName?.trim()) return voucher.branchName.trim().toUpperCase();
 
@@ -170,7 +172,10 @@ export function resolvePaymentBranch(
     return voucher.series.branch.name.trim().toUpperCase();
   }
 
-  // 3. Issuing branch ID lookup
+  // 3. Issuing branch ID lookup (custom map first, then static map)
+  if (voucher.issuingBranchId && branchMap?.[voucher.issuingBranchId]?.trim()) {
+    return branchMap[voucher.issuingBranchId].trim().toUpperCase();
+  }
   if (voucher.issuingBranchId && BRANCH_NAME_MAP[voucher.issuingBranchId]) {
     return BRANCH_NAME_MAP[voucher.issuingBranchId];
   }
@@ -181,6 +186,9 @@ export function resolvePaymentBranch(
   }
   if (voucher.class?.branch?.name?.trim()) {
     return voucher.class.branch.name.trim().toUpperCase();
+  }
+  if (voucher.targetBranchId && branchMap?.[voucher.targetBranchId]?.trim()) {
+    return branchMap[voucher.targetBranchId].trim().toUpperCase();
   }
   if (voucher.targetBranchId && BRANCH_NAME_MAP[voucher.targetBranchId]) {
     return BRANCH_NAME_MAP[voucher.targetBranchId];
@@ -289,7 +297,11 @@ export function formatVoucherDisplay(
   if (hasExplicitPrefix) {
     prefixPart = rawPrefix!.trim();
   } else {
-    const branch = resolvePaymentBranch(voucher, fallbackContext?.branchName);
+    const branch = resolvePaymentBranch(
+      voucher,
+      fallbackContext?.branchName,
+      fallbackContext?.branchMap
+    );
 
     const isDawarat =
       voucher.paymentType === "WORKSHOP" ||

@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
-import { saveAttendance, removeCatchUpAttendanceAction, markSingleAttendanceAction } from "@/lib/actions";
+import { saveAttendance, removeCatchUpAttendanceAction, markSingleAttendanceAction, removeRevisionVisitorAction } from "@/lib/actions";
 import { executeWithRetry } from "@/lib/retryUtils";
 import { toast } from "react-toastify";
 import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions } from "@/lib/studentBilling";
@@ -16,6 +16,7 @@ import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
 import CatchUpVisitorModal from "./CatchUpVisitorModal";
+import RevisionVisitorModal from "./RevisionVisitorModal";
 import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, UserX, Send, Clock, CheckCircle2 } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
@@ -47,6 +48,17 @@ export interface BookWithPendingDrops {
   totalUndistributed: number;
   hasPendingDrop: boolean;
   distributedStudentIds: string[];
+}
+
+export interface RevisionVisitor {
+  id: number;
+  studentId: string;
+  studentName: string;
+  globalNumber: number;
+  phone?: string | null;
+  status: string;
+  amount: number;
+  voucher?: any;
 }
 
 export interface CatchUpVisitor {
@@ -114,6 +126,10 @@ type FullStudent = Student & {
   remainingCredits?: number;
   pricePerCycle?: number;
   isFormation?: boolean;
+  isRevisionVisitor?: boolean;
+  revisionAttendanceId?: number;
+  revisionAmount?: number;
+  revisionVoucher?: any;
 };
 
 type FullLesson = Lesson & {
@@ -143,6 +159,7 @@ const AttendanceRoster = ({
   booksWithDrops = [],
   groupBooks = [],
   catchUpVisitors = [],
+  revisionVisitors = [],
   caughtUpAbsentees = [],
   inGroupCatchUps = [],
   initialSearch = "",
@@ -156,6 +173,7 @@ const AttendanceRoster = ({
   booksWithDrops?: BookWithPendingDrops[];
   groupBooks?: Array<{ id: number; title: string }>;
   catchUpVisitors?: CatchUpVisitor[];
+  revisionVisitors?: any[];
   caughtUpAbsentees?: CaughtUpAbsentee[];
   inGroupCatchUps?: InGroupCatchUp[];
   initialSearch?: string;
@@ -177,6 +195,8 @@ const AttendanceRoster = ({
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [activeRegisterTab, setActiveRegisterTab] = useState<"create" | "enroll_existing">("create");
   const [preselectedStudentForEnroll, setPreselectedStudentForEnroll] = useState<any>(null);
+  const [isRevisionModalOpen, setIsRevisionModalOpen] = useState(false);
+  const [deletingRevisionVisitorId, setDeletingRevisionVisitorId] = useState<string | null>(null);
 
   const resolvedStudentRelatedData = useMemo(() => {
     const grades = studentRelatedData?.grades || [];
@@ -210,6 +230,18 @@ const AttendanceRoster = ({
       month: "numeric",
     });
   };
+
+  const totalEnrolledCount = useMemo(() => {
+    return (students || []).filter((s) => {
+      const isSuspendedOrInactive =
+        s.enrollmentStatus === "SUSPENDED" ||
+        s.enrollmentStatus === "INACTIVE" ||
+        s.enrollmentStatus === "UNENROLLED" ||
+        s.enrollmentStatus === "TRANSFERRED" ||
+        s.enrollmentStatus === "REFUNDED";
+      return !isSuspendedOrInactive && !(s as any).isRefunded;
+    }).length;
+  }, [students]);
 
   const activeStudents = useMemo(() => {
     const regular = (students || []).filter((s) => {
@@ -258,8 +290,39 @@ const AttendanceRoster = ({
       inscriptionStatus: "PAID" as const,
     } as any));
 
-    return [...regular, ...visitors];
-  }, [students, catchUpVisitors]);
+    const revVisitors: FullStudent[] = (revisionVisitors || []).map((rv: any) => ({
+      id: rv.studentId,
+      globalNumber: rv.globalNumber,
+      name: rv.studentName,
+      phone: rv.phone || null,
+      surname: "",
+      className: locale === "ar" ? "زائر مراجعة" : "Visiteur Révision",
+      payerStatus: "NORMAL",
+      enrollmentStatus: "ACTIVE",
+      isSuspended: false,
+      isRefunded: false,
+      isVisitor: false,
+      isRevisionVisitor: true,
+      revisionAttendanceId: rv.id,
+      revisionAmount: rv.amount,
+      revisionVoucher: rv.voucher,
+      vouchers: rv.voucher ? [rv.voucher] : [],
+      attendances: [],
+      catchUps: [],
+      transfersFrom: [],
+      transfersTo: [],
+      creditResetOffset: 0,
+      family: null,
+      isBookEligible: false,
+      hasPaidBook: false,
+      receivedBookIds: [],
+      outstandingBooks: [],
+      bookDetails: [],
+      inscriptionStatus: "PAID" as const,
+    } as any));
+
+    return [...regular, ...visitors, ...revVisitors];
+  }, [students, catchUpVisitors, revisionVisitors, locale]);
 
   const filteredStudents = useMemo(() => {
     if (!cleanSearch) return activeStudents;
@@ -299,6 +362,27 @@ const AttendanceRoster = ({
         catchUps: [],
         transfersFrom: [],
       } as any)),
+      ...(revisionVisitors || []).map((rv: any) => ({
+        id: rv.studentId,
+        globalNumber: rv.globalNumber,
+        name: rv.studentName,
+        phone: rv.phone || null,
+        surname: "",
+        className: locale === "ar" ? "زائر مراجعة" : "Visiteur Révision",
+        payerStatus: "NORMAL",
+        enrollmentStatus: "ACTIVE",
+        isSuspended: false,
+        isRefunded: false,
+        isVisitor: false,
+        isRevisionVisitor: true,
+        revisionAttendanceId: rv.id,
+        revisionAmount: rv.amount,
+        revisionVoucher: rv.voucher,
+        vouchers: rv.voucher ? [rv.voucher] : [],
+        attendances: [],
+        catchUps: [],
+        transfersFrom: [],
+      } as any)),
     ];
     return pool.filter((student) => {
       const matchName = student.name.toLowerCase().includes(cleanSearch);
@@ -316,7 +400,7 @@ const AttendanceRoster = ({
           : false;
       return matchName || matchId || matchPhone || matchClass;
     });
-  }, [activeStudents, students, catchUpVisitors, cleanSearch, cleanNumeric]);
+  }, [activeStudents, students, catchUpVisitors, revisionVisitors, cleanSearch, cleanNumeric, locale]);
 
   const caughtUpMap = useMemo(
     () => new Map((caughtUpAbsentees || []).map((c) => [c.studentId, c])),
@@ -443,7 +527,7 @@ const AttendanceRoster = ({
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() => {
     const initialState: Record<string, AttendanceStatus> = {};
     activeStudents.forEach((student) => {
-      if (student.isVisitor) {
+      if (student.isVisitor || student.isRevisionVisitor) {
         initialState[student.id] = "PRESENT";
         return;
       }
@@ -463,7 +547,7 @@ const AttendanceRoster = ({
   const [justifications, setJustifications] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     activeStudents.forEach((student) => {
-      if (student.isVisitor) return;
+      if (student.isVisitor || student.isRevisionVisitor) return;
       const existingAtt = (student.attendances || []).find((a: any) => isSameSessionAttendance(a));
       const record = existingRecords.find((r) => r.studentId === student.id) || existingAtt;
       if (record?.justification) {
@@ -479,7 +563,7 @@ const AttendanceRoster = ({
       let changed = false;
       const next = { ...prev };
       activeStudents.forEach((student) => {
-        if (student.isVisitor) {
+        if (student.isVisitor || student.isRevisionVisitor) {
           if (next[student.id] === undefined) {
             next[student.id] = "PRESENT";
             changed = true;
@@ -587,6 +671,33 @@ const AttendanceRoster = ({
       toast.error(err.message || t("failedToRemoveVisitor"));
     } finally {
       setDeletingVisitorId(null);
+    }
+  };
+
+  const handleRemoveRevisionVisitor = async (studentId: string) => {
+    const confirmMsg =
+      locale === "ar"
+        ? "هل أنت متأكد من إلغاء زائر المراجعة؟ سيتم إلغاء الوصل وتعديل السجل المالي تلقائياً."
+        : "Êtes-vous sûr d'annuler ce visiteur révision ? Le reçu sera annulé et le grand livre ajusté.";
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      setDeletingRevisionVisitorId(studentId);
+      const res = await removeRevisionVisitorAction({ lessonId: lesson.id, studentId });
+      if (res.success) {
+        toast.success(
+          locale === "ar"
+            ? "تم إلغاء زائر المراجعة بنجاح"
+            : "Visiteur révision retiré avec succès"
+        );
+        router.refresh();
+      } else {
+        toast.error(res.message || "Erreur lors de l'annulation");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erreur inattendue");
+    } finally {
+      setDeletingRevisionVisitorId(null);
     }
   };
 
@@ -1071,10 +1182,10 @@ const AttendanceRoster = ({
         </div>
       )}
 
-      {/* Top action bar: Summary, Student Registration, and Catch-Up Visitor entry points */}
+      {/* Top action bar: Summary, Student Registration, Catch-Up Visitor, and Revision Visitor entry points */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-3 bg-gray-50 border border-gray-200 rounded-xl font-sans">
         <div className="flex items-center gap-2 text-xs text-gray-600 flex-wrap">
-          <span>{t("totalGroupStudents", { count: activeStudents.length })}</span>
+          <span>{t("totalGroupStudents", { count: totalEnrolledCount })}</span>
           {cleanSearch && (
             <span className="px-2 py-0.5 bg-blue-100 text-blue-800 font-semibold rounded-full text-[11px]">
               {locale === "ar"
@@ -1087,6 +1198,13 @@ const AttendanceRoster = ({
               {t("catchUpVisitorsCount", { count: catchUpVisitors.length })}
             </span>
           )}
+          {revisionVisitors.length > 0 && (
+            <span className="text-teal-700 font-medium">
+              {locale === "ar"
+                ? `${revisionVisitors.length} زائر مراجعة`
+                : `${revisionVisitors.length} visiteur(s) révision`}
+            </span>
+          )}
 
           {/* Status Color Indicators Legend */}
           <div className="flex items-center gap-1.5 ms-auto sm:ms-2 flex-wrap">
@@ -1097,6 +1215,10 @@ const AttendanceRoster = ({
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-100 text-sky-950 border border-sky-300 text-[11px] font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
               {locale === "ar" ? "حصة المدرسة فقط (أزرق)" : "Frais école seuls (Bleu)"}
+            </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-950 border border-teal-300 text-[11px] font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
+              {locale === "ar" ? "زائر مراجعة (تركوازي)" : "Visiteur révision (Turquoise)"}
             </span>
           </div>
         </div>
@@ -1117,6 +1239,13 @@ const AttendanceRoster = ({
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors shadow-xs cursor-pointer active:scale-95"
           >
             <span>{t("addCatchUpStudentBtn")}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsRevisionModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-teal-950 bg-teal-100 hover:bg-teal-200 border border-teal-300 rounded-lg transition-colors shadow-xs cursor-pointer active:scale-95"
+          >
+            <span>+ {locale === "ar" ? "إضافة زائر مراجعة" : "Visiteur révision"}</span>
           </button>
         </div>
       </div>
@@ -1324,10 +1453,20 @@ const AttendanceRoster = ({
               status: a.status,
             }));
 
+            const hasPaidCycle = Boolean(
+              (tuitionVouchers && tuitionVouchers.length > 0) ||
+              totalPaidFormation > 0 ||
+              (student.transfersTo && student.transfersTo.length > 0) ||
+              isNonPayer ||
+              (isSiblingWaived100 && isPayerSiblingPaid)
+            );
+
             // Consecutive absences and suspension checks (Rules 5 & 9)
             const consecutiveAbsences = computeStudentConsecutiveAbsences({
               lessons: studentLessons,
               attendances: studentAtts,
+              hasPaidCycle,
+              enrolledAt: student.enrolledAt,
             });
             const isSuspended = student.enrollmentStatus === "SUSPENDED";
             const hasConsecutiveAbsenceAlert = consecutiveAbsences >= 3;
@@ -1580,6 +1719,30 @@ const AttendanceRoster = ({
                           </div>
                         )}
 
+                        {student.isRevisionVisitor && (
+                          <div className="inline-flex items-center gap-1.5 flex-wrap">
+                            <Badge variant="primary" size="sm" withDot className="bg-teal-100 text-teal-950 border-teal-300 font-bold shadow-2xs">
+                              {locale === "ar"
+                                ? `زائر مراجعة (رسوم: ${student.revisionAmount || 0} د.ج)`
+                                : `Visiteur révision (Frais : ${student.revisionAmount || 0} DA)`}
+                            </Badge>
+                            {student.revisionVoucher && (
+                              <PrintTicketButton voucher={student.revisionVoucher} />
+                            )}
+                            <button
+                              type="button"
+                              disabled={deletingRevisionVisitorId === student.id}
+                              onClick={() => handleRemoveRevisionVisitor(student.id)}
+                              className="text-[11px] font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 border border-rose-200 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                              title={locale === "ar" ? "إلغاء زائر المراجعة واسترجاع الرسوم" : "Annuler le visiteur révision"}
+                            >
+                              {deletingRevisionVisitorId === student.id
+                                ? (locale === "ar" ? "جاري الإلغاء..." : "Annulation...")
+                                : (locale === "ar" ? "إلغاء الحضور" : "Annuler")}
+                            </button>
+                          </div>
+                        )}
+
                         {caughtUpMap.has(student.id) && (
                           <Badge variant="neutral" size="sm" withDot className="bg-blue-100 text-blue-900 border-blue-300 font-semibold shadow-2xs">
                             {locale === "ar"
@@ -1610,8 +1773,8 @@ const AttendanceRoster = ({
                         )}
 
                         <span className={`w-2 h-2 rounded-full ${statusBubble.color}`}></span>
-                        {/* Inscription Fee Status Badge (hide for cross-group visitors) */}
-                        {!student.isVisitor && (
+                        {/* Inscription Fee Status Badge (hide for cross-group visitors and revision visitors) */}
+                        {!student.isVisitor && !student.isRevisionVisitor && (
                           student.inscriptionStatus === "PAID" ? (
                             <Badge variant="success" size="sm" withDot>
                               {locale === "ar" ? "تسجيل مسدد" : "Inscr. Payée"}
@@ -1686,8 +1849,15 @@ const AttendanceRoster = ({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* Restyled Attendance Buttons: Green (Present) / Red (Absent) / Blue (Not defined) */}
-                    <div className="inline-flex items-center p-1 bg-gray-100/90 rounded-xl border border-gray-200/80 gap-1 w-full sm:w-auto shadow-2xs">
+                    {student.isRevisionVisitor ? (
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-teal-600 text-white shadow-xs">
+                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                        <span>{locale === "ar" ? "حاضر (مراجعة)" : "Présent (Révision)"}</span>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Restyled Attendance Buttons: Green (Present) / Red (Absent) / Blue (Not defined) */}
+                        <div className="inline-flex items-center p-1 bg-gray-100/90 rounded-xl border border-gray-200/80 gap-1 w-full sm:w-auto shadow-2xs">
                       {/* Present Button (Green) */}
                       <button
                         type="button"
@@ -1746,7 +1916,7 @@ const AttendanceRoster = ({
 
                     <div className="flex items-center gap-1.5 shrink-0">
                       {/* Book Status Badge and Toggle Controls */}
-                      {!student.isVisitor && allGroupBooks.length > 0 && (
+                      {!student.isVisitor && !student.isRevisionVisitor && allGroupBooks.length > 0 && (
                         <div className="flex items-center gap-1.5">
                           <BookStatusBadge
                             status={computedBookStatus}
@@ -1878,7 +2048,7 @@ const AttendanceRoster = ({
                         </div>
                       )}
 
-                      {!student.isVisitor && (
+                      {!student.isVisitor && !student.isRevisionVisitor && (
                         <>
                           <button
                             type="button"
@@ -1901,8 +2071,10 @@ const AttendanceRoster = ({
                         </>
                       )}
                     </div>
-                  </div>
-                </div>
+                  </>
+                )}
+              </div>
+            </div>
 
                 {/* NOT_DEFINED Mandatory Justification Input */}
                 {currentStatus === "NOT_DEFINED" && (
@@ -1944,9 +2116,15 @@ const AttendanceRoster = ({
         <input type="hidden" name="isAutoSave" value={isAutoSavingRef.current ? "true" : "false"} />
         {/* Render status for ALL active students to guarantee no student is ever omitted or left non-recorded */}
         {activeStudents.map((student) => {
-          // Skip catch-up visitors so their presence is strictly maintained via CatchUpAttendance,
+          // Skip catch-up visitors and revision visitors so their presence is strictly maintained via their own records,
           // avoiding duplicate/foreign Attendance records in saveAttendance.
-          if (catchUpVisitors.some((v) => v.studentId === student.id)) return null;
+          if (
+            catchUpVisitors.some((v) => v.studentId === student.id) ||
+            revisionVisitors.some((rv: any) => rv.studentId === student.id) ||
+            student.isRevisionVisitor
+          ) {
+            return null;
+          }
 
           const status = attendance[student.id] || "ABSENT";
           return (
@@ -2004,6 +2182,17 @@ const AttendanceRoster = ({
         lessonId={lesson.id}
         isOpen={isCatchUpModalOpen}
         onClose={() => setIsCatchUpModalOpen(false)}
+      />
+
+      {/* Revision Visitor Modal */}
+      <RevisionVisitorModal
+        lessonId={lesson.id}
+        isOpen={isRevisionModalOpen}
+        onClose={() => setIsRevisionModalOpen(false)}
+        onSuccess={() => {
+          setIsRevisionModalOpen(false);
+          router.refresh();
+        }}
       />
 
       {/* Free Session Confirmation Popup Modal */}

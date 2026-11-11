@@ -60,6 +60,7 @@ const ClassPaymentHistoryPage = async (
         where: {
           OR: [
             { status: "ACTIVE" },
+            { status: "SUSPENDED" },
             { status: "TRANSFERRED" },
             { transfersFrom: { some: {} } },
           ],
@@ -166,7 +167,13 @@ const ClassPaymentHistoryPage = async (
       },
       vouchers: {
         include: {
-          series: true,
+          series: {
+            include: {
+              issuingBranch: true,
+              targetBranch: true,
+              level: true,
+            },
+          },
           edits: {
             orderBy: { editedAt: "desc" },
           },

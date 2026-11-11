@@ -723,21 +723,29 @@ export function computeStudentRefundableSessions({
  * Computes the number of consecutive unexcused trailing absences for a student.
  * Breaks on PRESENT or CatchUp attendance. Passes through NOT_DEFINED.
  *
- * Rule: Non-starting students (students who have not yet attended any session
- * in this class) are never marked as suspended, regardless of how many pre-start
- * absences they have. Consecutive absences only begin tracking toward suspension
- * after the student's first attendance (PRESENT or CatchUp) in the class.
+ * Rules:
+ * 1. For students who have started attending (at least one PRESENT or CatchUp),
+ *    consecutive trailing absences are counted backwards from the latest lesson.
+ * 2. For non-starting students who have made a cycle payment (hasPaidCycle: true),
+ *    they are not marked as suspended because they have prepaid credit.
+ * 3. For non-starting students who only paid inscription fees (or no cycle payment, hasPaidCycle: false)
+ *    and didn't show up, lessons on/after enrollment where they are absent accumulate
+ *    consecutive absences toward auto-suspension (>= 4 unexcused absences).
  */
 export function computeStudentConsecutiveAbsences({
   lessons,
   attendances,
   catchUps = [],
+  hasPaidCycle = false,
+  enrolledAt,
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
   catchUps?: Array<{ missedLessonId: number }>;
+  hasPaidCycle?: boolean;
+  enrolledAt?: Date | string | null;
 }): number {
-  if (!lessons || lessons.length === 0 || !attendances || attendances.length === 0) {
+  if (!lessons || lessons.length === 0) {
     return 0;
   }
   const sortedLessons = [...lessons]
@@ -745,9 +753,9 @@ export function computeStudentConsecutiveAbsences({
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
   const attendanceMap = new Map<number, string>();
-  attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
+  (attendances || []).forEach((a) => attendanceMap.set(a.lessonId, a.status));
   const catchUpSet = new Set<number>();
-  catchUps.forEach((c) => catchUpSet.add(c.missedLessonId));
+  (catchUps || []).forEach((c) => catchUpSet.add(c.missedLessonId));
 
   // Determine if the student has started attending in this group (at least one PRESENT or CatchUp)
   const hasStarted = sortedLessons.some((l) => {
@@ -755,9 +763,35 @@ export function computeStudentConsecutiveAbsences({
     return status === "PRESENT" || catchUpSet.has(l.id);
   });
 
-  // Non-starting students are never marked as suspended, regardless of how many pre-start absences they have.
+  // Non-starting students who prepaid for a cycle are waiting to start and not marked suspended.
+  // But non-starting students who ONLY paid inscription fees (hasPaidCycle: false) and didn't show up
+  // accumulate consecutive absences for lessons held after enrollment.
   if (!hasStarted) {
-    return 0;
+    if (hasPaidCycle) {
+      return 0;
+    }
+
+    const enrolledTimeMs = enrolledAt
+      ? new Date(enrolledAt).getTime() - 2 * 60 * 60 * 1000 // 2-hour grace margin for same-day registrations
+      : 0;
+
+    let consecutiveAbsences = 0;
+    for (let i = sortedLessons.length - 1; i >= 0; i--) {
+      const l = sortedLessons[i];
+      if (enrolledTimeMs > 0 && new Date(l.startsAt).getTime() < enrolledTimeMs) {
+        break; // Stop at lessons held prior to student's enrollment
+      }
+      const status = attendanceMap.get(l.id);
+      if (status === "NOT_DEFINED") continue;
+      if (status === "PRESENT" || catchUpSet.has(l.id)) {
+        break;
+      }
+      // If status is "ABSENT" or past lesson without presence
+      if (status === "ABSENT" || !status) {
+        consecutiveAbsences++;
+      }
+    }
+    return consecutiveAbsences;
   }
 
   let consecutiveAbsences = 0;

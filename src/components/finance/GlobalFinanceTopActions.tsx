@@ -10,12 +10,16 @@ import { useLocale } from "next-intl";
 interface GlobalFinanceTopActionsProps {
   branches: Array<{ id: number; name: string }>;
   initialBranchId?: string;
+  initialDateFrom?: string;
+  initialDateTo?: string;
   locale?: string;
 }
 
 export default function GlobalFinanceTopActions({
   branches,
   initialBranchId = "all",
+  initialDateFrom,
+  initialDateTo,
   locale: propLocale,
 }: GlobalFinanceTopActionsProps) {
   const currentLocale = useLocale();
@@ -65,6 +69,8 @@ export default function GlobalFinanceTopActions({
           onClose={() => setIsReportModalOpen(false)}
           branches={branches}
           initialBranchId={initialBranchId}
+          initialDateFrom={initialDateFrom}
+          initialDateTo={initialDateTo}
           onOpenTransferModal={handleOpenTransferWithSource}
           locale={locale}
         />

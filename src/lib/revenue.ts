@@ -141,8 +141,23 @@ export async function getDailyRevenueDashboardData(options?: {
   const defaultDateTo = getAlgiersTodayDateString();
   const defaultDateFrom = `${algiersToday.year}-${String(algiersToday.month).padStart(2, "0")}-01`;
 
-  const dateFromStr = options?.dateFrom || defaultDateFrom;
-  const dateToStr = options?.dateTo || defaultDateTo;
+  let dateFromStr: string = options?.dateFrom || "";
+  let dateToStr: string = options?.dateTo || "";
+
+  if (!dateFromStr && !dateToStr) {
+    dateFromStr = defaultDateFrom;
+    dateToStr = defaultDateTo;
+  } else if (!dateFromStr && dateToStr) {
+    dateFromStr = dateToStr;
+  } else if (dateFromStr && !dateToStr) {
+    dateToStr = dateFromStr;
+  }
+
+  if (dateFromStr > dateToStr) {
+    const temp = dateFromStr;
+    dateFromStr = dateToStr;
+    dateToStr = temp;
+  }
 
   // Algiers business day window in UTC:
   // startDate is previous day 23:00:00.000Z (start of dateFromStr in Algiers)
@@ -265,7 +280,7 @@ export async function getDailyRevenueDashboardData(options?: {
 
     if (type === "REFUND") {
       summary.refunds += Math.abs(amount);
-    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION") {
+    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION" || (type as string) === "REVISION_SESSION") {
       summary.tuition += amount;
       summary.grossRevenue += amount;
     } else if (type === "INSCRIPTION") {
@@ -318,7 +333,7 @@ export async function getDailyRevenueDashboardData(options?: {
 
     if (type === "REFUND") {
       item.refunds += Math.abs(amount);
-    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION") {
+    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION" || (type as string) === "REVISION_SESSION") {
       item.tuition += amount;
       item.grossRevenue += amount;
     } else if (type === "INSCRIPTION") {
@@ -405,7 +420,7 @@ export async function getDailyRevenueDashboardData(options?: {
       bucket.refunds += Math.abs(amount);
     } else {
       bucket.grossRevenue += amount;
-      if (type === "TUITION" || (type as string) === "EXTRA_SESSION") bucket.tuition += amount;
+      if (type === "TUITION" || (type as string) === "EXTRA_SESSION" || (type as string) === "REVISION_SESSION") bucket.tuition += amount;
       else if (type === "INSCRIPTION") bucket.inscription += amount;
       else if (type === "BOOK") bucket.book += amount;
       else if (type === "ATELIER_FORMATION") bucket.atelierFormation += amount;
@@ -805,7 +820,7 @@ export async function getDailyBranchLedgerData(
     const type = row.type as LedgerVoucherCategory;
     if (type === "REFUND") {
       summary.refunds += Math.abs(amount);
-    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION") {
+    } else if (type === "TUITION" || (type as string) === "EXTRA_SESSION" || (type as string) === "REVISION_SESSION") {
       summary.tuition += amount;
       summary.grossRevenue += amount;
     } else if (type === "INSCRIPTION") {

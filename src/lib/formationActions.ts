@@ -1126,9 +1126,20 @@ export async function recordFormationLumpSumPayment(data: {
             isVoided: false,
           },
           include: {
-            class: true,
+            class: {
+              include: {
+                branch: true,
+                level: true,
+              },
+            },
             student: true,
-            series: true,
+            series: {
+              include: {
+                issuingBranch: true,
+                targetBranch: true,
+                level: true,
+              },
+            },
           },
         });
 
@@ -1173,9 +1184,20 @@ export async function recordFormationLumpSumPayment(data: {
             trimesterId: activeTrimesterId,
           },
           include: {
-            class: true,
+            class: {
+              include: {
+                branch: true,
+                level: true,
+              },
+            },
             student: true,
-            series: true,
+            series: {
+              include: {
+                issuingBranch: true,
+                targetBranch: true,
+                level: true,
+              },
+            },
           },
         });
 

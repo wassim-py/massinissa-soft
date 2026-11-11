@@ -37,9 +37,9 @@ export default function RevenueFilterBar({
 
   // Active time tab resolution (merging Aggregation Mode & Date Range)
   const isToday = dateFrom === todayStr && dateTo === todayStr && periodMode === "daily";
-  const isWeek = dateFrom === weekStartStr && dateTo === todayStr && periodMode === "weekly";
-  const isMonth = dateFrom === firstOfMonthStr && dateTo === todayStr && periodMode === "monthly";
-  const isAll = dateFrom === "2025-01-01" && dateTo === todayStr && periodMode === "monthly";
+  const isWeek = dateFrom === weekStartStr && dateTo === todayStr;
+  const isMonth = dateFrom === firstOfMonthStr && dateTo === todayStr;
+  const isAll = dateFrom === "2025-01-01" && dateTo === todayStr;
   const isCustom = !isToday && !isWeek && !isMonth && !isAll;
 
   const [showCustomInputs, setShowCustomInputs] = useState(isCustom);
@@ -47,6 +47,14 @@ export default function RevenueFilterBar({
   // Updates searchParams and triggers page transition
   const updateQuery = (params: Record<string, string | null>) => {
     const current = new URLSearchParams(Array.from(searchParams.entries()));
+
+    // Keep active date range intact when a single field (dateFrom or dateTo) is updated
+    if (params.dateFrom !== undefined && !params.dateTo && !current.has("dateTo") && dateTo) {
+      current.set("dateTo", dateTo);
+    }
+    if (params.dateTo !== undefined && !params.dateFrom && !current.has("dateFrom") && dateFrom) {
+      current.set("dateFrom", dateFrom);
+    }
 
     for (const [key, val] of Object.entries(params)) {
       if (val === null || val === "" || (key === "branchId" && val === "all")) {

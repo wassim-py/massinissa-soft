@@ -67,12 +67,21 @@ const globalForBiometricFeed = globalThis as unknown as {
   __biometricScanDedupCache?: Map<string, { result: { success: boolean; scan: BiometricScanResult }; expiresAt: number }>;
   __biometricInFlightScans?: Map<string, Promise<{ success: boolean; scan: BiometricScanResult }>>;
   __biometricClassLessonIdsCache?: Map<number, { ids: number[]; expiresAt: number }>;
+  __biometricResolvedLessonDateCache?: Map<string, { id: number; expiresAt: number }>;
 };
 
 const BIOMETRIC_FEED_CACHE_TTL_MS = 15 * 1000; // 15s in-memory cache when idle (invalidated immediately on scan/action)
 const BIOMETRIC_CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // Run stale log cleanup at most once every 10 minutes
 const BIOMETRIC_CLASS_LESSONS_CACHE_TTL_MS = 30 * 1000; // 30s rush-hour cache for class lesson IDs
+const BIOMETRIC_RESOLVED_LESSON_CACHE_TTL_MS = 5 * 60 * 1000; // 5m cache for resolved dated lesson instances
 const BIOMETRIC_SCAN_COOLDOWN_MS = 10 * 1000; // 10s scan deduplication window
+
+function getBiometricResolvedLessonDateCache(): Map<string, { id: number; expiresAt: number }> {
+  if (!globalForBiometricFeed.__biometricResolvedLessonDateCache) {
+    globalForBiometricFeed.__biometricResolvedLessonDateCache = new Map();
+  }
+  return globalForBiometricFeed.__biometricResolvedLessonDateCache;
+}
 
 function getBiometricFeedCacheMap(): Map<number, BiometricFeedCacheEntry> {
   if (!globalForBiometricFeed.__biometricFeedCache) {
@@ -669,11 +678,33 @@ export async function processBiometricScan(input: {
   const targetDateStr =
     (matchedLesson as any).instanceDate ||
     getAlgiersDateInfo(matchedLesson.startsAt).dateStr;
-  const persistedLessonId = await resolveOrCreateLessonForDate(
-    matchedLesson.id,
-    targetDateStr
+  const rawDbLesson = rawStudentLessons.find((r) => r.id === matchedLesson!.id);
+  const isAlreadyDatedInDb = Boolean(
+    rawDbLesson &&
+      (rawDbLesson.isExtra ||
+        rawDbLesson.isCatchUp ||
+        rawDbLesson.isFree ||
+        getAlgiersDateInfo(rawDbLesson.startsAt).dateStr === targetDateStr)
   );
-  matchedLesson.id = persistedLessonId;
+
+  if (!isAlreadyDatedInDb) {
+    const resolvedDateCache = getBiometricResolvedLessonDateCache();
+    const resolveKey = `${matchedLesson.id}:${targetDateStr}`;
+    const cachedResolved = resolvedDateCache.get(resolveKey);
+    if (cachedResolved && Date.now() < cachedResolved.expiresAt) {
+      matchedLesson.id = cachedResolved.id;
+    } else {
+      const persistedLessonId = await resolveOrCreateLessonForDate(
+        matchedLesson.id,
+        targetDateStr
+      );
+      resolvedDateCache.set(resolveKey, {
+        id: persistedLessonId,
+        expiresAt: Date.now() + BIOMETRIC_RESOLVED_LESSON_CACHE_TTL_MS,
+      });
+      matchedLesson.id = persistedLessonId;
+    }
+  }
 
   // ROUND-TRIP 2: Fetch Vouchers, Class Attendances, CatchUps, Current Lesson Attendance, and Payer Sibling in ONE Promise.all
   const enrolledClassId = (matchedLesson as any).studentEnrolledClassId || matchedLesson.classId;

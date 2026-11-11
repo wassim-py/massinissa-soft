@@ -246,11 +246,14 @@ export default async function FinancePage(props: PageProps) {
     .filter((p) => p.status === "PAID")
     .reduce((sum, p) => sum + Math.max(0, p.amount - (p.advance || 0) + (p.bonus || 0)), 0);
 
+  const effectiveDateFrom = searchParams.dateFrom || (searchParams as any).date;
+  const effectiveDateTo = searchParams.dateTo || (searchParams as any).date;
+
   // Top KPIs Revenue data
   const dashboardData = await getDailyRevenueDashboardData({
     branchId: selectedBranchParam,
-    dateFrom: searchParams.dateFrom,
-    dateTo: searchParams.dateTo,
+    dateFrom: effectiveDateFrom,
+    dateTo: effectiveDateTo,
     periodMode: searchParams.periodMode || "daily",
   });
 
@@ -279,9 +282,9 @@ export default async function FinancePage(props: PageProps) {
     const firstDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
     const lastDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59, 999));
 
-    const startDate = searchParams.dateFrom ? new Date(searchParams.dateFrom) : firstDay;
+    const startDate = effectiveDateFrom ? new Date(effectiveDateFrom) : firstDay;
     startDate.setUTCHours(0, 0, 0, 0);
-    const endDate = searchParams.dateTo ? new Date(searchParams.dateTo) : lastDay;
+    const endDate = effectiveDateTo ? new Date(effectiveDateTo) : lastDay;
     endDate.setUTCHours(23, 59, 59, 999);
 
     if (currentTab === "runs") {
@@ -506,6 +509,8 @@ export default async function FinancePage(props: PageProps) {
           <GlobalFinanceTopActions
             branches={allBranchesData}
             initialBranchId={String(selectedBranchParam)}
+            initialDateFrom={effectiveDateFrom || dashboardData?.dateFrom}
+            initialDateTo={effectiveDateTo || dashboardData?.dateTo}
             locale={locale}
           />
 

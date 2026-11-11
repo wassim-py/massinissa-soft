@@ -152,7 +152,9 @@ const FormContainer = async ({
                 familyId: st.familyId,
                 registeredBranchId: st.registeredBranchId,
                 parentPhoneNumbers: st.parentPhoneNumbers.map((p) => p.phone),
-                classes: st.enrollments.map((e) => e.classId),
+                classes: st.enrollments
+                  .filter((e) => e.status !== "TRANSFERRED" && e.status !== "UNENROLLED" && e.status !== "REFUNDED" && e.status !== "INACTIVE")
+                  .map((e) => e.classId),
               };
             }
           }

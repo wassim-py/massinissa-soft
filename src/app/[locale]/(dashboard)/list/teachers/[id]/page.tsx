@@ -126,7 +126,7 @@ const SingleTeacherPage = async (
             branch: true,
             level: true,
             FormationLevel: true,
-            enrollments: { select: { id: true } },
+            enrollments: { where: { status: "ACTIVE" }, select: { id: true } },
           },
         },
       },
@@ -153,7 +153,7 @@ const SingleTeacherPage = async (
     // Groups taught
     prisma.class.findMany({
       where: { teacherId: id },
-      include: { branch: true, level: true, FormationLevel: true, enrollments: { select: { id: true } } },
+      include: { branch: true, level: true, FormationLevel: true, enrollments: { where: { status: "ACTIVE" }, select: { id: true } } },
       orderBy: { name: "asc" },
     }),
     // 5. Books brought to school (§2.11)

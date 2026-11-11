@@ -71,6 +71,7 @@ export interface TeacherPayrollCalculation {
     sessionPrice: number;
     teacherCut: number;
     schoolCut?: number;
+    tuitionGross?: number;
     appliedPercentage?: number;
     lessonAmount: number;
     isFree: boolean;
@@ -348,6 +349,15 @@ export async function calculateTeacherPayroll(
         },
       },
       attendances: true,
+      vouchers: {
+        where: {
+          paymentType: "REVISION_SESSION",
+          isVoided: false,
+        },
+        include: {
+          refunds: true,
+        },
+      },
     },
     orderBy: { startsAt: "asc" },
   });
@@ -854,26 +864,34 @@ export async function calculateTeacherPayroll(
       existing.freeSessions += 1;
     }
 
-    // Actual student attendance (PRESENT regular attendees + catch-up visitors hosted)
+    // Actual student attendance (PRESENT regular attendees + catch-up visitors hosted + revision visitors)
     const visitorStudentIds = new Set(
       catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id).map((cv) => cv.studentId)
     );
     const visitorsInLesson = catchUpVisitors.filter((cv) => cv.catchUpLessonId === lesson.id);
     const caughtUpElsewhereStudents = missedLessonCatchUpMap.get(lesson.id);
 
-    // Regular present count excludes any student already counted as a catch-up visitor in this same lesson
+    // Revision visitors
+    const revisionVisitorAttendances = lesson.attendances.filter(
+      (a) => a.status === "PRESENT" && (a as any).isRevisionVisitor
+    );
+    const revisionVisitorStudentIds = new Set(revisionVisitorAttendances.map((a) => a.studentId));
+
+    // Regular present count excludes any student already counted as a catch-up visitor or revision visitor in this same lesson
     const regularPresentStudentIds = new Set(
       lesson.attendances
         .filter(
           (a) =>
             a.status === "PRESENT" &&
-            !visitorStudentIds.has(a.studentId)
+            !visitorStudentIds.has(a.studentId) &&
+            !revisionVisitorStudentIds.has(a.studentId)
         )
         .map((a) => a.studentId)
     );
     const regularPresentCount = regularPresentStudentIds.size;
     const visitorCount = visitorsInLesson.length;
-    const presentCount = regularPresentCount + visitorCount;
+    const revisionVisitorCount = revisionVisitorStudentIds.size;
+    const presentCount = regularPresentCount + visitorCount + revisionVisitorCount;
 
     existing.totalPresentAttendances += presentCount;
     totalPresentAttendances += presentCount;
@@ -921,6 +939,8 @@ export async function calculateTeacherPayroll(
       lesson.attendances.forEach((att) => {
         // If this student is hosted as a visitor in this lesson, skip here (handled in visitorsInLesson)
         if (visitorStudentIds.has(att.studentId)) return;
+        // If this student is a revision visitor, skip here (handled in revision visitors calculation below)
+        if ((att as any).isRevisionVisitor || revisionVisitorStudentIds.has(att.studentId)) return;
         // If this student already caught up for this missed lesson elsewhere AND was not PRESENT in this lesson, skip here (paid in host lesson)
         if (caughtUpElsewhereStudents?.has(att.studentId) && att.status !== "PRESENT") return;
         // Skip duplicate student attendance records to guarantee accurate calculation
@@ -1087,6 +1107,48 @@ export async function calculateTeacherPayroll(
       lessonTuition = Math.round(payingWeight * sessionPrice * 100) / 100;
       lessonSchoolCut = Math.max(0, lessonTuition - lessonAmount);
     }
+
+    // Process Revision Visitors: Teacher is paid on the full entered value (following the percentage)
+    let revisionVisitorsGross = 0;
+    let revisionVisitorsTeacherCut = 0;
+    let revisionVisitorsSchoolCut = 0;
+    let revisionVisitorsPayingCount = 0;
+
+    if (!lesson.isFree && !lesson.class?.isFormation && revisionVisitorAttendances.length > 0) {
+      const lessonVouchers = (lesson as any).vouchers || [];
+      const teacherPct =
+        appliedGroupPercentage !== null && appliedGroupPercentage > 0
+          ? appliedGroupPercentage
+          : (percentageOfSessionFee ?? 0);
+
+      revisionVisitorAttendances.forEach((rAtt) => {
+        // Find matching REVISION_SESSION voucher for this student & lesson
+        const v = lessonVouchers.find(
+          (voucher: any) =>
+            voucher.studentId === rAtt.studentId &&
+            voucher.paymentType === "REVISION_SESSION" &&
+            !voucher.isVoided
+        );
+        if (v) {
+          const refunded = (v.refunds || []).reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
+          const netPaid = Math.max(0, Number(v.amount || 0) - refunded);
+          if (netPaid > 0) {
+            const vTeacherCut = Math.round(((netPaid * teacherPct) / 100) * 100) / 100;
+            const vSchoolCut = Math.max(0, netPaid - vTeacherCut);
+
+            revisionVisitorsGross += netPaid;
+            revisionVisitorsTeacherCut += vTeacherCut;
+            revisionVisitorsSchoolCut += vSchoolCut;
+            revisionVisitorsPayingCount += 1;
+          }
+        }
+      });
+    }
+
+    lessonAmount += revisionVisitorsTeacherCut;
+    lessonTuition += revisionVisitorsGross;
+    lessonSchoolCut += revisionVisitorsSchoolCut;
+
     totalTuitionGross += lessonTuition;
     schoolGrossAmount += lessonSchoolCut;
 
@@ -1102,7 +1164,7 @@ export async function calculateTeacherPayroll(
       className: lesson.class?.name || "فوج",
       branchName: lesson.branch.name,
       presentCount,
-      payingCount: Math.round(payingWeight * 100) / 100,
+      payingCount: Math.round((payingWeight + revisionVisitorsPayingCount) * 100) / 100,
       pricePerCycle,
       sessionPrice,
       teacherCut: effectiveRateForSession,
@@ -1112,6 +1174,7 @@ export async function calculateTeacherPayroll(
       isFree: lesson.isFree,
       isExtra: lesson.isExtra,
       isCatchUp: lesson.isCatchUp,
+      tuitionGross: lessonTuition,
     });
   });
 
@@ -1866,7 +1929,7 @@ export async function calculateTeacherPayroll(
       } else {
         g.courseSessionsCount += 1;
         const payingCountForLesson = Number(s.payingCount ?? s.presentCount ?? 1);
-        const lessonTuition = Math.round(payingCountForLesson * s.sessionPrice * 100) / 100;
+        const lessonTuition = s.tuitionGross ?? Math.round(payingCountForLesson * s.sessionPrice * 100) / 100;
         const lessonTeacherCut = Number(s.lessonAmount || 0);
         const lessonSchoolCut = s.schoolCut ?? Math.max(0, lessonTuition - lessonTeacherCut);
 

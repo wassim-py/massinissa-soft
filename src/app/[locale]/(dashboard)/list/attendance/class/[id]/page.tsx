@@ -33,6 +33,7 @@ export type AttendanceCellDetail = {
     justification?: string | null;
     isPreStart?: boolean;
     isTeacherAbsent?: boolean;
+    isRevisionVisitor?: boolean;
     catchUp?: {
         catchUpDate: string;
         catchUpGroupName: string;
@@ -277,6 +278,85 @@ const ClassAttendancePage = async (
                 }
             } catch (attErr) {
                 console.error("Error fetching attendances:", attErr);
+            }
+
+            try {
+                const rawRevisionAttendances = await prisma.$queryRaw<any[]>`
+                    SELECT 
+                        a.id as "attendanceId",
+                        a."studentId",
+                        a.status,
+                        a.justification,
+                        a."isRevisionVisitor",
+                        l.id as "lessonId",
+                        l."startsAt" as date,
+                        l."classId" as "lessonClassId",
+                        l."isTeacherAbsent",
+                        l."isFree",
+                        l."isExtra",
+                        l."isCatchUp",
+                        s.name as "studentName",
+                        s."globalNumber" as "studentGlobalNumber",
+                        s.phone as "studentPhone"
+                    FROM "Attendance" a
+                    JOIN "Lesson" l ON l.id = a."lessonId"
+                    JOIN "Student" s ON s.id = a."studentId"
+                    WHERE a."isRevisionVisitor" = true
+                      AND (
+                          l."classId" = ${classId}
+                          OR EXISTS (
+                              SELECT 1 FROM "LessonGroup" lg
+                              WHERE lg."lessonId" = l.id AND lg."classId" = ${classId}
+                          )
+                      )
+                    ORDER BY l."startsAt" ASC
+                `;
+
+                for (const revAtt of rawRevisionAttendances) {
+                    if (!studentMap.has(revAtt.studentId)) {
+                        studentMap.set(revAtt.studentId, {
+                            id: revAtt.studentId,
+                            name: revAtt.studentName,
+                            globalNumber: revAtt.studentGlobalNumber,
+                            phone: revAtt.studentPhone,
+                            surname: "",
+                            status: "ACTIVE",
+                            isTransferred: false,
+                            isRevisionVisitorOnly: true,
+                            transferredAt: null,
+                            enrolledAt: null,
+                            transferredInAt: null,
+                            transferredFromClassId: null,
+                            attendances: [],
+                        });
+                    }
+                    const s = studentMap.get(revAtt.studentId);
+                    if (s) {
+                        s.attendances.push({
+                            id: revAtt.attendanceId,
+                            lessonId: revAtt.lessonId,
+                            date: revAtt.date,
+                            status: revAtt.status,
+                            justification: revAtt.justification || null,
+                            present: revAtt.status === "PRESENT",
+                            isTeacherAbsent: Boolean(revAtt.isTeacherAbsent),
+                            isFree: Boolean(revAtt.isFree),
+                            isExtra: Boolean(revAtt.isExtra),
+                            isCatchUp: Boolean(revAtt.isCatchUp),
+                            isRevisionVisitor: true,
+                            lesson: {
+                                isFree: Boolean(revAtt.isFree),
+                                isExtra: Boolean(revAtt.isExtra),
+                                isCatchUp: Boolean(revAtt.isCatchUp),
+                                subject: {
+                                    name: classHeader.name || "درس",
+                                },
+                            },
+                        });
+                    }
+                }
+            } catch (revErr) {
+                console.error("Error fetching revision attendances in ClassAttendancePage:", revErr);
             }
 
             let catchUpAttendances: any[] = [];
@@ -608,6 +688,8 @@ const ClassAttendancePage = async (
             const sortedStudents = Array.from(studentMap.values()).sort((a, b) => {
                 if (a.isTransferred && !b.isTransferred) return 1;
                 if (!a.isTransferred && b.isTransferred) return -1;
+                if (a.isRevisionVisitorOnly && !b.isRevisionVisitorOnly) return 1;
+                if (!a.isRevisionVisitorOnly && b.isRevisionVisitorOnly) return -1;
                 return a.name.localeCompare(b.name);
             });
 
@@ -832,6 +914,7 @@ const ClassAttendancePage = async (
                 justification: record.justification || null,
                 isPreStart: record.status === "PRESENT" ? false : Boolean(isPreStart),
                 isTeacherAbsent,
+                isRevisionVisitor: Boolean(record.isRevisionVisitor),
                 catchUp: catchUpInfo ? {
                     catchUpDate: catchUpInfo.catchUpDate,
                     catchUpGroupName: catchUpInfo.catchUpGroupName,

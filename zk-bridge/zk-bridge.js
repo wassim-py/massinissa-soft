@@ -1082,20 +1082,61 @@ async function uploadTemplateToDevice(dev, globalNumber, fingerIndex, templateBu
   }
 }
 
+const studentNameCache = new Map();
+let syncCacheLoadedOnce = false;
+
+function populateStudentNameCache(cacheObj) {
+  if (!cacheObj || typeof cacheObj !== "object") return;
+  for (const [key, val] of Object.entries(cacheObj)) {
+    if (key.startsWith("_") || !val || typeof val !== "object") continue;
+    const gNum = Number(val.globalNumber);
+    if (gNum > 0 && val.studentName) {
+      studentNameCache.set(gNum, String(val.studentName));
+    }
+  }
+}
+
+function getCachedStudentName(globalNumber) {
+  const gNum = Number(globalNumber);
+  if (!gNum || gNum <= 0) return null;
+  if (!syncCacheLoadedOnce) {
+    loadSyncCache();
+  }
+  return studentNameCache.get(gNum) || null;
+}
+
 function loadSyncCache() {
+  syncCacheLoadedOnce = true;
   try {
     if (fs.existsSync(SYNC_CACHE_FILE)) {
-      return JSON.parse(fs.readFileSync(SYNC_CACHE_FILE, "utf8"));
+      const parsed = JSON.parse(fs.readFileSync(SYNC_CACHE_FILE, "utf8"));
+      populateStudentNameCache(parsed);
+      return parsed;
     }
   } catch {}
   return {};
 }
 
 function saveSyncCache(cache) {
+  populateStudentNameCache(cache);
   try {
     fs.writeFileSync(SYNC_CACHE_FILE, JSON.stringify(cache, null, 2), "utf8");
   } catch {}
 }
+
+const httpKeepAliveAgent = new http.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+});
+
+const httpsKeepAliveAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+});
 
 function fetchFromCloud(path) {
   return new Promise((resolve) => {
@@ -1117,15 +1158,17 @@ function fetchFromCloud(path) {
 
     try {
       const targetUrl = new URL(path, state.appUrl);
-      const client = targetUrl.protocol === "https:" ? https : http;
+      const isHttps = targetUrl.protocol === "https:";
+      const client = isHttps ? https : http;
       req = client.get(
         targetUrl,
         {
+          agent: isHttps ? httpsKeepAliveAgent : httpKeepAliveAgent,
           timeout: 15000,
           headers: {
             "x-zk-bridge-key": BRIDGE_SECRET,
             "User-Agent": "Massinissa-ZK-Bridge/4.0",
-            Connection: "close",
+            Connection: "keep-alive",
           },
         },
         (res) => {
@@ -1174,18 +1217,20 @@ function postToCloud(path, payload) {
     try {
       const targetUrl = new URL(path, state.appUrl);
       const bodyStr = JSON.stringify(payload);
-      const client = targetUrl.protocol === "https:" ? https : http;
+      const isHttps = targetUrl.protocol === "https:";
+      const client = isHttps ? https : http;
 
       req = client.request(
         targetUrl,
         {
           method: "POST",
+          agent: isHttps ? httpsKeepAliveAgent : httpKeepAliveAgent,
           headers: {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(bodyStr),
             "x-zk-bridge-key": BRIDGE_SECRET,
             "User-Agent": "Massinissa-ZK-Bridge/4.0",
-            Connection: "close",
+            Connection: "keep-alive",
           },
           timeout: 5500,
         },
@@ -1410,8 +1455,15 @@ async function syncTemplatesWithCloud(force = false) {
 }
 
 async function dispatchScanEvent(scanPayload) {
+  const cachedStudentName =
+    scanPayload.studentName ||
+    (!scanPayload.isUnrecognizedFinger && scanPayload.globalNumber > 0
+      ? getCachedStudentName(scanPayload.globalNumber)
+      : null);
+
   const enrichedPayload = {
     ...scanPayload,
+    studentName: cachedStudentName,
     branchId: state.branchId,
     scanTime: scanPayload.scanTime || new Date().toISOString(),
   };
@@ -1433,6 +1485,12 @@ async function dispatchScanEvent(scanPayload) {
         ...enrichedPayload,
       });
       if (cloudRes && cloudRes.success) {
+        if (cloudRes.scan?.globalNumber > 0 && cloudRes.scan?.studentName) {
+          studentNameCache.set(
+            Number(cloudRes.scan.globalNumber),
+            String(cloudRes.scan.studentName)
+          );
+        }
         console.log(
           `[K50 Bridge] ✓ Scan posted to Cloud (Branch #${state.branchId}, Student=${
             enrichedPayload.globalNumber || "UNRECOGNIZED"
@@ -1603,6 +1661,12 @@ function handleRealTimeEvent(dev, eventType, payload) {
           reassertDeviceVerifyMode(dev);
 
           // Finalize enrollment state now that templateData is populated
+          if (enrolledNum > 0 && state.enrollment.studentName) {
+            studentNameCache.set(
+              Number(enrolledNum),
+              String(state.enrollment.studentName)
+            );
+          }
           state.enrollment.active = false;
           state.enrollment.enrollingDeviceIp = null;
           state.enrollment.status = "SUCCESS";

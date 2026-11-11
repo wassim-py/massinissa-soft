@@ -211,6 +211,7 @@ export const voucherPaymentTypeEnum = z.enum([
   "CATCHUP",
   "WORKSHOP",
   "FORMATION",
+  "REVISION_SESSION",
 ]);
 
 export const voucherSchema = z.object({
@@ -226,6 +227,7 @@ export const voucherSchema = z.object({
   isWaivedSibling: z.boolean().optional(),
   feeOverriddenByOwner: z.boolean().optional(),
   feeOverrideNote: z.string().optional(),
+  lessonId: z.coerce.number().optional().nullable(),
 });
 
 export type VoucherSchema = z.infer<typeof voucherSchema>;

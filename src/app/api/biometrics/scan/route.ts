@@ -93,6 +93,17 @@ export async function GET(request: NextRequest) {
  *   heartbeatOnly?: boolean
  * }
  */
+const globalForDeviceCache = globalThis as unknown as {
+  __biometricDeviceCache?: Map<string, { id: number; lastUpdatedAt: number }>;
+};
+
+function getBiometricDeviceCache() {
+  if (!globalForDeviceCache.__biometricDeviceCache) {
+    globalForDeviceCache.__biometricDeviceCache = new Map();
+  }
+  return globalForDeviceCache.__biometricDeviceCache;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const authCheck = await verifyBiometricApiAuth(request);
@@ -106,55 +117,97 @@ export async function POST(request: NextRequest) {
     let deviceId = body.deviceId ? Number(body.deviceId) : null;
     let branchId = body.branchId ? Number(body.branchId) : null;
 
-    // Enforce authenticated branch isolation so a Branch B admin session can never submit scans as Branch A
-    try {
-      const session = await getAuthSession();
-      if (session.userId) {
-        if (!session.isOwner && session.branchIds.length > 0) {
-          branchId = session.branchIds[0];
-        } else if (session.isOwner) {
-          const activeBranch = await getActiveBranchId();
-          branchId = activeBranch || branchId || 1;
+    // Enforce authenticated branch isolation for browser sessions (skip cookie lookup for direct bridge calls)
+    const hasBridgeKeyHeader = Boolean(request.headers.get("x-zk-bridge-key"));
+    if (!hasBridgeKeyHeader) {
+      try {
+        const session = await getAuthSession();
+        if (session.userId) {
+          if (!session.isOwner && session.branchIds.length > 0) {
+            branchId = session.branchIds[0];
+          } else if (session.isOwner) {
+            const activeBranch = await getActiveBranchId();
+            branchId = activeBranch || branchId || 1;
+          }
         }
+      } catch {
+        // Fallback to body.branchId for unauthenticated local bridge calls
       }
-    } catch {
-      // Fallback to body.branchId for unauthenticated local bridge calls
     }
     if (!branchId || isNaN(branchId)) branchId = 1;
 
     // Auto-register or update heartbeat of the K50 device if deviceIp or serialNumber is sent by the bridge
     if (!deviceId && (body.deviceIp || body.serialNumber)) {
-      const existingDevice = await prisma.biometricDevice.findFirst({
-        where: {
-          branchId,
-          ...(body.serialNumber
-            ? { serialNumber: String(body.serialNumber) }
-            : { ipAddress: String(body.deviceIp) }),
-        },
-      });
+      const cacheKey = `${branchId}:${body.serialNumber ? String(body.serialNumber) : String(body.deviceIp)}`;
+      const deviceCache = getBiometricDeviceCache();
+      const cachedDevice = deviceCache.get(cacheKey);
+      const nowMs = Date.now();
 
-      if (existingDevice) {
-        deviceId = existingDevice.id;
-        await prisma.biometricDevice.update({
-          where: { id: existingDevice.id },
-          data: {
-            lastSeenAt: new Date(),
-            ipAddress: body.deviceIp ? String(body.deviceIp) : existingDevice.ipAddress,
-          },
-        });
+      if (cachedDevice && !body.heartbeatOnly) {
+        deviceId = cachedDevice.id;
+        // Throttle background heartbeat DB write to once per 60 seconds so live scans have 0ms pre-query overhead
+        if (nowMs - cachedDevice.lastUpdatedAt > 60_000) {
+          cachedDevice.lastUpdatedAt = nowMs;
+          prisma.biometricDevice
+            .update({
+              where: { id: cachedDevice.id },
+              data: {
+                lastSeenAt: new Date(),
+                ...(body.deviceIp ? { ipAddress: String(body.deviceIp) } : {}),
+              },
+            })
+            .catch(() => {
+              deviceCache.delete(cacheKey);
+            });
+        }
       } else {
-        const created = await prisma.biometricDevice.create({
-          data: {
-            name: body.deviceName || `ZKTeco K50 Pro (Branch #${branchId})`,
+        const existingDevice = await prisma.biometricDevice.findFirst({
+          where: {
             branchId,
-            ipAddress: body.deviceIp ? String(body.deviceIp) : "192.168.50.201",
-            port: body.devicePort ? Number(body.devicePort) : 4370,
-            serialNumber: body.serialNumber ? String(body.serialNumber) : null,
-            isActive: true,
-            lastSeenAt: new Date(),
+            ...(body.serialNumber
+              ? { serialNumber: String(body.serialNumber) }
+              : { ipAddress: String(body.deviceIp) }),
           },
+          select: { id: true, ipAddress: true },
         });
-        deviceId = created.id;
+
+        if (existingDevice) {
+          deviceId = existingDevice.id;
+          deviceCache.set(cacheKey, { id: existingDevice.id, lastUpdatedAt: nowMs });
+          if (body.heartbeatOnly) {
+            await prisma.biometricDevice.update({
+              where: { id: existingDevice.id },
+              data: {
+                lastSeenAt: new Date(),
+                ipAddress: body.deviceIp ? String(body.deviceIp) : existingDevice.ipAddress,
+              },
+            });
+          } else {
+            prisma.biometricDevice
+              .update({
+                where: { id: existingDevice.id },
+                data: {
+                  lastSeenAt: new Date(),
+                  ipAddress: body.deviceIp ? String(body.deviceIp) : existingDevice.ipAddress,
+                },
+              })
+              .catch(() => {});
+          }
+        } else {
+          const created = await prisma.biometricDevice.create({
+            data: {
+              name: body.deviceName || `ZKTeco K50 Pro (Branch #${branchId})`,
+              branchId,
+              ipAddress: body.deviceIp ? String(body.deviceIp) : "192.168.50.201",
+              port: body.devicePort ? Number(body.devicePort) : 4370,
+              serialNumber: body.serialNumber ? String(body.serialNumber) : null,
+              isActive: true,
+              lastSeenAt: new Date(),
+            },
+          });
+          deviceId = created.id;
+          deviceCache.set(cacheKey, { id: created.id, lastUpdatedAt: nowMs });
+        }
       }
     }
 

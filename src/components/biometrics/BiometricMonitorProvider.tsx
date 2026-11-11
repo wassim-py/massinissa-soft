@@ -68,6 +68,7 @@ export type BiometricScanDisplayItem = BiometricScanResult & {
   resolvedClassId?: number | null;
   resolvedClassName?: string | null;
   billingSynced?: boolean;
+  isPendingVerification?: boolean;
 };
 
 interface BiometricMonitorContextType {
@@ -572,9 +573,14 @@ function getSharedAudioContext(): AudioContext | null {
   return sharedBiometricAudioCtx;
 }
 
-// 4 Distinct Web Audio API Sound Effects for the 4 Biometric States
+// Distinct Web Audio API Sound Effects for Biometric States + Instant Scan Read Tick
 function playBiometricTone(
-  type: "SUCCESS" | "NO_CREDITS" | "NO_UPCOMING_GROUP" | "UNRECOGNIZED"
+  type:
+    | "SUCCESS"
+    | "NO_CREDITS"
+    | "NO_UPCOMING_GROUP"
+    | "UNRECOGNIZED"
+    | "SCAN_PENDING"
 ) {
   try {
     const ctx = getSharedAudioContext();
@@ -611,7 +617,9 @@ function playBiometricTone(
       osc.stop(startTime + duration);
     };
 
-    if (type === "SUCCESS") {
+    if (type === "SCAN_PENDING") {
+      scheduleTone("sine", 880, null, 0, 0.08, now, 0.055);
+    } else if (type === "SUCCESS") {
       scheduleTone("sine", 523.25, 783.99, 0.1, 0.18, now, 0.35);
     } else if (type === "NO_CREDITS") {
       for (let i = 0; i < 2; i++) {
@@ -1056,20 +1064,45 @@ export default function BiometricMonitorProvider({
     }
   }, []);
 
+  const recentScansRef = useRef<BiometricScanDisplayItem[]>([]);
+  useEffect(() => {
+    recentScansRef.current = recentScans;
+  }, [recentScans]);
+  const lastPendingUnrecognizedAtRef = useRef<number>(0);
+
+  // Unlock shared Web Audio context on first user interaction so kiosk/direct-PC browsers never block tones
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const unlockAudio = () => {
+      getSharedAudioContext();
+    };
+    window.addEventListener("pointerdown", unlockAudio, { passive: true });
+    window.addEventListener("keydown", unlockAudio, { passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, []);
+
   // Process incoming scan into the Two-Zone Split HUD
   const announceIncomingScan = useCallback(
     (rawScan: BiometricScanDisplayItem) => {
       const scan = applyBillingInfoToScan(rawScan);
       if (!isMutedRef.current) {
-        playBiometricTone(
-          scan.status === "NO_CREDITS"
-            ? "NO_CREDITS"
-            : scan.status === "NO_UPCOMING_GROUP"
-            ? "NO_UPCOMING_GROUP"
-            : scan.status === "UNRECOGNIZED"
-            ? "UNRECOGNIZED"
-            : "SUCCESS"
-        );
+        const isDuplicateUnrecognizedTone =
+          scan.status === "UNRECOGNIZED" &&
+          Date.now() - lastPendingUnrecognizedAtRef.current < 3000;
+        if (!isDuplicateUnrecognizedTone) {
+          playBiometricTone(
+            scan.status === "NO_CREDITS"
+              ? "NO_CREDITS"
+              : scan.status === "NO_UPCOMING_GROUP"
+              ? "NO_UPCOMING_GROUP"
+              : scan.status === "UNRECOGNIZED"
+              ? "UNRECOGNIZED"
+              : "SUCCESS"
+          );
+        }
       }
 
       // Dispatch live event for AttendanceRoster.tsx auto-highlighting (§7.5)
@@ -1089,6 +1122,10 @@ export default function BiometricMonitorProvider({
         (scan.status === "NO_CREDITS" || scan.status === "NO_UPCOMING_GROUP") &&
         !isAlertDismissed(scan)
       ) {
+        // Clear any optimistic pending card in Zone A if this scan resolved to an alert in Zone B
+        setLiveStreamCard((curr) =>
+          curr?.isPendingVerification ? null : curr
+        );
         setPinnedAlerts((prev) => {
           const filtered = prev.filter(
             (p) => p.id !== scan.id && p.studentId !== scan.studentId
@@ -1221,7 +1258,99 @@ export default function BiometricMonitorProvider({
             }
 
             if (msg.type === "scan_pending") {
-              // Bridge has accepted scan from hardware and is processing directly with backend
+              // Instant <15ms optimistic visual & audio feedback the moment a finger touches the K50 Pro
+              const pendingId = -Date.now();
+              const scannedIso = msg.scanTime || new Date().toISOString();
+
+              if (msg.isUnrecognizedFinger) {
+                lastPendingUnrecognizedAtRef.current = Date.now();
+                if (!isMutedRef.current) {
+                  playBiometricTone("UNRECOGNIZED");
+                }
+                const optimisticUnrecognized: BiometricScanDisplayItem = {
+                  id: pendingId,
+                  deviceId: null,
+                  studentId: null,
+                  studentName: null,
+                  globalNumber: null,
+                  branchId: Number(msg.branchId || currentBranchIdRef.current || 1),
+                  lessonId: null,
+                  classId: null,
+                  className: null,
+                  classroomName: null,
+                  lessonStartsAt: null,
+                  lessonEndsAt: null,
+                  status: "UNRECOGNIZED",
+                  remainingCredits: 0,
+                  isNonPayer: false,
+                  hasPayerSibling: false,
+                  isSiblingWaived: false,
+                  payerStatus: undefined,
+                  nextLessonInfo: null,
+                  isResolved: false,
+                  scannedAt: scannedIso,
+                  isPendingVerification: true,
+                };
+                setLiveStreamCard(optimisticUnrecognized);
+                if (liveCardTimeoutRef.current) {
+                  clearTimeout(liveCardTimeoutRef.current);
+                }
+                liveCardTimeoutRef.current = setTimeout(() => {
+                  setLiveStreamCard((curr) =>
+                    curr?.id === pendingId ? null : curr
+                  );
+                }, 4500);
+                return;
+              }
+
+              const gNum = Number(msg.globalNumber);
+              if (gNum > 0) {
+                if (!isMutedRef.current) {
+                  playBiometricTone("SCAN_PENDING");
+                }
+                const prevMatch = recentScansRef.current.find(
+                  (s) => s.globalNumber === gNum && s.studentName
+                );
+                const resolvedName =
+                  msg.studentName ||
+                  prevMatch?.studentName ||
+                  (isAr ? `تلميذ #${gNum}` : `Élève #${gNum}`);
+
+                const optimisticCard: BiometricScanDisplayItem = {
+                  id: pendingId,
+                  deviceId: null,
+                  studentId: prevMatch?.studentId || null,
+                  studentName: resolvedName,
+                  globalNumber: gNum,
+                  branchId: Number(msg.branchId || currentBranchIdRef.current || 1),
+                  lessonId: null,
+                  classId: prevMatch?.classId ?? prevMatch?.resolvedClassId ?? null,
+                  className: prevMatch?.className || prevMatch?.resolvedClassName || null,
+                  classroomName: prevMatch?.classroomName || null,
+                  lessonStartsAt: null,
+                  lessonEndsAt: null,
+                  status: "SUCCESS",
+                  remainingCredits: prevMatch?.remainingCredits ?? 0,
+                  isNonPayer: Boolean(prevMatch?.isNonPayer),
+                  hasPayerSibling: Boolean(prevMatch?.hasPayerSibling),
+                  isSiblingWaived: Boolean(prevMatch?.isSiblingWaived),
+                  payerStatus: prevMatch?.payerStatus || undefined,
+                  inscriptionStatus: prevMatch?.inscriptionStatus || null,
+                  nextLessonInfo: null,
+                  isResolved: false,
+                  scannedAt: scannedIso,
+                  isPendingVerification: true,
+                };
+                setLiveStreamCard(optimisticCard);
+                if (liveCardTimeoutRef.current) {
+                  clearTimeout(liveCardTimeoutRef.current);
+                }
+                liveCardTimeoutRef.current = setTimeout(() => {
+                  setLiveStreamCard((curr) =>
+                    curr?.id === pendingId ? null : curr
+                  );
+                }, 4000);
+              }
               return;
             }
 
@@ -2394,7 +2523,11 @@ export default function BiometricMonitorProvider({
                     <div className="flex items-center gap-2">
                       <BiometricStatusDot variant="success" />
                       <span className="text-xs font-semibold text-emerald-700">
-                        {liveStreamCard.alreadyPresent
+                        {liveStreamCard.isPendingVerification
+                          ? isAr
+                            ? "تم قراءة البصمة — جاري التحقق..."
+                            : "Empreinte lue — Vérification..."
+                          : liveStreamCard.alreadyPresent
                           ? isAr
                             ? "تم تسجيل الحضور مسبقاً"
                             : "Déjà pointé (Présent)"
@@ -2477,17 +2610,21 @@ export default function BiometricMonitorProvider({
                       )}
                     </div>
 
-                    <BiometricGroupAndPaymentBadges
-                      scan={liveStreamCard}
-                      isAr={isAr}
-                    />
+                    {!liveStreamCard.isPendingVerification && (
+                      <>
+                        <BiometricGroupAndPaymentBadges
+                          scan={liveStreamCard}
+                          isAr={isAr}
+                        />
 
-                    <div className="pt-1 flex flex-wrap items-center justify-between gap-1.5">
-                      <BiometricRemainingLessonsBadge
-                        scan={liveStreamCard}
-                        isAr={isAr}
-                      />
-                    </div>
+                        <div className="pt-1 flex flex-wrap items-center justify-between gap-1.5">
+                          <BiometricRemainingLessonsBadge
+                            scan={liveStreamCard}
+                            isAr={isAr}
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               ) : (

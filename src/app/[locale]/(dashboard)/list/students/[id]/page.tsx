@@ -83,7 +83,7 @@ const SingleStudentPage = async (
     const session = await getAuthSession();
     const activeBranchId = await getActiveBranchId();
 
-    const [rawStudent, studentPaymentData, availableClasses, configuredInscriptionFee] = await Promise.all([
+    const [rawStudent, studentPaymentData, availableClasses, configuredInscriptionFee, allBranches] = await Promise.all([
       prisma.$queryRaw<any[]>`
         SELECT s.*, b.name as "branchName"
         FROM "Student" s
@@ -299,6 +299,10 @@ const SingleStudentPage = async (
         orderBy: [{ branchId: "asc" }, { name: "asc" }],
       }),
       getFixedInscriptionFeeAction(),
+      prisma.branch.findMany({
+        select: { id: true, name: true },
+        orderBy: { id: "asc" },
+      }),
     ]);
 
     if (!rawStudent || rawStudent.length === 0) {
@@ -1050,6 +1054,7 @@ const SingleStudentPage = async (
             activeBranchId={activeBranchId}
             availableClassesForTransfer={serializeForClient(availableClasses) as any}
             configuredInscriptionFee={configuredInscriptionFee}
+            branches={serializeForClient(allBranches)}
           />
         )}
 

@@ -35,6 +35,8 @@ interface GlobalFinanceReportModalProps {
   onClose: () => void;
   branches: Array<{ id: number; name: string }>;
   initialBranchId?: string;
+  initialDateFrom?: string;
+  initialDateTo?: string;
   onOpenTransferModal?: (sourceSection?: string) => void;
   locale?: string;
 }
@@ -134,6 +136,8 @@ export default function GlobalFinanceReportModal({
   onClose,
   branches,
   initialBranchId = "all",
+  initialDateFrom,
+  initialDateTo,
   onOpenTransferModal,
   locale: propLocale,
 }: GlobalFinanceReportModalProps) {
@@ -141,13 +145,16 @@ export default function GlobalFinanceReportModal({
   const locale = propLocale || currentLocale || "fr";
   const isAr = locale === "ar";
 
-  // Initial date presets
+  // Initial date presets strictly following selected date if provided
   const getInitialDates = () => {
+    if (initialDateFrom && initialDateTo) {
+      return { start: initialDateFrom, end: initialDateTo };
+    }
     const now = new Date();
     const y = now.getFullYear();
     const m = now.getMonth();
-    const start = new Date(Date.UTC(y, m, 1)).toISOString().split("T")[0];
-    const end = new Date(Date.UTC(y, m + 1, 0)).toISOString().split("T")[0];
+    const start = initialDateFrom || new Date(Date.UTC(y, m, 1)).toISOString().split("T")[0];
+    const end = initialDateTo || new Date(Date.UTC(y, m + 1, 0)).toISOString().split("T")[0];
     return { start, end };
   };
 
@@ -155,6 +162,17 @@ export default function GlobalFinanceReportModal({
   const [dateFrom, setDateFrom] = useState(initialDates.start);
   const [dateTo, setDateTo] = useState(initialDates.end);
   const [selectedBranchId, setSelectedBranchId] = useState<string>(initialBranchId);
+
+  useEffect(() => {
+    if (isOpen) {
+      if (initialDateFrom && initialDateFrom !== dateFrom) {
+        setDateFrom(initialDateFrom);
+      }
+      if (initialDateTo && initialDateTo !== dateTo) {
+        setDateTo(initialDateTo);
+      }
+    }
+  }, [isOpen, initialDateFrom, initialDateTo]);
 
   // The 5 Selective Boxes
   const [includeFormationIncomes, setIncludeFormationIncomes] = useState(true);

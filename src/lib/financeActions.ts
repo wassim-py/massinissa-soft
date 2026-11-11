@@ -5,6 +5,7 @@ import { getAuthSession } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { revalidateFinancialRoutes } from "@/lib/revalidation";
+import { getAlgiersDayBounds } from "@/lib/algiersDate";
 
 function safeRevalidate(path: string) {
   try {
@@ -1568,26 +1569,33 @@ export async function getGlobalFinanceReportDataAction(options: {
       return { success: false, error: true, message: "Action réservée au propriétaire." };
     }
 
-    const startDate = new Date(options.dateFrom);
-    startDate.setUTCHours(0, 0, 0, 0);
-    const endDate = new Date(options.dateTo);
-    endDate.setUTCHours(23, 59, 59, 999);
+    // Africa/Algiers business day query bounds
+    const startDate = options.dateFrom
+      ? getAlgiersDayBounds(options.dateFrom).startUtc
+      : new Date(0);
+    const endDate = options.dateTo
+      ? getAlgiersDayBounds(options.dateTo).endUtc
+      : new Date();
 
     const isAllBranches = !options.branchId || options.branchId === "all";
     const branchFilterNum = isAllBranches ? null : Number(options.branchId);
 
+    const allBranchesList = await prisma.branch.findMany({
+      select: { id: true, name: true },
+      orderBy: { id: "asc" },
+    });
+    const branchNameMap = new Map<number, string>(allBranchesList.map((b) => [b.id, b.name]));
+
     // Branch name lookup
     let branchName = "Toutes les branches (Siège consolidé)";
     if (!isAllBranches && branchFilterNum) {
-      const bObj = await prisma.branch.findUnique({
-        where: { id: branchFilterNum },
-        select: { name: true },
-      });
-      if (bObj) branchName = bObj.name;
+      branchName = branchNameMap.get(branchFilterNum) || `Branche #${branchFilterNum}`;
     }
 
     // Branch filters for queries
-    const branchTargetFilter = isAllBranches ? {} : { targetBranchId: branchFilterNum! };
+    const branchTargetFilter = isAllBranches
+      ? {}
+      : { OR: [{ issuingBranchId: branchFilterNum! }, { targetBranchId: branchFilterNum! }] };
     const branchIdFilter = isAllBranches ? {} : { branchId: branchFilterNum! };
 
     // 1. FORMATION INCOMES
@@ -1658,7 +1666,11 @@ export async function getGlobalFinanceReportDataAction(options: {
     inscriptionVouchers.forEach((v) => {
       const amt = Number(v.amount);
       totalInscription += amt;
-      const bName = v.class?.branch?.name || `Branche #${v.targetBranchId}`;
+      const bName =
+        v.class?.branch?.name ||
+        branchNameMap.get(v.targetBranchId) ||
+        branchNameMap.get(v.issuingBranchId) ||
+        `Branche #${v.targetBranchId || v.issuingBranchId}`;
       const existing = inscriptionBranchMap.get(bName) || { branchName: bName, count: 0, amount: 0 };
       existing.count += 1;
       existing.amount += amt;

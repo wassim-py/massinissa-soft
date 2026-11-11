@@ -38,6 +38,7 @@ export function resolveLedgerType(
     case "TUITION_4SESSION":
     case "CATCHUP":
     case "EXTRA_SESSION":
+    case "REVISION_SESSION":
       return "TUITION";
     default:
       return "TUITION";

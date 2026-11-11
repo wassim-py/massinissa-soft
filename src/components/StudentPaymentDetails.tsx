@@ -177,9 +177,10 @@ interface StudentPaymentDetailsProps {
     formationLevelId?: number | null;
     isFormation?: boolean;
     pricePerCycle?: any;
-    branch: { name: string };
+    branch: { id?: number; name: string };
   }>;
   configuredInscriptionFee?: number;
+  branches?: Array<{ id: number; name: string }>;
 }
 
 export default function StudentPaymentDetails({
@@ -189,6 +190,7 @@ export default function StudentPaymentDetails({
   activeBranchId = 1,
   availableClassesForTransfer = [],
   configuredInscriptionFee,
+  branches = [],
 }: StudentPaymentDetailsProps) {
   const t = useTranslations("studentPaymentDetails");
   const tCommon = useTranslations("common");
@@ -278,6 +280,51 @@ export default function StudentPaymentDetails({
   // Both OWNER and BRANCH_ADMIN see the SAME complete picture (all branches, all groups).
   // Optional branch tabs allow filtering if desired, but "all" is active by default.
   const allEnrollments = student.enrollments || (classData ? [{ id: 0, classId: classData.id, class: classData, enrolledAt: new Date(), inscriptionFeeCharged: true, feeOverriddenByOwner: false, transfersFrom: [], transfersTo: [] }] : []);
+
+  // Build dynamic branch list from configured branches + any branch referenced on enrollments/vouchers/classes
+  const availableBranches = (() => {
+    const branchMap = new Map<number, string>();
+    for (const b of branches) {
+      if (b?.id && b?.name) branchMap.set(Number(b.id), b.name);
+    }
+    if (student.registeredBranch?.id && student.registeredBranch?.name) {
+      branchMap.set(Number(student.registeredBranch.id), student.registeredBranch.name);
+    }
+    for (const enr of allEnrollments) {
+      const bId = enr.class?.branch?.id ?? enr.class?.branchId;
+      const bName = enr.class?.branch?.name;
+      if (bId && bName && !branchMap.has(Number(bId))) {
+        branchMap.set(Number(bId), bName);
+      }
+    }
+    for (const c of availableClassesForTransfer) {
+      if (c.branch?.id && c.branch?.name && !branchMap.has(Number(c.branch.id))) {
+        branchMap.set(Number(c.branch.id), c.branch.name);
+      }
+    }
+    for (const v of student.vouchers || []) {
+      const cId = v.class?.branchId;
+      const cName = v.class?.branch?.name;
+      if (cId && cName && !branchMap.has(Number(cId))) {
+        branchMap.set(Number(cId), cName);
+      }
+      const issId = v.issuingBranchId;
+      const issName = v.series?.issuingBranch?.name || v.issuingBranch?.name;
+      if (issId && issName && !branchMap.has(Number(issId))) {
+        branchMap.set(Number(issId), issName);
+      }
+    }
+    if (branchMap.size === 0) {
+      return [
+        { id: 1, name: "ECOLE" },
+        { id: 2, name: "ANNEX" },
+        { id: 3, name: "AMPHI" },
+      ];
+    }
+    return Array.from(branchMap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([id, name]) => ({ id, name }));
+  })();
 
   const branchScopedEnrollments = allEnrollments.filter((enr) => {
     if (selectedBranchTab !== "all") {
@@ -878,39 +925,20 @@ export default function StudentPaymentDetails({
                 >
                   {t("allBranches")} ({allEnrollments.length})
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedBranchTab(1)}
-                  className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                    selectedBranchTab === 1
-                      ? "bg-primary text-white shadow-xs"
-                      : "text-muted hover:text-gray-900"
-                  }`}
-                >
-                  ECOLE
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedBranchTab(2)}
-                  className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                    selectedBranchTab === 2
-                      ? "bg-primary text-white shadow-xs"
-                      : "text-muted hover:text-gray-900"
-                  }`}
-                >
-                  ANNEX
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedBranchTab(3)}
-                  className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                    selectedBranchTab === 3
-                      ? "bg-primary text-white shadow-xs"
-                      : "text-muted hover:text-gray-900"
-                  }`}
-                >
-                  AMPHI
-                </button>
+                {availableBranches.map((branch) => (
+                  <button
+                    key={branch.id}
+                    type="button"
+                    onClick={() => setSelectedBranchTab(branch.id)}
+                    className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      selectedBranchTab === branch.id
+                        ? "bg-primary text-white shadow-xs"
+                        : "text-muted hover:text-gray-900"
+                    }`}
+                  >
+                    {branch.name}
+                  </button>
+                ))}
               </div>
               {!isOwner && (
                 <span className="text-[11px] text-muted">
@@ -1691,13 +1719,29 @@ export default function StudentPaymentDetails({
                             ? Number(trf.amount)
                             : Math.round(Number(trf.transferredSessions || 0) * fallbackSessionPrice);
                         const trfRemainingBalance = Math.max(0, trfAmount - trfTotalRefunded);
+
+                        const fromCyclePrice = Number(trf.fromClass?.pricePerCycle || 0);
+                        const toCyclePrice = Number(trf.toClass?.pricePerCycle || toClassMetric?.class?.pricePerCycle || 0);
+                        const destLessonPrice = toCyclePrice > 0 ? toCyclePrice / 4 : 0;
+                        const isCrossPrice =
+                          (typeof trf.notes === "string" && trf.notes.includes("[PRICE_DIFF_VIREMENT]")) ||
+                          (fromCyclePrice > 0 && toCyclePrice > 0 && Math.abs(fromCyclePrice - toCyclePrice) >= 1);
+                        const destSessions =
+                          isCrossPrice && destLessonPrice > 0 && trfAmount > 0
+                            ? Math.floor(trfAmount / destLessonPrice)
+                            : Number(trf.transferredSessions || 0);
+
                         const trfPricePerSession =
-                          trf.transferredSessions > 0 ? trfAmount / trf.transferredSessions : fallbackSessionPrice;
+                          isCrossPrice && destLessonPrice > 0
+                            ? destLessonPrice
+                            : trf.transferredSessions > 0
+                            ? trfAmount / trf.transferredSessions
+                            : fallbackSessionPrice;
                         const prevRefundedSessions =
                           trfPricePerSession > 0 ? Math.round(trfTotalRefunded / trfPricePerSession) : 0;
                         const remainingTransferSessions = Math.max(
                           0,
-                          Number(trf.transferredSessions || 0) - prevRefundedSessions
+                          destSessions - prevRefundedSessions
                         );
                         const destNetSessions = toClassMetric ? toClassMetric.netSessions : remainingTransferSessions;
                         const unconsumedTransferSessions = Math.max(
@@ -1774,7 +1818,16 @@ export default function StudentPaymentDetails({
                             {/* Sessions & Amount */}
                             <td className="p-3 text-end">
                               <span className="font-mono font-bold text-purple-900 block text-xs">
-                                +{trf.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
+                                {isCrossPrice ? (
+                                  <>
+                                    +{destSessions} {locale === "ar" ? "حصص" : "séances"}
+                                    <span className="text-[10px] text-muted font-normal block">
+                                      ({locale === "ar" ? `من ${trf.transferredSessions} حصص سابقة` : `de ${trf.transferredSessions} séa. source`})
+                                    </span>
+                                  </>
+                                ) : (
+                                  `+${trf.transferredSessions} ${locale === "ar" ? "حصص" : "séances"}`
+                                )}
                               </span>
                               <span className="text-[10px] text-muted font-mono block">
                                 ({trfAmount.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD)
@@ -2001,7 +2054,18 @@ export default function StudentPaymentDetails({
                                 voucher={{
                                   ...v,
                                   student: student as any,
-                                  class: (v.class || classMetrics[0]?.class || { name: locale === "ar" ? "فوج دراسي" : "Groupe", branch: { name: "ECOLE" } }) as any,
+                                  class: (v.class || classMetrics[0]?.class || {
+                                    name: locale === "ar" ? "فوج دراسي" : "Groupe",
+                                    branch: {
+                                      name:
+                                        v.series?.issuingBranch?.name ||
+                                        v.issuingBranch?.name ||
+                                        student.registeredBranch?.name ||
+                                        availableBranches.find((b) => b.id === v.issuingBranchId)?.name ||
+                                        availableBranches[0]?.name ||
+                                        "ECOLE",
+                                    },
+                                  }) as any,
                                 } as any}
                               />
 
@@ -2276,12 +2340,34 @@ export default function StudentPaymentDetails({
                       </span>
                     </div>
 
-                    <div className="flex justify-between items-center py-1 border-b border-purple-100">
-                      <span className="text-muted">{locale === "ar" ? "عدد الحصص المنقولة :" : "Séances transférées :"}</span>
-                      <span className="font-mono font-bold text-sm text-purple-900">
-                        +{auditModal.transfer.transferredSessions} {locale === "ar" ? "حصص" : "séances"}
-                      </span>
-                    </div>
+                    {(() => {
+                      const fromCyclePrice = Number(auditModal.transfer.fromClass?.pricePerCycle || 0);
+                      const toCyclePrice = Number(auditModal.transfer.toClass?.pricePerCycle || 0);
+                      const destLessonPrice = toCyclePrice > 0 ? toCyclePrice / 4 : 0;
+                      const isCrossPrice =
+                        (typeof auditModal.transfer.notes === "string" && auditModal.transfer.notes.includes("[PRICE_DIFF_VIREMENT]")) ||
+                        (fromCyclePrice > 0 && toCyclePrice > 0 && Math.abs(fromCyclePrice - toCyclePrice) >= 1);
+                      const destSessions =
+                        isCrossPrice && destLessonPrice > 0 && Number(auditModal.transfer.amount || 0) > 0
+                          ? Math.floor(Number(auditModal.transfer.amount) / destLessonPrice)
+                          : auditModal.transfer.transferredSessions;
+
+                      return (
+                        <div className="flex justify-between items-center py-1 border-b border-purple-100">
+                          <span className="text-muted">{locale === "ar" ? "عدد الحصص المنقولة :" : "Séances transférées :"}</span>
+                          <div className="text-end font-mono">
+                            <span className="font-bold text-sm text-purple-900 block">
+                              +{auditModal.transfer.transferredSessions} {locale === "ar" ? "حصص من الفوج السابق" : "séances du groupe source"}
+                            </span>
+                            {isCrossPrice && (
+                              <span className="text-xs font-semibold text-purple-700 block mt-0.5">
+                                ➔ +{destSessions} {locale === "ar" ? "حصص معتمدة في الفوج الجديد" : "séances créditées dans le nouveau groupe"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     <div className="flex justify-between items-center py-1 border-b border-purple-100">
                       <span className="text-muted">{locale === "ar" ? "القيمة المالية المعادلة :" : "Valeur financière équivalente :"}</span>

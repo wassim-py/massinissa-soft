@@ -485,6 +485,54 @@ const TakeAttendancePage = async (
     catchUpStartsAt: c.catchUpLesson.startsAt,
   }));
 
+  // Fetch Revision Visitors for this lesson
+  let revisionVisitors: any[] = [];
+  try {
+    const revAttendances = await prisma.attendance.findMany({
+      where: { lessonId, isRevisionVisitor: true },
+      include: {
+        student: {
+          select: {
+            id: true,
+            name: true,
+            globalNumber: true,
+            phone: true,
+            vouchers: {
+              where: {
+                lessonId,
+                paymentType: "REVISION_SESSION",
+                isVoided: false,
+              },
+              include: {
+                class: { select: { id: true, name: true } },
+                series: { select: { id: true, scope: true } },
+              },
+              orderBy: { issuedAt: "desc" },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    revisionVisitors = revAttendances.map((r) => {
+      const v = r.student.vouchers?.[0] || null;
+      return {
+        id: r.id,
+        studentId: r.student.id,
+        studentName: r.student.name,
+        globalNumber: r.student.globalNumber,
+        phone: r.student.phone,
+        status: r.status,
+        amount: v ? Number(v.amount) : 0,
+        voucher: v,
+      };
+    });
+  } catch (revErr) {
+    console.error("Error fetching revision visitors:", revErr);
+    revisionVisitors = [];
+  }
+
   let rawStudents: any[] = [];
   try {
     const candidateEnrollments = await prisma.$queryRaw<any[]>`
@@ -530,7 +578,7 @@ const TakeAttendancePage = async (
   let existingAttendance: any[] = [];
   try {
     existingAttendance = await prisma.$queryRaw<any[]>`
-      SELECT id, "lessonId", "studentId", status, justification
+      SELECT id, "lessonId", "studentId", status, justification, "isRevisionVisitor"
       FROM "Attendance"
       WHERE "lessonId" = ${lessonId}
     `;
@@ -970,6 +1018,7 @@ const TakeAttendancePage = async (
           existingRecords={serializeForClient(todaysAttendance) as any}
           groupBooks={serializeForClient(groupBooks) as any}
           catchUpVisitors={serializeForClient(formattedCatchUpVisitors) as any}
+          revisionVisitors={serializeForClient(revisionVisitors) as any}
           caughtUpAbsentees={serializeForClient(formattedCaughtUpAbsentees) as any}
           inGroupCatchUps={serializeForClient(formattedInGroupCatchUps) as any}
           initialSearch={searchQuery}

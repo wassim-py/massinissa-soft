@@ -265,7 +265,7 @@ const StudentListPage = async (props: {
       ? await prisma.enrollment.findMany({
           where: {
             studentId: { in: studentIds },
-            status: { notIn: ["TRANSFERRED", "UNENROLLED", "INACTIVE"] },
+            status: { notIn: ["TRANSFERRED", "UNENROLLED", "INACTIVE", "REFUNDED"] },
           },
           include: {
             class: {

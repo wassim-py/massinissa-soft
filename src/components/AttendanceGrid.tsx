@@ -200,6 +200,8 @@ type AttendanceGridProps = {
         phone?: string | null;
         balance?: StudentBalanceInfo;
         isTransferred?: boolean;
+        isRevisionVisitorOnly?: boolean;
+        status?: string;
         transferredAt?: string | null;
         enrolledAt?: string | null;
         transferredInAt?: string | null;
@@ -261,6 +263,14 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
         currentDetail?: AttendanceCellDetail
     ) => {
         e.stopPropagation();
+        if (currentDetail?.isRevisionVisitor) {
+            toast.info(
+                locale === "ar"
+                    ? "حضور زائر المراجعة مرتبط بوصل مالي. لإلغائه أو تعديله، يرجى استخدام صفحة تسجيل الحضور الخاصة بالحصة."
+                    : "La présence d'un visiteur révision est liée à un reçu. Pour l'annuler, utilisez la page de prise de présence."
+            );
+            return;
+        }
         const rect = e.currentTarget.getBoundingClientRect();
 
         const popupWidth = 180;
@@ -464,8 +474,8 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
     const filteredStudents = useMemo(() => {
         const hasSearch = Boolean(searchQuery.trim());
         if (!hasSearch) {
-            // Transferred students do not show in their first group unless searched up
-            return students.filter((student) => !student.isTransferred);
+            // Transferred students and temporary revision visitors do not show in group unless searched up
+            return students.filter((student) => !student.isTransferred && !student.isRevisionVisitorOnly);
         }
         const q = searchQuery.toLowerCase().trim();
         return students.filter((student) => {
@@ -537,7 +547,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         <span className="px-2.5 py-1 bg-surface rounded-md border border-border text-gray-700 font-semibold shadow-2xs">
                             {searchQuery.trim()
                                 ? t("studentsFoundCount", { count: filteredStudents.length })
-                                : t("totalGroupStudents", { count: students.filter((s) => !s.isTransferred).length })}
+                                : t("totalGroupStudents", { count: students.filter((s) => !s.isTransferred && !s.isRevisionVisitorOnly).length })}
                         </span>
                     </div>
                 </div>
@@ -574,6 +584,10 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                     <div className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded-full bg-indigo-600 ring-1 ring-indigo-300 inline-block shadow-2xs"></span>
                         <span>{locale === "ar" ? "استدراك زائر (قبل التحويل)" : "Rattrapage visiteur (avant transfert)"}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-teal-500 ring-2 ring-teal-200 inline-block shadow-2xs"></span>
+                        <span>{locale === "ar" ? "حاضر كزائر مراجعة (ضيف حصة واحدة)" : "Présent visiteur révision (invité 1 séance)"}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded-full bg-rose-500 inline-block shadow-2xs"></span>
@@ -731,9 +745,19 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         <span className="truncate max-w-[110px] sm:max-w-[160px] group-hover:underline group-hover:text-primary transition-colors">
                                                             {student.name}
                                                         </span>
+                                                        {student.status === "SUSPENDED" && (
+                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 shadow-2xs">
+                                                                {locale === "ar" ? "معلّق" : "Suspendu"}
+                                                            </span>
+                                                        )}
                                                         {isTransferred && (
                                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-pink-100 text-pink-700 border border-pink-300 dark:bg-pink-950/60 dark:text-pink-300 dark:border-pink-800 shadow-2xs">
                                                                 {locale === "ar" ? "محول" : "Transféré"}
+                                                            </span>
+                                                        )}
+                                                        {student.isRevisionVisitorOnly && (
+                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-900 border border-teal-300 dark:bg-teal-950/60 dark:text-teal-300 dark:border-teal-800 shadow-2xs">
+                                                                {locale === "ar" ? "زائر مراجعة" : "Visiteur révision"}
                                                             </span>
                                                         )}
                                                     </div>
@@ -818,6 +842,19 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                             }`}
                                                             title={locale === "ar" ? "قبل تاريخ التحويل للفوج (انقر للتسجيل الاستثنائي)" : "Avant la date de transfert dans ce groupe (Cliquer pour déroger/enregistrer)"}
                                                         />
+                                                    </td>
+                                                );
+                                            }
+
+                                            if (student.isRevisionVisitorOnly && !rawRecord) {
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <span className="w-5 h-5 mx-auto flex items-center justify-center text-muted/40 font-mono text-xs select-none">
+                                                            —
+                                                        </span>
                                                     </td>
                                                 );
                                             }
@@ -945,6 +982,43 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                                     </div>
                                                                     <div className="text-[11px] text-gray-200 leading-snug">
                                                                         {tooltipText}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                );
+                                            }
+
+                                            if (record.isRevisionVisitor) {
+                                                // Blue-green (teal) circle: Present as revision visitor (one-time guest)
+                                                const revTooltip = locale === "ar"
+                                                    ? "حاضر كزائر مراجعة (ضيف حصة واحدة)"
+                                                    : "Présent en tant que visiteur révision (invité 1 séance)";
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <div className="relative group/revvisitor inline-flex items-center justify-center">
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                                className={`w-5 h-5 mx-auto rounded-full bg-teal-500 hover:bg-teal-600 ring-2 ring-teal-200 ring-offset-1 transition-all hover:scale-125 cursor-pointer shadow-xs focus:outline-none block ${
+                                                                    isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                                }`}
+                                                                title={revTooltip}
+                                                            />
+                                                            <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/revvisitor:flex flex-col items-center z-40 min-w-[190px] max-w-xs transition-all">
+                                                                <div className="bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-xl text-center font-normal">
+                                                                    <div className="font-bold text-teal-300 mb-0.5 flex items-center justify-center gap-1.5">
+                                                                        <span>
+                                                                            {locale === "ar" ? "زائر مراجعة" : "Visiteur révision"}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="text-[11px] text-gray-200 leading-snug">
+                                                                        {revTooltip}
                                                                     </div>
                                                                 </div>
                                                                 <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />

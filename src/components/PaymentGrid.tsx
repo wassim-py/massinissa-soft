@@ -285,14 +285,14 @@ export default function PaymentGrid({
     });
   };
 
-  // Deduplicate enrollments by studentId defensively and exclude transferred-out students
+  // Deduplicate enrollments by studentId defensively and exclude permanently unenrolled/refunded students
   const uniqueEnrollmentsMap = new Map<string, typeof classData.enrollments[0]>();
   for (const enr of classData.enrollments) {
-    // Exclude students who transferred out of this group so they are only shown in their new group
+    // Exclude permanently removed students
     if (
-      enr.status === "TRANSFERRED" ||
       enr.status === "UNENROLLED" ||
-      (enr.transfersFrom && enr.transfersFrom.length > 0 && enr.status !== "ACTIVE")
+      enr.status === "REFUNDED" ||
+      enr.status === "INACTIVE"
     ) {
       continue;
     }
@@ -300,12 +300,17 @@ export default function PaymentGrid({
       uniqueEnrollmentsMap.set(enr.studentId, enr);
     } else {
       const existing = uniqueEnrollmentsMap.get(enr.studentId)!;
+      const isNewActive = enr.status === "ACTIVE" || enr.status === "SUSPENDED";
+      const isExistingActive = existing.status === "ACTIVE" || existing.status === "SUSPENDED";
+      const primary = (!isExistingActive && isNewActive) ? enr : existing;
+      const secondary = (!isExistingActive && isNewActive) ? existing : enr;
+
       uniqueEnrollmentsMap.set(enr.studentId, {
-        ...enr,
-        transfersFrom: [...(existing.transfersFrom || []), ...(enr.transfersFrom || [])],
-        transfersTo: [...(existing.transfersTo || []), ...(enr.transfersTo || [])],
-        feeOverriddenByOwner: existing.feeOverriddenByOwner || enr.feeOverriddenByOwner,
-        inscriptionFeeCharged: existing.inscriptionFeeCharged && enr.inscriptionFeeCharged,
+        ...primary,
+        transfersFrom: [...(primary.transfersFrom || []), ...(secondary.transfersFrom || [])],
+        transfersTo: [...(primary.transfersTo || []), ...(secondary.transfersTo || [])],
+        feeOverriddenByOwner: primary.feeOverriddenByOwner || secondary.feeOverriddenByOwner,
+        inscriptionFeeCharged: primary.inscriptionFeeCharged && secondary.inscriptionFeeCharged,
       });
     }
   }
@@ -630,10 +635,10 @@ export default function PaymentGrid({
     return true;
   });
 
-  // Active non-transferred students list for KPI counters
+  // Active non-transferred non-suspended students list for KPI counters
   const activeStudentsList = processedStudents.filter(
     (item) =>
-      item.enrollment.status !== "TRANSFERRED" &&
+      item.enrollment.status === "ACTIVE" &&
       !(
         item.enrollment.transfersFrom &&
         item.enrollment.transfersFrom.length > 0 &&
@@ -877,12 +882,24 @@ export default function PaymentGrid({
             ? Number(tt.transferredAmount || tt.amount)
             : Math.round(tt.transferredSessions * (Number(classData.pricePerCycle) / 4));
         const remTransferAmount = Math.max(0, origAmount - totalRefunded);
+        const fromCyclePrice = Number(tt.fromEnrollment?.class?.pricePerCycle || 0);
+        const toCyclePrice = Number(classData.pricePerCycle || 0);
+        const destLessonPrice = toCyclePrice > 0 ? toCyclePrice / 4 : 0;
+        const isCrossPrice =
+          (typeof tt.notes === "string" && tt.notes.includes("[PRICE_DIFF_VIREMENT]")) ||
+          (fromCyclePrice > 0 && toCyclePrice > 0 && Math.abs(fromCyclePrice - toCyclePrice) >= 1);
+        const creditedSessions =
+          isCrossPrice && destLessonPrice > 0 && origAmount > 0
+            ? Math.floor(origAmount / destLessonPrice)
+            : tt.transferredSessions;
         const sessionRate =
-          tt.transferredSessions > 0
+          isCrossPrice && destLessonPrice > 0
+            ? destLessonPrice
+            : tt.transferredSessions > 0
             ? origAmount / tt.transferredSessions
             : Number(classData.pricePerCycle) / 4;
         const refundedSessionsApprox = sessionRate > 0 ? Math.round(totalRefunded / sessionRate) : 0;
-        const remainingTransferSessions = Math.max(0, tt.transferredSessions - refundedSessionsApprox);
+        const remainingTransferSessions = Math.max(0, creditedSessions - refundedSessionsApprox);
         const unconsumedTransferSessions = Math.max(
           0,
           Math.min(remainingTransferSessions, Math.max(0, item.netSessions))
@@ -900,7 +917,7 @@ export default function PaymentGrid({
           title: `${t("recordTypeTransfer")} #TRF-${tt.id}`,
           subtitle: tt.notes || "",
           amount: origAmount,
-          sessions: +tt.transferredSessions,
+          sessions: +creditedSessions,
           date: tt.transferredAt,
           user: tt.transferredBy,
           badgeVariant: remTransferAmount <= 0 ? "danger" : "primary",
@@ -996,6 +1013,7 @@ export default function PaymentGrid({
 
   const renderRow = (item: typeof processedStudents[0], index: number) => {
     const s = item.student;
+    const isSuspended = item.enrollment.status === "SUSPENDED";
     const isTransferred =
       item.enrollment.status === "TRANSFERRED" ||
       (item.enrollment.transfersFrom &&
@@ -1006,7 +1024,9 @@ export default function PaymentGrid({
       <tr
         key={`${s.id}-${index}`}
         className={`hover:bg-surface-subtle/50 transition-colors ${
-          isTransferred
+          isSuspended
+            ? "bg-rose-50/60 hover:bg-rose-100/60"
+            : isTransferred
             ? "bg-pink-50/70 hover:bg-pink-100/70"
             : item.status === "UNPAID"
             ? "bg-danger-light/20"
@@ -1027,6 +1047,11 @@ export default function PaymentGrid({
             >
               {s.name}
             </Link>
+            {isSuspended && (
+              <Badge variant="danger" size="sm" className="bg-rose-100 text-rose-900 border-rose-300 font-bold">
+                {locale === "ar" ? "معلّق" : "Suspendu"}
+              </Badge>
+            )}
             {isTransferred && (
               <Badge variant="neutral" size="sm" className="bg-pink-100 text-pink-700 border-pink-300 font-bold">
                 {locale === "ar" ? "محول" : "Transféré"}
@@ -1051,8 +1076,8 @@ export default function PaymentGrid({
                   item.enrollment.transfersTo?.map((t: any) => {
                     const fromName = t.fromEnrollment?.class?.name;
                     return fromName
-                      ? `${t.transferredSessions} ${locale === "ar" ? "حصص منقولة من" : "séances transférées depuis"} ${fromName}`
-                      : `${t.transferredSessions} ${locale === "ar" ? "حصص منقولة" : "séances transférées"}`;
+                      ? `${item.transferredIn} ${locale === "ar" ? `حصص معتمدة منقولة من ${fromName}` : `séances créditées depuis ${fromName}`}`
+                      : `${item.transferredIn} ${locale === "ar" ? "حصص منقولة" : "séances transférées"}`;
                   }).join(" • ") || (locale === "ar" ? "رصيد منقول" : "Crédit transféré")
                 }
               >
@@ -1230,7 +1255,11 @@ export default function PaymentGrid({
 
         {/* 7. Status Badge */}
         <td className="py-3 px-3 text-center">
-          {isTransferred ? (
+          {isSuspended ? (
+            <Badge variant="danger" size="sm" withDot className="bg-rose-100 text-rose-950 border-rose-300 font-bold">
+              {locale === "ar" ? "معلّق" : "Suspendu"}
+            </Badge>
+          ) : isTransferred ? (
             <Badge variant="neutral" size="sm" withDot className="bg-pink-100 text-pink-700 border-pink-300 font-bold">
               {locale === "ar" ? "محول" : "Transféré"}
             </Badge>
