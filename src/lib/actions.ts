@@ -3831,6 +3831,8 @@ export async function searchCatchUpCandidatesAction(
           attendances: vAtts,
           catchUps: vCatchUps,
           teacherPercentage,
+          enrolledAt: enr.enrolledAt,
+          enrollmentStatus: enr.status,
         });
         classCreditsMap.set(cls.id, Math.max(metrics.netSessions, metrics.transferableSessions));
       });
@@ -5140,6 +5142,8 @@ export async function searchStudentsForEnrollmentAction({
             attendances: vAtts,
             catchUps: vCatchUps,
             teacherPercentage,
+            enrolledAt: enr.enrolledAt,
+            enrollmentStatus: enr.status,
           });
 
           if (metrics.transferableSessions > 0) {
@@ -6992,6 +6996,8 @@ export const transferEnrollmentCredit = async (
         attendances: fromAttendances,
         lessons: fromLessons,
         catchUps: fromCatchUps,
+        enrolledAt: fromEnrollment.enrolledAt,
+        enrollmentStatus: fromEnrollment.status,
       });
 
       const availableSessionsFrom = Math.max(0, creditMetricsFrom.transferableSessions);
@@ -7331,6 +7337,7 @@ export const cancelEnrollmentTransfer = async (transferId: number) => {
           lessons: targetLessons,
           catchUps: targetCatchUps,
           enrolledAt: transfer.toEnrollment.enrolledAt,
+          enrollmentStatus: transfer.toEnrollment.status,
         });
 
         if (targetMetrics.netSessions <= 0 && remainingTransfersIn.length === 0) {
@@ -9314,6 +9321,8 @@ export const exportToExcel = async (
               catchUps: classCatchUps,
               lessons: classTarget.lessons as any,
               teacherPercentage,
+              enrolledAt: enrollment.enrolledAt,
+              enrollmentStatus: enrollment.status,
             });
 
             const consumed = creditMetrics.attendedSessions;
@@ -9758,6 +9767,8 @@ export const exportToExcel = async (
                 lessons: classData.lessons as any,
                 catchUps: classCatchUps,
                 teacherPercentage,
+              enrolledAt: enrollment.enrolledAt,
+              enrollmentStatus: enrollment.status,
             });
 
             const paidSessionsCount = isNonPayer || isSiblingWaived100
@@ -13638,6 +13649,7 @@ export async function getBiometricScansLiveBillingAction(
           attendances: filteredAttendances,
           catchUps: classCatchUps,
           enrolledAt: targetEnrollment?.enrolledAt,
+          enrollmentStatus: targetEnrollment?.status,
         });
 
         if (isFormation) {

@@ -491,6 +491,7 @@ export default function PaymentGrid({
       lessons: classData.lessons as any,
       teacherPercentage,
       enrolledAt: enrollment.enrolledAt,
+      enrollmentStatus: enrollment.status,
     });
 
     const purchasedSessions = creditMetrics.purchasedSessions;
@@ -609,8 +610,10 @@ export default function PaymentGrid({
         item.enrollment.transfersFrom.length > 0 &&
         item.enrollment.status !== "ACTIVE");
 
-    // Transferred students will not show on their first group unless searched up
-    if (isTransferred && !searchTerm.trim()) {
+    const isSuspended = item.enrollment.status === "SUSPENDED";
+
+    // Transferred and suspended students will not show on their group unless searched up
+    if ((isTransferred || isSuspended) && !searchTerm.trim()) {
       return false;
     }
 

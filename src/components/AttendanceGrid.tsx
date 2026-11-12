@@ -474,8 +474,13 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
     const filteredStudents = useMemo(() => {
         const hasSearch = Boolean(searchQuery.trim());
         if (!hasSearch) {
-            // Transferred students and temporary revision visitors do not show in group unless searched up
-            return students.filter((student) => !student.isTransferred && !student.isRevisionVisitorOnly);
+            // Transferred students, suspended students, and temporary revision visitors do not show in group unless searched up
+            return students.filter(
+                (student) =>
+                    !student.isTransferred &&
+                    !student.isRevisionVisitorOnly &&
+                    student.status !== "SUSPENDED"
+            );
         }
         const q = searchQuery.toLowerCase().trim();
         return students.filter((student) => {
@@ -547,7 +552,14 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         <span className="px-2.5 py-1 bg-surface rounded-md border border-border text-gray-700 font-semibold shadow-2xs">
                             {searchQuery.trim()
                                 ? t("studentsFoundCount", { count: filteredStudents.length })
-                                : t("totalGroupStudents", { count: students.filter((s) => !s.isTransferred && !s.isRevisionVisitorOnly).length })}
+                                : t("totalGroupStudents", {
+                                      count: students.filter(
+                                          (s) =>
+                                              !s.isTransferred &&
+                                              !s.isRevisionVisitorOnly &&
+                                              s.status !== "SUSPENDED"
+                                      ).length,
+                                  })}
                         </span>
                     </div>
                 </div>
@@ -711,12 +723,17 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         ) : (
                             filteredStudents.map((student, studentIndex) => {
                                 const isTransferred = Boolean(student.isTransferred);
-                                const rowBg = isTransferred
+                                const isSuspended = student.status === "SUSPENDED";
+                                const rowBg = isSuspended
+                                    ? "bg-rose-50/80 dark:bg-rose-950/20"
+                                    : isTransferred
                                     ? "bg-pink-50/80 dark:bg-pink-950/20"
                                     : studentIndex % 2 === 0
                                     ? "bg-surface"
                                     : "bg-surface-muted";
-                                const rowHover = isTransferred
+                                const rowHover = isSuspended
+                                    ? "hover:bg-rose-100/70 dark:hover:bg-rose-950/40"
+                                    : isTransferred
                                     ? "hover:bg-pink-100/70 dark:hover:bg-pink-950/40"
                                     : "hover:bg-surface-subtle";
                                 return (

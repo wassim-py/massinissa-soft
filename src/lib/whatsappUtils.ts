@@ -288,6 +288,8 @@ export async function verifyCreditIsStillZeroJit(studentId: string, classId?: nu
       attendances,
       catchUps,
       creditResetOffset: Number((enrollment as any).creditResetOffset || 0),
+      enrolledAt: enrollment.enrolledAt,
+      enrollmentStatus: enrollment.status,
     });
 
     return creditResult.netSessions <= 0;

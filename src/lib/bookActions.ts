@@ -273,7 +273,7 @@ export async function getGroupBooksData(classId: number) {
       level: true,
       enrollments: {
         where: {
-          status: { notIn: ["UNENROLLED", "TRANSFERRED", "REFUNDED", "INACTIVE"] },
+          status: { notIn: ["UNENROLLED", "TRANSFERRED", "REFUNDED", "INACTIVE", "SUSPENDED"] },
         },
         include: {
           student: {

@@ -945,6 +945,8 @@ export async function processBiometricScan(input: {
     creditResetOffset: (enrollment as any)?.creditResetOffset || 0,
     attendances: priorAttendances,
     catchUps,
+    enrolledAt: enrollment?.enrolledAt,
+    enrollmentStatus: enrollment?.status,
   });
 
   const isNonPayerStudent = Boolean(

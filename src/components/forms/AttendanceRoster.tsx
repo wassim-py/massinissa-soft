@@ -979,6 +979,7 @@ const AttendanceRoster = ({
         catchUps: st.catchUps || [],
         teacherPercentage,
         enrolledAt: st.enrolledAt,
+        enrollmentStatus: (st as any).enrollmentStatus || (st as any).status || "ACTIVE",
       });
 
       map.set(st.id, metrics.netSessions);
@@ -1437,6 +1438,7 @@ const AttendanceRoster = ({
               catchUps: student.catchUps || [],
               teacherPercentage,
               enrolledAt: student.enrolledAt,
+              enrollmentStatus: (student as any).enrollmentStatus || (student as any).status || "ACTIVE",
             });
 
             const sessionsRemaining =

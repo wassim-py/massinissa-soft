@@ -840,6 +840,7 @@ export interface ComputeStudentCreditParams {
     notes?: string | null;
     transferredAt?: Date | string | null;
     toEnrollment?: any;
+    fromEnrollment?: any;
   }> | number;
   creditResetOffset?: number | null;
   attendances?: Array<{
@@ -859,6 +860,7 @@ export interface ComputeStudentCreditParams {
   }>;
   payerRemainingCredit?: number | null;
   enrolledAt?: Date | string | null;
+  enrollmentStatus?: string | null;
 }
 
 export interface StudentCreditResult {
@@ -1124,6 +1126,7 @@ export function resolvePayerCredit({
       transfersIn: enr.transfersTo || [],
       transfersOut: enr.transfersFrom || [],
       creditResetOffset: enr.creditResetOffset || 0,
+      enrollmentStatus: enr.status,
       attendances: atts,
       catchUps: cus,
     });
@@ -1356,12 +1359,16 @@ export function isLessonApplicableToEnrollment(
       }
     } else {
       // Student transferred out at outTime and has not transferred back after outTime:
-      if (
-        (enrollment.status === "TRANSFERRED" ||
-          enrollment.status === "UNENROLLED" ||
-          inTimes.every((inMs) => inMs <= outTime)) &&
-        lessonTime > outTime
-      ) {
+      // Only treat this as a permanent transfer-out if the enrollment is actually TRANSFERRED or UNENROLLED.
+      // If the enrollment is ACTIVE (e.g. partial credit transfer to another group), the student is still active!
+      const isPermanentlyTransferredOut =
+        enrollment.status === "TRANSFERRED" ||
+        enrollment.status === "UNENROLLED" ||
+        (enrollment.status !== "ACTIVE" &&
+          inTimes.length > 0 &&
+          inTimes.every((inMs) => inMs <= outTime));
+
+      if (isPermanentlyTransferredOut && lessonTime > outTime) {
         return false;
       }
     }
@@ -1445,6 +1452,7 @@ export function computeStudentCreditAndSessions({
   catchUps = [],
   payerRemainingCredit,
   enrolledAt,
+  enrollmentStatus,
 }: ComputeStudentCreditParams): StudentCreditResult {
   const isForm = Boolean(isFormation);
   const normStatus = normalizePayerStatus(payerStatus);
@@ -1635,6 +1643,22 @@ export function computeStudentCreditAndSessions({
       postTransferThresholdMs !== null &&
       enrolledAtMs < postTransferThresholdMs);
 
+  const normEnrollmentStatus = (enrollmentStatus || "").toUpperCase();
+  const fromStatus = Array.isArray(transfersOut)
+    ? (transfersOut.find((t: any) => t?.fromEnrollment?.status)?.fromEnrollment?.status || "").toUpperCase()
+    : "";
+
+  const isPermanentlyTransferredOut =
+    normEnrollmentStatus === "TRANSFERRED" ||
+    normEnrollmentStatus === "UNENROLLED" ||
+    fromStatus === "TRANSFERRED" ||
+    fromStatus === "UNENROLLED" ||
+    (normEnrollmentStatus !== "ACTIVE" &&
+      fromStatus !== "ACTIVE" &&
+      inTimes.length > 0 &&
+      outTimes.length > 0 &&
+      inTimes.every((inMs) => inMs <= outTimes[outTimes.length - 1]));
+
   const isLessonInTransferOutWindow = (ms: number): boolean => {
     for (const outTime of outTimes) {
       const returnInTime = inTimes.find((inMs) => inMs > outTime);
@@ -1643,7 +1667,7 @@ export function computeStudentCreditAndSessions({
           return true;
         }
       } else {
-        if (ms > outTime) {
+        if (isPermanentlyTransferredOut && ms > outTime) {
           return true;
         }
       }

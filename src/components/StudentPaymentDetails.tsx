@@ -606,6 +606,7 @@ export default function StudentPaymentDetails({
       catchUps: classCatchUps,
       lessons: (c as any).lessons,
       enrolledAt: enr.enrolledAt,
+      enrollmentStatus: enr.status,
     });
 
     const purchasedSessions = creditMetrics.purchasedSessions;
