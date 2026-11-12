@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/Button";
 import { FormField, Input, Select } from "@/components/ui/FormField";
 import { DataTable } from "@/components/ui/DataTable";
 import { useTranslations, useLocale } from "next-intl";
+import { formatUtcPeriodDate } from "@/lib/algiersDate";
 import {
   Info,
   Trash2,
@@ -282,19 +283,39 @@ export default function PayrollClientTabs({
   const [periodFilterStart, setPeriodFilterStart] = useState("");
   const [periodFilterEnd, setPeriodFilterEnd] = useState("");
 
+  const parseFilterDateBound = (dateStr: string, endOfDay: boolean): number | null => {
+    if (!dateStr) return null;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+    if (match) {
+      return Date.UTC(
+        Number(match[1]),
+        Number(match[2]) - 1,
+        Number(match[3]),
+        endOfDay ? 23 : 0,
+        endOfDay ? 59 : 0,
+        endOfDay ? 59 : 0,
+        endOfDay ? 999 : 0
+      );
+    }
+    const ts = new Date(dateStr).getTime();
+    return Number.isNaN(ts) ? null : ts;
+  };
+
+  const filterStartMs = parseFilterDateBound(periodFilterStart, false);
+  const filterEndMs = parseFilterDateBound(periodFilterEnd, true);
+
   const filteredPayslips = payslips.filter((p) => {
     if (searchTeacher && !p.teacherName.toLowerCase().includes(searchTeacher.toLowerCase())) {
       return false;
     }
-    if (periodFilterStart) {
-      const pStart = new Date(p.periodStart).getTime();
-      const fStart = new Date(periodFilterStart).getTime();
-      if (pStart < fStart) return false;
+    const pStart = new Date(p.periodStart).getTime();
+    const pEnd = new Date(p.periodEnd).getTime();
+    // Period overlap: include payslips whose [pStart, pEnd] intersects [filterStartMs, filterEndMs]
+    if (filterStartMs !== null && pEnd < filterStartMs) {
+      return false;
     }
-    if (periodFilterEnd) {
-      const pEnd = new Date(p.periodEnd).getTime();
-      const fEnd = new Date(periodFilterEnd).getTime();
-      if (pEnd > fEnd) return false;
+    if (filterEndMs !== null && pStart > filterEndMs) {
+      return false;
     }
     return true;
   });
@@ -335,6 +356,20 @@ export default function PayrollClientTabs({
         month: "short",
         day: "numeric",
       });
+    } catch {
+      return iso;
+    }
+  };
+
+  const formatPeriodDate = (iso: string) => {
+    try {
+      return (
+        formatUtcPeriodDate(iso, locale === "ar" ? "ar-DZ" : "fr-DZ", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        }) || iso
+      );
     } catch {
       return iso;
     }
@@ -717,7 +752,7 @@ export default function PayrollClientTabs({
                         </td>
                         <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
                         <td className="p-3.5 text-muted text-xs">
-                          {formatDate(p.periodStart)} → {formatDate(p.periodEnd)}
+                          {formatPeriodDate(p.periodStart)} → {formatPeriodDate(p.periodEnd)}
                         </td>
                         <td className="p-3.5 text-center font-mono font-bold">{p.sessionsCount}</td>
                         <td className="p-3.5">
@@ -852,7 +887,7 @@ export default function PayrollClientTabs({
 
                         {/* Period & Sessions */}
                         <div className="flex items-center justify-between text-xs text-muted">
-                          <span>{formatDate(p.periodStart)} → {formatDate(p.periodEnd)}</span>
+                          <span>{formatPeriodDate(p.periodStart)} → {formatPeriodDate(p.periodEnd)}</span>
                           <span className="font-mono font-bold text-gray-800">
                             {p.sessionsCount} {locale === "ar" ? "حصة" : "séances"}
                           </span>

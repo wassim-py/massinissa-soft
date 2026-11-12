@@ -191,6 +191,43 @@ export function formatAlgiersDate(
 }
 
 /**
+ * Formats a UTC-normalized period boundary (e.g., PayrollRun.periodStart at 00:00:00.000Z
+ * or periodEnd at 23:59:59.999Z, or "YYYY-MM-DD") strictly in UTC so 23:59:59.999Z never
+ * rolls over to the next calendar day under Africa/Algiers (UTC+1).
+ */
+export function formatUtcPeriodDate(
+  dateInput: Date | string | number | null | undefined,
+  locale?: string,
+  options?: Intl.DateTimeFormatOptions
+): string {
+  if (dateInput === null || dateInput === undefined || dateInput === "") return "";
+
+  let d: Date;
+  if (typeof dateInput === "string") {
+    const trimmed = dateInput.trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if (match) {
+      d = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0));
+    } else {
+      d = new Date(trimmed);
+    }
+  } else {
+    d = new Date(dateInput);
+  }
+
+  if (isNaN(d.getTime())) return String(dateInput);
+
+  if (options) {
+    return new Intl.DateTimeFormat(locale || "fr-DZ", {
+      ...options,
+      timeZone: "UTC",
+    }).format(d);
+  }
+
+  return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`;
+}
+
+/**
  * Formats a time strictly as "HH:mm" in Africa/Algiers timezone.
  * Returns "" if input is null, undefined, empty, or invalid.
  */

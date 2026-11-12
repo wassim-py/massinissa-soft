@@ -1,6 +1,6 @@
 import React from 'react';
 import { MASSINISSA_LOGO_BASE64 } from "@/lib/receiptAssets";
-import { formatAlgiersDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
+import { formatUtcPeriodDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 
 export interface MasterOwnerPayrollTeacherItem {
   teacherId: string;
@@ -61,7 +61,7 @@ export function MasterOwnerPayrollReport({ data }: MasterOwnerPayrollReportProps
 
   const formatDate = (d: string | Date) => {
     try {
-      return formatAlgiersDate(d, 'fr-FR', {
+      return formatUtcPeriodDate(d, 'fr-FR', {
         year: 'numeric',
         month: 'long',
         day: 'numeric',

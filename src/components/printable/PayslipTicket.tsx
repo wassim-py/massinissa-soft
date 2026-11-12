@@ -1,6 +1,6 @@
 import React from 'react';
 import { MASSINISSA_LOGO_BASE64 } from "@/lib/receiptAssets";
-import { formatAlgiersDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
+import { formatAlgiersDate, formatUtcPeriodDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 
 export interface PayslipSessionItem {
   lessonId: number;
@@ -101,6 +101,18 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
     color: '#111827',
     direction: 'ltr',
     backgroundColor: '#ffffff',
+  };
+
+  const formatPeriodDate = (d: string | Date) => {
+    try {
+      return formatUtcPeriodDate(d, 'fr-FR', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }) || String(d);
+    } catch {
+      return String(d);
+    }
   };
 
   const formatDate = (d: string | Date) => {
@@ -244,7 +256,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         <div className="text-right">
           <p className="text-gray-500 text-xs">Période comptable :</p>
           <p className="font-bold text-gray-800">
-            Du {formatDate(data.periodStart)} au {formatDate(data.periodEnd)}
+            Du {formatPeriodDate(data.periodStart)} au {formatPeriodDate(data.periodEnd)}
           </p>
           <p className="text-xs text-gray-500 mt-1">
             Date d&apos;impression : {formatAlgiersDate(new Date(), 'fr-FR')}

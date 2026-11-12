@@ -224,6 +224,13 @@ function computeAllowedPaidSessions(
   return Math.max(0, purchasedSessions + tIn - tOut);
 }
 
+export interface BatchPayrollRequestItem {
+  teacherId: string;
+  startDate: Date | string;
+  endDate: Date | string;
+  groupFilter?: "all" | "normal" | "formation";
+}
+
 /**
  * Calculates payroll for a single teacher over a date range.
  * Consumes Attendance records to find lessons that ACTUALLY HAPPENED (including isFree = true).
@@ -236,95 +243,60 @@ export async function calculateTeacherPayroll(
   endDate: Date,
   groupFilter: "all" | "normal" | "formation" = "all"
 ): Promise<TeacherPayrollCalculation | null> {
-  const normStartDate = normalizeDateToStartOfDay(startDate);
-  const normEndDate = normalizeDateToEndOfDay(endDate);
-  startDate = normStartDate;
-  endDate = normEndDate;
+  const results = await calculateTeachersPayrollBatch([
+    { teacherId, startDate, endDate, groupFilter },
+  ]);
+  return results[0] ?? null;
+}
 
-  const teacher = await prisma.teacher.findUnique({
-    where: { id: teacherId },
-    include: {
-      TeacherBranch: {
-        include: { Branch: true },
-      },
-      TeacherPayRate: {
-        orderBy: [{ effectiveFrom: "desc" }, { id: "desc" }],
-      },
-      teacherClassRates: true,
-    },
-  });
+/**
+ * Calculates payroll for multiple teacher/period requests using shared bulk DB queries
+ * (4 bounded round-trips regardless of batch size) to avoid Neon TLS latency and pool contention.
+ */
+export async function calculateTeachersPayrollBatch(
+  items: BatchPayrollRequestItem[]
+): Promise<Array<TeacherPayrollCalculation | null>> {
+  if (items.length === 0) return [];
 
-  if (!teacher) return null;
+  const normalizedItems = items.map((item) => ({
+    teacherId: item.teacherId,
+    startDate: normalizeDateToStartOfDay(item.startDate),
+    endDate: normalizeDateToEndOfDay(item.endDate),
+    groupFilter: item.groupFilter ?? ("all" as const),
+  }));
 
-  // Active general pay rate effective on or before endDate
-  const activePayRate = teacher.TeacherPayRate.find(
-    (r) => new Date(r.effectiveFrom) <= endDate
-  ) || teacher.TeacherPayRate[0];
+  const uniqueTeacherIds = Array.from(new Set(normalizedItems.map((i) => i.teacherId)));
+  const minStartDate = new Date(Math.min(...normalizedItems.map((i) => i.startDate.getTime())));
+  const maxEndDate = new Date(Math.max(...normalizedItems.map((i) => i.endDate.getTime())));
+  const maxEndMs = maxEndDate.getTime();
+  const teacherWhere: any = uniqueTeacherIds.length === 1 ? uniqueTeacherIds[0] : { in: uniqueTeacherIds };
 
-  const defaultSessionRate = activePayRate?.ratePerSession
-    ? Number(activePayRate.ratePerSession)
-    : 0;
-  const fixedMonthly = (groupFilter === "formation")
-    ? 0
-    : (activePayRate?.fixedMonthly ? Number(activePayRate.fixedMonthly) : 0);
-  const percentageOfSessionFee = activePayRate?.percentageOfSessionFee
-    ? Number(activePayRate.percentageOfSessionFee)
-    : null;
-
-  // Map of branchId -> branch override rate
-  const branchRateMap = new Map<number, number>();
-  teacher.TeacherBranch.forEach((tb) => {
-    if (tb.payRate !== null && tb.payRate !== undefined) {
-      branchRateMap.set(tb.branchId, Number(tb.payRate));
-    }
-  });
-
-  // Map of classId -> group-specific percentage override
-  const classRateMap = new Map<number, number>();
-  teacher.teacherClassRates?.forEach((tcr) => {
-    if (tcr.percentage !== null && tcr.percentage !== undefined) {
-      classRateMap.set(tcr.classId, Number(tcr.percentage));
-    }
-  });
-
-  // Find all lessons in the period that ACTUALLY HAPPENED (have attendance) OR where teacher was marked absent
-  const rawLessons = await prisma.lesson.findMany({
-    where: {
-      teacherId: teacher.id,
-      startsAt: {
-        gte: startDate,
-        lte: endDate,
-      },
-      OR: [
-        { attendances: { some: {} } },
-        { isTeacherAbsent: true },
-      ],
-    },
-    include: {
-      branch: true,
-      class: {
+  const [teachers, allRawLessons, allTeacherClasses, allSalaryAdvances, allPhotocopyCharges] =
+    await Promise.all([
+      prisma.teacher.findMany({
+        where: { id: teacherWhere },
         include: {
-          enrollments: {
-            select: {
-              studentId: true,
-              payerStatus: true,
-              status: true,
-              student: {
-                select: {
-                  family: {
-                    select: {
-                      payerStudentId: true,
-                      discountPercentage: true,
-                    },
-                  },
-                },
-              },
-            },
+          TeacherBranch: {
+            include: { Branch: true },
           },
+          TeacherPayRate: {
+            orderBy: [{ effectiveFrom: "desc" }, { id: "desc" }],
+          },
+          teacherClassRates: true,
         },
-      },
-      lessonGroups: {
+      }),
+      // Find all lessons in the spanned period that ACTUALLY HAPPENED (have attendance) OR where teacher was marked absent
+      prisma.lesson.findMany({
+        where: {
+          teacherId: teacherWhere,
+          startsAt: {
+            gte: minStartDate,
+            lte: maxEndDate,
+          },
+          OR: [{ attendances: { some: {} } }, { isTeacherAbsent: true }],
+        },
         include: {
+          branch: true,
           class: {
             include: {
               enrollments: {
@@ -346,201 +318,764 @@ export async function calculateTeacherPayroll(
               },
             },
           },
-        },
-      },
-      attendances: true,
-      vouchers: {
-        where: {
-          paymentType: "REVISION_SESSION",
-          isVoided: false,
-        },
-        include: {
-          refunds: true,
-        },
-      },
-    },
-    orderBy: { startsAt: "asc" },
-  });
-
-  const lessons = rawLessons.filter((l) => {
-    if (groupFilter === "normal") return l.class?.isFormation !== true;
-    if (groupFilter === "formation") return l.class?.isFormation === true;
-    return true;
-  });
-
-  // Fetch Catch-Up visitors hosted in any lesson taught by this teacher in this period (Rule 8)
-  const lessonIds = lessons.map((l) => l.id);
-  const catchUpVisitors = lessonIds.length > 0
-    ? await prisma.catchUpAttendance.findMany({
-        where: {
-          catchUpLessonId: { in: lessonIds },
-          NOT: { recordedBy: "transfer" },
-        },
-        include: {
-          missedLesson: {
-            select: {
-              id: true,
-              classId: true,
-              startsAt: true,
-            },
-          },
-          student: {
-            select: {
-              id: true,
-              name: true,
-              family: {
-                select: {
-                  payerStudentId: true,
-                  discountPercentage: true,
+          lessonGroups: {
+            include: {
+              class: {
+                include: {
+                  enrollments: {
+                    select: {
+                      studentId: true,
+                      payerStatus: true,
+                      status: true,
+                      student: {
+                        select: {
+                          family: {
+                            select: {
+                              payerStudentId: true,
+                              discountPercentage: true,
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
                 },
               },
-              enrollments: {
-                where: { class: { teacherId: teacher.id } },
-                select: { classId: true, status: true, payerStatus: true },
-              },
             },
           },
-        },
-      })
-    : [];
-
-  // Get all unique class IDs taught by this teacher in or before this period (including catch-up home classes)
-  const teacherClasses = await prisma.class.findMany({
-    where: { teacherId: teacher.id },
-    select: { id: true, isFormation: true },
-  });
-  const filteredTeacherClassIds = teacherClasses
-    .filter((tc) => {
-      if (groupFilter === "normal") return tc.isFormation !== true;
-      if (groupFilter === "formation") return tc.isFormation === true;
-      return true;
-    })
-    .map((tc) => tc.id);
-
-  const classIds = Array.from(
-    new Set([
-      ...lessons.map((l) => l.classId),
-      ...lessons.flatMap((l) => (l as any).lessonGroups?.map((lg: any) => lg.classId) || []),
-      ...catchUpVisitors.map((cv) => cv.missedLesson?.classId),
-      ...filteredTeacherClassIds,
-    ].filter(Boolean))
-  ) as number[];
-
-  // For each class, fetch all historical non-free lessons and attendances up to endDate
-  const classHistoryMap = new Map<
-    number,
-    {
-      lessons: Array<{ id: number; classId: number; startsAt: Date; isFree: boolean; isTeacherAbsent?: boolean; lessonGroups?: Array<{ classId: number }> }>;
-      attendances: Array<{ lessonId: number; studentId: string; status: string }>;
-      catchUps: Array<{ studentId: string; missedLessonId: number; catchUpLessonId?: number; recordedAt: Date; recordedBy?: string | null; catchUpLesson?: { id: number; startsAt: Date; classId: number } | null }>;
-      classInfo: any;
-      vouchers: any[];
-    }
-  >();
-
-  for (const cid of classIds) {
-    const [cLessons, cAttendances, cCatchUps, cClass, cVouchers] = await Promise.all([
-      prisma.lesson.findMany({
-        where: {
-          AND: [
-            {
-              OR: [
-                { classId: cid },
-                { lessonGroups: { some: { classId: cid } } },
-              ],
+          attendances: true,
+          vouchers: {
+            where: {
+              paymentType: "REVISION_SESSION",
+              isVoided: false,
             },
-            {
-              OR: [
-                { attendances: { some: {} } },
-                { isTeacherAbsent: true },
-              ],
+            include: {
+              refunds: true,
             },
-          ],
-          startsAt: { lte: endDate },
-        },
-        select: {
-          id: true,
-          classId: true,
-          startsAt: true,
-          isFree: true,
-          isTeacherAbsent: true,
-          lessonGroups: { select: { classId: true } },
+          },
         },
         orderBy: { startsAt: "asc" },
       }),
-      prisma.attendance.findMany({
+      prisma.class.findMany({
+        where: { teacherId: teacherWhere },
+        select: { id: true, teacherId: true, isFormation: true },
+      }),
+      prisma.salaryAdvance.findMany({
         where: {
-          lesson: {
-            OR: [
-              { classId: cid },
-              { lessonGroups: { some: { classId: cid } } },
-            ],
-            startsAt: { lte: endDate },
+          personId: teacherWhere,
+          date: {
+            gte: minStartDate,
+            lte: maxEndDate,
           },
         },
-        select: { lessonId: true, studentId: true, status: true },
+        orderBy: { date: "asc" },
       }),
-      prisma.catchUpAttendance.findMany({
+      prisma.photocopyCharge.findMany({
         where: {
-          missedLesson: {
-            OR: [
-              { classId: cid },
-              { lessonGroups: { some: { classId: cid } } },
-            ],
-          },
-          recordedAt: { lte: endDate },
-        },
-        select: {
-          studentId: true,
-          missedLessonId: true,
-          catchUpLessonId: true,
-          recordedAt: true,
-          recordedBy: true,
-          catchUpLesson: { select: { id: true, startsAt: true, classId: true } },
-        },
-      }),
-      prisma.class.findUnique({
-        where: { id: cid },
-        select: {
-          id: true,
-          name: true,
-          branchId: true,
-          pricePerCycle: true,
-          isFormation: true,
-          enrollments: {
-            include: {
-              transfersTo: {
-                include: {
-                  fromEnrollment: { select: { class: { select: { id: true, pricePerCycle: true } } } },
-                },
-              },
-              transfersFrom: true,
-              student: { select: { id: true, family: true } },
-            },
+          teacherId: teacherWhere,
+          date: {
+            gte: minStartDate,
+            lte: maxEndDate,
           },
         },
-      }),
-      prisma.voucher.findMany({
-        where: {
-          OR: [{ classId: cid }, { classId: null }],
-          isVoided: false,
-          isRefund: false,
-          status: { not: "REFUNDED" },
-          paymentType: { in: ["TUITION_4SESSION", "FORMATION"] },
-          issuedAt: { lte: endDate },
+        include: {
+          Branch: true,
+          class: { select: { isFormation: true } },
         },
-        include: { refunds: true },
+        orderBy: { date: "asc" },
       }),
     ]);
 
-    classHistoryMap.set(cid, {
-      lessons: cLessons,
-      attendances: cAttendances,
-      catchUps: cCatchUps,
-      classInfo: cClass,
-      vouchers: cVouchers,
-    });
+  const teacherMap = new Map(teachers.map((t) => [t.id, t]));
+  const rawLessonsByTeacher = new Map<string, typeof allRawLessons>();
+  for (const l of allRawLessons) {
+    let list = rawLessonsByTeacher.get(l.teacherId);
+    if (!list) {
+      list = [];
+      rawLessonsByTeacher.set(l.teacherId, list);
+    }
+    list.push(l);
   }
+  const teacherClassesByTeacher = new Map<string, typeof allTeacherClasses>();
+  for (const tc of allTeacherClasses) {
+    if (!tc.teacherId) continue;
+    let list = teacherClassesByTeacher.get(tc.teacherId);
+    if (!list) {
+      list = [];
+      teacherClassesByTeacher.set(tc.teacherId, list);
+    }
+    list.push(tc);
+  }
+  const advancesByTeacher = new Map<string, typeof allSalaryAdvances>();
+  for (const adv of allSalaryAdvances) {
+    let list = advancesByTeacher.get(adv.personId);
+    if (!list) {
+      list = [];
+      advancesByTeacher.set(adv.personId, list);
+    }
+    list.push(adv);
+  }
+  const photocopyByTeacher = new Map<string, typeof allPhotocopyCharges>();
+  for (const pc of allPhotocopyCharges) {
+    let list = photocopyByTeacher.get(pc.teacherId);
+    if (!list) {
+      list = [];
+      photocopyByTeacher.set(pc.teacherId, list);
+    }
+    list.push(pc);
+  }
+
+  const allLessonIdsSet = new Set<number>();
+  const stage1PerItem = normalizedItems.map((item) => {
+    const teacher = teacherMap.get(item.teacherId);
+    if (!teacher) return null;
+
+    const itemStartMs = item.startDate.getTime();
+    const itemEndMs = item.endDate.getTime();
+
+    const lessons = (rawLessonsByTeacher.get(item.teacherId) || []).filter((l) => {
+      const t = new Date(l.startsAt).getTime();
+      if (t < itemStartMs || t > itemEndMs) return false;
+      if (item.groupFilter === "normal") return l.class?.isFormation !== true;
+      if (item.groupFilter === "formation") return l.class?.isFormation === true;
+      return true;
+    });
+
+    for (const l of lessons) {
+      allLessonIdsSet.add(l.id);
+    }
+
+    const teacherClasses = teacherClassesByTeacher.get(item.teacherId) || [];
+    const salaryAdvancesList = (advancesByTeacher.get(item.teacherId) || []).filter((a) => {
+      const t = new Date(a.date).getTime();
+      return t >= itemStartMs && t <= itemEndMs;
+    });
+    const photocopyChargesList = (photocopyByTeacher.get(item.teacherId) || []).filter((c) => {
+      const t = new Date(c.date).getTime();
+      if (t < itemStartMs || t > itemEndMs) return false;
+      if (item.groupFilter === "normal") return c.classId === null || c.class?.isFormation === false;
+      if (item.groupFilter === "formation") return c.class?.isFormation === true;
+      return true;
+    });
+
+    return {
+      item,
+      teacher,
+      lessons,
+      teacherClasses,
+      salaryAdvancesList,
+      photocopyChargesList,
+    };
+  });
+
+  const allLessonIds = Array.from(allLessonIdsSet);
+  const [allCatchUpVisitors, allCatchUpsForMissedLessons] =
+    allLessonIds.length > 0
+      ? await Promise.all([
+          prisma.catchUpAttendance.findMany({
+            where: {
+              catchUpLessonId: { in: allLessonIds },
+              NOT: { recordedBy: "transfer" },
+            },
+            include: {
+              missedLesson: {
+                select: {
+                  id: true,
+                  classId: true,
+                  startsAt: true,
+                },
+              },
+              student: {
+                select: {
+                  id: true,
+                  name: true,
+                  family: {
+                    select: {
+                      payerStudentId: true,
+                      discountPercentage: true,
+                    },
+                  },
+                  enrollments: {
+                    where: { class: { teacherId: teacherWhere } },
+                    select: {
+                      classId: true,
+                      status: true,
+                      payerStatus: true,
+                      class: { select: { teacherId: true } },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+          prisma.catchUpAttendance.findMany({
+            where: {
+              missedLessonId: { in: allLessonIds },
+              NOT: { recordedBy: "transfer" },
+            },
+            select: { studentId: true, missedLessonId: true },
+          }),
+        ])
+      : [[], []];
+
+  const visitorsByCatchUpLessonId = new Map<number, typeof allCatchUpVisitors>();
+  for (const cv of allCatchUpVisitors) {
+    if (!cv.catchUpLessonId) continue;
+    let list = visitorsByCatchUpLessonId.get(cv.catchUpLessonId);
+    if (!list) {
+      list = [];
+      visitorsByCatchUpLessonId.set(cv.catchUpLessonId, list);
+    }
+    list.push(cv);
+  }
+  const missedCatchUpsByLessonId = new Map<number, typeof allCatchUpsForMissedLessons>();
+  for (const cm of allCatchUpsForMissedLessons) {
+    let list = missedCatchUpsByLessonId.get(cm.missedLessonId);
+    if (!list) {
+      list = [];
+      missedCatchUpsByLessonId.set(cm.missedLessonId, list);
+    }
+    list.push(cm);
+  }
+
+  const allClassIdsSet = new Set<number>();
+  const stage2PerItem = stage1PerItem.map((s1) => {
+    if (!s1) return null;
+    const { item, teacher, lessons, teacherClasses } = s1;
+
+    const catchUpVisitors: any[] = [];
+    const catchUpsForMissedLessons: Array<{ studentId: string; missedLessonId: number }> = [];
+    for (const l of lessons) {
+      for (const cv of visitorsByCatchUpLessonId.get(l.id) || []) {
+        catchUpVisitors.push({
+          ...cv,
+          student: {
+            ...cv.student,
+            enrollments: (cv.student.enrollments || [])
+              .filter((e: any) => e.class?.teacherId === teacher.id)
+              .map(({ classId, status, payerStatus }: any) => ({ classId, status, payerStatus })),
+          },
+        });
+      }
+      for (const cm of missedCatchUpsByLessonId.get(l.id) || []) {
+        catchUpsForMissedLessons.push(cm);
+      }
+    }
+
+    const filteredTeacherClassIds = teacherClasses
+      .filter((tc) => {
+        if (item.groupFilter === "normal") return tc.isFormation !== true;
+        if (item.groupFilter === "formation") return tc.isFormation === true;
+        return true;
+      })
+      .map((tc) => tc.id);
+
+    const classIds = Array.from(
+      new Set(
+        [
+          ...lessons.map((l) => l.classId),
+          ...lessons.flatMap((l) => (l as any).lessonGroups?.map((lg: any) => lg.classId) || []),
+          ...catchUpVisitors.map((cv) => cv.missedLesson?.classId),
+          ...filteredTeacherClassIds,
+        ].filter(Boolean)
+      )
+    ) as number[];
+
+    for (const cid of classIds) {
+      allClassIdsSet.add(cid);
+    }
+
+    return {
+      ...s1,
+      catchUpVisitors,
+      catchUpsForMissedLessons,
+      classIds,
+    };
+  });
+
+  const allClassIds = Array.from(allClassIdsSet);
+  const needsFormation = stage2PerItem.some((s2) => s2 !== null && s2.item.groupFilter !== "normal");
+
+  const [allBookVouchers, allFormationClasses, classHistoryTuple] = await Promise.all([
+    prisma.voucher.findMany({
+      where: {
+        paymentType: "BOOK",
+        isVoided: false,
+        issuedAt: {
+          gte: minStartDate,
+          lte: maxEndDate,
+        },
+        OR: [
+          { class: { teacherId: teacherWhere } },
+          ...(allClassIds.length > 0 ? [{ classId: { in: allClassIds } }] : []),
+        ],
+      },
+      include: {
+        class: { select: { id: true, name: true, branchId: true, isFormation: true, teacherId: true } },
+        student: { select: { id: true, name: true } },
+        refunds: true,
+      },
+    }),
+    needsFormation
+      ? prisma.class.findMany({
+          where: {
+            isFormation: true,
+            OR: [
+              { teacherId: teacherWhere },
+              ...(allClassIds.length > 0 ? [{ id: { in: allClassIds } }] : []),
+            ],
+          },
+          include: {
+            FormationLevel: true,
+            branch: true,
+            enrollments: {
+              include: {
+                student: { select: { id: true, name: true } },
+              },
+            },
+          },
+        })
+      : Promise.resolve([]),
+    allClassIds.length > 0
+      ? Promise.all([
+          prisma.lesson.findMany({
+            where: {
+              AND: [
+                {
+                  OR: [
+                    { classId: { in: allClassIds } },
+                    { lessonGroups: { some: { classId: { in: allClassIds } } } },
+                  ],
+                },
+                {
+                  OR: [{ attendances: { some: {} } }, { isTeacherAbsent: true }],
+                },
+              ],
+              startsAt: { lte: maxEndDate },
+            },
+            select: {
+              id: true,
+              classId: true,
+              branchId: true,
+              startsAt: true,
+              isFree: true,
+              isTeacherAbsent: true,
+              lessonGroups: { select: { classId: true } },
+              branch: { select: { name: true } },
+              class: { select: { id: true, name: true, pricePerCycle: true } },
+            },
+            orderBy: { startsAt: "asc" },
+          }),
+          prisma.attendance.findMany({
+            where: {
+              lesson: {
+                OR: [
+                  { classId: { in: allClassIds } },
+                  { lessonGroups: { some: { classId: { in: allClassIds } } } },
+                ],
+                startsAt: { lte: maxEndDate },
+              },
+            },
+            select: {
+              lessonId: true,
+              studentId: true,
+              status: true,
+              lesson: {
+                select: {
+                  classId: true,
+                  startsAt: true,
+                  lessonGroups: { select: { classId: true } },
+                },
+              },
+            },
+          }),
+          prisma.catchUpAttendance.findMany({
+            where: {
+              missedLesson: {
+                OR: [
+                  { classId: { in: allClassIds } },
+                  { lessonGroups: { some: { classId: { in: allClassIds } } } },
+                ],
+              },
+              recordedAt: { lte: maxEndDate },
+            },
+            select: {
+              studentId: true,
+              missedLessonId: true,
+              catchUpLessonId: true,
+              recordedAt: true,
+              recordedBy: true,
+              catchUpLesson: { select: { id: true, startsAt: true, classId: true } },
+              missedLesson: {
+                select: {
+                  classId: true,
+                  lessonGroups: { select: { classId: true } },
+                },
+              },
+            },
+          }),
+          prisma.class.findMany({
+            where: { id: { in: allClassIds } },
+            select: {
+              id: true,
+              name: true,
+              branchId: true,
+              pricePerCycle: true,
+              isFormation: true,
+              enrollments: {
+                include: {
+                  transfersTo: {
+                    include: {
+                      fromEnrollment: {
+                        select: { class: { select: { id: true, pricePerCycle: true } } },
+                      },
+                    },
+                  },
+                  transfersFrom: true,
+                  student: { select: { id: true, family: true } },
+                },
+              },
+            },
+          }),
+          prisma.voucher.findMany({
+            where: {
+              OR: [{ classId: { in: allClassIds } }, { classId: null }],
+              isVoided: false,
+              isRefund: false,
+              status: { not: "REFUNDED" },
+              paymentType: { in: ["TUITION_4SESSION", "FORMATION"] },
+              issuedAt: { lte: maxEndDate },
+            },
+            include: { refunds: true },
+          }),
+        ])
+      : Promise.resolve(null),
+  ]);
+
+  const allFormationClassIds = allFormationClasses.map((fc) => fc.id);
+  const [allFormationLessons, allFormationVouchers] =
+    allFormationClassIds.length > 0
+      ? await Promise.all([
+          prisma.lesson.findMany({
+            where: { classId: { in: allFormationClassIds } },
+            select: { id: true, classId: true, startsAt: true, isTeacherAbsent: true, isFree: true },
+            orderBy: { startsAt: "asc" },
+          }),
+          prisma.voucher.findMany({
+            where: {
+              classId: { in: allFormationClassIds },
+              paymentType: "FORMATION",
+              isVoided: false,
+              isRefund: false,
+              status: { not: "REFUNDED" },
+              issuedAt: { lte: maxEndDate },
+            },
+            include: { refunds: true },
+            orderBy: { issuedAt: "asc" },
+          }),
+        ])
+      : [[], []];
+
+  // Index global class history & formation records by classId once for fast per-item slicing
+  const globalLessonByIdMap = new Map<number, any>();
+  const globalClassByIdMap = new Map<number, any>();
+  const globalLessonsByClass = new Map<number, any[]>();
+  const globalAttendancesWithDateByClass = new Map<
+    number,
+    Array<{ lessonId: number; studentId: string; status: string; startsAtMs: number }>
+  >();
+  const globalAttendancesByClass = new Map<
+    number,
+    Array<{ lessonId: number; studentId: string; status: string }>
+  >();
+  const globalCatchUpsByClass = new Map<number, any[]>();
+  const globalVouchersByClass = new Map<number, any[]>();
+  const globalNullVouchers: any[] = [];
+
+  for (const cid of allClassIds) {
+    globalLessonsByClass.set(cid, []);
+    globalAttendancesWithDateByClass.set(cid, []);
+    globalAttendancesByClass.set(cid, []);
+    globalCatchUpsByClass.set(cid, []);
+    globalVouchersByClass.set(cid, []);
+  }
+
+  if (classHistoryTuple) {
+    const [allClassLessons, allClassAttendances, allClassCatchUps, allClasses, allClassVouchers] =
+      classHistoryTuple;
+
+    for (const l of allClassLessons) {
+      globalLessonByIdMap.set(l.id, l);
+      globalLessonsByClass.get(l.classId)?.push(l);
+      for (const lg of l.lessonGroups || []) {
+        if (lg.classId !== l.classId) {
+          globalLessonsByClass.get(lg.classId)?.push(l);
+        }
+      }
+    }
+
+    for (const c of allClasses) {
+      globalClassByIdMap.set(c.id, c);
+    }
+
+    for (const a of allClassAttendances) {
+      const targetClassIds = new Set<number>([a.lesson.classId]);
+      for (const lg of a.lesson.lessonGroups || []) {
+        targetClassIds.add(lg.classId);
+      }
+      const startsAtMs = new Date(a.lesson.startsAt).getTime();
+      const stripped = { lessonId: a.lessonId, studentId: a.studentId, status: a.status };
+      const withDate = { ...stripped, startsAtMs };
+      for (const targetCid of targetClassIds) {
+        globalAttendancesByClass.get(targetCid)?.push(stripped);
+        globalAttendancesWithDateByClass.get(targetCid)?.push(withDate);
+      }
+    }
+
+    for (const c of allClassCatchUps) {
+      const targetClassIds = new Set<number>([c.missedLesson.classId]);
+      for (const lg of c.missedLesson.lessonGroups || []) {
+        targetClassIds.add(lg.classId);
+      }
+      const entry = {
+        studentId: c.studentId,
+        missedLessonId: c.missedLessonId,
+        catchUpLessonId: c.catchUpLessonId,
+        recordedAt: c.recordedAt,
+        recordedBy: c.recordedBy,
+        catchUpLesson: c.catchUpLesson,
+      };
+      for (const targetCid of targetClassIds) {
+        globalCatchUpsByClass.get(targetCid)?.push(entry);
+      }
+    }
+
+    for (const v of allClassVouchers) {
+      if (v.classId === null) {
+        globalNullVouchers.push(v);
+      } else {
+        globalVouchersByClass.get(v.classId)?.push(v);
+      }
+    }
+  }
+
+  const formationLessonsByClass = new Map<number, any[]>();
+  for (const fl of allFormationLessons) {
+    let list = formationLessonsByClass.get(fl.classId);
+    if (!list) {
+      list = [];
+      formationLessonsByClass.set(fl.classId, list);
+    }
+    list.push(fl);
+  }
+  const formationVouchersByClass = new Map<number, any[]>();
+  for (const fv of allFormationVouchers) {
+    if (fv.classId === null) continue;
+    let list = formationVouchersByClass.get(fv.classId);
+    if (!list) {
+      list = [];
+      formationVouchersByClass.set(fv.classId, list);
+    }
+    list.push(fv);
+  }
+
+  const results: Array<TeacherPayrollCalculation | null> = [];
+  for (const s2 of stage2PerItem) {
+    if (!s2) {
+      results.push(null);
+      continue;
+    }
+
+    const { item, teacher, lessons, teacherClasses, salaryAdvancesList, photocopyChargesList, catchUpVisitors, catchUpsForMissedLessons, classIds } = s2;
+    const itemStartMs = item.startDate.getTime();
+    const itemEndMs = item.endDate.getTime();
+    const needsEndDateFilter = itemEndMs < maxEndMs;
+    const itemClassIdSet = new Set<number>(classIds);
+
+    const bookVouchers = allBookVouchers.filter((bv) => {
+      const issuedMs = new Date(bv.issuedAt).getTime();
+      if (issuedMs < itemStartMs || issuedMs > itemEndMs) return false;
+      return bv.class?.teacherId === teacher.id || (bv.classId !== null && itemClassIdSet.has(bv.classId));
+    });
+
+    const formationClasses =
+      item.groupFilter === "normal"
+        ? []
+        : allFormationClasses.filter(
+            (fc) => fc.teacherId === teacher.id || itemClassIdSet.has(fc.id)
+          );
+
+    const itemFormationLessons = formationClasses.flatMap(
+      (fc) => formationLessonsByClass.get(fc.id) || []
+    );
+    const itemFormationVouchers = formationClasses.flatMap((fc) => {
+      const list = formationVouchersByClass.get(fc.id) || [];
+      return needsEndDateFilter
+        ? list.filter((v) => new Date(v.issuedAt).getTime() <= itemEndMs)
+        : list;
+    });
+
+    const classHistoryMap = new Map<number, any>();
+    const lessonByIdMap = new Map<number, any>();
+
+    if (classHistoryTuple) {
+      const itemNullVouchers = needsEndDateFilter
+        ? globalNullVouchers.filter((v) => new Date(v.issuedAt).getTime() <= itemEndMs)
+        : globalNullVouchers;
+
+      for (const cid of classIds) {
+        const rawLessonsForClass = globalLessonsByClass.get(cid) || [];
+        const cidLessons = needsEndDateFilter
+          ? rawLessonsForClass.filter((l) => new Date(l.startsAt).getTime() <= itemEndMs)
+          : rawLessonsForClass;
+
+        for (const l of cidLessons) {
+          lessonByIdMap.set(l.id, l);
+        }
+
+        const cidAttendances = needsEndDateFilter
+          ? (globalAttendancesWithDateByClass.get(cid) || [])
+              .filter((a) => a.startsAtMs <= itemEndMs)
+              .map(({ lessonId, studentId, status }) => ({ lessonId, studentId, status }))
+          : globalAttendancesByClass.get(cid) || [];
+
+        const rawCatchUps = globalCatchUpsByClass.get(cid) || [];
+        const cidCatchUps = needsEndDateFilter
+          ? rawCatchUps.filter((c) => new Date(c.recordedAt).getTime() <= itemEndMs)
+          : rawCatchUps;
+
+        const rawCidVouchers = globalVouchersByClass.get(cid) || [];
+        const cidVouchers = needsEndDateFilter
+          ? rawCidVouchers.filter((v) => new Date(v.issuedAt).getTime() <= itemEndMs)
+          : rawCidVouchers;
+
+        classHistoryMap.set(cid, {
+          lessons: cidLessons,
+          attendances: cidAttendances,
+          catchUps: cidCatchUps,
+          classInfo: globalClassByIdMap.get(cid) ?? null,
+          vouchers: [...cidVouchers, ...itemNullVouchers],
+        });
+      }
+    }
+
+    results.push(
+      await computeTeacherPayrollFromData({
+        startDate: item.startDate,
+        endDate: item.endDate,
+        groupFilter: item.groupFilter,
+        teacher,
+        lessons,
+        teacherClasses,
+        salaryAdvancesList,
+        photocopyChargesList,
+        catchUpVisitors,
+        catchUpsForMissedLessons,
+        bookVouchers,
+        formationClasses,
+        prefetchedFormationData: [itemFormationLessons, itemFormationVouchers],
+        classHistoryMap,
+        lessonByIdMap,
+      })
+    );
+  }
+
+  return results;
+}
+
+async function computeTeacherPayrollFromData(params: {
+  startDate: Date;
+  endDate: Date;
+  groupFilter: "all" | "normal" | "formation";
+  teacher: any;
+  lessons: any[];
+  teacherClasses: Array<{ id: number; isFormation: boolean }>;
+  salaryAdvancesList: any[];
+  photocopyChargesList: any[];
+  catchUpVisitors: any[];
+  catchUpsForMissedLessons: Array<{ studentId: string; missedLessonId: number }>;
+  bookVouchers: any[];
+  formationClasses: any[];
+  prefetchedFormationData: [any[], any[]];
+  classHistoryMap: Map<
+    number,
+    {
+      lessons: Array<{
+        id: number;
+        classId: number;
+        branchId: number;
+        startsAt: Date;
+        isFree: boolean;
+        isTeacherAbsent?: boolean;
+        lessonGroups?: Array<{ classId: number }>;
+        branch?: { name: string } | null;
+        class?: { id: number; name: string; pricePerCycle: any } | null;
+      }>;
+      attendances: Array<{ lessonId: number; studentId: string; status: string }>;
+      catchUps: Array<{
+        studentId: string;
+        missedLessonId: number;
+        catchUpLessonId?: number;
+        recordedAt: Date;
+        recordedBy?: string | null;
+        catchUpLesson?: { id: number; startsAt: Date; classId: number } | null;
+      }>;
+      classInfo: any;
+      vouchers: any[];
+    }
+  >;
+  lessonByIdMap: Map<number, any>;
+}): Promise<TeacherPayrollCalculation | null> {
+  const {
+    startDate,
+    endDate,
+    groupFilter,
+    teacher,
+    lessons,
+    teacherClasses,
+    salaryAdvancesList,
+    photocopyChargesList,
+    catchUpVisitors,
+    catchUpsForMissedLessons,
+    bookVouchers,
+    formationClasses,
+    prefetchedFormationData,
+    classHistoryMap,
+    lessonByIdMap,
+  } = params;
+
+  if (!teacher) return null;
+
+  // Active general pay rate effective on or before endDate
+  const activePayRate = teacher.TeacherPayRate.find(
+    (r: any) => new Date(r.effectiveFrom) <= endDate
+  ) || teacher.TeacherPayRate[0];
+
+  const defaultSessionRate = activePayRate?.ratePerSession
+    ? Number(activePayRate.ratePerSession)
+    : 0;
+  const fixedMonthly = (groupFilter === "formation")
+    ? 0
+    : (activePayRate?.fixedMonthly ? Number(activePayRate.fixedMonthly) : 0);
+  const percentageOfSessionFee = activePayRate?.percentageOfSessionFee
+    ? Number(activePayRate.percentageOfSessionFee)
+    : null;
+
+  // Map of branchId -> branch override rate
+  const branchRateMap = new Map<number, number>();
+  teacher.TeacherBranch.forEach((tb: any) => {
+    if (tb.payRate !== null && tb.payRate !== undefined) {
+      branchRateMap.set(tb.branchId, Number(tb.payRate));
+    }
+  });
+
+  // Map of classId -> group-specific percentage override
+  const classRateMap = new Map<number, number>();
+  teacher.teacherClassRates?.forEach((tcr: any) => {
+    if (tcr.percentage !== null && tcr.percentage !== undefined) {
+      classRateMap.set(tcr.classId, Number(tcr.percentage));
+    }
+  });
 
   // Pre-calculate classification and voucher-payment status for all students in all classes as of endDate and startDate
   const studentStatusAtEnd = new Map<string, any>();
@@ -756,7 +1291,7 @@ export async function calculateTeacherPayroll(
   >();
 
   // Initialize with all branches the teacher is associated with
-  teacher.TeacherBranch.forEach((tb) => {
+  teacher.TeacherBranch.forEach((tb: any) => {
     branchSessionsMap.set(tb.branchId, {
       branchName: tb.Branch.name,
       totalSessions: 0,
@@ -771,15 +1306,6 @@ export async function calculateTeacherPayroll(
   // Track catch-up records where lessons taught in this period were the MISSED lessons.
   // If a student already caught up for lesson X in another group (as a visitor) AND was not also PRESENT in lesson X,
   // they must NOT be counted as paying or present in lesson X to prevent double compensation.
-  const catchUpsForMissedLessons = lessonIds.length > 0
-    ? await prisma.catchUpAttendance.findMany({
-        where: {
-          missedLessonId: { in: lessonIds },
-          NOT: { recordedBy: "transfer" },
-        },
-        select: { studentId: true, missedLessonId: true },
-      })
-    : [];
   const missedLessonCatchUpMap = new Map<number, Set<string>>();
   for (const c of catchUpsForMissedLessons) {
     if (!missedLessonCatchUpMap.has(c.missedLessonId)) {
@@ -787,27 +1313,6 @@ export async function calculateTeacherPayroll(
     }
     missedLessonCatchUpMap.get(c.missedLessonId)!.add(c.studentId);
   }
-
-  // Fetch all non-voided BOOK vouchers issued during [startDate, endDate] for this teacher (100% Teacher Revenue)
-  const bookVouchers = await prisma.voucher.findMany({
-    where: {
-      paymentType: "BOOK",
-      isVoided: false,
-      issuedAt: {
-        gte: startDate,
-        lte: endDate,
-      },
-      OR: [
-        { class: { teacherId: teacher.id } },
-        { classId: { in: classIds } },
-      ],
-    },
-    include: {
-      class: { select: { id: true, name: true, branchId: true, isFormation: true } },
-      student: { select: { id: true, name: true } },
-      refunds: true,
-    },
-  });
 
   let totalSessions = 0;
   let teacherAbsencesCount = 0;
@@ -873,20 +1378,20 @@ export async function calculateTeacherPayroll(
 
     // Revision visitors
     const revisionVisitorAttendances = lesson.attendances.filter(
-      (a) => a.status === "PRESENT" && (a as any).isRevisionVisitor
+      (a: any) => a.status === "PRESENT" && (a as any).isRevisionVisitor
     );
-    const revisionVisitorStudentIds = new Set(revisionVisitorAttendances.map((a) => a.studentId));
+    const revisionVisitorStudentIds = new Set(revisionVisitorAttendances.map((a: any) => a.studentId));
 
     // Regular present count excludes any student already counted as a catch-up visitor or revision visitor in this same lesson
     const regularPresentStudentIds = new Set(
       lesson.attendances
         .filter(
-          (a) =>
+          (a: any) =>
             a.status === "PRESENT" &&
             !visitorStudentIds.has(a.studentId) &&
             !revisionVisitorStudentIds.has(a.studentId)
         )
-        .map((a) => a.studentId)
+        .map((a: any) => a.studentId)
     );
     const regularPresentCount = regularPresentStudentIds.size;
     const visitorCount = visitorsInLesson.length;
@@ -936,7 +1441,7 @@ export async function calculateTeacherPayroll(
     if (!lesson.isFree) {
       const countedPayingStudentIds = new Set<string>();
 
-      lesson.attendances.forEach((att) => {
+      lesson.attendances.forEach((att: any) => {
         // If this student is hosted as a visitor in this lesson, skip here (handled in visitorsInLesson)
         if (visitorStudentIds.has(att.studentId)) return;
         // If this student is a revision visitor, skip here (handled in revision visitors calculation below)
@@ -947,7 +1452,7 @@ export async function calculateTeacherPayroll(
         if (countedPayingStudentIds.has(att.studentId)) return;
 
         // Resolve student enrollment across primary group and secondary merged groups
-        let enrollment = lesson.class?.enrollments?.find((e) => e.studentId === att.studentId);
+        let enrollment = lesson.class?.enrollments?.find((e: any) => e.studentId === att.studentId);
         let enrolledClassId = lesson.classId;
 
         if (!enrollment || enrollment.status === "TRANSFERRED") {
@@ -1121,7 +1626,7 @@ export async function calculateTeacherPayroll(
           ? appliedGroupPercentage
           : (percentageOfSessionFee ?? 0);
 
-      revisionVisitorAttendances.forEach((rAtt) => {
+      revisionVisitorAttendances.forEach((rAtt: any) => {
         // Find matching REVISION_SESSION voucher for this student & lesson
         const v = lessonVouchers.find(
           (voucher: any) =>
@@ -1191,7 +1696,7 @@ export async function calculateTeacherPayroll(
     if (bv.class?.isFormation) {
       return;
     }
-    const refunded = bv.refunds?.reduce((sum, r) => sum + Number(r.amount), 0) || 0;
+    const refunded = bv.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount), 0) || 0;
     const netBookAmount = Math.max(0, Number(bv.amount) - refunded);
     if (netBookAmount > 0) {
       totalBookRevenue += netBookAmount;
@@ -1200,7 +1705,7 @@ export async function calculateTeacherPayroll(
       const targetBranchId = bv.targetBranchId || bv.class?.branchId || teacher.TeacherBranch[0]?.branchId || 1;
       const resolvedBranchName =
         branchSessionsMap.get(targetBranchId)?.branchName ||
-        teacher.TeacherBranch.find((tb) => tb.branchId === targetBranchId)?.Branch.name ||
+        teacher.TeacherBranch.find((tb: any) => tb.branchId === targetBranchId)?.Branch.name ||
         bv.class?.name ||
         "Siège";
 
@@ -1368,10 +1873,12 @@ export async function calculateTeacherPayroll(
       }
 
       if (eligiblePayingWeight > 0) {
-        const lessonRecord = await prisma.lesson.findUnique({
-          where: { id: pl.id },
-          include: { branch: true, class: true },
-        });
+        const lessonRecord =
+          lessonByIdMap.get(pl.id) ??
+          (await prisma.lesson.findUnique({
+            where: { id: pl.id },
+            include: { branch: true, class: true },
+          }));
         if (lessonRecord) {
           const pricePerCycle = lessonRecord.class?.pricePerCycle
             ? Number(lessonRecord.class.pricePerCycle)
@@ -1495,7 +2002,7 @@ export async function calculateTeacherPayroll(
         const targetBranchId = historyData.classInfo?.branchId || teacher.TeacherBranch[0]?.branchId || 1;
         const resolvedBranchName =
           branchSessionsMap.get(targetBranchId)?.branchName ||
-          teacher.TeacherBranch.find((tb) => tb.branchId === targetBranchId)?.Branch.name ||
+          teacher.TeacherBranch.find((tb: any) => tb.branchId === targetBranchId)?.Branch.name ||
           "Siège";
 
         const bEntry = branchSessionsMap.get(targetBranchId) || {
@@ -1554,49 +2061,29 @@ export async function calculateTeacherPayroll(
     cycleNumber: number;
   }> = [];
 
-  // Find all formation classes taught by this teacher or with lessons taught by this teacher
-  const formationClasses = groupFilter === "normal"
-    ? []
-    : await prisma.class.findMany({
-        where: {
-          isFormation: true,
-          OR: [
-            { teacherId: teacher.id },
-            { id: { in: classIds } },
-          ],
-        },
-        include: {
-          FormationLevel: true,
-          branch: true,
-          enrollments: {
-            include: {
-              student: { select: { id: true, name: true } },
-            },
-          },
-        },
-      });
-
   if (formationClasses.length > 0) {
     const formationClassIds = formationClasses.map((fc) => fc.id);
-    const [allFormationLessons, allFormationVouchers] = await Promise.all([
-      prisma.lesson.findMany({
-        where: { classId: { in: formationClassIds } },
-        select: { id: true, classId: true, startsAt: true, isTeacherAbsent: true, isFree: true },
-        orderBy: { startsAt: "asc" },
-      }),
-      prisma.voucher.findMany({
-        where: {
-          classId: { in: formationClassIds },
-          paymentType: "FORMATION",
-          isVoided: false,
-          isRefund: false,
-          status: { not: "REFUNDED" },
-          issuedAt: { lte: endDate },
-        },
-        include: { refunds: true },
-        orderBy: { issuedAt: "asc" },
-      }),
-    ]);
+    const [allFormationLessons, allFormationVouchers] =
+      prefetchedFormationData ??
+      (await Promise.all([
+        prisma.lesson.findMany({
+          where: { classId: { in: formationClassIds } },
+          select: { id: true, classId: true, startsAt: true, isTeacherAbsent: true, isFree: true },
+          orderBy: { startsAt: "asc" },
+        }),
+        prisma.voucher.findMany({
+          where: {
+            classId: { in: formationClassIds },
+            paymentType: "FORMATION",
+            isVoided: false,
+            isRefund: false,
+            status: { not: "REFUNDED" },
+            issuedAt: { lte: endDate },
+          },
+          include: { refunds: true },
+          orderBy: { issuedAt: "asc" },
+        }),
+      ]));
 
     for (const fClass of formationClasses) {
       const classLessons = allFormationLessons.filter((l) => l.classId === fClass.id);
@@ -1659,7 +2146,7 @@ export async function calculateTeacherPayroll(
 
         studentVouchers.forEach((v) => {
           const vAmount = Number(v.amount || 0);
-          const refunded = (v.refunds || []).reduce((s, r) => s + Number(r.amount || 0), 0);
+          const refunded = (v.refunds || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
           const netPaid = Math.max(0, vAmount - refunded);
 
           if (new Date(v.issuedAt) <= endDate) {
@@ -1801,18 +2288,6 @@ export async function calculateTeacherPayroll(
     schoolGrossAmount = Math.round(schoolGrossAmount * 100) / 100;
   }
 
-  // Fetch Salary Advances within or up to this period
-  const salaryAdvancesList = await prisma.salaryAdvance.findMany({
-    where: {
-      personId: teacher.id,
-      date: {
-        gte: startDate,
-        lte: endDate,
-      },
-    },
-    orderBy: { date: "asc" },
-  });
-
   let totalAdvances = salaryAdvancesList.reduce(
     (sum, a) => sum + Number(a.amount),
     0
@@ -1820,34 +2295,11 @@ export async function calculateTeacherPayroll(
 
   // If calculating formation groups only and the teacher also has normal groups, reserve advances for the normal/consolidated run
   if (groupFilter === "formation") {
-    const normalClassesCount = await prisma.class.count({
-      where: { teacherId: teacher.id, isFormation: false },
-    });
+    const normalClassesCount = teacherClasses.filter((tc) => !tc.isFormation).length;
     if (normalClassesCount > 0) {
       totalAdvances = 0;
     }
   }
-
-  // Fetch Photocopy Charges for this teacher in this period (§2.5)
-  const photocopyChargesList = await prisma.photocopyCharge.findMany({
-    where: {
-      teacherId: teacher.id,
-      date: {
-        gte: startDate,
-        lte: endDate,
-      },
-      ...(groupFilter === "normal" && {
-        OR: [{ class: { isFormation: false } }, { classId: null }],
-      }),
-      ...(groupFilter === "formation" && {
-        class: { isFormation: true },
-      }),
-    },
-    include: {
-      Branch: true,
-    },
-    orderBy: { date: "asc" },
-  });
 
   const totalPhotocopyDeductions = photocopyChargesList.reduce(
     (sum, c) => sum + Number(c.costAmount),

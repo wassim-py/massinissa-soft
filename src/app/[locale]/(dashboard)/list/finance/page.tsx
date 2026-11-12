@@ -288,7 +288,7 @@ export default async function FinancePage(props: PageProps) {
     endDate.setUTCHours(23, 59, 59, 999);
 
     if (currentTab === "runs") {
-      const [rawOverview, rawPayslips, teacherList, rawAdvances] = await Promise.all([
+      const [rawOverview, rawPayslips, teacherList] = await Promise.all([
         getOwnerPayrollOverview(startDate, endDate),
         prisma.payslip.findMany({
           where: { personType: "TEACHER" },
@@ -299,19 +299,28 @@ export default async function FinancePage(props: PageProps) {
               include: { Branch: { select: { id: true, name: true } } },
             },
           },
-          take: 100,
+          take: 500,
         }),
         prisma.teacher.findMany({ select: { id: true, name: true } }),
-        prisma.salaryAdvance.findMany({
-          where: {
-            date: {
-              gte: startDate,
-              lte: endDate,
-            },
-          },
-          orderBy: { date: "asc" },
-        }),
       ]);
+
+      const advanceRangeStart = rawPayslips.reduce(
+        (min, p) => (p.PayrollRun.periodStart < min ? p.PayrollRun.periodStart : min),
+        startDate
+      );
+      const advanceRangeEnd = rawPayslips.reduce(
+        (max, p) => (p.PayrollRun.periodEnd > max ? p.PayrollRun.periodEnd : max),
+        endDate
+      );
+      const rawAdvances = await prisma.salaryAdvance.findMany({
+        where: {
+          date: {
+            gte: advanceRangeStart,
+            lte: advanceRangeEnd,
+          },
+        },
+        orderBy: { date: "asc" },
+      });
 
       overviewData = rawOverview;
       payrollRuns = [];
@@ -757,7 +766,12 @@ export default async function FinancePage(props: PageProps) {
               bonus: Number((p as any).bonus || 0),
               advances: Number(p.advances),
               advanceDetails: allSalaryAdvances
-                .filter((a) => a.personId === p.personId)
+                .filter(
+                  (a) =>
+                    a.personId === p.personId &&
+                    a.date >= p.PayrollRun.periodStart &&
+                    a.date <= p.PayrollRun.periodEnd
+                )
                 .map((a) => ({
                   id: a.id,
                   amount: Number(a.amount),

@@ -328,6 +328,17 @@ export default function TeacherReportConfigModal({
       } catch (e) {
         console.error("Window print error:", e);
       }
+    } else {
+      // Fallback when popup is blocked: open the generated HTML inside a new tab via Blob URL or download
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `rapport-enseignant-${reportData.teacher.name.replace(/[^0-9A-Za-z_-]/g, "_")}.html`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
   };
 

@@ -11032,12 +11032,13 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
     if (filters?.payslipIds && filters.payslipIds.length > 0) {
       whereClause.id = { in: filters.payslipIds };
     } else if (filters?.periodStart || filters?.periodEnd) {
+      // Match payslips whose run period overlaps [filters.periodStart, filters.periodEnd]
       const payrollRunFilter: any = {};
       if (filters.periodStart) {
-        payrollRunFilter.periodStart = { gte: normalizeDateToStartOfDay(filters.periodStart) };
+        payrollRunFilter.periodEnd = { gte: normalizeDateToStartOfDay(filters.periodStart) };
       }
       if (filters.periodEnd) {
-        payrollRunFilter.periodEnd = { lte: normalizeDateToEndOfDay(filters.periodEnd) };
+        payrollRunFilter.periodStart = { lte: normalizeDateToEndOfDay(filters.periodEnd) };
       }
       whereClause.PayrollRun = payrollRunFilter;
     }
@@ -11051,7 +11052,7 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
         },
       },
       orderBy: { id: "desc" },
-      take: 200,
+      take: 500,
     });
 
     if (payslips.length === 0) {
@@ -11082,78 +11083,78 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
     });
     const teacherMap = new Map(teachersList.map((t) => [t.id, t]));
 
-    const { calculateTeacherPayroll } = await import("./payroll");
+    const { calculateTeachersPayrollBatch } = await import("./payroll");
 
-    const teacherItems = await Promise.all(
-      payslips.map(async (p) => {
-        const teacher = teacherMap.get(p.personId);
-        const teacherName = teacher?.name || p.personId;
-
-        let groups: Array<{
-          teacherName: string;
-          groupName: string;
-          branchName?: string;
-          payableLessons: number;
-          teacherCut: number;
-          schoolCut: number;
-        }> = [];
-
-        try {
-          const calc = await calculateTeacherPayroll(
-            p.personId,
-            p.PayrollRun.periodStart,
-            p.PayrollRun.periodEnd
-          );
-
-          groups = (calc?.groupBreakdown || []).map((g) => ({
-            teacherName,
-            groupName: g.className,
-            branchName: g.branchName,
-            payableLessons: Number(g.payableLessonsCount || 0),
-            teacherCut: Number(g.amount || 0),
-            schoolCut: Number(g.schoolAmount || 0),
-          }));
-        } catch (calcError) {
-          console.warn(`[Master Report] calculateTeacherPayroll skipped for ${p.personId}:`, calcError);
-        }
-
-        if (groups.length === 0 && p.PayslipBranchLine && p.PayslipBranchLine.length > 0) {
-          groups = p.PayslipBranchLine.map((bl) => ({
-            teacherName,
-            groupName: "Séances consolidées",
-            branchName: bl.Branch?.name || `Siège #${bl.branchId}`,
-            payableLessons: Number(bl.sessionsCount || 0),
-            teacherCut: Number(bl.amount || 0),
-            schoolCut: 0,
-          }));
-        }
-
-        const totalLessons = groups.reduce((s, g) => s + g.payableLessons, 0) || Number(p.sessionsCount || 0);
-        const grossTeacherCut = Number(p.grossAmount);
-        const bonus = Number((p as any).bonus || 0);
-        const advances = Number(p.advances);
-        const photocopyDeductions = Number(p.photocopyDeductions);
-        const netTeacherCut = Number(p.netAmount);
-        const totalSchoolCut = groups.reduce((s, g) => s + g.schoolCut, 0);
-
-        return {
+    let calcResults: Array<Awaited<ReturnType<typeof calculateTeachersPayrollBatch>>[number]> = [];
+    try {
+      calcResults = await calculateTeachersPayrollBatch(
+        payslips.map((p) => ({
           teacherId: p.personId,
+          startDate: p.PayrollRun.periodStart,
+          endDate: p.PayrollRun.periodEnd,
+        }))
+      );
+    } catch (calcError) {
+      console.warn("[Master Report] calculateTeachersPayrollBatch failed:", calcError);
+    }
+
+    const teacherItems = payslips.map((p, currentIdx) => {
+      const teacher = teacherMap.get(p.personId);
+      const teacherName = teacher?.name || p.personId;
+      const calc = calcResults[currentIdx] ?? null;
+
+      let groups: Array<{
+        teacherName: string;
+        groupName: string;
+        branchName?: string;
+        payableLessons: number;
+        teacherCut: number;
+        schoolCut: number;
+      }> = (calc?.groupBreakdown || []).map((g) => ({
+        teacherName,
+        groupName: g.className,
+        branchName: g.branchName,
+        payableLessons: Number(g.payableLessonsCount || 0),
+        teacherCut: Number(g.amount || 0),
+        schoolCut: Number(g.schoolAmount || 0),
+      }));
+
+      if (groups.length === 0 && p.PayslipBranchLine && p.PayslipBranchLine.length > 0) {
+        groups = p.PayslipBranchLine.map((bl) => ({
           teacherName,
-          phone: teacher?.phone || null,
-          payslipId: p.id,
-          periodStart: p.PayrollRun.periodStart.toISOString(),
-          periodEnd: p.PayrollRun.periodEnd.toISOString(),
-          groups,
-          totalLessons,
-          grossTeacherCut,
-          bonus,
-          advances,
-          photocopyDeductions,
-          netTeacherCut,
-          totalSchoolCut,
-        };
-      })
-    );
+          groupName: "Séances consolidées",
+          branchName: bl.Branch?.name || `Siège #${bl.branchId}`,
+          payableLessons: Number(bl.sessionsCount || 0),
+          teacherCut: Number(bl.amount || 0),
+          schoolCut: 0,
+        }));
+      }
+
+      const totalLessons = groups.reduce((s, g) => s + g.payableLessons, 0) || Number(p.sessionsCount || 0);
+      const grossTeacherCut = Number(p.grossAmount);
+      const bonus = Number((p as any).bonus || 0);
+      const advances = Number(p.advances);
+      const photocopyDeductions = Number(p.photocopyDeductions);
+      const netTeacherCut = Number(p.netAmount);
+      const totalSchoolCut = groups.reduce((s, g) => s + g.schoolCut, 0);
+
+      return {
+        teacherId: p.personId,
+        teacherName,
+        phone: teacher?.phone || null,
+        payslipId: p.id,
+        periodStart: p.PayrollRun.periodStart.toISOString(),
+        periodEnd: p.PayrollRun.periodEnd.toISOString(),
+        groups,
+        totalLessons,
+        grossTeacherCut,
+        bonus,
+        advances,
+        photocopyDeductions,
+        netTeacherCut,
+        totalSchoolCut,
+      };
+    });
 
     const totalLessons = teacherItems.reduce((sum, t) => sum + t.totalLessons, 0);
     const totalTeacherGross = teacherItems.reduce((sum, t) => sum + t.grossTeacherCut, 0);
@@ -11163,9 +11164,18 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
     const totalSchoolGross = teacherItems.reduce((sum, t) => sum + t.totalSchoolCut, 0);
     const totalSchoolNet = totalSchoolGross + totalPhotocopy;
 
+    const minPeriodStart = payslips.reduce(
+      (min, p) => (p.PayrollRun.periodStart < min ? p.PayrollRun.periodStart : min),
+      payslips[0].PayrollRun.periodStart
+    );
+    const maxPeriodEnd = payslips.reduce(
+      (max, p) => (p.PayrollRun.periodEnd > max ? p.PayrollRun.periodEnd : max),
+      payslips[0].PayrollRun.periodEnd
+    );
+
     const data = {
-      periodStart: filters?.periodStart || (payslips[0] ? payslips[payslips.length - 1].PayrollRun.periodStart.toISOString() : undefined),
-      periodEnd: filters?.periodEnd || (payslips[0] ? payslips[0].PayrollRun.periodEnd.toISOString() : undefined),
+      periodStart: filters?.periodStart || minPeriodStart.toISOString(),
+      periodEnd: filters?.periodEnd || maxPeriodEnd.toISOString(),
       generatedAt: new Date().toISOString(),
       teachersCount: teacherItems.length,
       totalLessons,
