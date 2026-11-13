@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useTransition, useEffect } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { toast } from "react-toastify";
@@ -14,6 +14,7 @@ interface DeclareSurplusMoneyModalProps {
   branchName: string;
   isOwner?: boolean;
   selectedDate?: string;
+  branches?: Array<{ id: number; name: string }>;
 }
 
 export default function DeclareSurplusMoneyModal({
@@ -21,13 +22,17 @@ export default function DeclareSurplusMoneyModal({
   branchName,
   isOwner = false,
   selectedDate,
+  branches,
 }: DeclareSurplusMoneyModalProps) {
   const t = useTranslations("dailyLedger");
+  const locale = useLocale();
+  const isAr = locale === "ar";
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [amount, setAmount] = useState<string>("");
   const [reason, setReason] = useState<string>("");
   const [date, setDate] = useState<string>(selectedDate || getAlgiersTodayDateString());
+  const [targetBranchId, setTargetBranchId] = useState<number>(branchId);
   const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
@@ -36,10 +41,15 @@ export default function DeclareSurplusMoneyModal({
     }
   }, [selectedDate]);
 
+  useEffect(() => {
+    setTargetBranchId(branchId);
+  }, [branchId]);
+
   const handleOpen = () => {
     setAmount("");
     setReason("");
     setDate(selectedDate || getAlgiersTodayDateString());
+    setTargetBranchId(branchId || branches?.[0]?.id || 1);
     setIsOpen(true);
   };
 
@@ -59,7 +69,7 @@ export default function DeclareSurplusMoneyModal({
     startTransition(async () => {
       try {
         const res = await declareSurplusMoneyAction({
-          branchId,
+          branchId: isOwner && branches && branches.length > 0 ? targetBranchId : branchId,
           amount: numAmount,
           reason,
           date: isOwner && date ? date : undefined,
@@ -119,6 +129,26 @@ export default function DeclareSurplusMoneyModal({
 
             {/* Modal Form */}
             <form onSubmit={handleSubmit} className="p-5 space-y-4">
+              {isOwner && branches && branches.length > 1 && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    {isAr ? "الفرع" : "Branche"}
+                  </label>
+                  <select
+                    value={targetBranchId}
+                    onChange={(e) => setTargetBranchId(Number(e.target.value))}
+                    disabled={isPending}
+                    className="w-full px-3.5 py-2.5 text-sm bg-surface border border-border rounded-xl outline-hidden transition-all"
+                  >
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {isOwner && (
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">

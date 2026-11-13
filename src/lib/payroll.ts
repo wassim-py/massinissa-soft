@@ -1,6 +1,8 @@
 import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { normalizeDateToStartOfDay, upsertDailyLedger } from "./ledger";
+import { normalizeOutcomeFundingSource } from "./financeConstants";
+import { syncOutcomeWithCaisseNoire, cleanupCaisseNoireLinks } from "./caisseNoireSync";
 import {
   classifyStudentAttendanceHistory,
   isLessonApplicableToEnrollment,
@@ -2714,11 +2716,16 @@ export async function generatePayrollRun(
 }
 
 /**
- * Updates a PayrollRun status (DRAFT -> VALIDATED -> PAID).
+ * Updates a PayrollRun status (DRAFT -> VALIDATED -> PAID) and keeps Caisse Noire synced.
  */
 export async function updatePayrollRunStatus(
   payrollRunId: number,
-  newStatus: "DRAFT" | "VALIDATED" | "PAID"
+  newStatus: "DRAFT" | "VALIDATED" | "PAID",
+  opts?: {
+    fundingSource?: string | null;
+    targetPayslipId?: number;
+    recordedBy?: string;
+  }
 ) {
   return await prisma.$transaction(
     async (tx) => {
@@ -2742,7 +2749,43 @@ export async function updatePayrollRunStatus(
       data: { status: newStatus },
     });
 
-    // If unmarking from PAID back to DRAFT/VALIDATED, clean up any legacy ledger entries
+    const teacherSlips = run.Payslip.filter((p) => p.personType === "TEACHER");
+    const targetedSlips = opts?.targetPayslipId
+      ? teacherSlips.filter((p) => p.id === opts.targetPayslipId)
+      : teacherSlips;
+
+    if (newStatus === "PAID") {
+      const teacherIds = Array.from(new Set(targetedSlips.map((p) => p.personId)));
+      const teachers = teacherIds.length > 0
+        ? await tx.teacher.findMany({ where: { id: { in: teacherIds } }, select: { id: true, name: true } })
+        : [];
+      const teacherNameMap = new Map(teachers.map((t) => [t.id, t.name]));
+
+      for (const slip of targetedSlips) {
+        const slipFunding = opts?.fundingSource
+          ? normalizeOutcomeFundingSource(opts.fundingSource)
+          : normalizeOutcomeFundingSource((slip as any).fundingSource);
+        const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+          existingTxId: (slip as any).caisseNoireTxId,
+          fundingSource: slipFunding,
+          isDisbursed: true,
+          amount: Number(slip.netAmount),
+          description: `[Paie Enseignant] ${teacherNameMap.get(slip.personId) || slip.personId} (Cycle #${payrollRunId})`,
+          date: new Date(),
+          recordedBy: opts?.recordedBy || "owner",
+        });
+
+        await tx.payslip.update({
+          where: { id: slip.id },
+          data: {
+            fundingSource: slipFunding,
+            caisseNoireTxId: cnTxId,
+          },
+        });
+      }
+    }
+
+    // If unmarking from PAID back to DRAFT/VALIDATED, clean up any legacy ledger entries & Caisse Noire links
     if (run.status === "PAID" && newStatus !== "PAID") {
       await tx.dailyLedger.deleteMany({
         where: {
@@ -2750,6 +2793,16 @@ export async function updatePayrollRunStatus(
           date: run.periodEnd,
         },
       });
+      await cleanupCaisseNoireLinks(
+        tx,
+        teacherSlips.map((p) => (p as any).caisseNoireTxId)
+      );
+      if (teacherSlips.length > 0) {
+        await tx.payslip.updateMany({
+          where: { id: { in: teacherSlips.map((p) => p.id) } },
+          data: { caisseNoireTxId: null },
+        });
+      }
     }
 
     return updated;
@@ -2764,9 +2817,10 @@ export async function updatePayrollRunStatus(
 /**
  * Deletes a PayrollRun and safely rolls back all its associated records:
  * 1. PayslipBranchLine entries
- * 2. Payslip entries
- * 3. Any DailyLedger PAYROLL_OUT entries posted if the run was marked PAID
- * 4. The PayrollRun itself
+ * 2. Linked CaisseNoireTransaction withdrawals
+ * 3. Payslip entries
+ * 4. Any DailyLedger PAYROLL_OUT entries posted if the run was marked PAID
+ * 5. The PayrollRun itself
  */
 export async function deletePayrollRun(payrollRunId: number) {
   return await prisma.$transaction(
@@ -2775,7 +2829,7 @@ export async function deletePayrollRun(payrollRunId: number) {
       where: { id: payrollRunId },
       include: {
         Payslip: {
-          select: { id: true },
+          select: { id: true, caisseNoireTxId: true },
         },
       },
     });
@@ -2785,6 +2839,10 @@ export async function deletePayrollRun(payrollRunId: number) {
     }
 
     const payslipIds = run.Payslip.map((p) => p.id);
+    await cleanupCaisseNoireLinks(
+      tx,
+      run.Payslip.map((p) => p.caisseNoireTxId)
+    );
 
     if (payslipIds.length > 0) {
       await tx.payslipBranchLine.deleteMany({

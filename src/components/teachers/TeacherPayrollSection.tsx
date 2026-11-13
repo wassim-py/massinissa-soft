@@ -33,6 +33,8 @@ import { PrintPayslipButton } from "@/components/PrintPayslipButton";
 import { PayslipPrintData } from "@/components/printable/PayslipTicket";
 import { PrintOwnerConsolidationButton } from "@/components/PrintOwnerConsolidationButton";
 import { OwnerTeacherConsolidationPrintData } from "@/components/printable/OwnerTeacherConsolidationReport";
+import { OutcomeFundingSourceSelect } from "@/components/finance/OutcomeFundingSourceSelect";
+import { type OutcomeFundingSource } from "@/lib/financeConstants";
 
 interface TeacherPayrollSectionProps {
   teacherId: string;
@@ -90,6 +92,7 @@ export default function TeacherPayrollSection({
   const [advanceAmount, setAdvanceAmount] = useState<string>("");
   const [advanceDate, setAdvanceDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
   const [advanceRemarque, setAdvanceRemarque] = useState<string>("");
+  const [advanceFundingSource, setAdvanceFundingSource] = useState<OutcomeFundingSource>("SCHOOL_MONTH_BENEFICE");
   const [isSubmittingAdvance, setIsSubmittingAdvance] = useState(false);
   const [isDeletingAdvanceId, setIsDeletingAdvanceId] = useState<number | null>(null);
   const [showAdvanceDetails, setShowAdvanceDetails] = useState(false);
@@ -241,12 +244,14 @@ export default function TeacherPayrollSection({
         amount: amt,
         date: advanceDate || new Date().toISOString().split("T")[0],
         remarque: advanceRemarque || undefined,
+        fundingSource: advanceFundingSource,
       });
       setIsSubmittingAdvance(false);
       if (res.success) {
         setShowAdvanceModal(false);
         setAdvanceAmount("");
         setAdvanceRemarque("");
+        setAdvanceFundingSource("SCHOOL_MONTH_BENEFICE");
         setFeedback({
           type: "success",
           message:
@@ -1574,6 +1579,12 @@ export default function TeacherPayrollSection({
                   className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-border bg-surface text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                 />
               </div>
+
+              <OutcomeFundingSourceSelect
+                value={advanceFundingSource}
+                onChange={setAdvanceFundingSource}
+                locale={locale}
+              />
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
                 <Button

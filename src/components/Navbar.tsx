@@ -1,27 +1,66 @@
 import { UserButton } from "@clerk/nextjs";
-import { currentUser } from "@/lib/auth";
+import { currentUser, getActiveBranchId, getAuthSession } from "@/lib/auth";
+import prisma from "@/lib/prisma";
+import { getAlgiersDayBounds, getAlgiersTodayDateString } from "@/lib/algiersDate";
 import { getTranslations } from "next-intl/server";
 import LanguageSwitcher from "./LanguageSwitcher";
 import BranchSwitcher from "./BranchSwitcher";
 import NavbarAnnouncementBadge from "./announcements/NavbarAnnouncementBadge";
 import NavbarBiometricControl from "./biometrics/NavbarBiometricControl";
+import NavbarPhotocopyControl from "./photocopy/NavbarPhotocopyControl";
 
 const Navbar = async ({
   mobileNav,
 }: {
   mobileNav?: React.ReactNode;
 }) => {
-  const user = await currentUser({ treatPendingAsSignedOut: false });
-  const rawRole = (user?.publicMetadata?.role as string) || "";
+  const [user, session, tRoles] = await Promise.all([
+    currentUser({ treatPendingAsSignedOut: false }).catch(() => null),
+    getAuthSession(),
+    getTranslations("roles"),
+  ]);
+  const rawRole = (user?.publicMetadata?.role as string) || session.rawRole || "";
   const roleKey = rawRole.toLowerCase();
   const isAdminOrOwner =
+    session.isOwnerOrAdmin ||
     !roleKey ||
     roleKey === "owner" ||
     roleKey === "admin" ||
     roleKey === "branch_admin" ||
     roleKey === "branch";
 
-  const tRoles = await getTranslations("roles");
+  let activeBranchId = 1;
+  let activeBranchName = "";
+  let todayPhotocopyCount = 0;
+
+  if (session.isOwnerOrAdmin) {
+    activeBranchId = await getActiveBranchId();
+    activeBranchName = `Siège #${activeBranchId}`;
+    try {
+      const todayBounds = getAlgiersDayBounds(getAlgiersTodayDateString());
+      const [branchRow, countRow] = await Promise.all([
+        prisma.branch.findUnique({
+          where: { id: activeBranchId },
+          select: { name: true },
+        }),
+        prisma.photocopyCharge.count({
+          where: {
+            branchId: activeBranchId,
+            date: {
+              gte: todayBounds.startUtc,
+              lte: todayBounds.endUtc,
+            },
+          },
+        }),
+      ]);
+      if (branchRow?.name) {
+        activeBranchName = branchRow.name;
+      }
+      todayPhotocopyCount = countRow;
+    } catch {
+      // Fallback gracefully if transient DB error occurs during header render
+    }
+  }
   let translatedRole = rawRole;
   if (roleKey === "branch_admin" || roleKey === "branch") {
     translatedRole = tRoles("branch_admin");
@@ -48,8 +87,16 @@ const Navbar = async ({
         <BranchSwitcher />
       </div>
 
-      {/* END: BIOMETRIC MONITOR, NOTIFICATION BELL, LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
+      {/* END: PHOTOCOPY JOURNAL, BIOMETRIC JOURNAL, NOTIFICATION BELL, LANGUAGE SWITCHER, USER INFO, CLERK BUTTON */}
       <div className="flex items-center gap-1.5 sm:gap-2.5 md:gap-4 justify-end shrink-0">
+        {session.isOwnerOrAdmin && (
+          <NavbarPhotocopyControl
+            branchId={activeBranchId}
+            branchName={activeBranchName}
+            isOwner={session.isOwner}
+            initialTodayCount={todayPhotocopyCount}
+          />
+        )}
         {isAdminOrOwner && <NavbarBiometricControl />}
         <NavbarAnnouncementBadge />
         <LanguageSwitcher />

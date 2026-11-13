@@ -521,6 +521,99 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
         });
     };
 
+    const presentStatsByLessonKey = useMemo(() => {
+        const stats = new Map<
+            string,
+            { total: number; active: number; revisionVisitors: number; otherEnrolled: number }
+        >();
+
+        for (const instance of lessonInstances) {
+            stats.set(instance.key, {
+                total: 0,
+                active: 0,
+                revisionVisitors: 0,
+                otherEnrolled: 0,
+            });
+        }
+
+        const seenStudentIds = new Set<string>();
+        for (const student of students) {
+            if (seenStudentIds.has(student.id)) continue;
+            seenStudentIds.add(student.id);
+
+            const studentRecords = localAttendanceMap.get(student.id);
+            if (!studentRecords) continue;
+
+            const isActiveGroupStudent =
+                !student.isTransferred &&
+                !student.isRevisionVisitorOnly &&
+                student.status !== "SUSPENDED";
+
+            for (const instance of lessonInstances) {
+                const rawRecord = studentRecords.get(instance.key);
+                if (!rawRecord) continue;
+
+                const isPresent =
+                    typeof rawRecord === "boolean"
+                        ? rawRecord
+                        : !rawRecord.isTeacherAbsent && rawRecord.status === "PRESENT";
+
+                if (!isPresent) continue;
+
+                const entry = stats.get(instance.key);
+                if (!entry) continue;
+
+                entry.total += 1;
+                if (typeof rawRecord !== "boolean" && rawRecord.isRevisionVisitor) {
+                    entry.revisionVisitors += 1;
+                } else if (isActiveGroupStudent) {
+                    entry.active += 1;
+                } else {
+                    entry.otherEnrolled += 1;
+                }
+            }
+        }
+
+        return stats;
+    }, [lessonInstances, students, localAttendanceMap]);
+
+    const formatPresentBadgeTitle = (stats: {
+        total: number;
+        active: number;
+        revisionVisitors: number;
+        otherEnrolled: number;
+    }) => {
+        const base =
+            locale === "ar"
+                ? `${stats.total} تلميذ حاضر`
+                : `${stats.total} élève(s) présent(s)`;
+
+        if (stats.revisionVisitors === 0 && stats.otherEnrolled === 0) {
+            return base;
+        }
+
+        const parts: string[] = [];
+        if (stats.active > 0) {
+            parts.push(locale === "ar" ? `${stats.active} من الفوج` : `${stats.active} du groupe`);
+        }
+        if (stats.revisionVisitors > 0) {
+            parts.push(
+                locale === "ar"
+                    ? `${stats.revisionVisitors} زائر مراجعة`
+                    : `${stats.revisionVisitors} visiteur(s) révision`
+            );
+        }
+        if (stats.otherEnrolled > 0) {
+            parts.push(
+                locale === "ar"
+                    ? `${stats.otherEnrolled} محول/معلق`
+                    : `${stats.otherEnrolled} transféré(s)/suspendu(s)`
+            );
+        }
+
+        return `${base} (${parts.join(" + ")})`;
+    };
+
     return (
         <div className="w-full bg-surface rounded-xl border border-border shadow-xs font-sans">
             {/* Top Toolbar: Search Bar, Counter, and Legend */}
@@ -637,6 +730,13 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                 const isFree = Boolean(instance.isFree);
                                 const isExtra = Boolean(instance.isExtra);
                                 const isCatchUp = Boolean(instance.isCatchUp);
+                                const presentStats = presentStatsByLessonKey.get(instance.key) || {
+                                    total: 0,
+                                    active: 0,
+                                    revisionVisitors: 0,
+                                    otherEnrolled: 0,
+                                };
+                                const presentBadgeTitle = formatPresentBadgeTitle(presentStats);
 
                                 return (
                                     <th
@@ -656,6 +756,19 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                     : `Modifier la présence du ${formatDateHeader(instance.date)}`
                                             }
                                         >
+                                            {/* Present Students Badge above the lesson */}
+                                            <Badge
+                                                variant={presentStats.total > 0 ? "success" : "neutral"}
+                                                size="sm"
+                                                withDot
+                                                className="text-[10px] px-1.5 py-0.5 font-bold leading-none gap-1 shadow-sm"
+                                                title={presentBadgeTitle}
+                                                aria-label={presentBadgeTitle}
+                                            >
+                                                <span className="tabular-nums">{presentStats.total}</span>
+                                                <span>{locale === "ar" ? "حاضر" : "prés."}</span>
+                                            </Badge>
+
                                             <span className={`font-bold group-hover/col:text-primary group-hover/col:underline ${isFree ? "text-amber-950" : "text-gray-800"}`}>
                                                 {instance.lessonName}
                                             </span>

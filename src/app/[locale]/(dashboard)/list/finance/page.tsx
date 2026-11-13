@@ -45,6 +45,8 @@ const TransferredMoneySection = nextDynamic(() => import("@/components/finance/T
 import { getTranslations, getLocale } from "next-intl/server";
 import { getCaisseNoireSummary } from "@/lib/financeActions";
 import GlobalFinanceTopActions from "@/components/finance/GlobalFinanceTopActions";
+import { getAlgiersDayBounds } from "@/lib/algiersDate";
+import { normalizeOutcomeFundingSource, getOutcomeFundingSourceMeta } from "@/lib/financeConstants";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -148,6 +150,7 @@ export default async function FinancePage(props: PageProps) {
             name: true,
             roleTitle: true,
             phone: true,
+            branchId: true,
             branch: { select: { name: true } },
           },
         },
@@ -183,6 +186,7 @@ export default async function FinancePage(props: PageProps) {
     amount: Number(e.amount),
     description: e.description,
     category: e.category,
+    fundingSource: normalizeOutcomeFundingSource((e as any).fundingSource),
     date: e.date,
     recordedBy: e.recordedBy,
   }));
@@ -204,6 +208,7 @@ export default async function FinancePage(props: PageProps) {
     staffName: p.staffMember.name,
     roleTitle: p.staffMember.roleTitle,
     phone: p.staffMember.phone,
+    branchId: p.staffMember.branchId,
     branchName: p.staffMember.branch?.name,
     month: p.month,
     year: p.year,
@@ -211,6 +216,7 @@ export default async function FinancePage(props: PageProps) {
     advance: Number((p as any).advance || 0),
     bonus: Number((p as any).bonus || 0),
     status: p.status,
+    fundingSource: normalizeOutcomeFundingSource((p as any).fundingSource),
     paidAt: p.paidAt,
     notes: p.notes,
   }));
@@ -224,6 +230,7 @@ export default async function FinancePage(props: PageProps) {
     date: a.date.toISOString(),
     month: a.month,
     year: a.year,
+    fundingSource: normalizeOutcomeFundingSource((a as any).fundingSource),
     notes: a.notes,
     recordedBy: a.recordedBy,
   }));
@@ -240,11 +247,6 @@ export default async function FinancePage(props: PageProps) {
     caisseNoireTxId: st.caisseNoireTxId,
     createdAt: st.createdAt.toISOString(),
   }));
-
-  const totalDailyExpensesSum = formattedExpenses.reduce((sum, e) => sum + e.amount, 0);
-  const totalStaffPayrollSum = formattedStaffPayrolls
-    .filter((p) => p.status === "PAID")
-    .reduce((sum, p) => sum + Math.max(0, p.amount - (p.advance || 0) + (p.bonus || 0)), 0);
 
   const effectiveDateFrom = searchParams.dateFrom || (searchParams as any).date;
   const effectiveDateTo = searchParams.dateTo || (searchParams as any).date;
@@ -470,27 +472,109 @@ export default async function FinancePage(props: PageProps) {
     });
   }
 
-  // Confirmed Teacher Payslips (PAID)
+  // Selected period bounds anchored strictly to Africa/Algiers from dashboardData
+  const periodDateFromStr = dashboardData.dateFrom;
+  const periodDateToStr = dashboardData.dateTo;
+  const periodStartUtc = getAlgiersDayBounds(periodDateFromStr).startUtc;
+  const periodEndUtc = getAlgiersDayBounds(periodDateToStr).endUtc;
+  const isSingleDaySelection = periodDateFromStr === periodDateToStr;
+
+  const [fromYearNum, fromMonthNum] = periodDateFromStr.split("-").map(Number);
+  const [toYearNum, toMonthNum] = periodDateToStr.split("-").map(Number);
+  const fromYearMonth = fromYearNum * 12 + fromMonthNum;
+  const toYearMonth = toYearNum * 12 + toMonthNum;
+
+  const expensesBySource = {
+    SCHOOL_MONTH_BENEFICE: 0,
+    INSCRIPTION_FEES: 0,
+    CAISSE_NOIRE: 0,
+  };
+
+  const filteredPeriodExpenses = formattedExpenses.filter((e) => {
+    const d = new Date(e.date);
+    const inDateRange = d >= periodStartUtc && d <= periodEndUtc;
+    const inBranch = selectedBranchParam === "all" || e.branchId === selectedBranchParam;
+    return inDateRange && inBranch;
+  });
+
+  const totalDailyExpensesSum = filteredPeriodExpenses.reduce((sum, e) => {
+    expensesBySource[e.fundingSource] += e.amount;
+    return sum + e.amount;
+  }, 0);
+
+  const filteredPeriodStaffPayrolls = formattedStaffPayrolls.filter((p) => {
+    if (p.status !== "PAID") return false;
+    if (selectedBranchParam !== "all" && p.branchId !== selectedBranchParam) return false;
+    if (isSingleDaySelection) {
+      return Boolean(p.paidAt && new Date(p.paidAt) >= periodStartUtc && new Date(p.paidAt) <= periodEndUtc);
+    }
+    const ym = p.year * 12 + p.month;
+    return ym >= fromYearMonth && ym <= toYearMonth;
+  });
+
+  const totalStaffPayrollSum = filteredPeriodStaffPayrolls.reduce((sum, p) => {
+    const net = Math.max(0, p.amount - (p.advance || 0) + (p.bonus || 0));
+    expensesBySource[p.fundingSource] += net;
+    return sum + net;
+  }, 0);
+
+  // Confirmed Teacher Payslips (PAID/VALIDATED/CONFIRMED) filtered strictly by selected period & branch
   const confirmedTeacherPayslips = await prisma.payslip.findMany({
     where: {
       personType: "TEACHER",
       PayrollRun: {
         status: { in: ["PAID", "VALIDATED", "CONFIRMED"] },
+        ...(isSingleDaySelection
+          ? { periodEnd: { gte: periodStartUtc, lte: periodEndUtc } }
+          : {
+              periodEnd: { gte: periodStartUtc },
+              periodStart: { lte: periodEndUtc },
+            }),
       },
     },
     select: {
       netAmount: true,
+      fundingSource: true,
+      PayslipBranchLine: {
+        select: {
+          branchId: true,
+          amount: true,
+        },
+      },
     },
   });
 
-  const totalTeacherPayrollSum = confirmedTeacherPayslips.reduce(
-    (sum, p) => sum + Number(p.netAmount),
-    0
-  );
+  const totalTeacherPayrollSum = confirmedTeacherPayslips.reduce((sum, p) => {
+    const fullNet = Number(p.netAmount);
+    let effectiveAmount = fullNet;
+    if (selectedBranchParam !== "all") {
+      const allLinesTotal = p.PayslipBranchLine.reduce((acc, bl) => acc + Number(bl.amount), 0);
+      const branchLineTotal = p.PayslipBranchLine
+        .filter((bl) => bl.branchId === selectedBranchParam)
+        .reduce((acc, bl) => acc + Number(bl.amount), 0);
+      effectiveAmount = allLinesTotal > 0 ? fullNet * (branchLineTotal / allLinesTotal) : 0;
+    }
+    const src = normalizeOutcomeFundingSource((p as any).fundingSource);
+    expensesBySource[src] += effectiveAmount;
+    return sum + effectiveAmount;
+  }, 0);
 
   const totalRevenueSum = Number(dashboardData?.summary?.grossRevenue || 0);
   const totalAllDecaissed = totalDailyExpensesSum + totalStaffPayrollSum + totalTeacherPayrollSum;
   const netProfitSum = totalRevenueSum - totalAllDecaissed;
+
+  const buildSectionHref = (section: string, extra?: Record<string, string>) => {
+    const qs = new URLSearchParams();
+    qs.set("section", section);
+    if (searchParams.branchId) qs.set("branchId", searchParams.branchId);
+    if (searchParams.dateFrom) qs.set("dateFrom", searchParams.dateFrom);
+    if (searchParams.dateTo) qs.set("dateTo", searchParams.dateTo);
+    if (searchParams.periodMode) qs.set("periodMode", searchParams.periodMode);
+    if (extra) {
+      Object.entries(extra).forEach(([k, v]) => qs.set(k, v));
+    }
+    return `/list/finance?${qs.toString()}`;
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -526,7 +610,7 @@ export default async function FinancePage(props: PageProps) {
           {/* Primary Section Switcher */}
           <div className="flex items-center bg-surface-muted border border-border p-1 rounded-xl shadow-xs text-xs font-semibold overflow-x-auto scrollbar-none w-full sm:w-auto">
             <Link
-              href={`/list/finance?section=revenue`}
+              href={buildSectionHref("revenue")}
               className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
                 activeSection === "revenue"
                   ? "bg-primary text-white shadow-xs"
@@ -537,7 +621,7 @@ export default async function FinancePage(props: PageProps) {
               <span>{t("revenueTab")}</span>
             </Link>
             <Link
-              href={`/list/finance?section=expenses`}
+              href={buildSectionHref("expenses")}
               className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
                 activeSection === "expenses"
                   ? "bg-primary text-white shadow-xs"
@@ -548,7 +632,7 @@ export default async function FinancePage(props: PageProps) {
               <span>{t("expensesTab")}</span>
             </Link>
             <Link
-              href={`/list/finance?section=payroll&tab=runs`}
+              href={buildSectionHref("payroll", { tab: "runs" })}
               className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
                 activeSection === "payroll"
                   ? "bg-primary text-white shadow-xs"
@@ -559,7 +643,7 @@ export default async function FinancePage(props: PageProps) {
               <span>{t("payrollTab")}</span>
             </Link>
             <Link
-              href={`/list/finance?section=staff`}
+              href={buildSectionHref("staff")}
               className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
                 activeSection === "staff"
                   ? "bg-primary text-white shadow-xs"
@@ -570,7 +654,7 @@ export default async function FinancePage(props: PageProps) {
               <span>{t("staffPayrollTab")}</span>
             </Link>
             <Link
-              href={`/list/finance?section=caisseNoire`}
+              href={buildSectionHref("caisseNoire")}
               className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
                 activeSection === "caisseNoire"
                   ? "bg-primary text-white shadow-xs"
@@ -581,7 +665,7 @@ export default async function FinancePage(props: PageProps) {
               <span>{t("caisseNoireTab")}</span>
             </Link>
             <Link
-              href={`/list/finance?section=transfers`}
+              href={buildSectionHref("transfers")}
               className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-lg transition-all shrink-0 cursor-pointer ${
                 activeSection === "transfers"
                   ? "bg-primary text-white shadow-xs"
@@ -618,20 +702,44 @@ export default async function FinancePage(props: PageProps) {
 
         {/* Card 2: Dépenses Totales */}
         <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-muted uppercase tracking-wider">
-              {t("totalExpensesLabel")}
-            </span>
-            <div className="w-9 h-9 rounded-xl bg-danger-light/50 text-danger flex items-center justify-center">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col">
+              <span className="text-xs font-semibold text-muted uppercase tracking-wider">
+                {t("totalExpensesLabel")}
+              </span>
+              <span className="text-[10px] font-mono text-muted">
+                {periodDateFromStr === periodDateToStr
+                  ? periodDateFromStr
+                  : `${periodDateFromStr} → ${periodDateToStr}`}
+              </span>
+            </div>
+            <div className="w-9 h-9 rounded-xl bg-danger-light/50 text-danger flex items-center justify-center shrink-0">
               <TrendingDown className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-4">
             <div className="text-2xl font-bold font-mono text-danger truncate">
-              - {totalAllDecaissed.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
+              - {Math.round(totalAllDecaissed).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
               <span className="text-xs font-normal text-danger-soft">{t("currency")}</span>
             </div>
             <p className="text-form-helper text-muted mt-1">{t("totalExpensesDesc")}</p>
+            {totalAllDecaissed > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {(["SCHOOL_MONTH_BENEFICE", "INSCRIPTION_FEES", "CAISSE_NOIRE"] as const)
+                  .filter((k) => expensesBySource[k] > 0)
+                  .map((k) => {
+                    const meta = getOutcomeFundingSourceMeta(k, locale);
+                    return (
+                      <span
+                        key={k}
+                        className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${meta.pillClass}`}
+                      >
+                        {meta.shortLabel}: {Math.round(expensesBySource[k]).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+                      </span>
+                    );
+                  })}
+              </div>
+            )}
           </div>
         </Card>
 
@@ -685,7 +793,7 @@ export default async function FinancePage(props: PageProps) {
           {/* Payroll Sub-tab Navigation: Runs, Deductions, Rates */}
           <div className="flex flex-wrap items-center bg-surface p-1 rounded-xl gap-1 text-xs font-semibold border border-border shadow-xs w-fit">
             <Link
-              href={`/list/finance?section=payroll&tab=runs`}
+              href={buildSectionHref("payroll", { tab: "runs" })}
               className={`px-4 py-2 rounded-lg transition-all ${
                 currentTab === "runs"
                   ? "bg-primary text-white shadow-xs"
@@ -695,7 +803,7 @@ export default async function FinancePage(props: PageProps) {
               {t("runsAndPayslipsTab")}
             </Link>
             <Link
-              href={`/list/finance?section=payroll&tab=deductions`}
+              href={buildSectionHref("payroll", { tab: "deductions" })}
               className={`px-4 py-2 rounded-lg transition-all ${
                 currentTab === "deductions"
                   ? "bg-primary text-white shadow-xs"
@@ -705,7 +813,7 @@ export default async function FinancePage(props: PageProps) {
               {t("advancesAndDeductions")}
             </Link>
             <Link
-              href={`/list/finance?section=payroll&tab=rates`}
+              href={buildSectionHref("payroll", { tab: "rates" })}
               className={`px-4 py-2 rounded-lg transition-all ${
                 currentTab === "rates"
                   ? "bg-primary text-white shadow-xs"
@@ -780,6 +888,7 @@ export default async function FinancePage(props: PageProps) {
                 })),
               photocopyDeductions: Number(p.photocopyDeductions),
               netAmount: Number(p.netAmount),
+              fundingSource: normalizeOutcomeFundingSource((p as any).fundingSource),
               branchLines: p.PayslipBranchLine.map((bl: any) => ({
                 branchId: bl.branchId,
                 branchName: bl.Branch.name,
@@ -804,6 +913,7 @@ export default async function FinancePage(props: PageProps) {
               teacherName: teacherMap.get(a.personId) || a.personId,
               amount: Number(a.amount),
               date: a.date.toISOString(),
+              fundingSource: normalizeOutcomeFundingSource((a as any).fundingSource),
               remarque: a.remarque || null,
             }))}
             teachers={teachers.map((tItem: any) => ({

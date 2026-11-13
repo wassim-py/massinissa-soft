@@ -3,6 +3,7 @@
 import React from "react";
 import ReactDOMServer from "react-dom/server";
 import { useLocale } from "next-intl";
+import { buildPrintableReportHtml } from "@/lib/printReportHtml";
 import { PayslipTicket, PayslipPrintData } from "./printable/PayslipTicket";
 
 interface PrintPayslipButtonProps {
@@ -28,62 +29,22 @@ export const PrintPayslipButton = ({
     const printWindow = window.open("", "_blank", "width=900,height=800");
 
     if (printWindow) {
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html dir="${isAr ? "rtl" : "ltr"}" lang="${locale}">
-          <head>
-            <meta charset="utf-8">
-            <base href="${window.location.origin}/">
-            <title>${isAr ? "قسيمة راتب" : "Bulletin de paie"} #${data.id} - ${data.teacher.name}</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <link rel="preconnect" href="https://fonts.googleapis.com">
-            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-            <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
-            <style>
-              /* The currency symbol "د.ج" must share the Arabic typeface and weight of the
-                 surrounding text. Tailwind's default font-mono stack has no Arabic coverage,
-                 so in RTL Tajawal comes first and digits + symbol share one typeface. */
-              .font-mono {
-                font-family: ${isAr ? "'Tajawal', sans-serif" : "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"} !important;
-              }
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const html = buildPrintableReportHtml({
+        title: `${isAr ? "قسيمة راتب" : "Bulletin de paie"} #${data.id} - ${data.teacher.name}`,
+        contentHtml: printContent,
+        isAr,
+        locale,
+        origin,
+        includeToolbar: false,
+        autoPrint: true,
+        closeAfterPrint: true,
+      });
 
-              body {
-                font-family: ${isAr ? "'Tajawal', sans-serif" : "system-ui, -apple-system, sans-serif"};
-                background-color: #fff;
-                color: #000;
-                margin: 0;
-                padding: 20px;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-              @media print {
-                body {
-                  margin: 0;
-                  padding: 0;
-                  -webkit-print-color-adjust: exact !important;
-                  print-color-adjust: exact !important;
-                }
-                .no-print { display: none; }
-                @page {
-                  size: A4 portrait;
-                  margin: 8mm;
-                }
-              }
-            </style>
-          </head>
-          <body>
-            ${printContent}
-          </body>
-        </html>
-      `);
-
+      printWindow.document.open();
+      printWindow.document.write(html);
       printWindow.document.close();
       printWindow.focus();
-
-      setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-      }, 500);
     }
   };
 

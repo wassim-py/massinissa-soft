@@ -65,9 +65,9 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
     width: '100%',
     maxWidth: '210mm',
     margin: '0 auto',
-    padding: '24px',
+    padding: '20px',
     fontFamily: 'system-ui, -apple-system, sans-serif',
-    fontSize: '11pt',
+    fontSize: '10pt',
     color: '#111827',
     direction: 'ltr',
     backgroundColor: '#ffffff',
@@ -432,111 +432,113 @@ export function OwnerTeacherConsolidationReport({ data }: OwnerTeacherConsolidat
         </div>
       )}
 
-      {/* Financial Consolidation & Net Payout Summary (Strictly Owner) */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        {/* Teacher Payout Summary */}
-        <div className="bg-rose-50/40 border border-rose-200 rounded-lg p-3 text-xs">
-          <p className="font-bold text-rose-950 uppercase mb-2 pb-1 border-b border-rose-200">
-            Masse Salariale Enseignant (Sélectionnée)
-          </p>
-          <div className="space-y-1.5 font-mono">
-            {includeRegular && (
-              <div className="flex justify-between">
-                <span className="text-gray-600 font-sans">Part Cours Réguliers :</span>
-                <span className="font-bold text-gray-900">{formatDZD(regularTeacherCut)}</span>
+      {/* Financial Consolidation & Net Payout Summary & Signature Footer kept together */}
+      <div className="avoid-break">
+        <div className="grid grid-cols-2 gap-4 mb-5">
+          {/* Teacher Payout Summary */}
+          <div className="bg-rose-50/40 border border-rose-200 rounded-lg p-3 text-xs">
+            <p className="font-bold text-rose-950 uppercase mb-2 pb-1 border-b border-rose-200">
+              Masse Salariale Enseignant (Sélectionnée)
+            </p>
+            <div className="space-y-1.5 font-mono">
+              {includeRegular && (
+                <div className="flex justify-between items-center gap-2">
+                  <span className="text-gray-600 font-sans">Part Cours Réguliers :</span>
+                  <span className="font-bold text-gray-900 whitespace-nowrap shrink-0">{formatDZD(regularTeacherCut)}</span>
+                </div>
+              )}
+              {includeFormation && (
+                <div className="flex justify-between items-center gap-2 text-rose-800 font-semibold">
+                  <span className="font-sans">Part Formations & Dawarat :</span>
+                  <span className="whitespace-nowrap shrink-0">{formatDZD(formationTeacherCut)}</span>
+                </div>
+              )}
+              {includeBooks && (
+                <div className="flex justify-between items-center gap-2 text-indigo-800 font-semibold">
+                  <span className="font-sans">Part Frais de Livres :</span>
+                  <span className="whitespace-nowrap shrink-0">{formatDZD(booksTotalCut)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center gap-2 border-t border-rose-200/60 pt-1 font-bold text-gray-950">
+                <span className="font-sans">Total Brut Enseignant :</span>
+                <span className="whitespace-nowrap shrink-0">{formatDZD(totalGrossPayout)}</span>
               </div>
-            )}
-            {includeFormation && (
-              <div className="flex justify-between text-rose-800 font-semibold">
-                <span className="font-sans">Part Formations & Dawarat :</span>
-                <span>{formatDZD(formationTeacherCut)}</span>
+              {bonus > 0 && (
+                <div className="flex justify-between items-center gap-2 text-emerald-700 font-bold">
+                  <span className="font-sans">Prime / Bonus accordé :</span>
+                  <span className="whitespace-nowrap shrink-0">+ {formatDZD(bonus)}</span>
+                </div>
+              )}
+              {bonus < 0 && (
+                <div className="flex justify-between items-center gap-2 text-rose-700 font-bold">
+                  <span className="font-sans">Déduction / Retenue :</span>
+                  <span className="whitespace-nowrap shrink-0">- {formatDZD(Math.abs(bonus))}</span>
+                </div>
+              )}
+              {advances > 0 && (
+                <div className="flex justify-between items-center gap-2 text-red-600">
+                  <span className="font-sans">Avances sur salaire déduites :</span>
+                  <span className="whitespace-nowrap shrink-0">- {formatDZD(advances)}</span>
+                </div>
+              )}
+              {photocopy > 0 && (
+                <div className="flex justify-between items-center gap-2 text-amber-700">
+                  <span className="font-sans">Frais de photocopie déduits :</span>
+                  <span className="whitespace-nowrap shrink-0">- {formatDZD(photocopy)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center gap-2 border-t border-rose-300 pt-1.5 text-sm font-black text-rose-800">
+                <span className="font-sans">Net Réel à Décaisser :</span>
+                <span className="whitespace-nowrap shrink-0">{formatDZD(netTeacher)}</span>
               </div>
-            )}
-            {includeBooks && (
-              <div className="flex justify-between text-indigo-800 font-semibold">
-                <span className="font-sans">Part Frais de Livres :</span>
-                <span>{formatDZD(booksTotalCut)}</span>
-              </div>
-            )}
-            <div className="flex justify-between border-t border-rose-200/60 pt-1 font-bold text-gray-950">
-              <span className="font-sans">Total Brut Enseignant :</span>
-              <span>{formatDZD(totalGrossPayout)}</span>
             </div>
-            {bonus > 0 && (
-              <div className="flex justify-between text-emerald-700 font-bold">
-                <span className="font-sans">Prime / Bonus accordé :</span>
-                <span>+ {formatDZD(bonus)}</span>
+          </div>
+
+          {/* School Share Summary */}
+          <div className="bg-emerald-50/40 border border-emerald-200 rounded-lg p-3 text-xs">
+            <p className="font-bold text-emerald-950 uppercase mb-2 pb-1 border-b border-emerald-200">
+              Part École Consolidée
+            </p>
+            <div className="space-y-1.5 font-mono">
+              {includeRegular && (
+                <div className="flex justify-between items-center gap-2">
+                  <span className="text-gray-600 font-sans">Part Cours Réguliers École :</span>
+                  <span className="font-bold text-gray-900 whitespace-nowrap shrink-0">{formatDZD(regularSchoolCut)}</span>
+                </div>
+              )}
+              {includeFormation && (
+                <div className="flex justify-between items-center gap-2 text-emerald-800 font-semibold">
+                  <span className="font-sans">Part Formations École :</span>
+                  <span className="whitespace-nowrap shrink-0">{formatDZD(formationSchoolCut)}</span>
+                </div>
+              )}
+              {photocopy > 0 && (
+                <div className="flex justify-between items-center gap-2 text-emerald-700">
+                  <span className="font-sans">Photocopies récupérées :</span>
+                  <span className="whitespace-nowrap shrink-0">+ {formatDZD(photocopy)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center gap-2 border-t border-emerald-200 pt-1.5 text-sm font-black text-emerald-800">
+                <span className="font-sans">Rendement Net École :</span>
+                <span className="whitespace-nowrap shrink-0">{formatDZD(netSchool)}</span>
               </div>
-            )}
-            {bonus < 0 && (
-              <div className="flex justify-between text-rose-700 font-bold">
-                <span className="font-sans">Déduction / Retenue :</span>
-                <span>- {formatDZD(Math.abs(bonus))}</span>
-              </div>
-            )}
-            {advances > 0 && (
-              <div className="flex justify-between text-red-600">
-                <span className="font-sans">Avances sur salaire déduites :</span>
-                <span>- {formatDZD(advances)}</span>
-              </div>
-            )}
-            {photocopy > 0 && (
-              <div className="flex justify-between text-amber-700">
-                <span className="font-sans">Frais de photocopie déduits :</span>
-                <span>- {formatDZD(photocopy)}</span>
-              </div>
-            )}
-            <div className="flex justify-between border-t border-rose-300 pt-1.5 text-sm font-black text-rose-800">
-              <span className="font-sans">Net Réel à Décaisser :</span>
-              <span>{formatDZD(netTeacher)}</span>
             </div>
           </div>
         </div>
 
-        {/* School Share Summary */}
-        <div className="bg-emerald-50/40 border border-emerald-200 rounded-lg p-3 text-xs">
-          <p className="font-bold text-emerald-950 uppercase mb-2 pb-1 border-b border-emerald-200">
-            Part École Consolidée
-          </p>
-          <div className="space-y-1.5 font-mono">
-            {includeRegular && (
-              <div className="flex justify-between">
-                <span className="text-gray-600 font-sans">Part Cours Réguliers École :</span>
-                <span className="font-bold text-gray-900">{formatDZD(regularSchoolCut)}</span>
-              </div>
-            )}
-            {includeFormation && (
-              <div className="flex justify-between text-emerald-800 font-semibold">
-                <span className="font-sans">Part Formations École :</span>
-                <span>{formatDZD(formationSchoolCut)}</span>
-              </div>
-            )}
-            {photocopy > 0 && (
-              <div className="flex justify-between text-emerald-700">
-                <span className="font-sans">Photocopies récupérées :</span>
-                <span>+ {formatDZD(photocopy)}</span>
-              </div>
-            )}
-            <div className="flex justify-between border-t border-emerald-200 pt-1.5 text-sm font-black text-emerald-800">
-              <span className="font-sans">Rendement Net École :</span>
-              <span>{formatDZD(netSchool)}</span>
-            </div>
+        {/* Signature and Confidentiality Footer */}
+        <div className="border-t border-gray-300 pt-4 flex justify-between items-end text-xs text-gray-600">
+          <div>
+            <p className="font-bold text-gray-800">Avis de Confidentialité :</p>
+            <p className="text-[10px] text-gray-500 max-w-sm">
+              Ce rapport consolidé détaille la marge de l&apos;établissement et les montants par groupe.
+              Il est exclusivement destiné au propriétaire / à la direction générale et ne doit en aucun cas être remis à l&apos;enseignant.
+            </p>
           </div>
-        </div>
-      </div>
-
-      {/* Signature and Confidentiality Footer */}
-      <div className="border-t border-gray-300 pt-4 flex justify-between items-end text-xs text-gray-600">
-        <div>
-          <p className="font-bold text-gray-800">Avis de Confidentialité :</p>
-          <p className="text-[10px] text-gray-500 max-w-sm">
-            Ce rapport consolidé détaille la marge de l&apos;établissement et les montants par groupe.
-            Il est exclusivement destiné au propriétaire / à la direction générale et ne doit en aucun cas être remis à l&apos;enseignant.
-          </p>
-        </div>
-        <div className="text-center min-w-[180px]">
-          <p className="text-xs font-semibold mb-8 text-gray-700">Signature & Cachet de la Direction</p>
-          <div className="border-b border-gray-400 w-36 mx-auto"></div>
+          <div className="text-center min-w-[180px]">
+            <p className="text-xs font-semibold mb-6 text-gray-700">Signature & Cachet de la Direction</p>
+            <div className="border-b border-gray-400 w-36 mx-auto"></div>
+          </div>
         </div>
       </div>
     </div>

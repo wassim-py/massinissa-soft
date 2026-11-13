@@ -1,6 +1,7 @@
 import React from "react";
 import Image from "next/image";
 import { formatAlgiersDate, formatDZD as formatDZDLib } from "@/lib/algiersDate";
+import { getOutcomeFundingSourceMeta } from "@/lib/financeConstants";
 
 export interface StaffPayslipPrintData {
   id: number;
@@ -15,6 +16,7 @@ export interface StaffPayslipPrintData {
   bonus: number; // prime / bonus cash
   totalNet: number;
   status: string;
+  fundingSource?: string | null;
   paidAt?: string | Date | null;
   notes?: string | null;
 }
@@ -100,6 +102,9 @@ export function StaffPayslipTicket({ data }: StaffPayslipTicketProps) {
           </p>
           <p className="text-xs text-gray-500 mt-0.5">
             Date d&apos;impression : {formatAlgiersDate(new Date(), "fr-FR")}
+          </p>
+          <p className="text-xs text-gray-700 font-semibold mt-1">
+            Source : {getOutcomeFundingSourceMeta(data.fundingSource, "fr").shortLabel}
           </p>
         </div>
       </div>

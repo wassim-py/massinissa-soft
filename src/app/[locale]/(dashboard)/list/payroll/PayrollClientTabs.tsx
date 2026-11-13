@@ -16,6 +16,13 @@ import {
 import PrintPayslipButton from "@/components/PrintPayslipButton";
 import PrintOwnerConsolidationButton from "@/components/PrintOwnerConsolidationButton";
 import PrintMasterOwnerReportButton from "@/components/PrintMasterOwnerReportButton";
+import { OutcomeFundingSourceSelect, FundingSourceBadge } from "@/components/finance/OutcomeFundingSourceSelect";
+import {
+  OUTCOME_FUNDING_SOURCES,
+  getOutcomeFundingSourceMeta,
+  normalizeOutcomeFundingSource,
+  type OutcomeFundingSource,
+} from "@/lib/financeConstants";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -198,6 +205,7 @@ interface Props {
     }>;
     photocopyDeductions: number;
     netAmount: number;
+    fundingSource?: string;
     branchLines: Array<{
       branchId: number;
       branchName: string;
@@ -222,6 +230,7 @@ interface Props {
     teacherName: string;
     amount: number;
     date: string;
+    fundingSource?: string;
     remarque?: string | null;
   }>;
   teachers: Array<{
@@ -337,6 +346,8 @@ export default function PayrollClientTabs({
   const [saAmount, setSaAmount] = useState(2000);
   const [saDate, setSaDate] = useState(new Date().toISOString().split("T")[0]);
   const [saRemarque, setSaRemarque] = useState("");
+  const [saFundingSource, setSaFundingSource] = useState<OutcomeFundingSource>("SCHOOL_MONTH_BENEFICE");
+  const [payslipFundingSources, setPayslipFundingSources] = useState<Record<number, OutcomeFundingSource>>({});
 
   // 4. Teacher Rate form
   const [rateTeacherId, setRateTeacherId] = useState(teachers[0]?.id || "");
@@ -376,10 +387,14 @@ export default function PayrollClientTabs({
   };
 
   // Handlers
-  const handleConfirmPayslip = (payslipId: number, confirm: boolean) => {
+  const handleConfirmPayslip = (
+    payslipId: number,
+    confirm: boolean,
+    fundingSource?: OutcomeFundingSource
+  ) => {
     setFeedbackMessage(null);
     startTransition(async () => {
-      const res = await confirmTeacherPayslipAction(payslipId, confirm);
+      const res = await confirmTeacherPayslipAction(payslipId, confirm, fundingSource);
       if (res.success) {
         setFeedbackMessage({ text: res.message, isError: false });
       } else {
@@ -434,10 +449,12 @@ export default function PayrollClientTabs({
         amount: Number(saAmount),
         date: saDate,
         remarque: saRemarque || undefined,
+        fundingSource: saFundingSource,
       });
       if (res.success) {
         setFeedbackMessage({ text: res.message, isError: false });
         setSaRemarque("");
+        setSaFundingSource("SCHOOL_MONTH_BENEFICE");
       } else {
         setFeedbackMessage({ text: res.message, isError: true });
       }
@@ -474,6 +491,7 @@ export default function PayrollClientTabs({
     personId: string;
     amount: number;
     date: string;
+    fundingSource: OutcomeFundingSource;
     remarque: string;
   } | null>(null);
   const [advanceToDelete, setAdvanceToDelete] = useState<{
@@ -492,6 +510,7 @@ export default function PayrollClientTabs({
         amount: Number(editingAdvance.amount),
         date: editingAdvance.date,
         remarque: editingAdvance.remarque,
+        fundingSource: editingAdvance.fundingSource,
       });
       if (res.success) {
         setFeedbackMessage({ text: res.message, isError: false });
@@ -740,15 +759,20 @@ export default function PayrollClientTabs({
                       <tr key={p.id} className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body">
                         <td className="p-3.5 font-mono font-bold">#{p.id}</td>
                         <td className="p-3.5 text-center">
-                          {isConfirmed ? (
-                            <Badge variant="success" size="sm" withDot className="font-semibold whitespace-nowrap">
-                              {locale === "ar" ? "مؤكد" : "Confirmé"}
-                            </Badge>
-                          ) : (
-                            <Badge variant="warning" size="sm" className="font-semibold whitespace-nowrap">
-                              {locale === "ar" ? "مسودة" : "Brouillon"}
-                            </Badge>
-                          )}
+                          <div className="flex flex-col items-center gap-1">
+                            {isConfirmed ? (
+                              <Badge variant="success" size="sm" withDot className="font-semibold whitespace-nowrap">
+                                {locale === "ar" ? "مؤكد" : "Confirmé"}
+                              </Badge>
+                            ) : (
+                              <Badge variant="warning" size="sm" className="font-semibold whitespace-nowrap">
+                                {locale === "ar" ? "مسودة" : "Brouillon"}
+                              </Badge>
+                            )}
+                            {isConfirmed && (
+                              <FundingSourceBadge source={p.fundingSource} locale={locale} compact />
+                            )}
+                          </div>
                         </td>
                         <td className="p-3.5 font-bold text-gray-900">{p.teacherName}</td>
                         <td className="p-3.5 text-muted text-xs">
@@ -782,17 +806,43 @@ export default function PayrollClientTabs({
                                 <span>{locale === "ar" ? "مؤكد" : "Confirmé"}</span>
                               </button>
                             ) : (
-                              <Button
-                                type="button"
-                                size="sm"
-                                disabled={isPending}
-                                onClick={() => handleConfirmPayslip(p.id, true)}
-                                className="!bg-emerald-600 hover:!bg-emerald-700 !text-white !px-2.5 !py-1.5 text-xs font-semibold gap-1 shadow-xs cursor-pointer"
-                                title={locale === "ar" ? "تأكيد وصرف كشف الراتب وخصمه من الصافي الإجمالي" : "Confirmer la fiche de paie et mettre à jour le revenu net"}
-                              >
-                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                                <span>{locale === "ar" ? "تأكيد" : "Confirmer"}</span>
-                              </Button>
+                              <div className="inline-flex items-center gap-1">
+                                <select
+                                  value={payslipFundingSources[p.id] ?? normalizeOutcomeFundingSource(p.fundingSource)}
+                                  onChange={(e) =>
+                                    setPayslipFundingSources((prev) => ({
+                                      ...prev,
+                                      [p.id]: normalizeOutcomeFundingSource(e.target.value),
+                                    }))
+                                  }
+                                  disabled={isPending}
+                                  className="px-1.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-700"
+                                  title={locale === "ar" ? "مصدر الصرف" : "Source de financement"}
+                                >
+                                  {OUTCOME_FUNDING_SOURCES.map((src) => (
+                                    <option key={src} value={src}>
+                                      {getOutcomeFundingSourceMeta(src, locale).shortLabel}
+                                    </option>
+                                  ))}
+                                </select>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  disabled={isPending}
+                                  onClick={() =>
+                                    handleConfirmPayslip(
+                                      p.id,
+                                      true,
+                                      payslipFundingSources[p.id] ?? normalizeOutcomeFundingSource(p.fundingSource)
+                                    )
+                                  }
+                                  className="!bg-emerald-600 hover:!bg-emerald-700 !text-white !px-2.5 !py-1.5 text-xs font-semibold gap-1 shadow-xs cursor-pointer"
+                                  title={locale === "ar" ? "تأكيد وصرف كشف الراتب وخصمه من الصافي الإجمالي" : "Confirmer la fiche de paie et mettre à jour le revenu net"}
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{locale === "ar" ? "تأكيد" : "Confirmer"}</span>
+                                </Button>
+                              </div>
                             )}
 
                             <Link
@@ -933,27 +983,55 @@ export default function PayrollClientTabs({
                         {/* Actions Row */}
                         <div className="flex items-center gap-1.5 flex-wrap pt-1">
                           {isConfirmed ? (
-                            <button
-                              type="button"
-                              disabled={isPending}
-                              onClick={() => handleConfirmPayslip(p.id, false)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-800 hover:bg-emerald-200 transition-colors shadow-xs"
-                              title={locale === "ar" ? "كشف مؤكد - اضغط لإلغاء التأكيد" : "Fiche confirmée - cliquer pour annuler"}
-                            >
-                              <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                              <span>{locale === "ar" ? "مؤكد" : "Confirmé"}</span>
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => handleConfirmPayslip(p.id, false)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-800 hover:bg-emerald-200 transition-colors shadow-xs"
+                                title={locale === "ar" ? "كشف مؤكد - اضغط لإلغاء التأكيد" : "Fiche confirmée - cliquer pour annuler"}
+                              >
+                                <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                                <span>{locale === "ar" ? "مؤكد" : "Confirmé"}</span>
+                              </button>
+                              <FundingSourceBadge source={p.fundingSource} locale={locale} compact />
+                            </>
                           ) : (
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={isPending}
-                              onClick={() => handleConfirmPayslip(p.id, true)}
-                              className="!bg-emerald-600 hover:!bg-emerald-700 !text-white !px-3 !py-1.5 text-xs font-semibold gap-1 shadow-xs"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                              <span>{locale === "ar" ? "تأكيد" : "Confirmer"}</span>
-                            </Button>
+                            <div className="inline-flex items-center gap-1 flex-wrap">
+                              <select
+                                value={payslipFundingSources[p.id] ?? normalizeOutcomeFundingSource(p.fundingSource)}
+                                onChange={(e) =>
+                                  setPayslipFundingSources((prev) => ({
+                                    ...prev,
+                                    [p.id]: normalizeOutcomeFundingSource(e.target.value),
+                                  }))
+                                }
+                                disabled={isPending}
+                                className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-700"
+                              >
+                                {OUTCOME_FUNDING_SOURCES.map((src) => (
+                                  <option key={src} value={src}>
+                                    {getOutcomeFundingSourceMeta(src, locale).shortLabel}
+                                  </option>
+                                ))}
+                              </select>
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={isPending}
+                                onClick={() =>
+                                  handleConfirmPayslip(
+                                    p.id,
+                                    true,
+                                    payslipFundingSources[p.id] ?? normalizeOutcomeFundingSource(p.fundingSource)
+                                  )
+                                }
+                                className="!bg-emerald-600 hover:!bg-emerald-700 !text-white !px-3 !py-1.5 text-xs font-semibold gap-1 shadow-xs"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                <span>{locale === "ar" ? "تأكيد" : "Confirmer"}</span>
+                              </Button>
+                            </div>
                           )}
 
                           <Link
@@ -1178,6 +1256,14 @@ export default function PayrollClientTabs({
                       />
                     </FormField>
 
+                    <div className="sm:col-span-2 lg:col-span-4">
+                      <OutcomeFundingSourceSelect
+                        value={saFundingSource}
+                        onChange={setSaFundingSource}
+                        locale={locale}
+                      />
+                    </div>
+
                     <Button
                       type="submit"
                       variant="danger"
@@ -1208,6 +1294,7 @@ export default function PayrollClientTabs({
                       { header: t("idCol"), accessor: "id" },
                       { header: t("teacher"), accessor: "teacherName" },
                       { header: t("advanceAmount"), accessor: "amount", align: "end" },
+                      { header: locale === "ar" ? "الصندوق" : "Source", accessor: "fundingSource" },
                       { header: t("date"), accessor: "date", align: "center" },
                       { header: locale === "ar" ? "الملاحظة" : "Remarque", accessor: "remarque" },
                       { header: t("actions") || (locale === "ar" ? "إجراءات" : "Actions"), accessor: "actions", align: "center" },
@@ -1219,6 +1306,9 @@ export default function PayrollClientTabs({
                         <td className="p-3.5 font-bold text-gray-900">{a.teacherName}</td>
                         <td className="p-3.5 text-end font-mono font-bold text-danger">
                           - {formatDZD(a.amount)}
+                        </td>
+                        <td className="p-3.5">
+                          <FundingSourceBadge source={a.fundingSource} locale={locale} compact />
                         </td>
                         <td className="p-3.5 text-center font-mono text-muted">{formatDate(a.date)}</td>
                         <td className="p-3.5 text-xs text-gray-700 max-w-xs truncate" title={a.remarque || ""}>
@@ -1236,6 +1326,7 @@ export default function PayrollClientTabs({
                                   personId: a.personId,
                                   amount: a.amount,
                                   date: new Date(a.date).toISOString().split("T")[0],
+                                  fundingSource: normalizeOutcomeFundingSource(a.fundingSource),
                                   remarque: a.remarque || "",
                                 })
                               }
@@ -1519,6 +1610,12 @@ export default function PayrollClientTabs({
                   className="text-xs"
                 />
               </FormField>
+
+              <OutcomeFundingSourceSelect
+                value={editingAdvance.fundingSource}
+                onChange={(val) => setEditingAdvance({ ...editingAdvance, fundingSource: val })}
+                locale={locale}
+              />
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
                 <Button type="button" variant="outline" onClick={() => setEditingAdvance(null)}>

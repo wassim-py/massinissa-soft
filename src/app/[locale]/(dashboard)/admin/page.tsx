@@ -309,6 +309,8 @@ const AdminPage = async () => {
         attendances: studentAtts,
         catchUps: classCatchUps,
         lessons: cls.lessons as any,
+        enrolledAt: enr.enrolledAt,
+        enrollmentStatus: enr.status,
       });
 
       if (creditMetrics.isNonPayer || (creditMetrics.status as string) === "SIBLING_WAIVED") {

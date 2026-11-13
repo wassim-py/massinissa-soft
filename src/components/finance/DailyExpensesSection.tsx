@@ -7,6 +7,13 @@ import { createDailyExpenseAction, updateDailyExpenseAction, deleteDailyExpenseA
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
+import { OutcomeFundingSourceSelect, FundingSourceBadge } from "@/components/finance/OutcomeFundingSourceSelect";
+import {
+  OUTCOME_FUNDING_SOURCES,
+  getOutcomeFundingSourceMeta,
+  normalizeOutcomeFundingSource,
+  type OutcomeFundingSource,
+} from "@/lib/financeConstants";
 
 export interface ExpenseItem {
   id: number;
@@ -15,6 +22,7 @@ export interface ExpenseItem {
   amount: number;
   description: string;
   category: string;
+  fundingSource?: string;
   date: string | Date;
   recordedBy: string;
 }
@@ -51,6 +59,8 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
   const [category, setCategory] = useState("GENERAL");
   const [branchId, setBranchId] = useState<string>("all");
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [fundingSource, setFundingSource] = useState<OutcomeFundingSource>("SCHOOL_MONTH_BENEFICE");
+  const [sourceFilter, setSourceFilter] = useState<"ALL" | OutcomeFundingSource>("ALL");
   const [isLoading, setIsLoading] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -61,6 +71,7 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
     setCategory("GENERAL");
     setBranchId("all");
     setDate(new Date().toISOString().split("T")[0]);
+    setFundingSource("SCHOOL_MONTH_BENEFICE");
     setIsModalOpen(true);
   };
 
@@ -71,6 +82,7 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
     setCategory(exp.category);
     setBranchId(exp.branchId ? String(exp.branchId) : "all");
     setDate(new Date(exp.date).toISOString().split("T")[0]);
+    setFundingSource(normalizeOutcomeFundingSource(exp.fundingSource));
     setIsModalOpen(true);
   };
 
@@ -90,6 +102,7 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
           category,
           branchId: branchId === "all" ? null : Number(branchId),
           date,
+          fundingSource,
         });
         if (res.success) {
           toast.success(res.message);
@@ -105,6 +118,7 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
           category,
           branchId: branchId === "all" ? null : Number(branchId),
           date,
+          fundingSource,
         });
         if (res.success) {
           toast.success(res.message);
@@ -138,6 +152,9 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
   };
 
   const filteredExpenses = expenses.filter((e) => {
+    if (sourceFilter !== "ALL" && normalizeOutcomeFundingSource(e.fundingSource) !== sourceFilter) {
+      return false;
+    }
     if (!search.trim()) return true;
     const term = search.toLowerCase();
     return (
@@ -152,30 +169,67 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
   return (
     <div className="flex flex-col gap-6 w-full">
       {/* Top Bar */}
-      <Card className="p-4 border-border/80 shadow-xs bg-surface flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            placeholder={t("searchExpense")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="px-3.5 py-2 text-xs border border-border rounded-lg bg-surface text-gray-900 focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary w-full sm:w-64"
-          />
-          <span className="text-xs font-semibold text-muted hidden sm:inline">
-            {t("filteredTotal")}{" "}
-            <strong className="text-danger font-mono text-sm">
-              {totalFilteredAmount.toLocaleString(numLocale)} {t("currency")}
-            </strong>
-          </span>
+      <Card className="p-4 border-border/80 shadow-xs bg-surface flex flex-col gap-3">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <input
+              type="text"
+              placeholder={t("searchExpense")}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="px-3.5 py-2 text-xs border border-border rounded-lg bg-surface text-gray-900 focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary w-full sm:w-64"
+            />
+            <span className="text-xs font-semibold text-muted hidden sm:inline">
+              {t("filteredTotal")}{" "}
+              <strong className="text-danger font-mono text-sm">
+                {totalFilteredAmount.toLocaleString(numLocale)} {t("currency")}
+              </strong>
+            </span>
+          </div>
+
+          <button
+            onClick={handleOpenAdd}
+            className="flex items-center justify-center gap-2 bg-primary hover:bg-primary-hover text-white px-4 py-2.5 rounded-lg text-xs font-semibold shadow-xs cursor-pointer transition-all active:scale-95 shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span>{t("addExpense")}</span>
+          </button>
         </div>
 
-        <button
-          onClick={handleOpenAdd}
-          className="flex items-center justify-center gap-2 bg-primary hover:bg-primary-hover text-white px-4 py-2.5 rounded-lg text-xs font-semibold shadow-xs cursor-pointer transition-all active:scale-95 shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>{t("addExpense")}</span>
-        </button>
+        {/* Funding Source Filter & Subtotals */}
+        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-border/60">
+          <button
+            type="button"
+            onClick={() => setSourceFilter("ALL")}
+            className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+              sourceFilter === "ALL"
+                ? "bg-primary text-white border-primary"
+                : "bg-white text-slate-600 border-border hover:bg-slate-50"
+            }`}
+          >
+            {locale === "ar" ? "جميع الصناديق" : "Toutes les sources"} ({expenses.length})
+          </button>
+          {OUTCOME_FUNDING_SOURCES.map((src) => {
+            const meta = getOutcomeFundingSourceMeta(src, locale);
+            const matching = expenses.filter((e) => normalizeOutcomeFundingSource(e.fundingSource) === src);
+            const sum = matching.reduce((s, e) => s + e.amount, 0);
+            const active = sourceFilter === src;
+            return (
+              <button
+                key={src}
+                type="button"
+                onClick={() => setSourceFilter(src)}
+                className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+                  active
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : `${meta.pillClass} hover:opacity-85`
+                }`}
+              >
+                {meta.shortLabel}: {sum.toLocaleString(numLocale)} {t("currency")}
+              </button>
+            );
+          })}
+        </div>
       </Card>
 
       {/* Expenses Table */}
@@ -192,6 +246,7 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
                   <th className="py-3 px-4">{t("date")}</th>
                   <th className="py-3 px-4">{t("expenseDescription")}</th>
                   <th className="py-3 px-4">{t("expenseCategory")}</th>
+                  <th className="py-3 px-4">{locale === "ar" ? "الصندوق" : "Source"}</th>
                   <th className="py-3 px-4">{t("expenseBranch")}</th>
                   <th className="py-3 px-4 text-right">{t("expenseAmount")}</th>
                   <th className="py-3 px-4 text-center">{t("actions")}</th>
@@ -213,6 +268,9 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
                       <span className="inline-block px-2.5 py-0.5 rounded-full bg-surface-muted text-gray-700 font-medium border border-border">
                         {categories.find((c) => c.value === exp.category)?.label || exp.category}
                       </span>
+                    </td>
+                    <td className="py-3 px-4 text-xs">
+                      <FundingSourceBadge source={exp.fundingSource} locale={locale} compact />
                     </td>
                     <td className="py-3 px-4 text-xs text-muted">
                       {exp.branchName || t("allBranchesOpt")}
@@ -333,6 +391,12 @@ export default function DailyExpensesSection({ expenses, branches, locale: propL
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
                 />
               </div>
+
+              <OutcomeFundingSourceSelect
+                value={fundingSource}
+                onChange={setFundingSource}
+                locale={locale}
+              />
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-gray-100">
                 <button

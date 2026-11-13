@@ -6,6 +6,8 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { revalidateFinancialRoutes } from "@/lib/revalidation";
 import { getAlgiersDayBounds } from "@/lib/algiersDate";
+import { normalizeOutcomeFundingSource } from "@/lib/financeConstants";
+import { syncOutcomeWithCaisseNoire, cleanupCaisseNoireLinks } from "@/lib/caisseNoireSync";
 
 function safeRevalidate(path: string) {
   try {
@@ -23,6 +25,7 @@ export async function createDailyExpenseAction(data: {
   amount: number;
   description: string;
   category?: string;
+  fundingSource?: string | null;
   branchId?: number | null;
   date?: string | Date;
 }) {
@@ -39,15 +42,33 @@ export async function createDailyExpenseAction(data: {
       return { success: false, error: true, message: "La description est obligatoire / البيان أو الوصف إجباري." };
     }
 
-    const expense = await prisma.dailyExpense.create({
-      data: {
-        amount: new Prisma.Decimal(data.amount),
-        description: data.description.trim(),
-        category: data.category?.trim() || "GENERAL",
-        branchId: data.branchId ? Number(data.branchId) : null,
-        date: data.date ? new Date(data.date) : new Date(),
+    const fundingSource = normalizeOutcomeFundingSource(data.fundingSource);
+    const expenseDate = data.date ? new Date(data.date) : new Date();
+    const amountNum = Number(data.amount);
+    const description = data.description.trim();
+
+    const expense = await prisma.$transaction(async (tx) => {
+      const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+        fundingSource,
+        isDisbursed: true,
+        amount: amountNum,
+        description: `[Dépense] ${description}`,
+        date: expenseDate,
         recordedBy: session.userId || "owner",
-      },
+      });
+
+      return tx.dailyExpense.create({
+        data: {
+          amount: new Prisma.Decimal(amountNum),
+          description,
+          category: data.category?.trim() || "GENERAL",
+          fundingSource,
+          caisseNoireTxId: cnTxId,
+          branchId: data.branchId ? Number(data.branchId) : null,
+          date: expenseDate,
+          recordedBy: session.userId || "owner",
+        },
+      });
     });
 
     await revalidateFinancialRoutes({
@@ -66,6 +87,7 @@ export async function updateDailyExpenseAction(
     amount?: number;
     description?: string;
     category?: string;
+    fundingSource?: string | null;
     branchId?: number | null;
     date?: string | Date;
   }
@@ -76,19 +98,48 @@ export async function updateDailyExpenseAction(
       return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
     }
 
-    const expense = await prisma.dailyExpense.update({
-      where: { id },
-      data: {
-        ...(data.amount !== undefined ? { amount: new Prisma.Decimal(data.amount) } : {}),
-        ...(data.description !== undefined ? { description: data.description.trim() } : {}),
-        ...(data.category !== undefined ? { category: data.category.trim() } : {}),
-        ...(data.branchId !== undefined ? { branchId: data.branchId ? Number(data.branchId) : null } : {}),
-        ...(data.date !== undefined ? { date: new Date(data.date) } : {}),
-      },
+    const expense = await prisma.$transaction(async (tx) => {
+      const existing = await tx.dailyExpense.findUnique({ where: { id } });
+      if (!existing) {
+        throw new Error("Dépense introuvable.");
+      }
+
+      const nextAmount = data.amount !== undefined ? Number(data.amount) : Number(existing.amount);
+      const nextDescription = data.description !== undefined ? data.description.trim() : existing.description;
+      const nextCategory = data.category !== undefined ? data.category.trim() : existing.category;
+      const nextBranchId = data.branchId !== undefined ? (data.branchId ? Number(data.branchId) : null) : existing.branchId;
+      const nextDate = data.date !== undefined ? new Date(data.date) : existing.date;
+      const nextFundingSource =
+        data.fundingSource !== undefined
+          ? normalizeOutcomeFundingSource(data.fundingSource)
+          : normalizeOutcomeFundingSource(existing.fundingSource);
+
+      const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+        existingTxId: existing.caisseNoireTxId,
+        fundingSource: nextFundingSource,
+        isDisbursed: true,
+        amount: nextAmount,
+        description: `[Dépense] ${nextDescription}`,
+        date: nextDate,
+        recordedBy: session.userId || "owner",
+      });
+
+      return tx.dailyExpense.update({
+        where: { id },
+        data: {
+          amount: new Prisma.Decimal(nextAmount),
+          description: nextDescription,
+          category: nextCategory,
+          fundingSource: nextFundingSource,
+          caisseNoireTxId: cnTxId,
+          branchId: nextBranchId,
+          date: nextDate,
+        },
+      });
     });
 
     await revalidateFinancialRoutes({
-      branchId: data.branchId ? Number(data.branchId) : null,
+      branchId: expense.branchId ? Number(expense.branchId) : null,
     });
     return { success: true, error: false, message: "Dépense mise à jour avec succès / تم تحديث النفقة بنجاح.", expense };
   } catch (err: any) {
@@ -104,7 +155,14 @@ export async function deleteDailyExpenseAction(id: number) {
       return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
     }
 
-    const deleted = await prisma.dailyExpense.delete({ where: { id } });
+    const deleted = await prisma.$transaction(async (tx) => {
+      const existing = await tx.dailyExpense.findUnique({ where: { id } });
+      if (!existing) {
+        throw new Error("Dépense introuvable.");
+      }
+      await cleanupCaisseNoireLinks(tx, [existing.caisseNoireTxId]);
+      return tx.dailyExpense.delete({ where: { id } });
+    });
 
     await revalidateFinancialRoutes({
       branchId: deleted.branchId ? Number(deleted.branchId) : null,
@@ -377,6 +435,7 @@ export async function recordStaffPayrollAction(data: {
   advance?: number;
   bonus?: number;
   status?: "PAID" | "PENDING";
+  fundingSource?: string | null;
   notes?: string;
   updateDefaultBaseSalary?: boolean;
 }) {
@@ -395,43 +454,76 @@ export async function recordStaffPayrollAction(data: {
 
     const bonusValue = Math.max(0, Number(data.bonus || 0));
     const advanceValue = Math.max(0, Number(data.advance || 0));
+    const statusValue = data.status || "PAID";
+    const fundingSource = normalizeOutcomeFundingSource(data.fundingSource);
+    const netDisbursed = Math.max(0, Number(data.amount) - advanceValue + bonusValue);
+    const paidAtDate = statusValue === "PENDING" ? null : new Date();
 
-    const payroll = await prisma.staffPayroll.upsert({
-      where: {
-        staffMemberId_month_year: {
-          staffMemberId: Number(data.staffMemberId),
-          month: Number(data.month),
-          year: Number(data.year),
-        },
-      },
-      create: {
-        staffMemberId: Number(data.staffMemberId),
-        month: Number(data.month),
-        year: Number(data.year),
-        amount: new Prisma.Decimal(data.amount),
-        advance: new Prisma.Decimal(advanceValue),
-        bonus: new Prisma.Decimal(bonusValue),
-        status: data.status || "PAID",
-        notes: data.notes?.trim() || null,
+    const payroll = await prisma.$transaction(async (tx) => {
+      const staffMemberId = Number(data.staffMemberId);
+      const month = Number(data.month);
+      const year = Number(data.year);
+      const [staff, existing] = await Promise.all([
+        tx.staffMember.findUnique({ where: { id: staffMemberId }, select: { name: true } }),
+        tx.staffPayroll.findUnique({
+          where: { staffMemberId_month_year: { staffMemberId, month, year } },
+          select: { caisseNoireTxId: true },
+        }),
+      ]);
+
+      const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+        existingTxId: existing?.caisseNoireTxId,
+        fundingSource,
+        isDisbursed: statusValue === "PAID",
+        amount: netDisbursed,
+        description: `[Salaire Personnel] ${staff?.name || `#${staffMemberId}`} (${String(month).padStart(2, "0")}/${year})`,
+        date: paidAtDate || new Date(),
         recordedBy: session.userId || "owner",
-        paidAt: data.status === "PENDING" ? null : new Date(),
-      },
-      update: {
-        amount: new Prisma.Decimal(data.amount),
-        advance: new Prisma.Decimal(advanceValue),
-        bonus: new Prisma.Decimal(bonusValue),
-        status: data.status || "PAID",
-        notes: data.notes?.trim() || null,
-        paidAt: data.status === "PENDING" ? null : new Date(),
-      },
-    });
-
-    if (data.updateDefaultBaseSalary) {
-      await prisma.staffMember.update({
-        where: { id: Number(data.staffMemberId) },
-        data: { baseSalary: new Prisma.Decimal(data.amount) },
       });
-    }
+
+      const saved = await tx.staffPayroll.upsert({
+        where: {
+          staffMemberId_month_year: {
+            staffMemberId,
+            month,
+            year,
+          },
+        },
+        create: {
+          staffMemberId,
+          month,
+          year,
+          amount: new Prisma.Decimal(data.amount),
+          advance: new Prisma.Decimal(advanceValue),
+          bonus: new Prisma.Decimal(bonusValue),
+          status: statusValue,
+          fundingSource,
+          caisseNoireTxId: cnTxId,
+          notes: data.notes?.trim() || null,
+          recordedBy: session.userId || "owner",
+          paidAt: paidAtDate,
+        },
+        update: {
+          amount: new Prisma.Decimal(data.amount),
+          advance: new Prisma.Decimal(advanceValue),
+          bonus: new Prisma.Decimal(bonusValue),
+          status: statusValue,
+          fundingSource,
+          caisseNoireTxId: cnTxId,
+          notes: data.notes?.trim() || null,
+          paidAt: paidAtDate,
+        },
+      });
+
+      if (data.updateDefaultBaseSalary) {
+        await tx.staffMember.update({
+          where: { id: staffMemberId },
+          data: { baseSalary: new Prisma.Decimal(data.amount) },
+        });
+      }
+
+      return saved;
+    });
 
     await revalidateFinancialRoutes();
     return { success: true, error: false, message: "Salaire du personnel enregistré avec succès.", payroll };
@@ -451,6 +543,7 @@ export async function updateStaffPayrollAction(
     advance?: number;
     bonus?: number;
     status?: "PAID" | "PENDING";
+    fundingSource?: string | null;
     notes?: string;
     updateDefaultBaseSalary?: boolean;
   }
@@ -461,29 +554,68 @@ export async function updateStaffPayrollAction(
       return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
     }
 
-    const updatePayload: any = {};
-    if (data.amount !== undefined) updatePayload.amount = new Prisma.Decimal(data.amount);
-    if (data.advance !== undefined) updatePayload.advance = new Prisma.Decimal(Math.max(0, Number(data.advance)));
-    if (data.bonus !== undefined) updatePayload.bonus = new Prisma.Decimal(Math.max(0, Number(data.bonus)));
-    if (data.month !== undefined) updatePayload.month = Number(data.month);
-    if (data.year !== undefined) updatePayload.year = Number(data.year);
-    if (data.status !== undefined) {
-      updatePayload.status = data.status;
-      updatePayload.paidAt = data.status === "PENDING" ? null : new Date();
-    }
-    if (data.notes !== undefined) updatePayload.notes = data.notes?.trim() || null;
-
-    const payroll = await prisma.staffPayroll.update({
-      where: { id },
-      data: updatePayload,
-    });
-
-    if (data.updateDefaultBaseSalary && data.amount && (data.staffMemberId || payroll.staffMemberId)) {
-      await prisma.staffMember.update({
-        where: { id: data.staffMemberId || payroll.staffMemberId },
-        data: { baseSalary: new Prisma.Decimal(data.amount) },
+    const payroll = await prisma.$transaction(async (tx) => {
+      const existing = await tx.staffPayroll.findUnique({
+        where: { id },
+        include: { staffMember: { select: { name: true } } },
       });
-    }
+      if (!existing) {
+        throw new Error("Enregistrement de paie introuvable.");
+      }
+
+      const nextAmount = data.amount !== undefined ? Number(data.amount) : Number(existing.amount);
+      const nextAdvance = data.advance !== undefined ? Math.max(0, Number(data.advance)) : Number(existing.advance);
+      const nextBonus = data.bonus !== undefined ? Math.max(0, Number(data.bonus)) : Number(existing.bonus);
+      const nextMonth = data.month !== undefined ? Number(data.month) : existing.month;
+      const nextYear = data.year !== undefined ? Number(data.year) : existing.year;
+      const nextStatus = data.status !== undefined ? data.status : existing.status;
+      const nextFundingSource =
+        data.fundingSource !== undefined
+          ? normalizeOutcomeFundingSource(data.fundingSource)
+          : normalizeOutcomeFundingSource(existing.fundingSource);
+      const nextPaidAt =
+        data.status !== undefined
+          ? data.status === "PENDING"
+            ? null
+            : existing.paidAt || new Date()
+          : existing.paidAt;
+      const netDisbursed = Math.max(0, nextAmount - nextAdvance + nextBonus);
+
+      const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+        existingTxId: existing.caisseNoireTxId,
+        fundingSource: nextFundingSource,
+        isDisbursed: nextStatus === "PAID",
+        amount: netDisbursed,
+        description: `[Salaire Personnel] ${existing.staffMember?.name || `#${existing.staffMemberId}`} (${String(nextMonth).padStart(2, "0")}/${nextYear})`,
+        date: nextPaidAt || new Date(),
+        recordedBy: session.userId || "owner",
+      });
+
+      const updated = await tx.staffPayroll.update({
+        where: { id },
+        data: {
+          amount: new Prisma.Decimal(nextAmount),
+          advance: new Prisma.Decimal(nextAdvance),
+          bonus: new Prisma.Decimal(nextBonus),
+          month: nextMonth,
+          year: nextYear,
+          status: nextStatus,
+          paidAt: nextPaidAt,
+          fundingSource: nextFundingSource,
+          caisseNoireTxId: cnTxId,
+          ...(data.notes !== undefined ? { notes: data.notes?.trim() || null } : {}),
+        },
+      });
+
+      if (data.updateDefaultBaseSalary && data.amount && (data.staffMemberId || updated.staffMemberId)) {
+        await tx.staffMember.update({
+          where: { id: data.staffMemberId || updated.staffMemberId },
+          data: { baseSalary: new Prisma.Decimal(data.amount) },
+        });
+      }
+
+      return updated;
+    });
 
     await revalidateFinancialRoutes();
     return { success: true, error: false, message: "Règlement du salaire mis à jour avec succès.", payroll };
@@ -500,8 +632,14 @@ export async function deleteStaffPayrollAction(id: number) {
       return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
     }
 
-    await prisma.staffPayroll.delete({
-      where: { id },
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.staffPayroll.findUnique({ where: { id }, select: { caisseNoireTxId: true } });
+      if (existing?.caisseNoireTxId) {
+        await cleanupCaisseNoireLinks(tx, [existing.caisseNoireTxId]);
+      }
+      await tx.staffPayroll.delete({
+        where: { id },
+      });
     });
 
     await revalidateFinancialRoutes();
@@ -522,6 +660,7 @@ export async function recordStaffAdvanceAction(data: {
   date?: string | Date;
   month?: number;
   year?: number;
+  fundingSource?: string | null;
   notes?: string;
 }) {
   try {
@@ -540,17 +679,34 @@ export async function recordStaffAdvanceAction(data: {
     const advanceDate = data.date ? new Date(data.date) : new Date();
     const targetMonth = data.month ? Number(data.month) : advanceDate.getMonth() + 1;
     const targetYear = data.year ? Number(data.year) : advanceDate.getFullYear();
+    const fundingSource = normalizeOutcomeFundingSource(data.fundingSource);
+    const amountNum = Number(data.amount);
 
-    const advance = await prisma.staffAdvance.create({
-      data: {
-        staffMemberId: Number(data.staffMemberId),
-        amount: new Prisma.Decimal(data.amount),
+    const advance = await prisma.$transaction(async (tx) => {
+      const staffMemberId = Number(data.staffMemberId);
+      const staff = await tx.staffMember.findUnique({ where: { id: staffMemberId }, select: { name: true } });
+      const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+        fundingSource,
+        isDisbursed: true,
+        amount: amountNum,
+        description: `[Avance Personnel] ${staff?.name || `#${staffMemberId}`}${data.notes ? ` — ${data.notes.trim()}` : ""}`,
         date: advanceDate,
-        month: targetMonth,
-        year: targetYear,
-        notes: data.notes?.trim() || null,
         recordedBy: session.userId || "owner",
-      },
+      });
+
+      return tx.staffAdvance.create({
+        data: {
+          staffMemberId,
+          amount: new Prisma.Decimal(amountNum),
+          date: advanceDate,
+          month: targetMonth,
+          year: targetYear,
+          fundingSource,
+          caisseNoireTxId: cnTxId,
+          notes: data.notes?.trim() || null,
+          recordedBy: session.userId || "owner",
+        },
+      });
     });
 
     await revalidateFinancialRoutes();
@@ -569,6 +725,7 @@ export async function updateStaffAdvanceAction(
     date?: string | Date;
     month?: number;
     year?: number;
+    fundingSource?: string | null;
     notes?: string;
   }
 ) {
@@ -578,17 +735,46 @@ export async function updateStaffAdvanceAction(
       return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
     }
 
-    const updatePayload: any = {};
-    if (data.staffMemberId !== undefined) updatePayload.staffMemberId = Number(data.staffMemberId);
-    if (data.amount !== undefined) updatePayload.amount = new Prisma.Decimal(data.amount);
-    if (data.date !== undefined) updatePayload.date = new Date(data.date);
-    if (data.month !== undefined) updatePayload.month = Number(data.month);
-    if (data.year !== undefined) updatePayload.year = Number(data.year);
-    if (data.notes !== undefined) updatePayload.notes = data.notes?.trim() || null;
+    const advance = await prisma.$transaction(async (tx) => {
+      const existing = await tx.staffAdvance.findUnique({ where: { id } });
+      if (!existing) {
+        throw new Error("Avance introuvable.");
+      }
+      const nextStaffMemberId = data.staffMemberId !== undefined ? Number(data.staffMemberId) : existing.staffMemberId;
+      const nextAmount = data.amount !== undefined ? Number(data.amount) : Number(existing.amount);
+      const nextDate = data.date !== undefined ? new Date(data.date) : existing.date;
+      const nextMonth = data.month !== undefined ? Number(data.month) : existing.month;
+      const nextYear = data.year !== undefined ? Number(data.year) : existing.year;
+      const nextNotes = data.notes !== undefined ? data.notes?.trim() || null : existing.notes;
+      const nextFundingSource =
+        data.fundingSource !== undefined
+          ? normalizeOutcomeFundingSource(data.fundingSource)
+          : normalizeOutcomeFundingSource(existing.fundingSource);
 
-    const advance = await prisma.staffAdvance.update({
-      where: { id },
-      data: updatePayload,
+      const staff = await tx.staffMember.findUnique({ where: { id: nextStaffMemberId }, select: { name: true } });
+      const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+        existingTxId: existing.caisseNoireTxId,
+        fundingSource: nextFundingSource,
+        isDisbursed: true,
+        amount: nextAmount,
+        description: `[Avance Personnel] ${staff?.name || `#${nextStaffMemberId}`}${nextNotes ? ` — ${nextNotes}` : ""}`,
+        date: nextDate,
+        recordedBy: session.userId || "owner",
+      });
+
+      return tx.staffAdvance.update({
+        where: { id },
+        data: {
+          staffMemberId: nextStaffMemberId,
+          amount: new Prisma.Decimal(nextAmount),
+          date: nextDate,
+          month: nextMonth,
+          year: nextYear,
+          fundingSource: nextFundingSource,
+          caisseNoireTxId: cnTxId,
+          notes: nextNotes,
+        },
+      });
     });
 
     await revalidateFinancialRoutes();
@@ -606,8 +792,14 @@ export async function deleteStaffAdvanceAction(id: number) {
       return { success: false, error: true, message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط." };
     }
 
-    await prisma.staffAdvance.delete({
-      where: { id },
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.staffAdvance.findUnique({ where: { id }, select: { caisseNoireTxId: true } });
+      if (existing?.caisseNoireTxId) {
+        await cleanupCaisseNoireLinks(tx, [existing.caisseNoireTxId]);
+      }
+      await tx.staffAdvance.delete({
+        where: { id },
+      });
     });
 
     await revalidateFinancialRoutes();

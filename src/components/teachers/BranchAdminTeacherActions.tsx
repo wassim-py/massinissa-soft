@@ -113,6 +113,7 @@ export default function BranchAdminTeacherActions({
 
       if (res.success) {
         toast.success(res.message);
+        window.dispatchEvent(new CustomEvent("photocopy:changed"));
         setIsPhotocopyModalOpen(false);
         setPagesCount(10);
       } else {

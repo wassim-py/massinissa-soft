@@ -95,9 +95,9 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
     width: '100%',
     maxWidth: '210mm',
     margin: '0 auto',
-    padding: '24px',
+    padding: '20px',
     fontFamily: 'system-ui, -apple-system, sans-serif',
-    fontSize: '12pt',
+    fontSize: '10pt',
     color: '#111827',
     direction: 'ltr',
     backgroundColor: '#ffffff',
@@ -837,72 +837,74 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </div>
       )}
 
-      {/* Section 5: Final Consolidated Net Calculation */}
-      <div className="border-2 border-gray-900 rounded-lg p-4 bg-gray-50 mb-6">
-        <h2 className="text-sm font-bold text-gray-900 mb-3 border-b border-gray-300 pb-1">
-          Calcul du Net à Payer :
-        </h2>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between items-center text-gray-800">
-            <span className="font-semibold">1. Rémunération des cours :</span>
-            <span className="font-mono font-bold text-base">
-              {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}
-            </span>
-          </div>
-
-          {(data.bookRevenue ?? 0) > 0 && (
-            <div className="flex justify-between items-center text-purple-900 font-semibold">
-              <span>+ Vente de livres (100% Enseignant) :</span>
-              <span className="font-mono font-bold text-purple-900">
-                + {formatDZD(Number(data.bookRevenue))}
+      {/* Section 5: Final Consolidated Net Calculation & Signatures kept intact across page breaks */}
+      <div className="avoid-break">
+        <div className="border-2 border-gray-900 rounded-lg p-4 bg-gray-50 mb-5">
+          <h2 className="text-sm font-bold text-gray-900 mb-3 border-b border-gray-300 pb-1">
+            Calcul du Net à Payer :
+          </h2>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between items-center gap-2 text-gray-800">
+              <span className="font-semibold">1. Rémunération des cours :</span>
+              <span className="font-mono font-bold text-base whitespace-nowrap shrink-0">
+                {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}
               </span>
             </div>
-          )}
 
-          <div className="flex justify-between items-center text-gray-900 border-t border-gray-200 pt-1 font-bold">
-            <span>Total Brut :</span>
-            <span className="font-mono font-bold">
-              {formatDZD(Number(data.grossAmount))}
-            </span>
-          </div>
+            {(data.bookRevenue ?? 0) > 0 && (
+              <div className="flex justify-between items-center gap-2 text-purple-900 font-semibold">
+                <span>+ Vente de livres (100% Enseignant) :</span>
+                <span className="font-mono font-bold text-purple-900 whitespace-nowrap shrink-0">
+                  + {formatDZD(Number(data.bookRevenue))}
+                </span>
+              </div>
+            )}
 
-          <div className="flex justify-between items-center text-red-700">
-            <div>
-              <span>2. Déduction des avances sur salaire :</span>
-              {data.advanceDetails && data.advanceDetails.length === 1 && data.advanceDetails[0].remarque && (
-                <span className="text-xs text-gray-600 ml-2 italic">({data.advanceDetails[0].remarque})</span>
-              )}
+            <div className="flex justify-between items-center gap-2 text-gray-900 border-t border-gray-200 pt-1 font-bold">
+              <span>Total Brut :</span>
+              <span className="font-mono font-bold whitespace-nowrap shrink-0">
+                {formatDZD(Number(data.grossAmount))}
+              </span>
             </div>
-            <span className="font-mono font-semibold">
-              - {formatDZD(Number(data.advances))}
-            </span>
-          </div>
 
-          <div className="flex justify-between items-center text-amber-800">
-            <span>3. Déduction des frais de photocopie :</span>
-            <span className="font-mono font-semibold">
-              - {formatDZD(Number(data.photocopyDeductions))}
-            </span>
-          </div>
+            <div className="flex justify-between items-center gap-2 text-red-700">
+              <div>
+                <span>2. Déduction des avances sur salaire :</span>
+                {data.advanceDetails && data.advanceDetails.length === 1 && data.advanceDetails[0].remarque && (
+                  <span className="text-xs text-gray-600 ml-2 italic">({data.advanceDetails[0].remarque})</span>
+                )}
+              </div>
+              <span className="font-mono font-semibold whitespace-nowrap shrink-0">
+                - {formatDZD(Number(data.advances))}
+              </span>
+            </div>
 
-          <div className="border-t-2 border-dashed border-gray-900 pt-2 mt-2 flex justify-between items-center text-lg font-black text-gray-900 bg-white p-3 rounded border">
-            <span>Net à payer :</span>
-            <span className="font-mono text-blue-900 text-xl">
-              {formatDZD(Number(data.netAmount))}
-            </span>
+            <div className="flex justify-between items-center gap-2 text-amber-800">
+              <span>3. Déduction des frais de photocopie :</span>
+              <span className="font-mono font-semibold whitespace-nowrap shrink-0">
+                - {formatDZD(Number(data.photocopyDeductions))}
+              </span>
+            </div>
+
+            <div className="border-t-2 border-dashed border-gray-900 pt-2 mt-2 flex justify-between items-center gap-2 text-lg font-black text-gray-900 bg-white p-3 rounded border">
+              <span>Net à payer :</span>
+              <span className="font-mono text-blue-900 text-xl whitespace-nowrap shrink-0">
+                {formatDZD(Number(data.netAmount))}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Signatures */}
-      <div className="grid grid-cols-2 gap-8 pt-6 border-t border-gray-300 text-center text-xs">
-        <div>
-          <p className="font-bold text-gray-700 mb-12">Signature de l&apos;enseignant(e)</p>
-          <p className="text-gray-400">...................................................</p>
-        </div>
-        <div>
-          <p className="font-bold text-gray-700 mb-12">Cachet et signature de l&apos;administration</p>
-          <p className="text-gray-400">...................................................</p>
+        {/* Signatures */}
+        <div className="grid grid-cols-2 gap-8 pt-5 border-t border-gray-300 text-center text-xs">
+          <div>
+            <p className="font-bold text-gray-700 mb-10">Signature de l&apos;enseignant(e)</p>
+            <p className="text-gray-400">...................................................</p>
+          </div>
+          <div>
+            <p className="font-bold text-gray-700 mb-10">Cachet et signature de l&apos;administration</p>
+            <p className="text-gray-400">...................................................</p>
+          </div>
         </div>
       </div>
     </div>

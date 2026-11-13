@@ -433,6 +433,8 @@ model Payslip {
   photocopyDeductions Decimal             @default(0)
   netAmount           Decimal
   bonus               Decimal             @default(0)
+  fundingSource       String              @default("SCHOOL_MONTH_BENEFICE") // INSCRIPTION_FEES, SCHOOL_MONTH_BENEFICE, CAISSE_NOIRE
+  caisseNoireTxId     Int?
   PayrollRun          PayrollRun          @relation(fields: [payrollRunId], references: [id])
   PayslipBranchLine   PayslipBranchLine[]
 }
@@ -466,11 +468,13 @@ model PhotocopyCharge {
 }
 
 model SalaryAdvance {
-  id       Int      @id @default(autoincrement())
-  personId String
-  amount   Decimal
-  date     DateTime
-  remarque String?
+  id              Int      @id @default(autoincrement())
+  personId        String
+  amount          Decimal
+  date            DateTime
+  remarque        String?
+  fundingSource   String   @default("SCHOOL_MONTH_BENEFICE") // INSCRIPTION_FEES, SCHOOL_MONTH_BENEFICE, CAISSE_NOIRE
+  caisseNoireTxId Int?
 
   @@index([personId, date])
   @@index([date])
@@ -741,16 +745,18 @@ model SurplusMoney {
 }
 
 model DailyExpense {
-  id          Int      @id @default(autoincrement())
-  branchId    Int?
-  amount      Decimal
-  description String
-  category    String   @default("GENERAL") // GENERAL, SUPPLIES, UTILITIES, RENT, MAINTENANCE, OTHER
-  date        DateTime @default(now())
-  recordedBy  String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  branch      Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  id              Int      @id @default(autoincrement())
+  branchId        Int?
+  amount          Decimal
+  description     String
+  category        String   @default("GENERAL") // GENERAL, SUPPLIES, UTILITIES, RENT, MAINTENANCE, OTHER
+  fundingSource   String   @default("SCHOOL_MONTH_BENEFICE") // INSCRIPTION_FEES, SCHOOL_MONTH_BENEFICE, CAISSE_NOIRE
+  caisseNoireTxId Int?
+  date            DateTime @default(now())
+  recordedBy      String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  branch          Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 
   @@index([branchId, date])
   @@index([date])
@@ -809,35 +815,39 @@ model StaffMember {
 }
 
 model StaffPayroll {
-  id            Int         @id @default(autoincrement())
-  staffMemberId Int
-  month         Int // 1-12
-  year          Int // e.g. 2026
-  amount        Decimal // base salary
-  advance       Decimal     @default(0) // avances sur salaire
-  bonus         Decimal     @default(0) // prime / bonus cash
-  status        String      @default("PAID") // "PAID" | "PENDING"
-  paidAt        DateTime?   @default(now())
-  notes         String?
-  recordedBy    String
-  createdAt     DateTime    @default(now())
-  staffMember   StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+  id              Int         @id @default(autoincrement())
+  staffMemberId   Int
+  month           Int // 1-12
+  year            Int // e.g. 2026
+  amount          Decimal // base salary
+  advance         Decimal     @default(0) // avances sur salaire
+  bonus           Decimal     @default(0) // prime / bonus cash
+  status          String      @default("PAID") // "PAID" | "PENDING"
+  fundingSource   String      @default("SCHOOL_MONTH_BENEFICE") // INSCRIPTION_FEES, SCHOOL_MONTH_BENEFICE, CAISSE_NOIRE
+  caisseNoireTxId Int?
+  paidAt          DateTime?   @default(now())
+  notes           String?
+  recordedBy      String
+  createdAt       DateTime    @default(now())
+  staffMember     StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
 
   @@unique([staffMemberId, month, year])
   @@index([year, month])
 }
 
 model StaffAdvance {
-  id            Int         @id @default(autoincrement())
-  staffMemberId Int
-  amount        Decimal
-  date          DateTime    @default(now())
-  month         Int? // target payroll month (1-12)
-  year          Int? // target payroll year (e.g. 2026)
-  notes         String?
-  recordedBy    String
-  createdAt     DateTime    @default(now())
-  staffMember   StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
+  id              Int         @id @default(autoincrement())
+  staffMemberId   Int
+  amount          Decimal
+  date            DateTime    @default(now())
+  month           Int? // target payroll month (1-12)
+  year            Int? // target payroll year (e.g. 2026)
+  fundingSource   String      @default("SCHOOL_MONTH_BENEFICE") // INSCRIPTION_FEES, SCHOOL_MONTH_BENEFICE, CAISSE_NOIRE
+  caisseNoireTxId Int?
+  notes           String?
+  recordedBy      String
+  createdAt       DateTime    @default(now())
+  staffMember     StaffMember @relation(fields: [staffMemberId], references: [id], onDelete: Cascade)
 
   @@index([staffMemberId, date])
   @@index([staffMemberId, year, month])

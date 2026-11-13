@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, startTransition } from "react";
+import React, { useMemo, useRef, useState, startTransition } from "react";
 import ReactDOMServer from "react-dom/server";
 import Image from "next/image";
 import {
@@ -19,6 +19,11 @@ import {
   Trash2,
   AlertTriangle,
   History,
+  Printer,
+  FileSpreadsheet,
+  Download,
+  ExternalLink,
+  X,
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -34,6 +39,18 @@ import {
   deleteStaffAdvanceAction,
 } from "@/lib/financeActions";
 import { StaffPayslipTicket, StaffPayslipPrintData } from "@/components/printable/StaffPayslipTicket";
+import {
+  StaffPayrollSummaryReport,
+  StaffPayrollSummaryPrintData,
+} from "@/components/printable/StaffPayrollSummaryReport";
+import { OutcomeFundingSourceSelect, FundingSourceBadge } from "@/components/finance/OutcomeFundingSourceSelect";
+import {
+  OUTCOME_FUNDING_SOURCES,
+  getOutcomeFundingSourceMeta,
+  normalizeOutcomeFundingSource,
+  type OutcomeFundingSource,
+} from "@/lib/financeConstants";
+import { buildPrintableReportHtml } from "@/lib/printReportHtml";
 import { toast } from "react-toastify";
 import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
@@ -55,6 +72,7 @@ export interface StaffPayrollItem {
   staffName: string;
   roleTitle: string;
   phone?: string | null;
+  branchId?: number | null;
   branchName?: string | null;
   month: number;
   year: number;
@@ -62,6 +80,7 @@ export interface StaffPayrollItem {
   advance: number; // avances sur salaire
   bonus: number; // prime / bonus cash
   status: string;
+  fundingSource?: string;
   paidAt: string | Date | null;
   notes?: string | null;
 }
@@ -75,6 +94,7 @@ export interface StaffAdvanceItem {
   date: string;
   month?: number | null;
   year?: number | null;
+  fundingSource?: string;
   notes?: string | null;
   recordedBy?: string;
 }
@@ -151,6 +171,7 @@ export default function StaffPayrollSection({
   const [payrollBonus, setPayrollBonus] = useState<string>("");
   const [payrollNotes, setPayrollNotes] = useState<string>("");
   const [payrollStatus, setPayrollStatus] = useState<"PAID" | "PENDING">("PAID");
+  const [payrollFundingSource, setPayrollFundingSource] = useState<OutcomeFundingSource>("SCHOOL_MONTH_BENEFICE");
   const [updateDefaultBaseSalary, setUpdateDefaultBaseSalary] = useState(false);
   const [editingPayrollId, setEditingPayrollId] = useState<number | null>(null);
 
@@ -161,7 +182,22 @@ export default function StaffPayrollSection({
   const [advanceYear, setAdvanceYear] = useState<number>(new Date().getFullYear());
   const [advanceDate, setAdvanceDate] = useState<string>(new Date().toISOString().split("T")[0]);
   const [advanceNotes, setAdvanceNotes] = useState<string>("");
+  const [advanceFundingSource, setAdvanceFundingSource] = useState<OutcomeFundingSource>("SCHOOL_MONTH_BENEFICE");
   const [editingAdvanceId, setEditingAdvanceId] = useState<number | null>(null);
+
+  // Report filters & PDF preview modal
+  const [filterMonth, setFilterMonth] = useState<string>("all");
+  const [filterYear, setFilterYear] = useState<string>("all");
+  const [filterBranch, setFilterBranch] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<"ALL" | "PAID" | "PENDING">("ALL");
+  const [filterSource, setFilterSource] = useState<"ALL" | OutcomeFundingSource>("ALL");
+  const [reportPreview, setReportPreview] = useState<{
+    iframeHtml: string;
+    downloadHtml: string;
+    filename: string;
+    count: number;
+  } | null>(null);
+  const reportIframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -206,6 +242,7 @@ export default function StaffPayrollSection({
     setPayrollBonus("");
     setPayrollNotes("");
     setPayrollStatus("PAID");
+    setPayrollFundingSource("SCHOOL_MONTH_BENEFICE");
     setIsPayrollModalOpen(true);
   };
 
@@ -219,6 +256,7 @@ export default function StaffPayrollSection({
     setPayrollAdvance(p.advance > 0 ? String(p.advance) : "");
     setPayrollBonus(p.bonus > 0 ? String(p.bonus) : "");
     setPayrollStatus((p.status as any) || "PAID");
+    setPayrollFundingSource(normalizeOutcomeFundingSource(p.fundingSource));
     setPayrollNotes(p.notes || "");
     setUpdateDefaultBaseSalary(false);
     setIsPayrollModalOpen(true);
@@ -248,6 +286,7 @@ export default function StaffPayrollSection({
     setAdvanceYear(new Date().getFullYear());
     setAdvanceDate(new Date().toISOString().split("T")[0]);
     setAdvanceNotes("");
+    setAdvanceFundingSource("SCHOOL_MONTH_BENEFICE");
     setIsAdvanceModalOpen(true);
   };
 
@@ -260,6 +299,7 @@ export default function StaffPayrollSection({
     setAdvanceYear(adv.year || new Date().getFullYear());
     setAdvanceDate(new Date(adv.date).toISOString().split("T")[0]);
     setAdvanceNotes(adv.notes || "");
+    setAdvanceFundingSource(normalizeOutcomeFundingSource(adv.fundingSource));
     setIsAdvanceModalOpen(true);
   };
 
@@ -384,6 +424,7 @@ export default function StaffPayrollSection({
           advance: Number(payrollAdvance || 0),
           bonus: Number(payrollBonus || 0),
           status: payrollStatus,
+          fundingSource: payrollFundingSource,
           notes: payrollNotes,
           updateDefaultBaseSalary,
         });
@@ -396,6 +437,7 @@ export default function StaffPayrollSection({
           advance: Number(payrollAdvance || 0),
           bonus: Number(payrollBonus || 0),
           status: payrollStatus,
+          fundingSource: payrollFundingSource,
           notes: payrollNotes,
           updateDefaultBaseSalary,
         });
@@ -440,6 +482,7 @@ export default function StaffPayrollSection({
           date: advanceDate,
           month: Number(advanceMonth),
           year: Number(advanceYear),
+          fundingSource: advanceFundingSource,
           notes: advanceNotes,
         });
       } else {
@@ -449,6 +492,7 @@ export default function StaffPayrollSection({
           date: advanceDate,
           month: Number(advanceMonth),
           year: Number(advanceYear),
+          fundingSource: advanceFundingSource,
           notes: advanceNotes,
         });
       }
@@ -559,6 +603,7 @@ export default function StaffPayrollSection({
       bonus: p.bonus || 0,
       totalNet,
       status: p.status,
+      fundingSource: p.fundingSource,
       paidAt: p.paidAt,
       notes: p.notes,
     };
@@ -567,70 +612,250 @@ export default function StaffPayrollSection({
       <StaffPayslipTicket data={printData} />
     );
 
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const html = buildPrintableReportHtml({
+      title: `Bulletin de paie #STF-${p.id} - ${p.staffName}`,
+      contentHtml: printContent,
+      isAr: false,
+      locale: "fr",
+      origin,
+      includeToolbar: true,
+      includeDownloadButton: true,
+      downloadFilename: `bulletin-personnel-${p.id}.html`,
+      autoPrint: true,
+      closeAfterPrint: true,
+    });
+
     const printWindow = window.open("", "_blank", "width=900,height=800");
     if (printWindow) {
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html dir="ltr" lang="fr">
-          <head>
-            <meta charset="utf-8">
-            <base href="${window.location.origin}/">
-            <title>Bulletin de paie #STF-${p.id} - ${p.staffName}</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <link rel="preconnect" href="https://fonts.googleapis.com">
-            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-            <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
-            <style>
-              body {
-                font-family: system-ui, -apple-system, sans-serif;
-                background-color: #fff;
-                color: #000;
-                margin: 0;
-                padding: 20px;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-              @media print {
-                body {
-                  margin: 0;
-                  padding: 0;
-                  -webkit-print-color-adjust: exact !important;
-                  print-color-adjust: exact !important;
-                }
-                .no-print { display: none; }
-                @page {
-                  size: A4 portrait;
-                  margin: 8mm;
-                }
-              }
-            </style>
-          </head>
-          <body>
-            ${printContent}
-          </body>
-        </html>
-      `);
-
+      printWindow.document.open();
+      printWindow.document.write(html);
       printWindow.document.close();
       printWindow.focus();
-
-      setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-      }, 500);
+    } else {
+      setReportPreview({
+        iframeHtml: buildPrintableReportHtml({
+          title: `Bulletin de paie #STF-${p.id} - ${p.staffName}`,
+          contentHtml: printContent,
+          isAr: false,
+          locale: "fr",
+          origin,
+          includeToolbar: false,
+          autoPrint: false,
+        }),
+        downloadHtml: html,
+        filename: `bulletin-personnel-${p.id}.html`,
+        count: 1,
+      });
     }
   };
 
-  // Calculations for KPI summaries
-  const totalBaseSalarySum = payrollLogs
+  // Filtered payrolls & advances for table + consolidated PDF export
+  const staffBranchMap = useMemo(() => {
+    const map = new Map<number, number | null>();
+    for (const s of staffMembers) {
+      map.set(s.id, s.branchId);
+    }
+    return map;
+  }, [staffMembers]);
+
+  const availableYears = useMemo(() => {
+    const set = new Set<number>([new Date().getFullYear()]);
+    for (const p of payrollLogs) set.add(p.year);
+    for (const a of staffAdvances) {
+      if (a.year) set.add(a.year);
+    }
+    return Array.from(set).sort((a, b) => b - a);
+  }, [payrollLogs, staffAdvances]);
+
+  const filteredPayrollLogs = useMemo(() => {
+    return payrollLogs.filter((p) => {
+      if (filterMonth !== "all" && p.month !== Number(filterMonth)) return false;
+      if (filterYear !== "all" && p.year !== Number(filterYear)) return false;
+      if (filterStatus !== "ALL" && p.status !== filterStatus) return false;
+      if (
+        filterSource !== "ALL" &&
+        normalizeOutcomeFundingSource(p.fundingSource) !== filterSource
+      ) {
+        return false;
+      }
+      if (filterBranch !== "all") {
+        const bId = p.branchId ?? staffBranchMap.get(p.staffMemberId) ?? null;
+        if (bId !== Number(filterBranch)) return false;
+      }
+      return true;
+    });
+  }, [payrollLogs, filterMonth, filterYear, filterStatus, filterSource, filterBranch, staffBranchMap]);
+
+  const filteredAdvances = useMemo(() => {
+    return staffAdvances.filter((a) => {
+      if (filterMonth !== "all" && a.month && a.month !== Number(filterMonth)) return false;
+      if (filterYear !== "all" && a.year && a.year !== Number(filterYear)) return false;
+      if (
+        filterSource !== "ALL" &&
+        normalizeOutcomeFundingSource(a.fundingSource) !== filterSource
+      ) {
+        return false;
+      }
+      if (filterBranch !== "all") {
+        const bId = staffBranchMap.get(a.staffMemberId) ?? null;
+        if (bId !== Number(filterBranch)) return false;
+      }
+      return true;
+    });
+  }, [staffAdvances, filterMonth, filterYear, filterSource, filterBranch, staffBranchMap]);
+
+  const handlePrintStaffPayrollSummary = (mode: "print" | "preview" = "print") => {
+    const periodLabel =
+      filterMonth !== "all" && filterYear !== "all"
+        ? `${MONTH_NAMES_FR[Number(filterMonth) - 1]} ${filterYear}`
+        : filterMonth !== "all"
+          ? `${MONTH_NAMES_FR[Number(filterMonth) - 1]} (Toutes années)`
+          : filterYear !== "all"
+            ? `Année ${filterYear}`
+            : "Toutes les périodes";
+
+    const branchLabel =
+      filterBranch === "all"
+        ? "Toutes les succursales"
+        : branches.find((b) => b.id === Number(filterBranch))?.name || `Branche #${filterBranch}`;
+
+    const statusFilterLabel =
+      filterStatus === "ALL"
+        ? "Tous les statuts"
+        : filterStatus === "PAID"
+          ? "Payés uniquement"
+          : "En attente uniquement";
+
+    const summaryData: StaffPayrollSummaryPrintData = {
+      periodLabel,
+      branchLabel,
+      statusFilterLabel,
+      generatedAt: new Date(),
+      staffMembersCount:
+        filterBranch === "all"
+          ? staffMembers.length
+          : staffMembers.filter((s) => s.branchId === Number(filterBranch)).length,
+      payrolls: filteredPayrollLogs.map((p) => ({
+        id: p.id,
+        staffName: p.staffName,
+        roleTitle: p.roleTitle,
+        branchName: p.branchName,
+        month: p.month,
+        year: p.year,
+        amount: p.amount,
+        advance: p.advance || 0,
+        bonus: p.bonus || 0,
+        totalNet: Math.max(0, p.amount - (p.advance || 0) + (p.bonus || 0)),
+        status: p.status,
+        fundingSource: p.fundingSource,
+        paidAt: p.paidAt,
+        notes: p.notes,
+      })),
+      advances: filteredAdvances.map((a) => ({
+        id: a.id,
+        staffName: a.staffName,
+        roleTitle: a.roleTitle,
+        amount: a.amount,
+        date: a.date,
+        month: a.month,
+        year: a.year,
+        fundingSource: a.fundingSource,
+        notes: a.notes,
+      })),
+    };
+
+    const printContent = ReactDOMServer.renderToString(
+      <StaffPayrollSummaryReport data={summaryData} />
+    );
+
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const slugParts = [
+      "rapport-paie-personnel",
+      filterYear !== "all" ? filterYear : null,
+      filterMonth !== "all" ? String(filterMonth).padStart(2, "0") : null,
+    ]
+      .filter(Boolean)
+      .join("-");
+    const filename = `${slugParts}.html`;
+    const title = `Rapport Paie Personnel — ${periodLabel}`;
+
+    const iframeHtml = buildPrintableReportHtml({
+      title,
+      contentHtml: printContent,
+      isAr: false,
+      locale: "fr",
+      origin,
+      includeToolbar: false,
+      autoPrint: false,
+    });
+
+    const downloadHtml = buildPrintableReportHtml({
+      title,
+      contentHtml: printContent,
+      isAr: false,
+      locale: "fr",
+      origin,
+      toolbarTitle: "Rapport Consolidé — Paie du Personnel",
+      toolbarBadge: `${filteredPayrollLogs.length} bulletins`,
+      includeToolbar: true,
+      includeDownloadButton: true,
+      downloadFilename: filename,
+      autoPrint: false,
+      closeAfterPrint: false,
+    });
+
+    if (mode === "preview") {
+      setReportPreview({
+        iframeHtml,
+        downloadHtml,
+        filename,
+        count: filteredPayrollLogs.length,
+      });
+      return;
+    }
+
+    const popupHtml = buildPrintableReportHtml({
+      title,
+      contentHtml: printContent,
+      isAr: false,
+      locale: "fr",
+      origin,
+      toolbarTitle: "Rapport Consolidé — Paie du Personnel",
+      toolbarBadge: `${filteredPayrollLogs.length} bulletins`,
+      includeToolbar: true,
+      includeDownloadButton: true,
+      downloadFilename: filename,
+      autoPrint: true,
+      closeAfterPrint: false,
+    });
+
+    const printWindow = window.open("", "_blank", "width=1040,height=860");
+    if (printWindow) {
+      printWindow.document.open();
+      printWindow.document.write(popupHtml);
+      printWindow.document.close();
+      printWindow.focus();
+    } else {
+      setReportPreview({
+        iframeHtml,
+        downloadHtml,
+        filename,
+        count: filteredPayrollLogs.length,
+      });
+    }
+  };
+
+  // Calculations for KPI summaries (follows active table filters)
+  const totalBaseSalarySum = filteredPayrollLogs
     .filter((l) => l.status === "PAID")
     .reduce((sum, l) => sum + l.amount, 0);
 
-  const totalAdvancesDeductedSum = payrollLogs
+  const totalAdvancesDeductedSum = filteredPayrollLogs
     .filter((l) => l.status === "PAID")
     .reduce((sum, l) => sum + (l.advance || 0), 0);
 
-  const totalMonthlyStaffPayroll = payrollLogs
+  const totalMonthlyStaffPayroll = filteredPayrollLogs
     .filter((l) => l.status === "PAID")
     .reduce((sum, l) => sum + Math.max(0, l.amount - (l.advance || 0) + (l.bonus || 0)), 0);
 
@@ -710,6 +935,17 @@ export default function StaffPayrollSection({
           >
             <HandCoins className="w-3.5 h-3.5 text-amber-700" />
             <span>{t("recordStaffAdvance")}</span>
+          </button>
+
+          {/* Print / PDF Staff Payroll Summary Report */}
+          <button
+            type="button"
+            onClick={() => handlePrintStaffPayrollSummary("preview")}
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-semibold shadow-xs cursor-pointer transition-all active:scale-95"
+            title={locale === "ar" ? "معاينة وطباعة تقرير الرواتب PDF" : "Aperçu & Export PDF du rapport de paie"}
+          >
+            <Printer className="w-3.5 h-3.5 text-emerald-400" />
+            <span>{locale === "ar" ? "تقرير PDF" : "Rapport PDF"}</span>
           </button>
 
           {/* Pay Salary Button */}
@@ -843,7 +1079,7 @@ export default function StaffPayrollSection({
               <Receipt className="w-3.5 h-3.5 text-primary" />
               <span>{t("payrollHistory")}</span>
               <span className="text-2xs font-mono px-1.5 py-0.2 rounded-full bg-surface-muted text-gray-700 border border-border/60">
-                {payrollLogs.length}
+                {filteredPayrollLogs.length}
               </span>
             </button>
 
@@ -859,26 +1095,92 @@ export default function StaffPayrollSection({
               <HandCoins className="w-3.5 h-3.5 text-amber-700" />
               <span>{t("staffAdvancesHistory")}</span>
               <span className="text-2xs font-mono px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
-                {staffAdvances.length}
+                {filteredAdvances.length}
               </span>
             </button>
           </div>
 
-          <span className="text-2xs text-muted hidden sm:inline">
-            {activeBottomTab === "payrolls"
-              ? locale === "ar"
-                ? "يتم حساب الباقي تلقائياً بعد خصم التسبيقات وإضافة المنح"
-                : "Le reste est calculé automatiquement (Salaire de base - Avances + Prime)"
-              : locale === "ar"
-              ? "سجل التسبيقات المسحوبة قبل تاريخ الصرف"
-              : "Historique des acomptes accordés au personnel"}
-          </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={filterMonth}
+              onChange={(e) => setFilterMonth(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg border border-border bg-white text-xs font-medium text-gray-700"
+            >
+              <option value="all">{locale === "ar" ? "كل الأشهر" : "Tous les mois"}</option>
+              {monthNames.map((mName, idx) => (
+                <option key={idx + 1} value={String(idx + 1)}>
+                  {mName}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filterYear}
+              onChange={(e) => setFilterYear(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg border border-border bg-white text-xs font-medium text-gray-700"
+            >
+              <option value="all">{locale === "ar" ? "كل السنوات" : "Toutes années"}</option>
+              {availableYears.map((y) => (
+                <option key={y} value={String(y)}>
+                  {y}
+                </option>
+              ))}
+            </select>
+
+            {branches.length > 0 && (
+              <select
+                value={filterBranch}
+                onChange={(e) => setFilterBranch(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg border border-border bg-white text-xs font-medium text-gray-700"
+              >
+                <option value="all">{t("allBranchesOpt")}</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={String(b.id)}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <select
+              value={filterSource}
+              onChange={(e) => setFilterSource(e.target.value as any)}
+              className="px-2.5 py-1.5 rounded-lg border border-border bg-white text-xs font-medium text-gray-700"
+            >
+              <option value="ALL">{locale === "ar" ? "كل الصناديق" : "Toutes sources"}</option>
+              {OUTCOME_FUNDING_SOURCES.map((src) => (
+                <option key={src} value={src}>
+                  {getOutcomeFundingSourceMeta(src, locale).shortLabel}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as any)}
+              className="px-2.5 py-1.5 rounded-lg border border-border bg-white text-xs font-medium text-gray-700"
+            >
+              <option value="ALL">{locale === "ar" ? "كل الحالات" : "Tous statuts"}</option>
+              <option value="PAID">{t("statusPaid")}</option>
+              <option value="PENDING">{t("statusPendingLabel")}</option>
+            </select>
+
+            <button
+              type="button"
+              onClick={() => handlePrintStaffPayrollSummary("print")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs cursor-pointer transition-colors"
+              title={locale === "ar" ? "طباعة وحفظ PDF" : "Imprimer / Enregistrer en PDF"}
+            >
+              <Printer className="w-3.5 h-3.5 text-emerald-400" />
+              <span>{locale === "ar" ? "طباعة PDF" : "Imprimer / PDF"}</span>
+            </button>
+          </div>
         </div>
 
         {/* TAB 1: PAYROLL HISTORY */}
         {activeBottomTab === "payrolls" && (
           <div>
-            {payrollLogs.length === 0 ? (
+            {filteredPayrollLogs.length === 0 ? (
               <div className="p-8 text-center text-muted text-sm">
                 {t("noStaffPayrollLogs")}
               </div>
@@ -902,13 +1204,14 @@ export default function StaffPayrollSection({
                       <th className="py-3 px-4 text-right font-black text-blue-900 bg-blue-50/40">
                         {t("salaryRest")} (Net)
                       </th>
+                      <th className="py-3 px-4">{locale === "ar" ? "الصندوق" : "Source"}</th>
                       <th className="py-3 px-4 text-center">{t("statusCol")}</th>
                       <th className="py-3 px-4">{t("date")}</th>
                       <th className="py-3 px-4 text-center">{locale === "ar" ? "إجراءات" : "Actions"}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/60">
-                    {payrollLogs.map((p) => {
+                    {filteredPayrollLogs.map((p) => {
                       const totalRest = Math.max(0, p.amount - (p.advance || 0) + (p.bonus || 0));
                       return (
                         <tr key={p.id} className="hover:bg-surface-subtle/80 transition-colors">
@@ -951,6 +1254,11 @@ export default function StaffPayrollSection({
                           {/* Automatic Rest Net Column */}
                           <td className="py-3 px-4 text-right font-mono font-black text-blue-900 whitespace-nowrap text-sm bg-blue-50/30">
                             {totalRest.toLocaleString(numLocale)} {t("currency")}
+                          </td>
+
+                          {/* Funding Source */}
+                          <td className="py-3 px-4 text-xs">
+                            <FundingSourceBadge source={p.fundingSource} locale={locale} compact />
                           </td>
 
                           {/* Status */}
@@ -1020,7 +1328,7 @@ export default function StaffPayrollSection({
         {/* TAB 2: STANDALONE ADVANCES LOG */}
         {activeBottomTab === "advances" && (
           <div>
-            {staffAdvances.length === 0 ? (
+            {filteredAdvances.length === 0 ? (
               <div className="p-8 text-center text-muted text-sm flex flex-col items-center gap-2">
                 <HandCoins className="w-8 h-8 text-muted/60 mb-1" />
                 <p>{t("noStaffAdvances")}</p>
@@ -1046,12 +1354,13 @@ export default function StaffPayrollSection({
                       <th className="py-3 px-4 text-right text-amber-950 font-bold">
                         {t("staffAdvanceAmount")}
                       </th>
+                      <th className="py-3 px-4">{locale === "ar" ? "الصندوق" : "Source"}</th>
                       <th className="py-3 px-4">{t("paymentNotes")}</th>
                       <th className="py-3 px-4 text-center">{locale === "ar" ? "إجراءات" : "Actions"}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/60">
-                    {staffAdvances.map((adv) => (
+                    {filteredAdvances.map((adv) => (
                       <tr key={adv.id} className="hover:bg-surface-subtle/80 transition-colors">
                         <td className="py-3 px-4 font-mono text-xs text-gray-900 whitespace-nowrap">
                           {new Date(adv.date).toLocaleDateString(numLocale)}
@@ -1067,6 +1376,9 @@ export default function StaffPayrollSection({
                         </td>
                         <td className="py-3 px-4 text-right font-mono font-bold text-amber-900 whitespace-nowrap">
                           - {adv.amount.toLocaleString(numLocale)} {t("currency")}
+                        </td>
+                        <td className="py-3 px-4 text-xs">
+                          <FundingSourceBadge source={adv.fundingSource} locale={locale} compact />
                         </td>
                         <td className="py-3 px-4 text-xs text-muted">
                           {adv.notes || "—"}
@@ -1328,6 +1640,12 @@ export default function StaffPayrollSection({
                 </div>
               </div>
 
+              <OutcomeFundingSourceSelect
+                value={payrollFundingSource}
+                onChange={setPayrollFundingSource}
+                locale={locale}
+              />
+
               {/* Modal Buttons */}
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
                 <Button
@@ -1455,6 +1773,12 @@ export default function StaffPayrollSection({
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 />
               </div>
+
+              <OutcomeFundingSourceSelect
+                value={advanceFundingSource}
+                onChange={setAdvanceFundingSource}
+                locale={locale}
+              />
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
                 <Button
@@ -1855,6 +2179,91 @@ export default function StaffPayrollSection({
                 </Button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* IN-PAGE PDF / PRINT PREVIEW MODAL FOR STAFF PAYROLL REPORT */}
+      {reportPreview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-5xl h-[90vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+            <div className="px-5 py-3.5 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-bold text-sm">
+                  {locale === "ar" ? "تقرير رواتب الموظفين (PDF)" : "Rapport Consolidé — Paie du Personnel"}
+                </span>
+                <span className="text-[11px] font-semibold bg-white/15 px-2.5 py-0.5 rounded-full">
+                  {reportPreview.count} {locale === "ar" ? "كشوف" : "bulletin(s)"}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const blob = new Blob([reportPreview.downloadHtml], { type: "text/html;charset=utf-8" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = reportPreview.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>{locale === "ar" ? "تحميل (.html)" : "Télécharger (.html)"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const blob = new Blob([reportPreview.downloadHtml], { type: "text/html;charset=utf-8" });
+                    const url = URL.createObjectURL(blob);
+                    window.open(url, "_blank");
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/15 hover:bg-white/25 text-white transition-colors cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>{locale === "ar" ? "فتح في نافذة جديدة" : "Nouvel onglet"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cw = reportIframeRef.current?.contentWindow;
+                    if (cw) {
+                      cw.focus();
+                      cw.print();
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>{locale === "ar" ? "طباعة / حفظ PDF" : "Imprimer / Enregistrer en PDF"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReportPreview(null)}
+                  className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
+                  title={locale === "ar" ? "إغلاق" : "Fermer"}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <iframe
+              ref={reportIframeRef}
+              srcDoc={reportPreview.iframeHtml}
+              title={locale === "ar" ? "معاينة تقرير رواتب الموظفين" : "Aperçu du rapport de paie du personnel"}
+              className="flex-1 w-full bg-white border-0"
+            />
           </div>
         </div>
       )}

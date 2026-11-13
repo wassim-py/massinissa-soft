@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import ExportButton from "@/components/ExportButton";
 import { Card } from "@/components/ui/Card";
 import { Calendar, SlidersHorizontal } from "lucide-react";
@@ -24,6 +24,7 @@ export default function RevenueFilterBar({
   dateTo,
 }: RevenueFilterBarProps) {
   const t = useTranslations("finance");
+  const locale = useLocale();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -31,7 +32,9 @@ export default function RevenueFilterBar({
   // Helper date calculations strictly anchored to Africa/Algiers
   const algiersToday = getAlgiersDateInfo();
   const todayStr = algiersToday.dateStr;
-  const weekStartDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const weekStartDate = new Date(
+    Date.UTC(algiersToday.year, algiersToday.month - 1, algiersToday.day - 7, 12, 0, 0)
+  );
   const weekStartStr = getAlgiersDateInfo(weekStartDate).dateStr;
   const firstOfMonthStr = `${algiersToday.year}-${String(algiersToday.month).padStart(2, "0")}-01`;
 
@@ -40,9 +43,44 @@ export default function RevenueFilterBar({
   const isWeek = dateFrom === weekStartStr && dateTo === todayStr;
   const isMonth = dateFrom === firstOfMonthStr && dateTo === todayStr;
   const isAll = dateFrom === "2025-01-01" && dateTo === todayStr;
-  const isCustom = !isToday && !isWeek && !isMonth && !isAll;
+
+  const activeMonthValue = (() => {
+    if (!dateFrom || !dateTo) return "";
+    const [y1, m1, d1] = dateFrom.split("-").map(Number);
+    const [y2, m2] = dateTo.split("-").map(Number);
+    if (y1 === y2 && m1 === m2 && d1 === 1) {
+      const lastDayOfSelectedMonth = new Date(Date.UTC(y1, m1, 0)).getUTCDate();
+      const endDay = Number(dateTo.split("-")[2]);
+      const isCurrentMonthToToday =
+        y1 === algiersToday.year && m1 === algiersToday.month && dateTo === todayStr;
+      if (endDay === lastDayOfSelectedMonth || isCurrentMonthToToday) {
+        return `${y1}-${String(m1).padStart(2, "0")}`;
+      }
+    }
+    return "";
+  })();
+
+  const isCustom = !isToday && !isWeek && !isMonth && !isAll && !activeMonthValue;
 
   const [showCustomInputs, setShowCustomInputs] = useState(isCustom);
+
+  const applySpecificMonth = (monthVal: string) => {
+    if (!monthVal) return;
+    const [yStr, mStr] = monthVal.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr);
+    if (!y || !m) return;
+    const startStr = `${yStr}-${mStr}-01`;
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const fullEndStr = `${yStr}-${mStr}-${String(lastDay).padStart(2, "0")}`;
+    const isCurrentMonth = y === algiersToday.year && m === algiersToday.month;
+    setShowCustomInputs(false);
+    updateQuery({
+      dateFrom: startStr,
+      dateTo: isCurrentMonth && todayStr < fullEndStr ? todayStr : fullEndStr,
+      periodMode: "monthly",
+    });
+  };
 
   // Updates searchParams and triggers page transition
   const updateQuery = (params: Record<string, string | null>) => {
@@ -185,8 +223,20 @@ export default function RevenueFilterBar({
           </div>
         </div>
 
-        {/* Custom Date Pickers & Excel Export (always aligned together) */}
+        {/* Custom Date Pickers, Month Picker & Excel Export (always aligned together) */}
         <div className="flex items-center gap-2 flex-wrap lg:flex-nowrap">
+          <div className="flex items-center gap-1.5 bg-surface-muted/60 px-2.5 py-1 rounded-xl border border-border">
+            <span className="text-[11px] font-semibold text-muted whitespace-nowrap">
+              {locale === "ar" ? "الشهر :" : "Mois :"}
+            </span>
+            <input
+              type="month"
+              value={activeMonthValue}
+              onChange={(e) => applySpecificMonth(e.target.value)}
+              aria-label={locale === "ar" ? "اختر الشهر" : "Sélectionner le mois"}
+              className="border border-border rounded-lg px-2 py-1 text-xs font-mono bg-surface text-gray-800 shadow-xs focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-colors cursor-pointer"
+            />
+          </div>
           {(isCustom || showCustomInputs) && (
             <div className="flex items-center gap-2 bg-surface-muted/60 p-1 rounded-xl border border-border">
               <div className="flex items-center gap-1.5 text-xs text-muted font-medium">

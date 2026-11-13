@@ -89,6 +89,20 @@ export interface RevenueDashboardData {
     type: string;
     amount: number;
   }>;
+  discrepancies: Array<{
+    id: number;
+    type: "MISSING" | "SURPLUS";
+    branchId: number;
+    branchName: string;
+    date: string;
+    amount: number;
+    reason: string | null;
+    declaredBy: string;
+    status: string;
+    confirmedBy: string | null;
+    confirmedAt: string | null;
+    createdAt: string;
+  }>;
 }
 
 /**
@@ -173,8 +187,8 @@ export async function getDailyRevenueDashboardData(options?: {
 
   const targetBranchId = branchFilter !== "all" ? Number(branchFilter) : undefined;
 
-  // Query DailyLedger within the date range, confirmed MissingMoney, confirmed SurplusMoney, and individual Vouchers
-  const [ledgerRows, comparisonRows, confirmedMissingRows, confirmedSurplusRows, voucherRows] = await Promise.all([
+  // Query DailyLedger within the date range, all MissingMoney/SurplusMoney in range, and individual Vouchers
+  const [ledgerRows, comparisonRows, allMissingRows, allSurplusRows, voucherRows] = await Promise.all([
     prisma.dailyLedger.findMany({
       where: {
         date: {
@@ -207,11 +221,11 @@ export async function getDailyRevenueDashboardData(options?: {
           gte: startDate,
           lte: endDate,
         },
-        status: "CONFIRMED",
       },
       include: {
         branch: { select: { id: true, name: true } },
       },
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     }),
     prisma.surplusMoney.findMany({
       where: {
@@ -219,11 +233,11 @@ export async function getDailyRevenueDashboardData(options?: {
           gte: startDate,
           lte: endDate,
         },
-        status: "CONFIRMED",
       },
       include: {
         branch: { select: { id: true, name: true } },
       },
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     }),
     prisma.voucher.findMany({
       where: {
@@ -260,6 +274,9 @@ export async function getDailyRevenueDashboardData(options?: {
       orderBy: { issuedAt: "desc" },
     }),
   ]);
+
+  const confirmedMissingRows = allMissingRows.filter((m) => m.status === "CONFIRMED");
+  const confirmedSurplusRows = allSurplusRows.filter((s) => s.status === "CONFIRMED");
 
   // Calculate Overall Summary
   const summary: RevenueSummary = {
@@ -574,6 +591,41 @@ export async function getDailyRevenueDashboardData(options?: {
       amount: Number(r.amount),
     }));
 
+  const discrepancies = [
+    ...allMissingRows
+      .filter((m) => !targetBranchId || m.branchId === targetBranchId)
+      .map((m) => ({
+        id: m.id,
+        type: "MISSING" as const,
+        branchId: m.branchId,
+        branchName: m.branch?.name || branchNameMap.get(m.branchId) || `Branche #${m.branchId}`,
+        date: m.date.toISOString(),
+        amount: Number(m.amount),
+        reason: m.reason,
+        declaredBy: m.declaredBy,
+        status: m.status,
+        confirmedBy: m.confirmedBy,
+        confirmedAt: m.confirmedAt ? m.confirmedAt.toISOString() : null,
+        createdAt: m.createdAt.toISOString(),
+      })),
+    ...allSurplusRows
+      .filter((s) => !targetBranchId || s.branchId === targetBranchId)
+      .map((s) => ({
+        id: s.id,
+        type: "SURPLUS" as const,
+        branchId: s.branchId,
+        branchName: s.branch?.name || branchNameMap.get(s.branchId) || `Branche #${s.branchId}`,
+        date: s.date.toISOString(),
+        amount: Number(s.amount),
+        reason: s.reason,
+        declaredBy: s.declaredBy,
+        status: s.status,
+        confirmedBy: s.confirmedBy,
+        confirmedAt: s.confirmedAt ? s.confirmedAt.toISOString() : null,
+        createdAt: s.createdAt.toISOString(),
+      })),
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
   return {
     periodMode,
     dateFrom: dateFromStr,
@@ -585,6 +637,7 @@ export async function getDailyRevenueDashboardData(options?: {
     timeline,
     vouchers: formattedVouchers,
     recentLedgerEntries,
+    discrepancies,
   };
 }
 

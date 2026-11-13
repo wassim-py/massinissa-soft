@@ -65,9 +65,9 @@ export function GlobalFinanceConsolidatedReport({
     width: "100%",
     maxWidth: "210mm",
     margin: "0 auto",
-    padding: "24px",
+    padding: "20px",
     fontFamily: "system-ui, -apple-system, sans-serif",
-    fontSize: "11pt",
+    fontSize: "10pt",
     color: "#111827",
     direction: isAr ? "rtl" : "ltr",
     backgroundColor: "#ffffff",
@@ -431,72 +431,74 @@ export function GlobalFinanceConsolidatedReport({
         </div>
       )}
 
-      {/* Grand Consolidated Bilan Card */}
-      <div className="bg-slate-900 text-white rounded-xl p-5 mb-8">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-slate-200 mb-3 pb-2 border-b border-slate-800">
-          {isAr ? "الحصيلة المالية الإجمالية للعناصر المختارة" : "Bilan Consolidé des Rubriques Sélectionnées"}
-        </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-4">
-          {selections.includeFormationIncomes && (
-            <div className="bg-slate-800 p-2.5 rounded">
-              <span className="text-[10px] text-slate-400 block">Formations & Dawarat</span>
-              <span className="font-mono font-bold text-rose-400 text-sm">+{formatDZD(data.formationIncomes.total)}</span>
+      {/* Grand Consolidated Bilan Card & Signature Footer kept together */}
+      <div className="avoid-break">
+        <div className="bg-slate-900 text-white rounded-xl p-5 mb-6">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-200 mb-3 pb-2 border-b border-slate-800">
+            {isAr ? "الحصيلة المالية الإجمالية للعناصر المختارة" : "Bilan Consolidé des Rubriques Sélectionnées"}
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-4">
+            {selections.includeFormationIncomes && (
+              <div className="bg-slate-800 p-2.5 rounded">
+                <span className="text-[10px] text-slate-400 block">Formations & Dawarat</span>
+                <span className="font-mono font-bold text-rose-400 text-sm whitespace-nowrap">+{formatDZD(data.formationIncomes.total)}</span>
+              </div>
+            )}
+            {selections.includeInscriptionFees && (
+              <div className="bg-slate-800 p-2.5 rounded">
+                <span className="text-[10px] text-slate-400 block">Frais d&apos;Inscription</span>
+                <span className="font-mono font-bold text-emerald-400 text-sm whitespace-nowrap">+{formatDZD(data.inscriptionFees.total)}</span>
+              </div>
+            )}
+            {selections.includePhotocopyDeductions && (
+              <div className="bg-slate-800 p-2.5 rounded">
+                <span className="text-[10px] text-slate-400 block">Photocopies Récupérées</span>
+                <span className="font-mono font-bold text-amber-400 text-sm whitespace-nowrap">+{formatDZD(data.photocopyDeductions.totalAmount)}</span>
+              </div>
+            )}
+            {selections.includeFormationBooks && (
+              <div className="bg-slate-800 p-2.5 rounded">
+                <span className="text-[10px] text-slate-400 block">Livres de Formation</span>
+                <span className="font-mono font-bold text-indigo-300 text-sm whitespace-nowrap">+{formatDZD(data.formationBooks.totalAmount)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-800">
+            <div>
+              <p className="text-xs uppercase font-bold text-slate-300">
+                {isAr ? "المجموع الكلي للتدفقات المختارة :" : "Total Global Consolidé (Flux Sélectionnés) :"}
+              </p>
+              <p className="text-2xl font-black font-mono text-emerald-400 whitespace-nowrap">
+                +{formatDZD(selectedGrandTotal)}
+              </p>
             </div>
-          )}
-          {selections.includeInscriptionFees && (
-            <div className="bg-slate-800 p-2.5 rounded">
-              <span className="text-[10px] text-slate-400 block">Frais d&apos;Inscription</span>
-              <span className="font-mono font-bold text-emerald-400 text-sm">+{formatDZD(data.inscriptionFees.total)}</span>
-            </div>
-          )}
-          {selections.includePhotocopyDeductions && (
-            <div className="bg-slate-800 p-2.5 rounded">
-              <span className="text-[10px] text-slate-400 block">Photocopies Récupérées</span>
-              <span className="font-mono font-bold text-amber-400 text-sm">+{formatDZD(data.photocopyDeductions.totalAmount)}</span>
-            </div>
-          )}
-          {selections.includeFormationBooks && (
-            <div className="bg-slate-800 p-2.5 rounded">
-              <span className="text-[10px] text-slate-400 block">Livres de Formation</span>
-              <span className="font-mono font-bold text-indigo-300 text-sm">+{formatDZD(data.formationBooks.totalAmount)}</span>
-            </div>
-          )}
+            {selections.includeCaisseNoire && (
+              <div className="text-right">
+                <p className="text-xs text-slate-400">
+                  {isAr ? "رصيد الصندوق الأسود الحالي :" : "Liquidité Caisse Noire :"}
+                </p>
+                <p className="text-base font-bold font-mono text-slate-200 whitespace-nowrap">
+                  {formatDZD(data.caisseNoire.endingBalance)}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+        {/* Signature & Direction Footer */}
+        <div className="border-t border-gray-300 pt-4 flex justify-between items-end text-xs text-gray-600">
           <div>
-            <p className="text-xs uppercase font-bold text-slate-300">
-              {isAr ? "المجموع الكلي للتدفقات المختارة :" : "Total Global Consolidé (Flux Sélectionnés) :"}
-            </p>
-            <p className="text-2xl font-black font-mono text-emerald-400">
-              +{formatDZD(selectedGrandTotal)}
+            <p className="font-bold text-gray-800">Avis de Confidentialité :</p>
+            <p className="text-[10px] text-gray-500 max-w-sm">
+              Ce document financier est strictement réservé à la direction générale et au propriétaire de Massinissa School.
+              Toute diffusion ou reproduction externe est strictement interdite.
             </p>
           </div>
-          {selections.includeCaisseNoire && (
-            <div className="text-right">
-              <p className="text-xs text-slate-400">
-                {isAr ? "رصيد الصندوق الأسود الحالي :" : "Liquidité Caisse Noire :"}
-              </p>
-              <p className="text-base font-bold font-mono text-slate-200">
-                {formatDZD(data.caisseNoire.endingBalance)}
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Signature & Direction Footer */}
-      <div className="border-t border-gray-300 pt-4 flex justify-between items-end text-xs text-gray-600">
-        <div>
-          <p className="font-bold text-gray-800">Avis de Confidentialité :</p>
-          <p className="text-[10px] text-gray-500 max-w-sm">
-            Ce document financier est strictement réservé à la direction générale et au propriétaire de Massinissa School.
-            Toute diffusion ou reproduction externe est strictement interdite.
-          </p>
-        </div>
-        <div className="text-center min-w-[200px]">
-          <p className="text-xs font-semibold mb-8 text-gray-700">Signature & Cachet de la Direction</p>
-          <div className="border-b border-gray-400 w-44 mx-auto"></div>
+          <div className="text-center min-w-[200px]">
+            <p className="text-xs font-semibold mb-6 text-gray-700">Signature & Cachet de la Direction</p>
+            <div className="border-b border-gray-400 w-44 mx-auto"></div>
+          </div>
         </div>
       </div>
     </div>

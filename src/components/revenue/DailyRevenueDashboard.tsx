@@ -7,6 +7,7 @@ import RevenueSummaryCards from "./RevenueSummaryCards";
 import BranchComparisonChart from "./BranchComparisonChart";
 import RevenueAggregationTable from "./RevenueAggregationTable";
 import RevenuePaymentsTable from "./RevenuePaymentsTable";
+import RevenueDiscrepanciesSection from "./RevenueDiscrepanciesSection";
 import { Badge } from "@/components/ui/Badge";
 
 interface DailyRevenueDashboardProps {
@@ -64,6 +65,15 @@ export default function DailyRevenueDashboard({ data }: DailyRevenueDashboardPro
         <RevenueAggregationTable
           timeline={data.timeline}
           periodMode={data.periodMode}
+        />
+
+        {/* Outdated & Current Surplus / Missing Money Management */}
+        <RevenueDiscrepanciesSection
+          discrepancies={data.discrepancies || []}
+          branches={data.branches || []}
+          selectedBranchId={data.selectedBranchId}
+          dateFrom={data.dateFrom}
+          dateTo={data.dateTo}
         />
 
         {/* Detailed Payments & Vouchers Records Table */}

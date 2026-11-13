@@ -182,7 +182,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
               {allBranches.map((b) => (
                 <Link
                   key={b.id}
-                  href={`/list/daily-ledger?branchId=${b.id}`}
+                  href={`/list/daily-ledger?branchId=${b.id}&date=${targetDateStr}`}
                   className={`px-3 py-1.5 rounded-lg font-semibold transition-all ${
                     b.id === selectedBranchId
                       ? "bg-primary text-white shadow-xs"
@@ -466,9 +466,25 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                 {isOwner && (
                   <td className="p-3.5 text-end">
                     {item.type === "MISSING" ? (
-                      <MissingMoneyActions id={item.id} status={item.status} />
+                      <MissingMoneyActions
+                        id={item.id}
+                        status={item.status}
+                        amount={item.amount}
+                        reason={item.reason}
+                        date={targetDateStr}
+                        branchId={branch.id}
+                        branches={allBranches.map((b) => ({ id: b.id, name: b.name }))}
+                      />
                     ) : (
-                      <SurplusMoneyActions id={item.id} status={item.status} />
+                      <SurplusMoneyActions
+                        id={item.id}
+                        status={item.status}
+                        amount={item.amount}
+                        reason={item.reason}
+                        date={targetDateStr}
+                        branchId={branch.id}
+                        branches={allBranches.map((b) => ({ id: b.id, name: b.name }))}
+                      />
                     )}
                   </td>
                 )}

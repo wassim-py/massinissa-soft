@@ -50,6 +50,8 @@ import { getAuthSession, getActiveBranchId } from "./auth";
 import { canUserAccessBranch } from "./settings";
 import { upsertDailyLedger, resolveLedgerType, normalizeDateToStartOfDay } from "./ledger";
 import { getDailyRevenueDashboardData } from "./revenue";
+import { normalizeOutcomeFundingSource } from "./financeConstants";
+import { syncOutcomeWithCaisseNoire, cleanupCaisseNoireLinks } from "./caisseNoireSync";
 import { getTranslations } from "next-intl/server";
 import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, computeEnrollmentInscriptionStatus, resolvePayerCredit, isLessonApplicableToEnrollment, extractSameTeacherHeldFromTransfers } from "./studentBilling";
 import { getFixedInscriptionFeeAction, getFormationInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
@@ -67,6 +69,11 @@ import {
   DuplicateStudentCandidate,
   DuplicateMatchType,
 } from "./studentDeduplication";
+import {
+  recordPhotocopyJournalEntryAction,
+  updatePhotocopyJournalEntryAction,
+  deletePhotocopyJournalEntryAction,
+} from "./photocopyActions";
 
 export { normalizeStudentName };
 export type { DuplicateStudentCandidate, DuplicateMatchType };
@@ -10670,6 +10677,7 @@ export async function recordSalaryAdvanceAction(formData: {
   amount: number;
   date?: string | Date;
   remarque?: string | null;
+  fundingSource?: string | null;
 }) {
   try {
     const session = await getAuthSession();
@@ -10678,14 +10686,33 @@ export async function recordSalaryAdvanceAction(formData: {
     }
 
     const advanceDate = formData.date ? new Date(formData.date) : new Date();
+    const fundingSource = normalizeOutcomeFundingSource(formData.fundingSource);
+    const amountNum = Number(formData.amount);
 
-    const advance = await prisma.salaryAdvance.create({
-      data: {
-        personId: formData.personId,
-        amount: new Prisma.Decimal(formData.amount),
+    const advance = await prisma.$transaction(async (tx) => {
+      const teacher = await tx.teacher.findUnique({
+        where: { id: formData.personId },
+        select: { name: true },
+      });
+      const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+        fundingSource,
+        isDisbursed: true,
+        amount: amountNum,
+        description: `[Avance Enseignant] ${teacher?.name || formData.personId}${formData.remarque ? ` — ${formData.remarque.trim()}` : ""}`,
         date: advanceDate,
-        remarque: formData.remarque?.trim() || null,
-      },
+        recordedBy: session.userId || "admin",
+      });
+
+      return tx.salaryAdvance.create({
+        data: {
+          personId: formData.personId,
+          amount: new Prisma.Decimal(amountNum),
+          date: advanceDate,
+          remarque: formData.remarque?.trim() || null,
+          fundingSource,
+          caisseNoireTxId: cnTxId,
+        },
+      });
     });
 
     safeRevalidatePath("/list/payroll");
@@ -10711,6 +10738,7 @@ export async function updateSalaryAdvanceAction(
     amount?: number;
     date?: string | Date;
     remarque?: string | null;
+    fundingSource?: string | null;
   }
 ) {
   try {
@@ -10720,22 +10748,51 @@ export async function updateSalaryAdvanceAction(
     }
 
     const existing = await prisma.salaryAdvance.findUnique({ where: { id } });
+    if (!existing) {
+      return { success: false, error: true, message: "التسبيق غير موجود" };
+    }
 
-    const advance = await prisma.salaryAdvance.update({
-      where: { id },
-      data: {
-        ...(formData.personId ? { personId: formData.personId } : {}),
-        ...(formData.amount !== undefined ? { amount: new Prisma.Decimal(formData.amount) } : {}),
-        ...(formData.date ? { date: new Date(formData.date) } : {}),
-        ...(formData.remarque !== undefined ? { remarque: formData.remarque?.trim() || null } : {}),
-      },
+    const nextPersonId = formData.personId || existing.personId;
+    const nextAmount = formData.amount !== undefined ? Number(formData.amount) : Number(existing.amount);
+    const nextDate = formData.date ? new Date(formData.date) : existing.date;
+    const nextRemarque = formData.remarque !== undefined ? formData.remarque?.trim() || null : existing.remarque;
+    const nextFundingSource =
+      formData.fundingSource !== undefined
+        ? normalizeOutcomeFundingSource(formData.fundingSource)
+        : normalizeOutcomeFundingSource((existing as any).fundingSource);
+
+    const advance = await prisma.$transaction(async (tx) => {
+      const teacher = await tx.teacher.findUnique({
+        where: { id: nextPersonId },
+        select: { name: true },
+      });
+      const cnTxId = await syncOutcomeWithCaisseNoire(tx, {
+        existingTxId: (existing as any).caisseNoireTxId,
+        fundingSource: nextFundingSource,
+        isDisbursed: true,
+        amount: nextAmount,
+        description: `[Avance Enseignant] ${teacher?.name || nextPersonId}${nextRemarque ? ` — ${nextRemarque}` : ""}`,
+        date: nextDate,
+        recordedBy: session.userId || "admin",
+      });
+
+      return tx.salaryAdvance.update({
+        where: { id },
+        data: {
+          personId: nextPersonId,
+          amount: new Prisma.Decimal(nextAmount),
+          date: nextDate,
+          remarque: nextRemarque,
+          fundingSource: nextFundingSource,
+          caisseNoireTxId: cnTxId,
+        },
+      });
     });
 
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
-    const pId = formData.personId || existing?.personId;
-    if (pId) {
-      safeRevalidatePath(`/list/teachers/${pId}`);
+    if (nextPersonId) {
+      safeRevalidatePath(`/list/teachers/${nextPersonId}`);
     }
     safeRevalidatePath("/list/teachers");
     return {
@@ -10759,8 +10816,13 @@ export async function deleteSalaryAdvanceAction(id: number) {
 
     const existing = await prisma.salaryAdvance.findUnique({ where: { id } });
 
-    await prisma.salaryAdvance.delete({
-      where: { id },
+    await prisma.$transaction(async (tx) => {
+      if (existing) {
+        await cleanupCaisseNoireLinks(tx, [(existing as any).caisseNoireTxId]);
+      }
+      await tx.salaryAdvance.delete({
+        where: { id },
+      });
     });
 
     safeRevalidatePath("/list/payroll");
@@ -11201,6 +11263,7 @@ export async function getMasterAccumulatedPayrollReportAction(filters?: {
 export async function setPayrollRunStatusAction(formData: {
   payrollRunId: number;
   status: "DRAFT" | "VALIDATED" | "PAID";
+  fundingSource?: string | null;
 }) {
   try {
     const session = await getAuthSession();
@@ -11208,7 +11271,10 @@ export async function setPayrollRunStatusAction(formData: {
       return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
     }
 
-    await updatePayrollRunStatus(formData.payrollRunId, formData.status);
+    await updatePayrollRunStatus(formData.payrollRunId, formData.status, {
+      fundingSource: formData.fundingSource || undefined,
+      recordedBy: session.userId || "owner",
+    });
 
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
@@ -11229,7 +11295,11 @@ export async function setPayrollRunStatusAction(formData: {
  * When confirmed (status = "PAID"), the payslip amount is posted to DailyLedger
  * and counts as decaissed in the school's Net Revenue.
  */
-export async function confirmTeacherPayslipAction(payslipId: number, confirm: boolean = true) {
+export async function confirmTeacherPayslipAction(
+  payslipId: number,
+  confirm: boolean = true,
+  fundingSource?: string | null
+) {
   try {
     const session = await getAuthSession();
     if (!session.isOwner) {
@@ -11246,7 +11316,11 @@ export async function confirmTeacherPayslipAction(payslipId: number, confirm: bo
     }
 
     const newStatus: "PAID" | "DRAFT" = confirm ? "PAID" : "DRAFT";
-    await updatePayrollRunStatus(payslip.payrollRunId, newStatus);
+    await updatePayrollRunStatus(payslip.payrollRunId, newStatus, {
+      fundingSource: confirm ? normalizeOutcomeFundingSource(fundingSource) : undefined,
+      targetPayslipId: payslipId,
+      recordedBy: session.userId || "owner",
+    });
 
     safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/list/finance");
@@ -11256,6 +11330,7 @@ export async function confirmTeacherPayslipAction(payslipId: number, confirm: bo
       success: true,
       error: false,
       status: newStatus,
+      fundingSource: confirm ? normalizeOutcomeFundingSource(fundingSource) : undefined,
       message: confirm
         ? "Fiche de paie confirmée avec succès. Le revenu net a été actualisé."
         : "Confirmation annulée. Le revenu net a été réajusté.",
@@ -11541,9 +11616,7 @@ export async function deleteBookDropAction(formData: {
 
 /**
  * Record a Photocopy Charge for a teacher (§2.5).
- * Opens with only a page-count input; the cost is auto-computed server-side from
- * Teacher.photocopyRatePerPage. Admin never sees or enters a cost calculation.
- * Branch and date are captured automatically from the admin session and current date.
+ * Cost is auto-computed server-side from Teacher.photocopyRatePerPage and omitted for branch admins.
  */
 export async function recordTeacherPhotocopyAction(formData: {
   teacherId: string;
@@ -11551,63 +11624,13 @@ export async function recordTeacherPhotocopyAction(formData: {
   branchId?: number;
   classId?: number | null;
 }) {
-  try {
-    const session = await getAuthSession();
-    if (!session.isOwnerOrAdmin) {
-      return { success: false, error: true, message: "غير مصرح لك بهذا الإجراء." };
-    }
-
-    const branchId = formData.branchId ? Number(formData.branchId) : await getActiveBranchId();
-    const recordedBy = session.userId || session.rawRole || "admin";
-    const pages = Number(formData.pages);
-
-    if (!pages || pages < 1) {
-      return { success: false, error: true, message: "يرجى إدخال عدد صفحات صالح (1 على الأقل)." };
-    }
-
-    const teacher = await prisma.teacher.findUnique({
-      where: { id: formData.teacherId },
-      select: { id: true, name: true, photocopyRatePerPage: true },
-    });
-
-    if (!teacher) {
-      return { success: false, error: true, message: "لم يتم العثور على الأستاذ المطلوب." };
-    }
-
-    const rate = teacher.photocopyRatePerPage ? Number(teacher.photocopyRatePerPage) : 0;
-    const costAmount = pages * rate;
-
-    const charge = await prisma.photocopyCharge.create({
-      data: {
-        teacherId: formData.teacherId,
-        branchId,
-        classId: formData.classId ? Number(formData.classId) : null,
-        pages,
-        costAmount: new Prisma.Decimal(costAmount),
-        date: new Date(),
-        recordedBy,
-      },
-    });
-
-    safeRevalidatePath("/list/teachers");
-    safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
-    safeRevalidatePath("/list/payroll");
-
-    return {
-      success: true,
-      error: false,
-      message: `تم تسجيل ${pages} صفحة للأستاذ ${teacher.name} بنجاح.`,
-      data: charge,
-    };
-  } catch (error: any) {
-    console.error("Error in recordTeacherPhotocopyAction:", error);
-    return { success: false, error: true, message: error.message || "فشل تسجيل تكلفة النسخ." };
-  }
+  return recordPhotocopyJournalEntryAction(formData);
 }
 
 /**
- * Update an existing Photocopy Charge for a teacher (Owner-only).
- * Allows the owner to correct false counting/pages, branch, or group.
+ * Update an existing Photocopy Charge for a teacher.
+ * Enforces branch access, same-day (Africa/Algiers) limits for branch admins,
+ * PAID payroll protection, server-side cost recalculation, and AuditLog tracking.
  */
 export async function updateTeacherPhotocopyAction(formData: {
   id: number;
@@ -11616,119 +11639,19 @@ export async function updateTeacherPhotocopyAction(formData: {
   branchId?: number;
   classId?: number | null;
 }) {
-  try {
-    const session = await getAuthSession();
-    if (!session.isOwner) {
-      return {
-        success: false,
-        error: true,
-        message: "Action réservée au propriétaire / تعديل سجل النسخ متاح للمالك فقط.",
-      };
-    }
-
-    const pages = Number(formData.pages);
-    if (!pages || pages < 1) {
-      return { success: false, error: true, message: "يرجى إدخال عدد صفحات صالح (1 على الأقل)." };
-    }
-
-    const teacher = await prisma.teacher.findUnique({
-      where: { id: formData.teacherId },
-      select: { id: true, name: true, photocopyRatePerPage: true },
-    });
-
-    if (!teacher) {
-      return { success: false, error: true, message: "لم يتم العثور على الأستاذ المطلوب." };
-    }
-
-    const existingCharge = await prisma.photocopyCharge.findUnique({
-      where: { id: Number(formData.id) },
-    });
-
-    if (!existingCharge) {
-      return { success: false, error: true, message: "لم يتم العثور على سجل النسخ المطلوب." };
-    }
-
-    const rate = teacher.photocopyRatePerPage ? Number(teacher.photocopyRatePerPage) : 0;
-    const costAmount = pages * rate;
-
-    const charge = await prisma.photocopyCharge.update({
-      where: { id: Number(formData.id) },
-      data: {
-        pages,
-        costAmount: new Prisma.Decimal(costAmount),
-        ...(formData.branchId ? { branchId: Number(formData.branchId) } : {}),
-        classId: formData.classId !== undefined ? (formData.classId ? Number(formData.classId) : null) : undefined,
-      },
-      include: {
-        Branch: true,
-        class: true,
-      },
-    });
-
-    safeRevalidatePath("/list/teachers");
-    safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
-    safeRevalidatePath("/list/payroll");
-    safeRevalidatePath("/list/finance");
-
-    return {
-      success: true,
-      error: false,
-      message: `تم تعديل عملية النسخ #${charge.id} (${pages} صفحة - ${costAmount} دج) للأستاذ ${teacher.name} بنجاح.`,
-      data: {
-        ...charge,
-        costAmount: Number(charge.costAmount),
-      },
-    };
-  } catch (error: any) {
-    console.error("Error in updateTeacherPhotocopyAction:", error);
-    return { success: false, error: true, message: error.message || "فشل تعديل تكلفة النسخ." };
-  }
+  return updatePhotocopyJournalEntryAction(formData);
 }
 
 /**
- * Delete a Photocopy Charge for a teacher (Owner-only).
- * Allows the owner to remove erroneous or false photocopy entries.
+ * Delete a Photocopy Charge for a teacher.
+ * Enforces branch access, same-day (Africa/Algiers) limits for branch admins,
+ * PAID payroll protection, and AuditLog deletion snapshot.
  */
 export async function deleteTeacherPhotocopyAction(formData: {
   id: number;
   teacherId: string;
 }) {
-  try {
-    const session = await getAuthSession();
-    if (!session.isOwner) {
-      return {
-        success: false,
-        error: true,
-        message: "Action réservée au propriétaire / حذف سجل النسخ متاح للمالك فقط.",
-      };
-    }
-
-    const existingCharge = await prisma.photocopyCharge.findUnique({
-      where: { id: Number(formData.id) },
-    });
-
-    if (!existingCharge) {
-      return { success: false, error: true, message: "لم يتم العثور على سجل النسخ المطلوب." };
-    }
-
-    await prisma.photocopyCharge.delete({
-      where: { id: Number(formData.id) },
-    });
-
-    safeRevalidatePath("/list/teachers");
-    safeRevalidatePath(`/list/teachers/${formData.teacherId}`);
-    safeRevalidatePath("/list/payroll");
-    safeRevalidatePath("/list/finance");
-
-    return {
-      success: true,
-      error: false,
-      message: `تم حذف سجل النسخ #${formData.id} بنجاح.`,
-    };
-  } catch (error: any) {
-    console.error("Error in deleteTeacherPhotocopyAction:", error);
-    return { success: false, error: true, message: error.message || "فشل حذف سجل النسخ." };
-  }
+  return deletePhotocopyJournalEntryAction({ id: formData.id });
 }
 
 /**
@@ -12058,6 +11981,87 @@ export async function declareMissingMoneyAction(data: {
   }
 }
 
+export async function updateMissingMoneyAction(
+  id: number,
+  data: {
+    amount: number;
+    reason?: string | null;
+    date?: string | Date;
+    branchId?: number;
+  }
+): Promise<{ success: boolean; error: boolean; message: string }> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Seul le propriétaire peut modifier un manque de caisse / هذا الإجراء متاح لمالك المؤسسة فقط",
+      };
+    }
+
+    const existing = await prisma.missingMoney.findUnique({ where: { id } });
+    if (!existing) {
+      return {
+        success: false,
+        error: true,
+        message: "Enregistrement de manque introuvable / لم يتم العثور على سجل العجز",
+      };
+    }
+
+    const amount = Number(data.amount);
+    if (isNaN(amount) || amount <= 0) {
+      return {
+        success: false,
+        error: true,
+        message: "Veuillez saisir un montant manquant supérieur à 0 / يرجى إدخال مبلغ أكبر من الصفر",
+      };
+    }
+
+    let recordDate = existing.date;
+    if (data.date) {
+      const parsed = new Date(data.date);
+      if (isNaN(parsed.getTime())) {
+        return { success: false, error: true, message: "Date invalide / تاريخ غير صالح" };
+      }
+      recordDate = normalizeDateToStartOfDay(data.date);
+    }
+
+    const targetBranchId = data.branchId ? Number(data.branchId) : existing.branchId;
+    if (isNaN(targetBranchId) || targetBranchId <= 0) {
+      return { success: false, error: true, message: "Identifiant de branche invalide" };
+    }
+
+    await prisma.missingMoney.update({
+      where: { id },
+      data: {
+        branchId: targetBranchId,
+        amount: new Prisma.Decimal(amount),
+        reason: data.reason !== undefined ? (data.reason?.trim() || null) : existing.reason,
+        date: recordDate,
+      },
+    });
+
+    await revalidateFinancialRoutes({ branchId: existing.branchId });
+    if (targetBranchId !== existing.branchId) {
+      await revalidateFinancialRoutes({ branchId: targetBranchId });
+    }
+
+    return {
+      success: true,
+      error: false,
+      message: "Manque mis à jour avec succès / تم تحديث سجل العجز بنجاح",
+    };
+  } catch (err: any) {
+    console.error("updateMissingMoneyAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err.message || "Erreur lors de la modification / حدث خطأ أثناء التعديل",
+    };
+  }
+}
+
 export async function confirmMissingMoneyAction(id: number): Promise<{
   success: boolean;
   error: boolean;
@@ -12288,6 +12292,87 @@ export async function declareSurplusMoneyAction(data: {
       success: false,
       error: true,
       message: err.message || "Erreur lors de l'enregistrement / حدث خطأ أثناء التسجيل",
+    };
+  }
+}
+
+export async function updateSurplusMoneyAction(
+  id: number,
+  data: {
+    amount: number;
+    reason?: string | null;
+    date?: string | Date;
+    branchId?: number;
+  }
+): Promise<{ success: boolean; error: boolean; message: string }> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Seul le propriétaire peut modifier un surplus de caisse / هذا الإجراء متاح لمالك المؤسسة فقط",
+      };
+    }
+
+    const existing = await prisma.surplusMoney.findUnique({ where: { id } });
+    if (!existing) {
+      return {
+        success: false,
+        error: true,
+        message: "Enregistrement de surplus introuvable / لم يتم العثور على سجل الفائض",
+      };
+    }
+
+    const amount = Number(data.amount);
+    if (isNaN(amount) || amount <= 0) {
+      return {
+        success: false,
+        error: true,
+        message: "Veuillez saisir un montant de surplus supérieur à 0 / يرجى إدخال مبلغ أكبر من الصفر",
+      };
+    }
+
+    let recordDate = existing.date;
+    if (data.date) {
+      const parsed = new Date(data.date);
+      if (isNaN(parsed.getTime())) {
+        return { success: false, error: true, message: "Date invalide / تاريخ غير صالح" };
+      }
+      recordDate = normalizeDateToStartOfDay(data.date);
+    }
+
+    const targetBranchId = data.branchId ? Number(data.branchId) : existing.branchId;
+    if (isNaN(targetBranchId) || targetBranchId <= 0) {
+      return { success: false, error: true, message: "Identifiant de branche invalide" };
+    }
+
+    await prisma.surplusMoney.update({
+      where: { id },
+      data: {
+        branchId: targetBranchId,
+        amount: new Prisma.Decimal(amount),
+        reason: data.reason !== undefined ? (data.reason?.trim() || null) : existing.reason,
+        date: recordDate,
+      },
+    });
+
+    await revalidateFinancialRoutes({ branchId: existing.branchId });
+    if (targetBranchId !== existing.branchId) {
+      await revalidateFinancialRoutes({ branchId: targetBranchId });
+    }
+
+    return {
+      success: true,
+      error: false,
+      message: "Surplus mis à jour avec succès / تم تحديث سجل الفائض بنجاح",
+    };
+  } catch (err: any) {
+    console.error("updateSurplusMoneyAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err.message || "Erreur lors de la modification / حدث خطأ أثناء التعديل",
     };
   }
 }

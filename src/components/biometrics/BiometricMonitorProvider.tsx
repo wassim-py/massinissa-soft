@@ -654,7 +654,8 @@ export default function BiometricMonitorProvider({
     return match ? Number(match[1]) : null;
   }, [pathname]);
 
-  const [isEnabled, setIsEnabledState] = useState<boolean>(true);
+  // Fingerprint background monitor is permanently active and cannot be turned off from the UI
+  const isEnabled = true;
   const [isMuted, setIsMutedState] = useState<boolean>(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
   const [recentScans, setRecentScans] = useState<BiometricScanDisplayItem[]>([]);
@@ -1022,10 +1023,8 @@ export default function BiometricMonitorProvider({
 
   useEffect(() => {
     try {
-      const savedEnabled = localStorage.getItem("massinissa_biometric_enabled");
-      if (savedEnabled !== null) {
-        setIsEnabledState(savedEnabled === "true");
-      }
+      // Ensure any legacy "false" setting in storage is cleared so fingerprint monitor stays active
+      localStorage.setItem("massinissa_biometric_enabled", "true");
       const savedMuted = localStorage.getItem("massinissa_biometric_muted");
       if (savedMuted !== null) {
         const m = savedMuted === "true";
@@ -1038,16 +1037,8 @@ export default function BiometricMonitorProvider({
   }, []);
 
   const setIsEnabled = useCallback((val: boolean) => {
-    setIsEnabledState(val);
-    try {
-      localStorage.setItem("massinissa_biometric_enabled", String(val));
-    } catch {
-      // ignore
-    }
-    if (!val) {
-      setLiveStreamCard(null);
-    } else if (typeof window !== "undefined") {
-      // Force an immediate fresh K50 Pro hardware handshake when toggled ON
+    if (val && typeof window !== "undefined") {
+      // Trigger a fresh K50 Pro hardware handshake on explicit reconnect request
       fetch("http://127.0.0.1:4375/status?forceReconnect=1", {
         cache: "no-store",
       }).catch(() => {});

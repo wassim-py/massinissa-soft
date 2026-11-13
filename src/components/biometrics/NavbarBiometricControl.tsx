@@ -4,7 +4,6 @@ import React, { useState, useRef } from "react";
 import { useLocale } from "next-intl";
 import { Link } from "@/i18n/navigation";
 import {
-  Fingerprint,
   ClipboardList,
   AlertTriangle,
   CreditCard,
@@ -25,8 +24,6 @@ export default function NavbarBiometricControl() {
   const isAr = locale === "ar";
 
   const {
-    isEnabled,
-    setIsEnabled,
     setIsDrawerOpen,
     recentScans,
     pinnedAlerts,
@@ -66,61 +63,7 @@ export default function NavbarBiometricControl() {
       dir={isAr ? "rtl" : "ltr"}
       className="flex items-center gap-1.5 sm:gap-2"
     >
-      {/* 1. ON / OFF Background Monitor Toggle */}
-      <button
-        type="button"
-        onClick={() => setIsEnabled(!isEnabled)}
-        className="w-9 h-9 sm:w-auto sm:px-3 sm:py-1.5 rounded-full sm:rounded-md flex items-center justify-center sm:justify-start gap-2 border border-gray-200 sm:border-gray-300 bg-white hover:bg-gray-50 active:bg-gray-100 text-xs font-medium text-gray-700 shadow-xs transition-colors cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-blue-500 shrink-0 relative"
-        title={
-          isEnabled
-            ? isAr
-              ? "قارئ البصمة مفعل في الخلفية (اضغط للإيقاف)"
-              : "Lecteur d'empreinte actif en arrière-plan (cliquer pour désactiver)"
-            : isAr
-            ? "قارئ البصمة متوقف (اضغط للتفعيل)"
-            : "Lecteur d'empreinte désactivé (cliquer pour activer)"
-        }
-      >
-        {/* Mobile status indicator */}
-        <span className="sm:hidden absolute top-1 right-1 rtl:right-auto rtl:left-1 flex h-2 w-2">
-          {isEnabled && (
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-          )}
-          <span
-            className={`relative inline-flex rounded-full h-2 w-2 ${
-              isEnabled ? "bg-emerald-500" : "bg-gray-400"
-            }`}
-          />
-        </span>
-
-        {/* Desktop status indicator */}
-        <span className="hidden sm:flex relative h-2.5 w-2.5 shrink-0">
-          {isEnabled && (
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-          )}
-          <span
-            className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-              isEnabled ? "bg-emerald-500" : "bg-gray-400"
-            }`}
-          />
-        </span>
-
-        <Fingerprint className="w-4 h-4 text-gray-700 sm:text-gray-600 shrink-0" />
-        <span className="hidden md:inline font-semibold text-gray-800">
-          {isAr ? "البصمة" : "Empreinte"}
-        </span>
-        <span
-          className={`hidden sm:inline px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase border ${
-            isEnabled
-              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-              : "bg-gray-100 text-gray-600 border-gray-200"
-          }`}
-        >
-          {isEnabled ? "ON" : "OFF"}
-        </span>
-      </button>
-
-      {/* 2. Journal Drawer Trigger Button */}
+      {/* 1. Journal Drawer Trigger Button */}
       <button
         type="button"
         onClick={() => setIsDrawerOpen(true)}

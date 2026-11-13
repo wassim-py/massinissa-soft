@@ -8,6 +8,7 @@ import {
   OwnerTeacherConsolidationPrintData,
 } from "./printable/OwnerTeacherConsolidationReport";
 import { getTeacherPayslipConsolidatedReportAction } from "@/lib/actions";
+import { buildPrintableReportHtml } from "@/lib/printReportHtml";
 import { Printer, Loader2 } from "lucide-react";
 import TeacherReportConfigModal from "@/components/teachers/TeacherReportConfigModal";
 
@@ -76,88 +77,18 @@ function getReportHtml(
   locale: string,
   origin: string
 ) {
-  return `<!DOCTYPE html>
-<html dir="${isAr ? "rtl" : "ltr"}" lang="${locale}">
-  <head>
-    <meta charset="utf-8">
-    <base href="${origin}/">
-    <title>Rapport Consolidé Propriétaire - ${teacherName}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
-    <style>
-      .font-mono {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important;
-      }
-      [dir="rtl"] {
-        font-family: 'Tajawal', system-ui, -apple-system, sans-serif !important;
-      }
-      body {
-        font-family: system-ui, -apple-system, sans-serif;
-        background-color: #fff;
-        color: #000;
-        margin: 0;
-        padding: 0;
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-      }
-      @media print {
-        body {
-          margin: 0;
-          padding: 0;
-          -webkit-print-color-adjust: exact !important;
-          print-color-adjust: exact !important;
-        }
-        .no-print { display: none !important; }
-        @page {
-          size: A4 portrait;
-          margin: 8mm;
-        }
-      }
-      table { border-collapse: collapse; width: 100%; }
-      th, td { border: 1px solid #9ca3af; padding: 6px 10px; }
-      th { background-color: #e5e7eb; }
-    </style>
-  </head>
-  <body>
-    <div class="no-print" style="position: sticky; top: 0; z-index: 9999; background: #0f172a; color: #fff; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-family: system-ui, -apple-system, sans-serif;">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="font-weight: 700; font-size: 14px;">Rapport Consolidé Propriétaire — ${teacherName}</span>
-      </div>
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <button onclick="window.print()" style="background: #059669; color: #ffffff; border: none; font-weight: 700; font-size: 13px; padding: 8px 18px; border-radius: 8px; cursor: pointer;">
-          🖨️ ${isAr ? "طباعة / حفظ كـ PDF" : "Imprimer / Enregistrer en PDF"}
-        </button>
-        <button onclick="window.close()" style="background: rgba(255,255,255,0.12); color: #e2e8f0; border: 1px solid rgba(255,255,255,0.2); font-size: 13px; font-weight: 500; padding: 8px 14px; border-radius: 8px; cursor: pointer;">
-          ✕ ${isAr ? "إغلاق" : "Fermer"}
-        </button>
-      </div>
-    </div>
-
-    <div style="padding: 20px;">
-      ${printContent}
-    </div>
-
-    <script>
-      function triggerPrint() {
-        setTimeout(function() {
-          try {
-            window.focus();
-            window.print();
-          } catch (e) {
-            console.error("Print trigger error:", e);
-          }
-        }, 400);
-      }
-      if (document.readyState === 'complete') {
-        triggerPrint();
-      } else {
-        window.addEventListener('load', triggerPrint);
-      }
-    </script>
-  </body>
-</html>`;
+  return buildPrintableReportHtml({
+    title: `Rapport Consolidé Propriétaire - ${teacherName}`,
+    toolbarTitle: `Rapport Consolidé Propriétaire — ${teacherName}`,
+    contentHtml: printContent,
+    isAr,
+    locale,
+    origin,
+    includeToolbar: true,
+    includeDownloadButton: true,
+    downloadFilename: `rapport-enseignant-${teacherName.replace(/[^0-9A-Za-z_-]/g, "_")}.html`,
+    autoPrint: true,
+  });
 }
 
 function printViaIframe(html: string) {

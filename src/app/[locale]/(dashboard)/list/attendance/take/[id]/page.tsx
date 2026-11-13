@@ -440,6 +440,7 @@ const TakeAttendancePage = async (
       attendances: vAttendances,
       catchUps: vCatchUps,
       enrolledAt: vEnr?.enrolledAt,
+      enrollmentStatus: vEnr?.status,
     });
 
     const isScenarioA = new Date(v.missedLesson.startsAt).getTime() < new Date(l.startsAt).getTime();

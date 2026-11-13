@@ -329,6 +329,7 @@ export default async function PayslipDetailPage(props: PageProps) {
           <ConfirmPayslipButton
             payslipId={payslip.id}
             initialStatus={payslip.PayrollRun.status}
+            initialFundingSource={(payslip as any).fundingSource}
           />
         </div>
       </Card>

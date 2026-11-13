@@ -8,6 +8,7 @@ import {
   MasterOwnerPayrollPrintData,
 } from "./printable/MasterOwnerPayrollReport";
 import { getMasterAccumulatedPayrollReportAction } from "@/lib/actions";
+import { buildPrintableReportHtml } from "@/lib/printReportHtml";
 import { Download, ExternalLink, FileSpreadsheet, Loader2, Printer, X } from "lucide-react";
 
 interface PrintMasterOwnerReportButtonProps {
@@ -152,127 +153,23 @@ function getFullReportHtml(
   origin: string,
   options?: { autoPrint?: boolean; includeToolbar?: boolean; filename?: string }
 ) {
-  const autoPrint = options?.autoPrint ?? true;
-  const includeToolbar = options?.includeToolbar ?? true;
-  const safeFilename = (options?.filename || "rapport-paie-enseignants.html").replace(/[^0-9A-Za-z._-]/g, "");
-
-  return `<!DOCTYPE html>
-<html dir="${isAr ? "rtl" : "ltr"}" lang="${locale}">
-  <head>
-    <meta charset="utf-8">
-    <base href="${origin}/">
-    <title>${isAr ? "التقرير المالي التراكمي الشامل - المالك" : "Rapport Financier Consolidé Global - Propriétaire"}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
-    <style>
-      .font-mono {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important;
-      }
-      [dir="rtl"] {
-        font-family: 'Tajawal', system-ui, -apple-system, sans-serif !important;
-      }
-      body {
-        font-family: system-ui, -apple-system, sans-serif;
-        background-color: #fff;
-        color: #000;
-        margin: 0;
-        padding: 0;
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-      }
-      @media print {
-        body {
-          margin: 0;
-          padding: 0;
-          -webkit-print-color-adjust: exact !important;
-          print-color-adjust: exact !important;
-        }
-        .no-print { display: none !important; }
-        @page {
-          size: A4 portrait;
-          margin: 8mm;
-        }
-      }
-      /* Fallback essential styles in case Tailwind CDN is blocked or slow */
-      table { border-collapse: collapse; width: 100%; }
-      th, td { border: 1px solid #9ca3af; padding: 6px 10px; }
-      th { background-color: #e5e7eb; }
-      .flex { display: flex; }
-      .justify-between { justify-content: space-between; }
-      .items-center { align-items: center; }
-      .grid { display: grid; }
-      .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .gap-4 { gap: 1rem; }
-    </style>
-  </head>
-  <body>
-    ${includeToolbar ? `<!-- Persistent top action toolbar (hidden on print) -->
-    <div class="no-print" style="position: sticky; top: 0; z-index: 9999; background: #0f172a; color: #fff; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-family: system-ui, -apple-system, sans-serif;">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="font-weight: 700; font-size: 14px; letter-spacing: 0.3px;">Massinissa School — ${isAr ? "التقرير المالي التراكمي الشامل" : "Rapport Financier Consolidé Global"}</span>
-        <span style="font-size: 11px; font-weight: 600; background: rgba(255,255,255,0.16); padding: 2px 8px; border-radius: 9999px;">
-          ${dataToPrint.teachersCount} ${isAr ? "أساتذة" : "enseignants"}
-        </span>
-      </div>
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <button onclick="downloadReport()" style="background: #2563eb; color: #ffffff; border: none; font-weight: 700; font-size: 13px; padding: 8px 16px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-          ⬇️ ${isAr ? "تحميل التقرير (HTML)" : "Télécharger (.html)"}
-        </button>
-        <button onclick="window.print()" style="background: #059669; color: #ffffff; border: none; font-weight: 700; font-size: 13px; padding: 8px 18px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-          🖨️ ${isAr ? "طباعة / حفظ كـ PDF" : "Imprimer / Enregistrer en PDF"}
-        </button>
-        <button onclick="window.close()" style="background: rgba(255,255,255,0.12); color: #e2e8f0; border: 1px solid rgba(255,255,255,0.2); font-size: 13px; font-weight: 500; padding: 8px 14px; border-radius: 8px; cursor: pointer;">
-          ✕ ${isAr ? "إغلاق" : "Fermer"}
-        </button>
-      </div>
-    </div>` : ""}
-
-    <div style="padding: 20px;">
-      ${printContent}
-    </div>
-
-    <script data-report-script>
-      function downloadReport() {
-        try {
-          var clone = document.documentElement.cloneNode(true);
-          var scripts = clone.querySelectorAll('script[data-report-script]');
-          for (var i = 0; i < scripts.length; i++) scripts[i].remove();
-          var blob = new Blob(['<!DOCTYPE html>' + clone.outerHTML], { type: 'text/html;charset=utf-8' });
-          var url = URL.createObjectURL(blob);
-          var a = document.createElement('a');
-          a.href = url;
-          a.download = '${safeFilename}';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
-        } catch (e) {
-          console.error("Download error:", e);
-        }
-      }
-      ${autoPrint ? `
-      function triggerPrint() {
-        if (window.__masterReportPrinted) return;
-        window.__masterReportPrinted = true;
-        setTimeout(function() {
-          try {
-            window.focus();
-            window.print();
-          } catch (e) {
-            console.error("Auto-print error:", e);
-          }
-        }, 400);
-      }
-      if (document.readyState === 'complete') {
-        triggerPrint();
-      } else {
-        window.addEventListener('load', triggerPrint);
-      }` : ""}
-    </script>
-  </body>
-</html>`;
+  return buildPrintableReportHtml({
+    title: isAr
+      ? "التقرير المالي التراكمي الشامل - المالك"
+      : "Rapport Financier Consolidé Global - Propriétaire",
+    toolbarTitle: `Massinissa School — ${
+      isAr ? "التقرير المالي التراكمي الشامل" : "Rapport Financier Consolidé Global"
+    }`,
+    toolbarBadge: `${dataToPrint.teachersCount} ${isAr ? "أساتذة" : "enseignants"}`,
+    contentHtml: printContent,
+    isAr,
+    locale,
+    origin,
+    includeToolbar: options?.includeToolbar ?? true,
+    includeDownloadButton: true,
+    downloadFilename: options?.filename || "rapport-paie-enseignants.html",
+    autoPrint: options?.autoPrint ?? true,
+  });
 }
 
 export const PrintMasterOwnerReportButton = ({

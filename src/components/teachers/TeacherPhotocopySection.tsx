@@ -149,6 +149,7 @@ export default function TeacherPhotocopySection({
 
       if (res.success) {
         toast.success(res.message);
+        window.dispatchEvent(new CustomEvent("photocopy:changed"));
         setIsModalOpen(false);
         setNewPages(10);
         router.refresh();
@@ -208,6 +209,7 @@ export default function TeacherPhotocopySection({
           )
         );
         setEditingCharge(null);
+        window.dispatchEvent(new CustomEvent("photocopy:changed"));
         router.refresh();
       } else {
         toast.error(res.message || (locale === "ar" ? "فشل تعديل سجل النسخ" : "Échec de la modification"));
@@ -228,6 +230,7 @@ export default function TeacherPhotocopySection({
         toast.success(res.message || t("photocopyDeleted"));
         setCharges((prev) => prev.filter((c) => c.id !== deletingCharge.id));
         setDeletingCharge(null);
+        window.dispatchEvent(new CustomEvent("photocopy:changed"));
         router.refresh();
       } else {
         toast.error(res.message || (locale === "ar" ? "فشل حذف سجل النسخ" : "Échec de la suppression"));
