@@ -549,9 +549,13 @@ export async function getNavbarPhotocopyJournalAction(rawInput?: {
     }
 
     const { session, branchId } = actorCtx;
+    // Branch admins may only inspect today's entries in Africa/Algiers (no historical diving)
+    const effectivePreset: PhotocopyDatePreset = session.isOwner
+      ? parsed.data.datePreset
+      : "today";
     const { todayStr, todayStartUtc, todayEndUtc, startUtc, endUtc } = computePresetDateRange(
-      parsed.data.datePreset,
-      parsed.data.customDate
+      effectivePreset,
+      session.isOwner ? parsed.data.customDate : undefined
     );
 
     const trimmedSearch = parsed.data.teacherSearch?.trim() || "";

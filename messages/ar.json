@@ -2821,10 +2821,6 @@
     "clearTeacherFilter": "الكل",
     "todayEmptyStrip": "لم تُسجل أي عملية نسخ اليوم في هذا الفرع.",
     "presetToday": "اليوم",
-    "presetYesterday": "أمس",
-    "preset7d": "7 أيام",
-    "presetMonth": "هذا الشهر",
-    "presetDate": "تاريخ",
     "searchJournalPlaceholder": "تصفية حسب الأستاذ...",
     "periodSummary": "{count} عملية · {pages} صفحة",
     "pagesUnit": "{pages} ص.",
@@ -2839,8 +2835,8 @@
     "confirmDelete": "تأكيد",
     "lockedPreviousDay": "مغلق (يوم سابق)",
     "lockedPaidPayroll": "مغلق (مدرج في راتب مدفوع)",
-    "emptyJournalTitle": "لا توجد عمليات نسخ في هذه الفترة",
-    "emptyJournalDesc": "ستظهر هنا جميع عمليات النسخ المسجلة لهذا الفرع.",
+    "emptyJournalTitle": "لا توجد عمليات نسخ اليوم",
+    "emptyJournalDesc": "ستظهر هنا جميع عمليات النسخ المسجلة اليوم لهذا الفرع.",
     "loadingJournal": "جاري تحميل السجل...",
     "pagesAria": "عدد الصفحات"
   }

@@ -2821,10 +2821,6 @@
     "clearTeacherFilter": "Tous",
     "todayEmptyStrip": "Aucune photocopie enregistrée aujourd'hui sur ce siège.",
     "presetToday": "Aujourd'hui",
-    "presetYesterday": "Hier",
-    "preset7d": "7 jours",
-    "presetMonth": "Ce mois",
-    "presetDate": "Date",
     "searchJournalPlaceholder": "Filtrer par enseignant...",
     "periodSummary": "{count} opération(s) · {pages} page(s)",
     "pagesUnit": "{pages} p.",
@@ -2839,8 +2835,8 @@
     "confirmDelete": "Confirmer",
     "lockedPreviousDay": "Verrouillé (jour précédent)",
     "lockedPaidPayroll": "Verrouillé (paie déjà payée)",
-    "emptyJournalTitle": "Aucune saisie sur cette période",
-    "emptyJournalDesc": "Les photocopies enregistrées pour ce siège apparaîtront ici.",
+    "emptyJournalTitle": "Aucune saisie aujourd'hui",
+    "emptyJournalDesc": "Les photocopies enregistrées aujourd'hui pour ce siège apparaîtront ici.",
     "loadingJournal": "Chargement du journal...",
     "pagesAria": "Nombre de pages"
   }

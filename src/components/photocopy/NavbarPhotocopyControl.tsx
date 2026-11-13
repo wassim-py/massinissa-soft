@@ -16,7 +16,6 @@ import {
   Search,
   Clock,
   User,
-  Calendar,
   Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -28,7 +27,6 @@ import {
   updatePhotocopyJournalEntryAction,
   deletePhotocopyJournalEntryAction,
   type NavbarPhotocopyJournalData,
-  type PhotocopyDatePreset,
   type PhotocopyJournalEntryDto,
 } from "@/lib/photocopyActions";
 
@@ -41,12 +39,6 @@ interface NavbarPhotocopyControlProps {
 
 const QUICK_PAGE_PRESETS = [10, 20, 30, 50, 100] as const;
 const PHOTOCOPY_SYNC_EVENT = "photocopy:changed";
-
-function formatDisplayDate(algiersDateStr: string): string {
-  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(algiersDateStr);
-  if (!parts) return algiersDateStr;
-  return `${parts[3]}/${parts[2]}/${parts[1]}`;
-}
 
 export default function NavbarPhotocopyControl({
   branchId,
@@ -64,9 +56,7 @@ export default function NavbarPhotocopyControl({
   const [isOpen, setIsOpen] = useState(false);
   const [todayCount, setTodayCount] = useState<number>(initialTodayCount);
 
-  // Filter state
-  const [datePreset, setDatePreset] = useState<PhotocopyDatePreset>("today");
-  const [customDate, setCustomDate] = useState<string>("");
+  // Filter state (today only)
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedTeacherIdFilter, setSelectedTeacherIdFilter] = useState<string>("");
 
@@ -98,41 +88,31 @@ export default function NavbarPhotocopyControl({
     setTodayCount(initialTodayCount);
   }, [initialTodayCount, branchId]);
 
-  const loadJournal = useCallback(
-    async (opts?: {
-      presetOverride?: PhotocopyDatePreset;
-      customDateOverride?: string;
-    }) => {
-      const targetPreset = opts?.presetOverride ?? datePreset;
-      const targetCustomDate = opts?.customDateOverride ?? customDate;
-      setIsLoading(true);
-      try {
-        const res = await getNavbarPhotocopyJournalAction({
-          branchId,
-          datePreset: targetPreset,
-          customDate:
-            targetPreset === "date" && targetCustomDate ? targetCustomDate : undefined,
-        });
-        if (res.success && res.data) {
-          setJournalData(res.data);
-          setTodayCount(res.data.todaySummary.entriesCount);
-        } else if (res.message) {
-          toast.error(res.message);
-        }
-      } catch {
-        toast.error(isAr ? "خطأ في تحميل السجل" : "Erreur lors du chargement du journal");
-      } finally {
-        setIsLoading(false);
+  const loadJournal = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await getNavbarPhotocopyJournalAction({
+        branchId,
+        datePreset: "today",
+      });
+      if (res.success && res.data) {
+        setJournalData(res.data);
+        setTodayCount(res.data.todaySummary.entriesCount);
+      } else if (res.message) {
+        toast.error(res.message);
       }
-    },
-    [branchId, datePreset, customDate, isAr]
-  );
+    } catch {
+      toast.error(isAr ? "خطأ في تحميل السجل" : "Erreur lors du chargement du journal");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [branchId, isAr]);
 
-  // Fetch journal whenever drawer opens or active branch/date preset changes while open
+  // Fetch today's journal whenever drawer opens or active branch changes while open
   useEffect(() => {
     if (!isOpen) return;
     loadJournal();
-  }, [isOpen, branchId, datePreset, customDate, loadJournal]);
+  }, [isOpen, branchId, loadJournal]);
 
   // Close on Escape key (unless editing inline)
   useEffect(() => {
@@ -261,11 +241,7 @@ export default function NavbarPhotocopyControl({
         setRecordPages("10");
         setSelectedTeacherIdFilter("");
         setSearchQuery("");
-        if (datePreset !== "today") {
-          setDatePreset("today");
-        } else {
-          await loadJournal({ presetOverride: "today" });
-        }
+        await loadJournal();
         notifyRelatedPagesIfVisible();
       } else {
         toast.error(res.message);
@@ -338,17 +314,8 @@ export default function NavbarPhotocopyControl({
     }
   };
 
-  const handlePresetClick = (preset: PhotocopyDatePreset) => {
-    setEditingId(null);
-    setConfirmDeleteId(null);
-    setDatePreset(preset);
-  };
-
   const handleTodayChipClick = (teacherId: string) => {
     setSelectedTeacherIdFilter((prev) => (prev === teacherId ? "" : teacherId));
-    if (datePreset !== "today") {
-      setDatePreset("today");
-    }
   };
 
   const renderEditDetail = (entry: PhotocopyJournalEntryDto) => {
@@ -372,7 +339,6 @@ export default function NavbarPhotocopyControl({
   };
 
   const resolvedBranchName = journalData?.branchName || branchName;
-  const showDateInRows = datePreset === "7d" || datePreset === "month";
 
   return (
     <>
@@ -601,48 +567,8 @@ export default function NavbarPhotocopyControl({
                 )}
               </div>
 
-              {/* 4. Date Preset & Search Filters Bar */}
-              <div className="px-4 py-2.5 border-b border-gray-200 bg-white shrink-0 space-y-2 relative z-10">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {(
-                    [
-                      ["today", t("presetToday")],
-                      ["yesterday", t("presetYesterday")],
-                      ["7d", t("preset7d")],
-                      ["month", t("presetMonth")],
-                      ["date", t("presetDate")],
-                    ] as Array<[PhotocopyDatePreset, string]>
-                  ).map(([presetKey, label]) => {
-                    const active = datePreset === presetKey;
-                    return (
-                      <button
-                        key={presetKey}
-                        type="button"
-                        onClick={() => handlePresetClick(presetKey)}
-                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border cursor-pointer transition-colors ${
-                          active
-                            ? "bg-gray-900 text-white border-gray-900"
-                            : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100 hover:text-gray-900"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
-
-                  {datePreset === "date" && (
-                    <div className="flex items-center gap-1 ms-auto">
-                      <Calendar className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                      <input
-                        type="date"
-                        value={customDate || journalData?.todayAlgiersDate || ""}
-                        onChange={(e) => setCustomDate(e.target.value)}
-                        className="px-2 py-1 rounded-md border border-gray-300 bg-white text-xs font-mono text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                      />
-                    </div>
-                  )}
-                </div>
-
+              {/* 4. Search Filter Bar */}
+              <div className="px-4 py-2.5 border-b border-gray-200 bg-white shrink-0 relative z-10">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div className="relative flex items-center flex-1">
                     <Search className="w-3.5 h-3.5 text-gray-400 absolute start-2.5 pointer-events-none" />
@@ -799,9 +725,7 @@ export default function NavbarPhotocopyControl({
                                   dir="ltr"
                                 >
                                   <Clock className="w-3 h-3 text-gray-400" />
-                                  {showDateInRows
-                                    ? `${formatDisplayDate(entry.algiersDateStr)} ${entry.algiersTimeStr}`
-                                    : entry.algiersTimeStr}
+                                  {entry.algiersTimeStr}
                                 </span>
                                 <span className="inline-flex items-center gap-1">
                                   <User className="w-3 h-3 text-gray-400" />
