@@ -9,6 +9,7 @@ import Image from "next/image";
 import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
 import { saveAttendance, removeCatchUpAttendanceAction, markSingleAttendanceAction, removeRevisionVisitorAction } from "@/lib/actions";
+import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import { executeWithRetry } from "@/lib/retryUtils";
 import { toast } from "react-toastify";
 import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions } from "@/lib/studentBilling";
@@ -664,6 +665,7 @@ const AttendanceRoster = ({
       const res = await executeWithRetry(() => removeCatchUpAttendanceAction(visitorId, lesson.id));
       if (res.success) {
         toast.success(res.message);
+        notifyAttendanceChanged({ lessonId: lesson.id, source: "remove-catchup-visitor" });
       } else {
         toast.error(res.message);
       }
@@ -690,6 +692,7 @@ const AttendanceRoster = ({
             ? "تم إلغاء زائر المراجعة بنجاح"
             : "Visiteur révision retiré avec succès"
         );
+        notifyAttendanceChanged({ lessonId: lesson.id, source: "remove-revision-visitor" });
         router.refresh();
       } else {
         toast.error(res.message || "Erreur lors de l'annulation");
@@ -815,6 +818,8 @@ const AttendanceRoster = ({
           if (!res.success) {
             setAttendance((prev) => ({ ...prev, [studentId]: previousStatus }));
             toast.error(res.message);
+          } else {
+            notifyAttendanceChanged({ lessonId: lesson.id, source: "single-attendance" });
           }
         })
         .catch((err) => {
@@ -876,11 +881,12 @@ const AttendanceRoster = ({
   useEffect(() => {
     if (state?.success) {
       toast.success(state.message);
+      notifyAttendanceChanged({ lessonId: lesson.id, source: "save-attendance" });
     }
     if (state?.error) {
       toast.error(state.message);
     }
-  }, [state]);
+  }, [state, lesson.id]);
 
   // Dynamically resolve live remaining credit for all non-sibling/payer students present in this roster
   // so waived siblings strictly track their payer's live remaining credit in real time (Rule 3)

@@ -2062,7 +2062,21 @@
       "excused": "مبرر",
       "excusedNote": "منهم {count} مبرر",
       "recordedOutOfExpected": "تم تسجيل {recorded} من {expected} متوقع",
-      "notRecordedYet": "في انتظار التسجيل"
+      "notRecordedYet": "في انتظار التسجيل",
+      "live": "مباشر",
+      "clickToTakeAttendance": "انقر على أي عمود لتسجيل الحضور",
+      "takeAttendanceAction": "تسجيل الحضور",
+      "catchUp": "تعويض",
+      "catchUpNote": "منهم {count} تعويض",
+      "regularPresent": "المسجلون الحاضرون",
+      "groupsCount": "{count} فوج",
+      "scrollHint": "مرّر لعرض جميع الأفواج",
+      "showAllSessions": "عرض جميع الحصص",
+      "teacherAbsent": "الأستاذ غائب",
+      "enrolledCount": "المسجلون: {count}",
+      "scrollPrev": "الأفواج السابقة",
+      "scrollNext": "الأفواج التالية",
+      "updatedAt": "تحديث {time}"
     },
     "teachersDetail": {
       "title": "أساتذة المدرسة",

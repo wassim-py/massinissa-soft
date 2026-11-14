@@ -5,6 +5,7 @@ import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
 import { Search, Loader2, X, AlertCircle, CheckCircle2, User, UserPlus, Banknote, Printer } from "lucide-react";
 import { searchRevisionVisitorCandidatesAction, recordRevisionVisitorAction } from "@/lib/actions";
+import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import PrintTicketButton from "@/components/PrintTicketButton";
 
 interface CandidateStudent {
@@ -171,6 +172,7 @@ export default function RevisionVisitorModal({
         if (res.success) {
           toast.success(res.message);
           setIssuedVoucher(res.voucher);
+          notifyAttendanceChanged({ lessonId, source: "revision-visitor" });
           onSuccess?.();
         } else {
           toast.error(res.message);
@@ -198,6 +200,7 @@ export default function RevisionVisitorModal({
         if (res.success) {
           toast.success(res.message);
           setIssuedVoucher(res.voucher);
+          notifyAttendanceChanged({ lessonId, source: "revision-visitor" });
           onSuccess?.();
         } else {
           toast.error(res.message);

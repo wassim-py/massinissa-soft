@@ -12,6 +12,7 @@ import React, {
 import { useLocale } from "next-intl";
 import { useRouter, usePathname, Link } from "@/i18n/navigation";
 import { toast } from "react-toastify";
+import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import {
   Fingerprint,
   X,
@@ -1721,9 +1722,16 @@ export default function BiometricMonitorProvider({
   useEffect(() => {
     const runAutoSave = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      fetch("/api/attendance/auto-save", { method: "POST" }).catch(() => {
-        // Tolerated background heartbeat
-      });
+      fetch("/api/attendance/auto-save", { method: "POST" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.totalSaved > 0) {
+            notifyAttendanceChanged({ source: "auto-save" });
+          }
+        })
+        .catch(() => {
+          // Tolerated background heartbeat
+        });
     };
     const initialTimeout = setTimeout(runAutoSave, 4000);
     const autoSaveInterval = setInterval(runAutoSave, 60000);
@@ -2039,6 +2047,10 @@ export default function BiometricMonitorProvider({
         });
         setCatchUpTargetScan(null);
         await syncScansWithLiveBilling([updatedScan]);
+        notifyAttendanceChanged({
+          lessonId: Number(selectedCatchUpLessonId),
+          source: "biometric-catchup",
+        });
       } else {
         toast.error(res.message);
       }

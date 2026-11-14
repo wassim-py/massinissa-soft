@@ -905,13 +905,29 @@ export function computeEnrollmentInscriptionStatus({
   vouchers = [],
   paidInscClassIds,
   allEnrollments,
+  visitedEnrollmentIds,
 }: {
   enrollment?: any;
   classData: { id: number; isFormation?: boolean; inscriptionFee?: any };
   vouchers?: any[];
   paidInscClassIds: Set<number>;
   allEnrollments?: any[];
+  visitedEnrollmentIds?: Set<number>;
 }): InscriptionStatusResult {
+  const visited = visitedEnrollmentIds ?? new Set<number>();
+  if (enrollment?.id != null) {
+    if (visited.has(enrollment.id)) {
+      return {
+        status: "UNPAID",
+        isInscriptionPaid: false,
+        isInscriptionWaived: false,
+        isTransferred: false,
+        totalPaid: 0,
+      };
+    }
+    visited.add(enrollment.id);
+  }
+
   const classId = classData.id;
   const isFormation = Boolean(classData.isFormation);
 
@@ -975,7 +991,7 @@ export function computeEnrollmentInscriptionStatus({
     }
 
     // Check recursive parent enrollment if allEnrollments provided
-    if (allEnrollments && t.fromEnrollmentId) {
+    if (allEnrollments && t.fromEnrollmentId && !visited.has(t.fromEnrollmentId)) {
       const parentEnr = allEnrollments.find((e: any) => e.id === t.fromEnrollmentId);
       if (parentEnr) {
         const parentRes = computeEnrollmentInscriptionStatus({
@@ -987,6 +1003,7 @@ export function computeEnrollmentInscriptionStatus({
           vouchers,
           paidInscClassIds,
           allEnrollments,
+          visitedEnrollmentIds: visited,
         });
         if (parentRes.isInscriptionPaid) {
           return {

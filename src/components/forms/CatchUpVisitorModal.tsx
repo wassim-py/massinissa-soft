@@ -6,6 +6,7 @@ import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
 import { Search, Loader2, X, AlertCircle, CheckCircle2, User, Calendar } from "lucide-react";
 import { searchCatchUpCandidatesAction, recordCatchUpAttendanceAction } from "@/lib/actions";
+import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 
 interface MissedLesson {
   attendanceId?: number | null;
@@ -249,6 +250,7 @@ export default function CatchUpVisitorModal({
 
         if (res.success) {
           toast.success(res.message);
+          notifyAttendanceChanged({ lessonId, source: "catchup-modal" });
           onClose();
           if (onSuccess) onSuccess();
         } else {

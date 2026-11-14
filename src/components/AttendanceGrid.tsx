@@ -10,6 +10,7 @@ import { useTranslations, useLocale } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { Search, X, Check, FileText, RotateCcw, Loader2 } from "lucide-react";
 import { markSingleAttendanceAction, deleteSingleAttendanceAction } from "@/lib/actions";
+import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import { toast } from "react-toastify";
 import { Badge } from "@/components/ui/Badge";
 
@@ -329,6 +330,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                     toast.error(res.message);
                 } else {
                     toast.success(res.message);
+                    notifyAttendanceChanged({ lessonId, source: "attendance-grid" });
                     router.refresh();
                 }
             } catch (err: any) {
@@ -357,6 +359,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                     toast.error(res.message);
                 } else {
                     toast.success(res.message);
+                    notifyAttendanceChanged({ lessonId, source: "attendance-grid" });
                     router.refresh();
                 }
             } catch (err: any) {
@@ -410,6 +413,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                     toast.error(res.message);
                 } else {
                     toast.success(res.message);
+                    notifyAttendanceChanged({ lessonId: activePopup.lessonId, source: "attendance-grid" });
                     router.refresh();
                 }
             } catch (err: any) {
@@ -451,6 +455,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                 toast.error(res.message);
             } else {
                 toast.success(res.message);
+                notifyAttendanceChanged({ lessonId: activePopup.lessonId, source: "attendance-grid" });
                 router.refresh();
                 setActivePopup(null);
                 setShowJustificationField(false);

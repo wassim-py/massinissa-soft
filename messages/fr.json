@@ -2062,7 +2062,21 @@
       "excused": "Justifiés",
       "excusedNote": "dont {count} justifié(s)",
       "recordedOutOfExpected": "{recorded} enregistrés sur {expected} attendus",
-      "notRecordedYet": "En attente d'appel"
+      "notRecordedYet": "En attente d'appel",
+      "live": "En direct",
+      "clickToTakeAttendance": "Cliquez sur une colonne pour faire l'appel",
+      "takeAttendanceAction": "Faire l'appel",
+      "catchUp": "Rattrapage",
+      "catchUpNote": "dont {count} rattrapage(s)",
+      "regularPresent": "Inscrits présents",
+      "groupsCount": "{count} groupe(s)",
+      "scrollHint": "Faites défiler pour voir tous les groupes",
+      "showAllSessions": "Afficher toutes les séances",
+      "teacherAbsent": "Prof. absent",
+      "enrolledCount": "Inscrits : {count}",
+      "scrollPrev": "Groupes précédents",
+      "scrollNext": "Groupes suivants",
+      "updatedAt": "Mis à jour à {time}"
     },
     "teachersDetail": {
       "title": "Enseignants de l'école",

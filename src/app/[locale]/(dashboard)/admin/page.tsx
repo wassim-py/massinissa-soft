@@ -7,9 +7,11 @@ import UpcomingLessons, {
 import StudentsToWatch, {
   StudentToWatchItem,
 } from "@/components/dashboard/StudentsToWatch";
-import TodayAttendanceChart, {
-  TodayLessonAttendanceData,
-} from "@/components/dashboard/TodayAttendanceChart";
+import TodayAttendanceChart from "@/components/dashboard/TodayAttendanceChart";
+import {
+  buildTodayAttendanceSummary,
+  tagLessonSourceDates,
+} from "@/lib/dashboardAttendance";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
 import { canUserAccessBranch } from "@/lib/settings";
 import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
@@ -153,13 +155,19 @@ const AdminPage = async () => {
         },
       },
       attendances: true,
+      catchUpVisitsHosted: {
+        select: {
+          studentId: true,
+        },
+      },
     },
     orderBy: {
       startsAt: "asc",
     },
   });
 
-  const allTodaysLessons = resolveRecurringLessonsForDate(candidateLessons, now);
+  const taggedCandidateLessons = tagLessonSourceDates(candidateLessons);
+  const allTodaysLessons = resolveRecurringLessonsForDate(taggedCandidateLessons, now);
 
   // Today's lessons strictly for THIS branch (hosted in this branch or group belonging to this branch)
   const thisBranchTodaysLessons = allTodaysLessons.filter(
@@ -370,52 +378,11 @@ const AdminPage = async () => {
   );
 
   // 3. Process Today's Attendance Chart data (scoped strictly to THIS branch)
-  const lessonsAttendanceData: TodayLessonAttendanceData[] =
-    thisBranchTodaysLessons.map((l) => {
-      const present = l.attendances.filter((a) => a.status === "PRESENT").length;
-      const unexcused = l.attendances.filter((a) => a.status === "ABSENT").length;
-      const excused = l.attendances.filter((a) => a.status === "NOT_DEFINED").length;
-      const absent = unexcused + excused;
-      const totalRecorded = present + absent;
-      const rate = totalRecorded > 0 ? (present / totalRecorded) * 100 : 0;
-      const enrolled = l.class.enrollments.filter(
-        (e: any) => e.status === "ACTIVE" || !e.status
-      ).length;
-
-      const timeSlot = `${new Date(l.startsAt).toLocaleTimeString("en-GB", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-        timeZone: "Africa/Algiers",
-      })}`;
-
-      return {
-        lessonId: l.id,
-        className: l.class.name,
-        timeSlot,
-        present,
-        absent,
-        excused,
-        enrolled,
-        total: totalRecorded,
-        rate,
-        isTeacherAbsent: Boolean(l.isTeacherAbsent),
-      };
-    });
-
-  const recordedLessons = lessonsAttendanceData.filter((item) => item.total > 0);
-  const totalPresent = lessonsAttendanceData.reduce((sum, item) => sum + item.present, 0);
-  const totalAbsent = lessonsAttendanceData.reduce((sum, item) => sum + item.absent, 0);
-  const totalExcused = lessonsAttendanceData.reduce((sum, item) => sum + (item.excused || 0), 0);
-  const totalExpectedRecorded = recordedLessons.reduce((sum, item) => sum + (item.enrolled || item.total), 0);
-  const totalExpected = thisBranchTodaysLessons.reduce(
-    (sum, l) => sum + l.class.enrollments.filter((e: any) => e.status === "ACTIVE" || !e.status).length,
-    0
-  );
-
-  const recordedTotal = totalPresent + totalAbsent;
-  const overallRate =
-    recordedTotal > 0 ? (totalPresent / recordedTotal) * 100 : 0;
+  const todayAttendanceSummary = buildTodayAttendanceSummary({
+    lessons: thisBranchTodaysLessons,
+    branchId: activeBranchId,
+    now,
+  });
 
   return (
     <div className="p-4 md:p-6 flex gap-6 flex-col lg:flex-row">
@@ -434,13 +401,7 @@ const AdminPage = async () => {
 
         {/* TODAY'S ATTENDANCE CHART */}
         <TodayAttendanceChart
-          totalPresent={totalPresent}
-          totalAbsent={totalAbsent}
-          totalExcused={totalExcused}
-          totalExpected={totalExpected}
-          totalExpectedRecorded={totalExpectedRecorded}
-          overallRate={overallRate}
-          lessonsData={lessonsAttendanceData}
+          initialSummary={todayAttendanceSummary}
           branchName={branchName}
         />
       </div>
