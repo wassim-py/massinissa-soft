@@ -173,6 +173,8 @@ const FormContainer = async ({
                 bookFee: true,
                 hasBooks: true,
                 branchId: true,
+                isCompleted: true,
+                isPaused: true,
               },
               orderBy: { name: "asc" },
             }),
@@ -200,6 +202,7 @@ const FormContainer = async ({
               bookFee: Number(c.bookFee || 0),
               hasBooks: Boolean(c.hasBooks),
               branchId: c.branchId,
+              isInactive: Boolean(c.isCompleted || c.isPaused),
             })),
             families: families.map((f) => ({
               id: f.id,
@@ -240,9 +243,14 @@ const FormContainer = async ({
             });
             existingAdditionalClassIds = groups.map((g) => g.classId);
           }
+          const existingLessonClassId = Number(data?.classId || -1);
           const [classes, classrooms, teachers, branches] = await Promise.all([
             prisma.$queryRaw<Array<{ id: number; name: string; teacherId: string | null; branchId: number; levelId: number | null; formationLevelId: number | null }>>`
-              SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId" FROM "Class" ORDER BY name ASC
+              SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId"
+              FROM "Class"
+              WHERE (("isCompleted" = false OR "isCompleted" IS NULL) AND ("isPaused" = false OR "isPaused" IS NULL))
+                 OR id = ${existingLessonClassId}
+              ORDER BY name ASC
             `,
             prisma.$queryRaw<Array<{ id: number; name: string; branchId: number }>>`SELECT id, name, "branchId" FROM "Classroom" ORDER BY name ASC`,
             prisma.$queryRaw<Array<{ id: string; name: string }>>`SELECT id, name FROM "Teacher" ORDER BY name ASC`,
@@ -284,13 +292,24 @@ const FormContainer = async ({
           break;
         }
         case "workshop": {
-          const [teachers, students] = await Promise.all([
-            prisma.$queryRaw<Array<{ id: string; name: string }>>`SELECT id, name FROM "Teacher" ORDER BY name ASC`,
-            prisma.$queryRaw<Array<{ id: string; name: string }>>`SELECT id, name FROM "Student" ORDER BY name ASC`,
-          ]);
+          const branches = await prisma.branch.findMany({
+            select: { id: true, name: true },
+            orderBy: { name: "asc" },
+          });
+          let workshopDetails: any = null;
+          if (type === "update" && id) {
+            workshopDetails = await prisma.workshop.findUnique({
+              where: { id: Number(id) },
+              include: {
+                sessions: { orderBy: { startsAt: "asc" } },
+              },
+            });
+          }
           finalRelatedData = {
-            teachers: teachers.map((t) => ({ id: t.id, name: t.name, surname: "" })),
-            students: students.map((s) => ({ id: s.id, name: s.name, surname: "" })),
+            branches,
+            isOwner: session.isOwner,
+            defaultBranchId: session.branchIds?.[0] || branches[0]?.id || 1,
+            workshopDetails,
           };
           break;
         }

@@ -46,6 +46,7 @@ import { getTranslations, getLocale } from "next-intl/server";
 import { getCaisseNoireSummary } from "@/lib/financeActions";
 import GlobalFinanceTopActions from "@/components/finance/GlobalFinanceTopActions";
 import { getAlgiersDayBounds } from "@/lib/algiersDate";
+import { getPaymentTypeLabel } from "@/lib/voucherUtils";
 import { normalizeOutcomeFundingSource, getOutcomeFundingSourceMeta } from "@/lib/financeConstants";
 
 export const dynamic = "force-dynamic";
@@ -440,10 +441,11 @@ export default async function FinancePage(props: PageProps) {
       const fromBranchName = branchMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`;
       const toBranchName = branchMap.get(v.targetBranchId) || `Branche #${v.targetBranchId}`;
       const groupName = v.class?.name || v.workshop?.title || "—";
+      const paymentTypeLabel = getPaymentTypeLabel(v.paymentType, locale);
       const noteLabel =
         locale === "ar"
-          ? `وصل #${v.number} (${v.paymentType}) - دفعة بين الفروع`
-          : `Reçu #${v.number} (${v.paymentType}) - Paiement inter-branches`;
+          ? `وصل #${v.number} (${paymentTypeLabel}) - دفعة بين الفروع`
+          : `Reçu #${v.number} (${paymentTypeLabel}) - Paiement inter-branches`;
 
       return {
         id: `v-${v.id}`,
@@ -459,7 +461,7 @@ export default async function FinancePage(props: PageProps) {
         toBranchId: v.targetBranchId,
         toBranchName,
         isCrossBranch: true,
-        transferredSessions: v.paymentType.startsWith("TUITION") ? 4 : 0,
+        transferredSessions: v.paymentType === "REVISION_SESSION" ? 1 : v.paymentType.startsWith("TUITION") ? 4 : 0,
         amount: Number(v.amount || 0),
         notes: noteLabel,
         transferredBy: v.issuedBy,

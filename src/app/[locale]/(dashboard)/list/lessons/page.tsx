@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { getTranslations } from "next-intl/server";
 import Link from "next/link";
 import { getAlgiersWeekBounds, resolveRecurringLessonsForWeek, getAlgiersDateInfo } from "@/lib/utils";
+import { ACTIVE_CLASS_WHERE, isLessonVisibleForClassStatus } from "@/lib/classStatus";
 
 type TimetableLesson = {
   id: number;
@@ -103,6 +104,7 @@ const LessonListPage = async (props: {
           orderBy: { name: "asc" },
         }),
         prisma.class.findMany({
+          where: ACTIVE_CLASS_WHERE,
           select: { id: true, name: true, teacherId: true, branchId: true, levelId: true, formationLevelId: true },
           orderBy: { name: "asc" },
         }),
@@ -168,11 +170,22 @@ const LessonListPage = async (props: {
   let lessons: TimetableLesson[] = [];
 
   try {
+    const currentWeekStart = getAlgiersWeekBounds(0).startOfWeek;
     const whereConditions: Prisma.Sql[] = [
       // Fetch normal recurring lessons (regular and formation) for active classes,
-      // or one-off/dated lessons occurring in the requested week.
-      // If a class is completed/closed, its recurring lessons stop displaying for subsequent weeks.
-      Prisma.sql`((l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false AND (c."isCompleted" = false OR c."isCompleted" IS NULL OR c."completedAt" >= ${startOfWeek})) OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek}))`,
+      // or recurring lessons of closed/paused classes when viewing historical weeks prior to their pause/completion date,
+      // or dated lessons occurring in the requested week.
+      Prisma.sql`(
+        (
+          l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false
+          AND (
+            ((c."isCompleted" = false OR c."isCompleted" IS NULL) AND (c."isPaused" = false OR c."isPaused" IS NULL))
+            OR LEAST(COALESCE(c."pausedAt", 'infinity'::timestamp), COALESCE(c."completedAt", 'infinity'::timestamp)) >= ${startOfWeek}
+            OR (c."pausedAt" IS NULL AND c."completedAt" IS NULL AND ${startOfWeek} < ${currentWeekStart})
+          )
+        )
+        OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek})
+      )`,
     ];
 
     if (search) {
@@ -235,7 +248,7 @@ const LessonListPage = async (props: {
     const rawLessons = await prisma.$queryRaw<any[]>`
       SELECT l.id, l."startsAt", l."endsAt", l."classId", l."teacherId", l."classroomId", l."branchId",
              l."isExtra", l."isCatchUp", l."isFree", l."extraFee", l."isTeacherAbsent",
-             c.name as "className", c."branchId" as "classBranchId", c."isFormation", c."isCompleted", c."completedAt", c."levelId", lvl.name as "levelName",
+             c.name as "className", c."branchId" as "classBranchId", c."isFormation", c."isCompleted", c."completedAt", c."isPaused", c."pausedAt", c."levelId", lvl.name as "levelName",
              t.name as "teacherName", cr.name as "classroomName", cr."branchId" as "classroomBranchId", b.name as "branchName",
              fl."languageId" as "formationLanguageId", flLang.name as "formationLanguageName",
              (
@@ -264,23 +277,20 @@ const LessonListPage = async (props: {
     // DISPLAY RULE:
     // Regular and formation lessons display every week as fixed recurring schedule.
     // One-off lessons (extra, catch-up, free) display ONLY for the week they actually occur in.
-    // Completed/closed classes do not recur in weeks after their completion date.
+    // Closed/paused/completed classes hide immediately for all slots ending after their pause/completion date,
+    // while past recorded weeks before their pause/completion date remain visible when navigating backward.
     const displayedRawLessons = rawLessons.filter((r) => {
       const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFree);
       if (isOneOff) {
         const lessonDate = new Date(r.startsAt);
         return lessonDate >= startOfWeek && lessonDate <= endOfWeek;
       }
-      if (r.isCompleted && r.completedAt) {
-        const completedDate = new Date(r.completedAt);
-        if (completedDate < startOfWeek) {
-          return false;
-        }
-      }
       return true;
     });
 
-    const resolvedWeekLessons = resolveRecurringLessonsForWeek(displayedRawLessons, weekBounds);
+    const resolvedWeekLessons = resolveRecurringLessonsForWeek(displayedRawLessons, weekBounds).filter((r) =>
+      isLessonVisibleForClassStatus(r.endsAt, r, currentWeekStart)
+    );
 
     lessons = resolvedWeekLessons.map((r) => {
       const d = new Date(r.startsAt);

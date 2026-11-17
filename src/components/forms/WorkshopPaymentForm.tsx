@@ -6,10 +6,12 @@ import { workshopPaymentSchema, WorkshopPaymentSchema } from "@/lib/formValidati
 import { addWorkshopPayment, updateWorkshopPayment } from "@/lib/actions";
 import { useActionState, useEffect, startTransition } from "react";
 import { useTranslations } from "next-intl";
+import { useRouter } from "@/i18n/navigation";
 import { toast } from "react-toastify";
 import { Workshop, WorkshopParticipant } from "@prisma/client";
 import PrintWorkshopTicketButton from "../PrintWorkshopTicketButton";
 import { Button } from "@/components/ui/Button";
+import { formatVoucherDisplay } from "@/lib/voucherUtils";
 
 const WorkshopPaymentForm = ({
     participant,
@@ -26,6 +28,14 @@ const WorkshopPaymentForm = ({
     setOpen: (isOpen: boolean) => void;
     amountOwedByParticipant?: number;
 }) => {
+    const router = useRouter();
+    const defaultAmount =
+      data?.amount !== undefined
+        ? Number(data.amount)
+        : amountOwedByParticipant && amountOwedByParticipant > 0
+        ? amountOwedByParticipant
+        : 0;
+
     const {
         register,
         handleSubmit,
@@ -36,7 +46,7 @@ const WorkshopPaymentForm = ({
             id: data?.id,
             participantId: participant.id,
             workshopId: workshop.id,
-            amount: data?.amount || 0,
+            amount: defaultAmount,
             notes: data?.notes || ""
         }
     });
@@ -48,11 +58,14 @@ const WorkshopPaymentForm = ({
         if (state?.success) {
             toast.success(state.message);
             setOpen(false);
+            startTransition(() => {
+              router.refresh();
+            });
         }
-        if (state?.error) {
+        if (state?.error && state.message) {
             toast.error(state.message);
         }
-    }, [state, setOpen]);
+    }, [state, setOpen, router]);
 
     const t = useTranslations("workshops");
     const tCommon = useTranslations("common");
@@ -64,6 +77,7 @@ const WorkshopPaymentForm = ({
     };
 
     const participantName = participant.Student?.name || participant.name || `${t("student")} #${participant.id}`;
+    const branchName = (workshop as any).branch?.name || (workshop as any).Branch?.name;
 
     return (
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4 p-4 font-sans">
@@ -75,13 +89,28 @@ const WorkshopPaymentForm = ({
                     <PrintWorkshopTicketButton 
                         payment={{
                             ...data,
+                            voucherDisplay:
+                              data.voucherDisplay ||
+                              formatVoucherDisplay(
+                                {
+                                  number: data.number || data.id,
+                                  issuedAt: data.date || new Date(),
+                                  paymentType: data.paymentType || "WORKSHOP",
+                                  isRefund: data.isRefund,
+                                  refundForVoucherId: data.refundForVoucherId,
+                                  issuingBranchId: data.issuingBranchId,
+                                  targetBranchId: data.targetBranchId,
+                                  series: data.series,
+                                },
+                                { branchName, isWorkshop: true }
+                              ),
                             participant: {
                                 name: participantName,
                                 phone: participant.Student?.phone || null,
                                 chairNumber: (participant as any).chairNumber,
                                 gender: (participant as any).gender,
                             },
-                            workshop: { title: workshop.title, totalPrice: workshop.totalPrice }
+                            workshop: { title: workshop.title, totalPrice: workshop.totalPrice, branchName }
                         }}
                         amountOwedByParticipant={amountOwedByParticipant || 0}
                     />
@@ -96,6 +125,7 @@ const WorkshopPaymentForm = ({
                 <label className="text-xs text-gray-500">{t("paidAmountLabel")}</label>
                 <input
                     type="number"
+                    min="0"
                     step="any"
                     {...register("amount")}
                     className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px]"
@@ -107,8 +137,8 @@ const WorkshopPaymentForm = ({
                 <label className="text-xs text-gray-500">{t("notesLabel")}</label>
                 <textarea {...register("notes")} rows={3} className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full" placeholder={t("notesPlaceholder")} />
             </div>
-            <Button type="submit" variant="primary" size="lg" className="w-full">
-                {type === 'create' ? t("savePayment") : tCommon("update")}
+            <Button type="submit" variant="primary" size="lg" disabled={isPending} className="w-full">
+                {isPending ? t("saving") : type === 'create' ? t("savePayment") : tCommon("update")}
             </Button>
         </form>
     );

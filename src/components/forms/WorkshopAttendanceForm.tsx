@@ -1,15 +1,16 @@
 "use client";
 
 import { WorkshopParticipant, WorkshopAttendance } from "@prisma/client";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, startTransition } from "react";
 import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
 import { saveWorkshopAttendance } from "@/lib/actions";
 import { toast } from "react-toastify";
 import { Button } from "@/components/ui/Button";
 import { useTranslations } from "next-intl";
+import { useRouter } from "@/i18n/navigation";
 
-const SubmitButton = () => {
+const SubmitButton = ({ disabled }: { disabled?: boolean }) => {
   const { pending } = useFormStatus();
   const t = useTranslations("workshops");
   return (
@@ -17,7 +18,7 @@ const SubmitButton = () => {
       type="submit"
       variant="primary"
       size="lg"
-      disabled={pending}
+      disabled={pending || disabled}
       className="w-full"
     >
       {pending ? t("saving") : t("saveAttendance")}
@@ -46,6 +47,7 @@ const WorkshopAttendanceForm = ({
   setOpen: (isOpen: boolean) => void;
 }) => {
   const t = useTranslations("workshops");
+  const router = useRouter();
 
   const activeParticipants = useMemo(() => {
     return (participants || []).filter((p) => {
@@ -81,17 +83,21 @@ const WorkshopAttendanceForm = ({
     if (state?.success) {
       toast.success(state.message);
       setOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
     }
-    if (state?.error) {
+    if (state?.error && state.message) {
       toast.error(state.message);
     }
-  }, [state, setOpen]);
+  }, [state, setOpen, router]);
 
   return (
     <form action={formAction} className="p-4 font-sans">
       <h2 className="text-section-title font-bold text-gray-900 mb-4">{t("attendanceRosterTitle")}</h2>
-      <div className="space-y-3 max-h-96 overflow-y-auto">
-        {activeParticipants.map((participant) => {
+      {activeParticipants.length > 0 ? (
+        <div className="space-y-3 max-h-96 overflow-y-auto">
+          {activeParticipants.map((participant) => {
           const currentStatus = attendance[participant.id];
           const displayName = participant.Student?.name || participant.name || `${t("student")} #${participant.id}`;
           const isGirl = participant.gender === "FEMALE";
@@ -144,10 +150,13 @@ const WorkshopAttendanceForm = ({
             </div>
           );
         })}
-      </div>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500 text-center py-8">{t("noParticipantsAdded")}</p>
+      )}
 
       <div className="mt-6 flex justify-end">
-        <SubmitButton />
+        <SubmitButton disabled={activeParticipants.length === 0} />
       </div>
     </form>
   );

@@ -10,6 +10,12 @@ import { Badge } from "@/components/ui/Badge";
 import { FilterTabs } from "@/components/ui/FilterTabs";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { getTranslations, getLocale } from "next-intl/server";
+import {
+  ACTIVE_CLASS_WHERE,
+  INACTIVE_CLASS_WHERE,
+  isClassInactive,
+  normalizeClassFilterStatus,
+} from "@/lib/classStatus";
 
 const FinancialStatCard = ({
   label,
@@ -89,7 +95,7 @@ const TransactionHistory = ({
 );
 
 const PaymentsListPage = async (props: {
-  searchParams: Promise<{ studentId?: string; search?: string; branchId?: string; page?: string }>;
+  searchParams: Promise<{ studentId?: string; search?: string; branchId?: string; page?: string; status?: string }>;
 }) => {
   const searchParams = await props.searchParams;
   const t = await getTranslations("payments");
@@ -210,7 +216,8 @@ const PaymentsListPage = async (props: {
   // BRANCH SCOPING (§1.0 & Phase 16):
   // - Branch Admin sees only groups at their own branch.
   // - Owner gets filter tabs to see the whole school or filter to a specific branch.
-  const { search, branchId: selectedBranchParam, page } = searchParams;
+  const { search, branchId: selectedBranchParam, page, status } = searchParams;
+  const activeStatus = normalizeClassFilterStatus(status);
   const isOwner = session.isOwner;
   const pageNum = page ? parseInt(page, 10) : 1;
   const p = isNaN(pageNum) || pageNum < 1 ? 1 : pageNum;
@@ -222,17 +229,38 @@ const PaymentsListPage = async (props: {
     branchFilter = Number(selectedBranchParam);
   }
 
-  const classWhere = {
+  const baseClassWhere = {
     ...(branchFilter ? { branchId: branchFilter } : {}),
     ...(search ? { name: { contains: search, mode: "insensitive" as const } } : {}),
   };
 
-  const [branches, totalClassesCount, classesData] = await Promise.all([
+  const classWhere = {
+    ...baseClassWhere,
+    ...(activeStatus === "active"
+      ? ACTIVE_CLASS_WHERE
+      : activeStatus === "inactive"
+      ? INACTIVE_CLASS_WHERE
+      : {}),
+  };
+
+  const createPaymentsFilterUrl = (overrides: { branchId?: string; status?: "active" | "inactive" | "all" }) => {
+    const params = new URLSearchParams();
+    const branchVal = overrides.branchId !== undefined ? overrides.branchId : (selectedBranchParam || "all");
+    if (isOwner && branchVal) params.set("branchId", branchVal);
+    const statusVal = overrides.status !== undefined ? overrides.status : activeStatus;
+    if (statusVal && statusVal !== "active") params.set("status", statusVal);
+    if (search) params.set("search", search);
+    const qs = params.toString();
+    return qs ? `/list/payments?${qs}` : "/list/payments";
+  };
+
+  const [branches, activeClassesCount, inactiveClassesCount, classesData] = await Promise.all([
     prisma.branch.findMany({
       select: { id: true, name: true },
       orderBy: { id: "asc" },
     }),
-    prisma.class.count({ where: classWhere }),
+    prisma.class.count({ where: { ...baseClassWhere, ...ACTIVE_CLASS_WHERE } }),
+    prisma.class.count({ where: { ...baseClassWhere, ...INACTIVE_CLASS_WHERE } }),
     prisma.class.findMany({
       where: classWhere,
       skip: ITEM_PER_PAGE * (p - 1),
@@ -242,6 +270,8 @@ const PaymentsListPage = async (props: {
         name: true,
         branchId: true,
         pricePerCycle: true,
+        isCompleted: true,
+        isPaused: true,
         branch: { select: { id: true, name: true } },
         level: { select: { id: true, name: true } },
         _count: {
@@ -261,6 +291,14 @@ const PaymentsListPage = async (props: {
       ],
     }),
   ]);
+
+  const allClassesCount = activeClassesCount + inactiveClassesCount;
+  const totalClassesCount =
+    activeStatus === "active"
+      ? activeClassesCount
+      : activeStatus === "inactive"
+      ? inactiveClassesCount
+      : allClassesCount;
 
   return (
     <Card className="flex-1 w-full border-border/80 shadow-xs font-sans">
@@ -282,12 +320,12 @@ const PaymentsListPage = async (props: {
                 {
                   id: "all",
                   label: t("allBranchesTab"),
-                  href: "/list/payments?branchId=all",
+                  href: createPaymentsFilterUrl({ branchId: "all" }),
                 },
                 ...branches.map((b) => ({
                   id: String(b.id),
                   label: b.name,
-                  href: `/list/payments?branchId=${b.id}`,
+                  href: createPaymentsFilterUrl({ branchId: String(b.id) }),
                 })),
               ]}
               activeTab={selectedBranchParam || "all"}
@@ -299,6 +337,36 @@ const PaymentsListPage = async (props: {
           )}
         </div>
 
+        {/* Status Filter Tabs (Active / Closed & Paused / All) */}
+        <div className="flex flex-wrap items-center gap-2 mt-4 pb-4 border-b border-border/70">
+          <span className="text-xs font-bold text-muted ms-1">
+            {locale === "ar" ? "تصفية حسب الحالة:" : "Statut :"}
+          </span>
+          <FilterTabs
+            activeTab={activeStatus}
+            tabs={[
+              {
+                id: "active",
+                label: locale === "ar" ? "الأفواج النشطة" : "Groupes actifs",
+                count: activeClassesCount,
+                href: createPaymentsFilterUrl({ status: "active" }),
+              },
+              {
+                id: "inactive",
+                label: locale === "ar" ? "مغلقة / متوقفة" : "Fermés / En pause",
+                count: inactiveClassesCount,
+                href: createPaymentsFilterUrl({ status: "inactive" }),
+              },
+              {
+                id: "all",
+                label: locale === "ar" ? "الكل" : "Tous",
+                count: allClassesCount,
+                href: createPaymentsFilterUrl({ status: "all" }),
+              },
+            ]}
+          />
+        </div>
+
         <div className="mt-6">
           <PageHeader
             title=""
@@ -308,19 +376,26 @@ const PaymentsListPage = async (props: {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 mt-4">
-          {classesData.map((c) => (
+          {classesData.map((c) => {
+            const inactive = isClassInactive(c);
+            return (
             <Link
               href={`/list/payments/class/${c.id}`}
               key={c.id}
               className="block group h-full"
             >
-              <Card className="h-full border-border/80 group-hover:border-primary/50 group-hover:shadow-md transition-all flex flex-col justify-between">
+              <Card className={`h-full border-border/80 group-hover:border-primary/50 group-hover:shadow-md transition-all flex flex-col justify-between ${inactive ? "bg-amber-50/20" : ""}`}>
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between mb-3">
                     <div className="w-10 h-10 rounded-xl bg-primary-light flex items-center justify-center shrink-0">
                       <Image src="/finance.png" alt="finance icon" width={20} height={20} />
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      {inactive && (
+                        <Badge variant="warning" size="sm" withDot>
+                          {locale === "ar" ? "مغلق / متوقف" : "Fermé / En pause"}
+                        </Badge>
+                      )}
                       {c.level && (
                         <Badge variant="secondary" size="sm">
                           {c.level.name}
@@ -351,7 +426,8 @@ const PaymentsListPage = async (props: {
                 </CardContent>
               </Card>
             </Link>
-          ))}
+            );
+          })}
           {classesData.length === 0 && (
             <div className="col-span-full text-center py-16 px-4 border-2 border-dashed border-border rounded-xl">
               <p className="text-table-body text-muted">

@@ -2,7 +2,7 @@
 
 import prisma from "@/lib/prisma";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
-import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
+import { computeStudentCreditAndSessions, resolvePayerCredit, formatDiscountBadgeLabel } from "@/lib/studentBilling";
 import { revalidatePath } from "next/cache";
 import { recordCatchUpAttendanceAction, unsuspendEnrollmentWithDebtClearance } from "@/lib/actions";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/lib/utils";
 import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
+import { ACTIVE_CLASS_WHERE, isClassInactive } from "@/lib/classStatus";
 
 export type BiometricScanStatus =
   | "SUCCESS"
@@ -40,7 +41,10 @@ export interface BiometricScanResult {
   isResolved: boolean;
   alreadyPresent?: boolean;
   scannedAt: string;
-  payerStatus?: "NORMAL" | "NON_PAYER" | "SCHOOL_FEES_ONLY" | string;
+  payerStatus?: "NORMAL" | "NON_PAYER" | "SCHOOL_FEES_ONLY" | "DISCOUNTED" | string;
+  discountType?: string | null;
+  discountValue?: number | null;
+  discountLabel?: string | null;
   isNonPayer?: boolean;
   isSiblingWaived?: boolean;
   hasPayerSibling?: boolean;
@@ -268,6 +272,7 @@ export async function processBiometricScan(input: {
               pricePerCycle: true,
               isFormation: true,
               isCompleted: true,
+              isPaused: true,
               teacherId: true,
               teacher: {
                 include: {
@@ -286,7 +291,7 @@ export async function processBiometricScan(input: {
                       isExtra: false,
                       isCatchUp: false,
                       isFree: false,
-                      class: { isCompleted: false },
+                      class: ACTIVE_CLASS_WHERE,
                     },
                     ...(openLessonIdNum ? [{ id: openLessonIdNum }] : []),
                   ],
@@ -311,7 +316,7 @@ export async function processBiometricScan(input: {
                         isExtra: false,
                         isCatchUp: false,
                         isFree: false,
-                        class: { isCompleted: false },
+                        class: ACTIVE_CLASS_WHERE,
                       },
                     },
                     ...(openLessonIdNum ? [{ lessonId: openLessonIdNum }] : []),
@@ -335,6 +340,7 @@ export async function processBiometricScan(input: {
           },
           transfersFrom: true,
           transfersTo: true,
+          payerHistory: { orderBy: { effectiveFrom: "asc" } },
         },
       },
     },
@@ -372,10 +378,10 @@ export async function processBiometricScan(input: {
     };
   }
 
-  // Filter candidate enrollments (exclude unenrolled/refunded/transferred or completed classes)
+  // Filter candidate enrollments (exclude unenrolled/refunded/transferred or completed/paused classes)
   const activeEnrollments = student.enrollments.filter(
     (e) =>
-      !e.class.isCompleted &&
+      !isClassInactive(e.class) &&
       (!e.status ||
         !["REFUNDED", "UNENROLLED", "TRANSFERRED", "INACTIVE"].includes(
           e.status.toUpperCase()
@@ -934,6 +940,9 @@ export async function processBiometricScan(input: {
     pricePerCycle: Number(matchedLesson.class.pricePerCycle || 0),
     isFormation: Boolean(matchedLesson.class.isFormation),
     payerStatus: effectivePayerStatus,
+    discountType: (enrollment as any)?.discountType,
+    discountValue: (enrollment as any)?.discountValue,
+    payerHistory: (enrollment as any)?.payerHistory,
     siblingDiscountPercentage: siblingDiscountPct,
     isSiblingWaived,
     isPayerSiblingPaid,
@@ -953,19 +962,20 @@ export async function processBiometricScan(input: {
     creditMetricsBefore.isNonPayer ||
     effectivePayerStatus === "NON_PAYER"
   );
+  const isZeroFeeDiscountStudent = Boolean(creditMetricsBefore.isZeroFeeDiscount);
   const isSiblingStudent = Boolean(
-    isPayerInThisClass && (
-      isSiblingWaived ||
-      creditMetricsBefore.isSiblingWaived ||
-      needsPayerSiblingCheck ||
-      (student.family?.payerStudentId && student.family.payerStudentId !== student.id)
-    )
+    !creditMetricsBefore.isDiscounted &&
+      isPayerInThisClass &&
+      (isSiblingWaived ||
+        creditMetricsBefore.isSiblingWaived ||
+        needsPayerSiblingCheck ||
+        (student.family?.payerStudentId && student.family.payerStudentId !== student.id))
   );
 
   const alreadyMarkedPresent = primaryRow?.status === "PRESENT";
 
   let hasAvailableCredit = false;
-  if (matchedLesson.isFree || matchedLesson.isTeacherAbsent || isNonPayerStudent) {
+  if (matchedLesson.isFree || matchedLesson.isTeacherAbsent || isNonPayerStudent || isZeroFeeDiscountStudent) {
     hasAvailableCredit = true;
   } else if (isSiblingStudent) {
     hasAvailableCredit = isPayerSiblingPaid;
@@ -1018,8 +1028,14 @@ export async function processBiometricScan(input: {
       scan: {
         ...serializeScanLog(log),
         payerStatus: effectivePayerStatus,
+        discountType: (enrollment as any)?.discountType ?? null,
+        discountValue: (enrollment as any)?.discountValue != null ? Number((enrollment as any).discountValue) : null,
+        discountLabel:
+          effectivePayerStatus === "DISCOUNTED"
+            ? formatDiscountBadgeLabel((enrollment as any)?.discountType, (enrollment as any)?.discountValue, "fr")
+            : null,
         isNonPayer: isNonPayerStudent,
-        isSiblingWaived: Boolean(isSiblingWaived || creditMetricsBefore.isSiblingWaived),
+        isSiblingWaived: Boolean(!creditMetricsBefore.isDiscounted && (isSiblingWaived || creditMetricsBefore.isSiblingWaived)),
         hasPayerSibling: isSiblingStudent,
         remainingCredits: 0,
         inscriptionStatus,
@@ -1041,13 +1057,14 @@ export async function processBiometricScan(input: {
     !matchedLesson.isFree &&
     !matchedLesson.isTeacherAbsent &&
     !isNonPayerStudent &&
+    !isZeroFeeDiscountStudent &&
     !isSiblingStudent &&
     !matchedLesson.class.isFormation;
 
   // Exact remaining credits after this lesson's presence:
   // Since priorAttendances excludes this lesson, netSessions - 1 is ALWAYS the exact remaining credit
   // whether scanned for the 1st, 2nd, or nth time!
-  const remainingCreditsAfter = (isNonPayerStudent || isSiblingStudent)
+  const remainingCreditsAfter = (isNonPayerStudent || isZeroFeeDiscountStudent || isSiblingStudent)
     ? null
     : consumesOneCredit
     ? Math.max(0, creditMetricsBefore.netSessions - 1)
@@ -1056,6 +1073,8 @@ export async function processBiometricScan(input: {
   let scanMetadataTag: string | null = null;
   if (isNonPayerStudent) {
     scanMetadataTag = "WAIVED";
+  } else if (effectivePayerStatus === "DISCOUNTED") {
+    scanMetadataTag = "DISCOUNTED";
   } else if (isSiblingStudent) {
     scanMetadataTag = isSiblingWaived ? "SIBLING_WAIVED" : "PAYER_SIBLING";
   } else if (effectivePayerStatus === "SCHOOL_FEES_ONLY") {
@@ -1144,8 +1163,14 @@ export async function processBiometricScan(input: {
     scan: {
       ...serializeScanLog(log),
       payerStatus: effectivePayerStatus,
+      discountType: (enrollment as any)?.discountType ?? null,
+      discountValue: (enrollment as any)?.discountValue != null ? Number((enrollment as any).discountValue) : null,
+      discountLabel:
+        effectivePayerStatus === "DISCOUNTED"
+          ? formatDiscountBadgeLabel((enrollment as any)?.discountType, (enrollment as any)?.discountValue, "fr")
+          : null,
       isNonPayer: isNonPayerStudent,
-      isSiblingWaived: Boolean(isSiblingWaived || creditMetricsBefore.isSiblingWaived),
+      isSiblingWaived: Boolean(!creditMetricsBefore.isDiscounted && (isSiblingWaived || creditMetricsBefore.isSiblingWaived)),
       hasPayerSibling: isSiblingStudent,
       remainingCredits: remainingCreditsAfter,
       alreadyPresent: alreadyMarkedPresent,
@@ -1183,9 +1208,12 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
   const hasSiblingWaivedTag = rawNext.includes("SIBLING_WAIVED");
   const hasPayerSiblingTag = rawNext.includes("PAYER_SIBLING");
   const hasSchoolFeesOnlyTag = rawNext.includes("SCHOOL_FEES_ONLY");
+  const hasDiscountedTag = rawNext.includes("DISCOUNTED");
 
   const enr = log.student?.enrollments?.find((e: any) => e.classId === log.classId) || log.student?.enrollments?.[0];
-  const payerStatus = hasSchoolFeesOnlyTag
+  const payerStatus = hasDiscountedTag
+    ? "DISCOUNTED"
+    : hasSchoolFeesOnlyTag
     ? "SCHOOL_FEES_ONLY"
     : hasWaivedTag
     ? "NON_PAYER"
@@ -1204,18 +1232,20 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
   );
 
   const isSiblingWaived = Boolean(
-    hasSiblingWaivedTag ||
+    payerStatus !== "DISCOUNTED" &&
+    (hasSiblingWaivedTag ||
     isFamilyDiscountWaived ||
     enr?.isSiblingWaived ||
-    log.isSiblingWaived
+    log.isSiblingWaived)
   );
 
   const hasPayerSibling = Boolean(
-    hasPayerSiblingTag ||
+    payerStatus !== "DISCOUNTED" &&
+    (hasPayerSiblingTag ||
     hasSiblingWaivedTag ||
     isSiblingWaived ||
     (log.student?.family?.payerStudentId && log.student.family.payerStudentId !== log.studentId) ||
-    log.hasPayerSibling
+    log.hasPayerSibling)
   );
 
   let cleanNextLessonInfo: string | null = null;
@@ -1226,6 +1256,7 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
         !p.includes("WAIVED") &&
         !p.includes("SIBLING") &&
         !p.includes("SCHOOL_FEES") &&
+        !p.includes("DISCOUNTED") &&
         !p.includes("ALREADY_PRESENT") &&
         !p.startsWith("INSC_")
       );
@@ -1282,6 +1313,12 @@ function serializeScanLog(log: any, index?: number): BiometricScanResult {
     alreadyPresent: isAlreadyPresent,
     scannedAt: new Date(log.scannedAt).toISOString(),
     payerStatus,
+    discountType: enr?.discountType ?? null,
+    discountValue: enr?.discountValue != null ? Number(enr.discountValue) : null,
+    discountLabel:
+      payerStatus === "DISCOUNTED"
+        ? formatDiscountBadgeLabel(enr?.discountType, enr?.discountValue, "fr")
+        : null,
     isNonPayer,
     isSiblingWaived,
     hasPayerSibling,
@@ -1384,6 +1421,8 @@ export async function getBiometricLiveFeedAction(params?: {
             select: {
               classId: true,
               payerStatus: true,
+              discountType: true,
+              discountValue: true,
               feeOverriddenByOwner: true,
               inscriptionFeeCharged: true,
             },
@@ -1826,6 +1865,7 @@ export async function getBiometricCatchUpOptionsAction(studentId: string, branch
         branchId: activeBranchId,
         startsAt: { lte: windowEnd },
         endsAt: { gte: windowStart },
+        class: ACTIVE_CLASS_WHERE,
       },
       include: {
         class: {

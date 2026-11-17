@@ -16,7 +16,7 @@ import MissingMoneyActions from "@/components/finance/MissingMoneyActions";
 import SurplusMoneyActions from "@/components/finance/SurplusMoneyActions";
 
 import DailyLedgerDateFilter from "@/components/daily-ledger/DailyLedgerDateFilter";
-import { formatVoucherDisplay, formatPaymentTime } from "@/lib/voucherUtils";
+import { formatVoucherDisplay, formatPaymentTime, getPaymentTypeLabel } from "@/lib/voucherUtils";
 import { formatDZD, getAlgiersTodayDateString, formatAlgiersDate } from "@/lib/algiersDate";
 
 export const dynamic = "force-dynamic";
@@ -586,7 +586,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                         }
                         size="sm"
                       >
-                        {v.paymentType}
+                        {getPaymentTypeLabel(v.paymentType, locale)}
                       </Badge>
                     </td>
                     <td className="p-3.5 text-muted text-xs">
@@ -765,7 +765,7 @@ export default async function DailyBranchLedgerPage(props: PageProps) {
                           }
                           size="sm"
                         >
-                          {item.paymentType}
+                          {getPaymentTypeLabel(item.paymentType, locale)}
                         </Badge>
                       </td>
                       <td className="p-3.5 text-muted text-xs">

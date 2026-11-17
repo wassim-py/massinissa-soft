@@ -18,6 +18,7 @@ import {
   formatPaymentDate,
   formatPaymentTime,
 } from "@/lib/voucherUtils";
+import { computeStudentSessionFee, formatDiscountBadgeLabel } from "@/lib/studentBilling";
 import { useRouter } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 
@@ -39,6 +40,8 @@ export default function FormationRoster({
     bookFee?: number | any;
     branchId: number;
     branch?: { name: string };
+    isPaused?: boolean;
+    isCompleted?: boolean;
   };
   formationLevel: {
     id: number;
@@ -58,6 +61,10 @@ export default function FormationRoster({
     id: number;
     enrolledAt: Date | string;
     hasNeverAttended?: boolean;
+    payerStatus?: string;
+    discountType?: string | null;
+    discountValue?: number | null;
+    discountReason?: string | null;
     student: {
       id: string;
       globalNumber?: number;
@@ -123,6 +130,7 @@ export default function FormationRoster({
   }>({ isOpen: false, enrollments: [] });
 
   const levelPrice = Number(formationLevel?.lumpSumPrice || 0);
+  const isGroupInactive = Boolean(formationClass.isPaused || formationClass.isCompleted);
 
   const toggleHistory = (studentId: string) => {
     setVisibleHistory((prev) => (prev === studentId ? null : studentId));
@@ -136,7 +144,7 @@ export default function FormationRoster({
           <h2 className="text-xl font-bold text-gray-800">
             {t("enrolledStudents", { count: enrolledStudents.length })}
           </h2>
-          {(canCreateStudent || role === "admin") && (
+          {(canCreateStudent || role === "admin") && !isGroupInactive && (
             <button
               type="button"
               onClick={() => setIsEnrollModalOpen(true)}
@@ -154,7 +162,7 @@ export default function FormationRoster({
             <p className="text-gray-500 text-sm mb-3">
               {t("noStudentsEnrolled")}
             </p>
-            {(canCreateStudent || role === "admin") && (
+            {(canCreateStudent || role === "admin") && !isGroupInactive && (
               <button
                 type="button"
                 onClick={() => setIsEnrollModalOpen(true)}
@@ -184,8 +192,29 @@ export default function FormationRoster({
                 return sum + (paid - refunded);
               }, 0);
 
-              const isPaidInFull = totalPaid >= levelPrice;
-              const amountOwed = Math.max(0, levelPrice - totalPaid);
+              const enrPayerStatus = (enr as any).payerStatus || "NORMAL";
+              const enrDiscountType = (enr as any).discountType || null;
+              const enrDiscountValue = (enr as any).discountValue != null ? Number((enr as any).discountValue) : null;
+              const studentLevelPrice = computeStudentSessionFee({
+                pricePerCycle: levelPrice,
+                isFormation: true,
+                payerStatus: enrPayerStatus,
+                discountType: enrDiscountType,
+                discountValue: enrDiscountValue,
+              }).studentCycleFee;
+              const isDiscounted = enrPayerStatus === "DISCOUNTED";
+              const discountBadgeLabel = isDiscounted
+                ? formatDiscountBadgeLabel(
+                    enrDiscountType,
+                    enrDiscountValue,
+                    locale === "ar" ? "ar" : "fr"
+                  )
+                : null;
+
+              const isPaidInFull =
+                (studentLevelPrice === 0 && (enrPayerStatus === "NON_PAYER" || isDiscounted)) ||
+                totalPaid >= studentLevelPrice;
+              const amountOwed = Math.max(0, studentLevelPrice - totalPaid);
               const isRetake = latestTest && !latestTest.passed;
               const isBookPaid = vouchers.some(
                 (v) => v.paymentType === "BOOK" && !v.isVoided
@@ -208,12 +237,21 @@ export default function FormationRoster({
                         {idDisplay}
                       </Link>
                       <div>
-                        <Link
-                          href={`/list/students/${student.id}`}
-                          className="font-medium text-gray-900 hover:text-primary hover:underline transition-colors block"
-                        >
-                          {student.name}
-                        </Link>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Link
+                            href={`/list/students/${student.id}`}
+                            className="font-medium text-gray-900 hover:text-primary hover:underline transition-colors block"
+                          >
+                            {student.name}
+                          </Link>
+                          {isDiscounted && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-900 border border-violet-300 shadow-2xs">
+                              {locale === "ar"
+                                ? `مخفّض${discountBadgeLabel ? ` (${discountBadgeLabel})` : ""}`
+                                : `Remise${discountBadgeLabel ? ` (${discountBadgeLabel})` : ""}`}
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2 text-xs">
                           <span
                             className={`font-semibold ${
@@ -231,7 +269,7 @@ export default function FormationRoster({
                                   ),
                                  })
                               : t("remainingBalance", {
-                                  amount: levelPrice.toLocaleString(
+                                  amount: studentLevelPrice.toLocaleString(
                                     locale === "ar" ? "ar-DZ" : "fr-DZ"
                                   ),
                                  })}
@@ -264,9 +302,21 @@ export default function FormationRoster({
                             onClick={() =>
                               setPaymentModalState({
                                 isOpen: true,
-                                student,
+                                student: {
+                                  ...student,
+                                  enrollments: [
+                                    {
+                                      id: enr.id,
+                                      classId: formationClass.id,
+                                      payerStatus: enrPayerStatus,
+                                      discountType: enrDiscountType,
+                                      discountValue: enrDiscountValue,
+                                      discountReason: (enr as any).discountReason || null,
+                                    },
+                                  ],
+                                },
                                 totalPaid,
-                                amountOwed: isRetake ? levelPrice : amountOwed,
+                                amountOwed: isRetake ? studentLevelPrice : amountOwed,
                                 isRetake,
                                 previousVouchers: vouchers,
                                 isBookPaid,
@@ -416,15 +466,19 @@ export default function FormationRoster({
                                     <td className="p-2 text-center">
                                       <PrintTicketButton
                                         voucher={{
+                                          ...v,
                                           id: v.id,
                                           number: v.number,
                                           amount: v.amount,
                                           paymentType: v.paymentType || "FORMATION",
                                           student: {
+                                            id: student.id,
+                                            globalNumber: student.globalNumber,
                                             name: student.name,
                                             phone: student.phone,
                                           },
                                           class: {
+                                            id: formationClass.id,
                                             name: formationClass.name,
                                             isFormation: true,
                                             branch: formationClass.branch,
@@ -432,7 +486,16 @@ export default function FormationRoster({
                                           issuedAt: v.issuedAt,
                                           series: v.series,
                                         } as any}
+                                        cycleRemainingFee={
+                                          isFormationVoucher && amountOwed > 0
+                                            ? amountOwed
+                                            : undefined
+                                        }
                                         amountOwedByStudent={amountOwed}
+                                        isPartial={
+                                          Boolean(v.isPartial) ||
+                                          (isFormationVoucher && amountOwed > 0)
+                                        }
                                       />
                                     </td>
                                     <td className="p-2 text-center">

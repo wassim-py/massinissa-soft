@@ -35,8 +35,12 @@ export default async function WorkshopAttendancePage(props: {
     notFound();
   }
 
-  // 2. Branch access check outside try/catch to avoid eslint error-boundary warning
-  if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, workshopHeader.branchId)) {
+  // 2. Role & branch access check outside try/catch to avoid eslint error-boundary warning
+  const canAccessAttendance =
+    session.isOwner ||
+    (session.isOwnerOrAdmin && canUserAccessBranch(session.rawRole, session.branchIds, workshopHeader.branchId));
+
+  if (!canAccessAttendance) {
     return (
       <Card className="p-8 text-center max-w-md mx-auto my-8 border-border shadow-xs font-sans">
         <div className="flex flex-col items-center gap-3">
@@ -132,18 +136,19 @@ export default async function WorkshopAttendancePage(props: {
   const girlsCount = processedParticipants.filter((p) => p.gender === "FEMALE").length;
   const totalSessions = workshop.sessions.length;
 
-  // Calculate overall attendance rate
+  // Calculate overall attendance rate using active participants only (matches denominator)
+  const activeStudentIds = new Set(processedParticipants.map((p) => p.studentId));
   let totalPresences = 0;
   let totalPossible = totalParticipants * totalSessions;
   for (const s of workshop.sessions) {
     for (const a of s.attendances) {
-      if (a.status === "PRESENT") totalPresences++;
+      if (a.status === "PRESENT" && activeStudentIds.has(a.studentId)) totalPresences++;
     }
   }
 
-  const globalAttendanceRate = totalPossible > 0 ? Math.round((totalPresences / totalPossible) * 100) : 0;
+  const globalAttendanceRate = totalPossible > 0 ? Math.min(100, Math.round((totalPresences / totalPossible) * 100)) : 0;
 
-  const canManage = session.isOwnerOrAdmin || session.role === "admin";
+  const canManage = canAccessAttendance;
 
   return (
     <Card className="flex-1 w-full border-border/80 shadow-xs font-sans">

@@ -13,7 +13,7 @@ import {
   formatPaymentTime,
   formatPaymentDateTime,
 } from "@/lib/voucherUtils";
-import { transferEnrollmentCredit, cancelEnrollmentTransfer, createRefund } from "@/lib/actions";
+import { transferEnrollmentCredit, cancelEnrollmentTransfer, createRefund, editVoucher } from "@/lib/actions";
 import {
   computeStudentSessionFee,
   computeStudentConsumedSessions,
@@ -21,13 +21,14 @@ import {
   resolvePayerCredit,
   computeEnrollmentInscriptionStatus,
   isLessonApplicableToEnrollment,
+  formatDiscountBadgeLabel,
 } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { SearchableGroupSelect } from "@/components/ui/SearchableGroupSelect";
-import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, ArrowRightLeft, RotateCcw, ChevronDown, ChevronUp, Users } from "lucide-react";
+import { AlertTriangle, Building2, Clock, CheckCircle2, AlertCircle, Sparkles, ShieldAlert, Tag, ArrowRightLeft, RotateCcw, ChevronDown, ChevronUp, Users } from "lucide-react";
 import { useTranslations, useLocale } from "next-intl";
 
 export type ExtendedTransferItem = {
@@ -113,6 +114,13 @@ export type ExtendedVoucherItem = Voucher & {
     branchId: number;
     branch?: { name: string } | null;
     level?: { name: string } | null;
+  } | null;
+  workshop?: {
+    id: number;
+    title: string;
+    totalPrice?: any;
+    branchId: number;
+    Branch?: { id: number; name: string } | null;
   } | null;
   issuingBranch?: { name: string } | null;
   targetBranch?: { name: string } | null;
@@ -208,10 +216,16 @@ export default function StudentPaymentDetails({
         return t("typeExtraSession");
       case "CATCHUP":
         return t("typeCatchup");
+      case "REVISION_SESSION":
+        return t("typeRevisionSession");
       case "WORKSHOP":
         return t("typeWorkshop");
       case "FORMATION":
         return t("typeFormation");
+      case "REVISION_SESSION":
+        return locale === "ar" ? "حصة مراجعة (زائر)" : "Séance de révision (Visiteur)";
+      case "MULTI_ITEM":
+        return locale === "ar" ? "دفع مجمّع" : "Paiement combiné";
       default:
         return type;
     }
@@ -225,7 +239,7 @@ export default function StudentPaymentDetails({
     isOpen: boolean;
     type: "create" | "update";
     classData?: any;
-    voucher?: Voucher;
+    voucher?: ExtendedVoucherItem;
     amountOwed?: number;
     isBookPaid?: boolean;
   }>({ isOpen: false, type: "create" });
@@ -243,7 +257,8 @@ export default function StudentPaymentDetails({
     transfer?: ExtendedTransferItem | null;
   }>({ isOpen: false });
 
-  const [historyTab, setHistoryTab] = useState<"all" | "vouchers" | "transfers">("all");
+  const [historyTab, setHistoryTab] = useState<"all" | "vouchers" | "transfers" | "byGroup">("all");
+  const [selectedVoucherGroupId, setSelectedVoucherGroupId] = useState<number | "">("");
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
   const INITIAL_HISTORY_COUNT = 5;
 
@@ -378,6 +393,81 @@ export default function StudentPaymentDetails({
     );
   });
 
+  type VoucherGroupOption = {
+    id: number;
+    name: string;
+    branchName?: string;
+    voucherCount: number;
+    isActiveEnrollment: boolean;
+    enrollmentStatus?: string;
+  };
+
+  const availableVoucherGroups: VoucherGroupOption[] = (() => {
+    const groupMap = new Map<number, VoucherGroupOption>();
+
+    for (const enr of branchScopedEnrollments) {
+      const cls = enr.class;
+      if (!cls?.id) continue;
+      const isActive = !enr.status || enr.status === "ACTIVE";
+      const existing = groupMap.get(cls.id);
+      if (existing) {
+        if (isActive) {
+          existing.isActiveEnrollment = true;
+          existing.enrollmentStatus = "ACTIVE";
+        }
+      } else {
+        groupMap.set(cls.id, {
+          id: cls.id,
+          name: cls.name,
+          branchName: cls.branch?.name,
+          voucherCount: 0,
+          isActiveEnrollment: isActive,
+          enrollmentStatus: enr.status || "ACTIVE",
+        });
+      }
+    }
+
+    for (const v of branchScopedVouchers) {
+      const cid = v.classId || v.class?.id;
+      if (!cid) continue;
+      const existing = groupMap.get(cid);
+      if (existing) {
+        existing.voucherCount += 1;
+      } else {
+        groupMap.set(cid, {
+          id: cid,
+          name: v.class?.name || (locale === "ar" ? `فوج #${cid}` : `Groupe #${cid}`),
+          branchName: v.class?.branch?.name || undefined,
+          voucherCount: 1,
+          isActiveEnrollment: false,
+          enrollmentStatus: undefined,
+        });
+      }
+    }
+
+    return Array.from(groupMap.values()).sort((a, b) => {
+      if (a.isActiveEnrollment !== b.isActiveEnrollment) {
+        return a.isActiveEnrollment ? -1 : 1;
+      }
+      return (a.name || "").localeCompare(b.name || "");
+    });
+  })();
+
+  const effectiveVoucherGroupId: number | "" = (() => {
+    if (availableVoucherGroups.length === 0) return "";
+    if (
+      selectedVoucherGroupId !== "" &&
+      availableVoucherGroups.some((g) => g.id === Number(selectedVoucherGroupId))
+    ) {
+      return Number(selectedVoucherGroupId);
+    }
+    const firstWithVouchers = availableVoucherGroups.find((g) => g.voucherCount > 0);
+    return (firstWithVouchers ?? availableVoucherGroups[0]).id;
+  })();
+
+  const selectedVoucherGroup =
+    availableVoucherGroups.find((g) => g.id === effectiveVoucherGroupId) || null;
+
   type CombinedPaymentItem =
     | { kind: "voucher"; date: Date | string; voucher: ExtendedVoucherItem }
     | { kind: "transfer"; date: Date | string; transfer: ExtendedTransferItem };
@@ -386,6 +476,13 @@ export default function StudentPaymentDetails({
   if (historyTab === "all" || historyTab === "vouchers") {
     branchScopedVouchers.forEach((v) => {
       combinedItems.push({ kind: "voucher", date: v.issuedAt, voucher: v });
+    });
+  } else if (historyTab === "byGroup" && effectiveVoucherGroupId !== "") {
+    branchScopedVouchers.forEach((v) => {
+      const vClassId = v.classId || v.class?.id;
+      if (vClassId === effectiveVoucherGroupId) {
+        combinedItems.push({ kind: "voucher", date: v.issuedAt, voucher: v });
+      }
     });
   }
   if (historyTab === "all" || historyTab === "transfers") {
@@ -509,12 +606,12 @@ export default function StudentPaymentDetails({
       });
     }
 
-    const isLevelPaidInFull = isFormation && totalPaidFormation >= formationLevelPrice && formationLevelPrice > 0;
-    const isLevelPartiallyPaid = isFormation && totalPaidFormation > 0 && totalPaidFormation < formationLevelPrice;
-    const isLevelUnpaid = isFormation && totalPaidFormation <= 0;
-    const levelRemainingBalance = isFormation ? Math.max(0, formationLevelPrice - totalPaidFormation) : 0;
-
     const enrPayerStatus = (enr as any).payerStatus || student.payerStatus || "NORMAL";
+    const enrDiscountType: string | null = (enr as any).discountType ?? null;
+    const enrDiscountValue: number | null =
+      (enr as any).discountValue !== undefined && (enr as any).discountValue !== null
+        ? Number((enr as any).discountValue)
+        : null;
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(
       (cu: any) =>
         cu.missedLesson?.classId === c.id ||
@@ -568,6 +665,8 @@ export default function StudentPaymentDetails({
 
     const feeCalc = computeStudentSessionFee({
       payerStatus: enrPayerStatus,
+      discountType: enrDiscountType,
+      discountValue: enrDiscountValue,
       pricePerCycle: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
       teacherPercentage,
       isSiblingWaived: enrIsSiblingWaived100,
@@ -576,10 +675,25 @@ export default function StudentPaymentDetails({
       isPayerActiveAndPaid: enrPayerActiveAndPaid,
     });
 
+    const effectiveFormationLevelPrice = isFormation ? feeCalc.studentCycleFee : formationLevelPrice;
+    const isLevelPaidInFull =
+      isFormation &&
+      (effectiveFormationLevelPrice <= 0 ||
+        (totalPaidFormation >= effectiveFormationLevelPrice && effectiveFormationLevelPrice > 0));
+    const isLevelPartiallyPaid =
+      isFormation && totalPaidFormation > 0 && totalPaidFormation < effectiveFormationLevelPrice;
+    const isLevelUnpaid = isFormation && !isLevelPaidInFull && totalPaidFormation <= 0;
+    const levelRemainingBalance = isFormation
+      ? Math.max(0, effectiveFormationLevelPrice - totalPaidFormation)
+      : 0;
+
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
       isFormation,
       payerStatus: enrPayerStatus,
+      discountType: enrDiscountType,
+      discountValue: enrDiscountValue,
+      payerHistory: (enr as any).payerHistory,
       siblingDiscountPercentage: enrSiblingDiscountPct,
       isSiblingWaived: enrIsSiblingWaived100,
       isPayerActiveAndPaid: enrPayerActiveAndPaid,
@@ -651,6 +765,61 @@ export default function StudentPaymentDetails({
       status = creditMetrics.status;
     }
 
+    const perVoucherPartialMap: Record<number, boolean> = {};
+    if (isFormation && effectiveFormationLevelPrice > 0) {
+      const sortedFormAsc = [...formationVouchers].sort((a, b) => {
+        const dt = new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime();
+        return dt !== 0 ? dt : a.id - b.id;
+      });
+      let cumFormPaid = 0;
+      for (const fv of sortedFormAsc) {
+        const fvPaid = Number(fv.amount || 0);
+        const fvRefunded = ((fv as any).refunds || []).reduce(
+          (s: number, r: any) => s + Number(r.amount || 0),
+          0
+        );
+        cumFormPaid += Math.max(0, fvPaid - fvRefunded);
+        perVoucherPartialMap[fv.id] =
+          Boolean((fv as any).isPartial) ||
+          (cumFormPaid > 0 && cumFormPaid < effectiveFormationLevelPrice - 1);
+      }
+    } else if (!isFormation && creditMetrics.effectiveCycleFee > 0) {
+      const cycleFee = creditMetrics.effectiveCycleFee;
+      const sortedTuitionAsc = [...tuitionVouchers].sort((a, b) => {
+        const dt = new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime();
+        return dt !== 0 ? dt : a.id - b.id;
+      });
+      let cumTuitionPaid = 0;
+      for (let i = 0; i < sortedTuitionAsc.length; i++) {
+        const tv = sortedTuitionAsc[i];
+        const tvPaid = Number(tv.amount || 0);
+        const tvRefunded = ((tv as any).refunds || []).reduce(
+          (s: number, r: any) => s + Number(r.amount || 0),
+          0
+        );
+        const tvNet = Math.max(0, tvPaid - tvRefunded);
+        cumTuitionPaid += tvNet;
+        const isLast = i === sortedTuitionAsc.length - 1;
+        if (Boolean((tv as any).isPartial)) {
+          perVoucherPartialMap[tv.id] = true;
+        } else if (isLast) {
+          perVoucherPartialMap[tv.id] = creditMetrics.cycleRemainingFee > 0;
+        } else {
+          const mod = cumTuitionPaid % cycleFee;
+          perVoucherPartialMap[tv.id] =
+            tvNet > 0 && mod >= 1 && Math.abs(mod - cycleFee) >= 1;
+        }
+      }
+    }
+
+    const classCycleRemainingFee = isFormation
+      ? levelRemainingBalance > 0
+        ? levelRemainingBalance
+        : 0
+      : creditMetrics.cycleRemainingFee;
+    const effectiveRemainingSessions =
+      !isFormation && enrPayerStatus !== "NON_PAYER" ? netSessions : undefined;
+
     return {
       enrollment: enr,
       class: c,
@@ -658,7 +827,8 @@ export default function StudentPaymentDetails({
       formationLevel,
       formationLevelName,
       formationLanguageName,
-      formationLevelPrice,
+      formationLevelPrice: effectiveFormationLevelPrice,
+      baseFormationLevelPrice: formationLevelPrice,
       totalPaidFormation,
       isLevelPaidInFull,
       isLevelPartiallyPaid,
@@ -695,14 +865,22 @@ export default function StudentPaymentDetails({
       partialTransferRemainderDzd: creditMetrics.partialTransferRemainderDzd || 0,
       refundableAmount,
       effectiveLessonPrice,
+      effectiveCycleFee: creditMetrics.effectiveCycleFee,
+      cycleRemainingFee: classCycleRemainingFee,
+      effectiveRemainingSessions,
+      perVoucherPartialMap,
       mostRecentActiveCycle,
       status,
       feeCalc,
-      hasPayerSibling: isPayerInThisClass,
-      isSiblingWaived: enrIsSiblingWaived100,
-      isPayerSiblingPaid: enrIsSiblingWaived100 ? enrPayerActiveAndPaid : true,
+      hasPayerSibling: !creditMetrics.isDiscounted && isPayerInThisClass,
+      isSiblingWaived: creditMetrics.isSiblingWaived,
+      isPayerSiblingPaid: creditMetrics.isSiblingWaived ? enrPayerActiveAndPaid : true,
       siblingDiscountPct: enrSiblingDiscountPct,
       isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
+      isDiscounted: creditMetrics.isDiscounted,
+      isZeroFeeDiscount: creditMetrics.isZeroFeeDiscount,
+      discountType: enrDiscountType,
+      discountValue: enrDiscountValue,
       payerStatus: enrPayerStatus,
     };
   });
@@ -1377,6 +1555,16 @@ export default function StudentPaymentDetails({
                               <span>{locale === "ar" ? "معفى من الدفع" : "Non-payeur"}</span>
                             </Badge>
                           )}
+                          {(cm.enrollment as any).payerStatus === "DISCOUNTED" && (
+                            <Badge variant="primary" size="sm" className="bg-violet-100 text-violet-900 border border-violet-300 font-semibold">
+                              <Tag className="w-3 h-3 text-violet-700" />
+                              <span>
+                                {locale === "ar"
+                                  ? `تخفيض (${formatDiscountBadgeLabel((cm.enrollment as any).discountType, (cm.enrollment as any).discountValue, "ar")})`
+                                  : `Remise (${formatDiscountBadgeLabel((cm.enrollment as any).discountType, (cm.enrollment as any).discountValue, "fr")})`}
+                              </span>
+                            </Badge>
+                          )}
                           {(cm.enrollment as any).payerStatus === "SCHOOL_FEES_ONLY" && (
                             <Badge variant="primary" size="sm" className="bg-sky-100 text-sky-900 border border-sky-300 font-semibold">
                               <ShieldAlert className="w-3 h-3 text-sky-700" />
@@ -1549,6 +1737,16 @@ export default function StudentPaymentDetails({
                                 ({locale === "ar" ? `حصة المدرسة ${cm.feeCalc.schoolPercentage}%` : `part école ${cm.feeCalc.schoolPercentage}%`})
                               </span>
                             </span>
+                          ) : (cm.enrollment as any).payerStatus === "DISCOUNTED" ? (
+                            <span className="text-violet-800 font-bold">
+                              <span className="line-through text-gray-400 font-normal me-1">
+                                {cm.feeCalc.baseSessionFee.toLocaleString()} DZD
+                              </span>
+                              {cm.feeCalc.studentSessionFee.toLocaleString()} DZD / {locale === "ar" ? "حصة" : "séance"}
+                              <span className="text-violet-700 font-semibold text-[10px] ms-1">
+                                ({formatDiscountBadgeLabel((cm.enrollment as any).discountType, (cm.enrollment as any).discountValue, locale === "ar" ? "ar" : "fr")})
+                              </span>
+                            </span>
                           ) : (
                             <span>
                               {cm.feeCalc.studentSessionFee.toLocaleString()} DZD / {locale === "ar" ? "حصة" : "séance"}
@@ -1635,10 +1833,15 @@ export default function StudentPaymentDetails({
                 </p>
               </div>
 
-              {/* Filter Tabs: All vs Vouchers vs Transfers */}
-              <div className="flex items-center bg-surface-muted p-1 rounded-xl border border-border text-xs font-semibold self-start sm:self-auto">
+              {/* Filter Tabs: All vs Vouchers vs Transfers vs By Group */}
+              <div
+                className="flex items-center flex-wrap gap-0.5 bg-surface-muted p-1 rounded-xl border border-border text-xs font-semibold self-start sm:self-auto"
+                role="tablist"
+              >
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={historyTab === "all"}
                   onClick={() => {
                     setHistoryTab("all");
                     setIsHistoryExpanded(false);
@@ -1653,6 +1856,8 @@ export default function StudentPaymentDetails({
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={historyTab === "vouchers"}
                   onClick={() => {
                     setHistoryTab("vouchers");
                     setIsHistoryExpanded(false);
@@ -1667,6 +1872,8 @@ export default function StudentPaymentDetails({
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={historyTab === "transfers"}
                   onClick={() => {
                     setHistoryTab("transfers");
                     setIsHistoryExpanded(false);
@@ -1679,8 +1886,98 @@ export default function StudentPaymentDetails({
                 >
                   {locale === "ar" ? "تحويلات فقط" : "Transferts"} ({branchScopedTransfers.length})
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={historyTab === "byGroup"}
+                  onClick={() => {
+                    setHistoryTab("byGroup");
+                    setIsHistoryExpanded(false);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                    historyTab === "byGroup"
+                      ? "bg-primary text-white shadow-xs"
+                      : "text-muted hover:text-gray-900"
+                  }`}
+                >
+                  {t("tabByGroup")}
+                </button>
               </div>
             </div>
+
+            {historyTab === "byGroup" && (
+              <div className="p-3 bg-surface-subtle/80 border border-border rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2 shrink-0">
+                  <Users className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span className="text-xs font-bold text-gray-800">
+                    {t("filterByGroupLabel")}
+                  </span>
+                </div>
+
+                {availableVoucherGroups.length > 0 ? (
+                  <div className="flex items-center flex-wrap gap-1.5 flex-1 max-h-40 overflow-y-auto">
+                    {availableVoucherGroups.map((grp) => {
+                      const isSelected = effectiveVoucherGroupId === grp.id;
+                      return (
+                        <button
+                          key={grp.id}
+                          type="button"
+                          aria-pressed={isSelected}
+                          onClick={() => {
+                            setSelectedVoucherGroupId(grp.id);
+                            setIsHistoryExpanded(false);
+                          }}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 border ${
+                            isSelected
+                              ? "bg-primary text-white border-primary shadow-xs"
+                              : "bg-surface text-gray-700 border-border hover:text-gray-900 hover:bg-surface-muted"
+                          }`}
+                        >
+                          <span>{grp.name}</span>
+                          {selectedBranchTab === "all" && availableBranches.length > 1 && grp.branchName && (
+                            <span
+                              className={`text-[10px] font-medium ${
+                                isSelected ? "text-white/80" : "text-muted"
+                              }`}
+                            >
+                              • {grp.branchName}
+                            </span>
+                          )}
+                          {!grp.isActiveEnrollment && (
+                            <span
+                              className={`text-[10px] px-1 py-0.5 rounded leading-none ${
+                                isSelected
+                                  ? "bg-white/20 text-white"
+                                  : "bg-gray-100 text-muted"
+                              }`}
+                            >
+                              {grp.enrollmentStatus === "TRANSFERRED"
+                                ? t("groupStatusTransferred")
+                                : grp.enrollmentStatus === "SUSPENDED"
+                                ? t("groupStatusSuspended")
+                                : t("groupStatusInactive")}
+                            </span>
+                          )}
+                          <span
+                            className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold leading-none ${
+                              isSelected
+                                ? "bg-white/25 text-white"
+                                : "bg-surface-muted text-muted"
+                            }`}
+                          >
+                            {grp.voucherCount}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <span className="text-xs text-muted italic">
+                    {t("noGroupsInScope")}
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="overflow-x-auto border border-border rounded-xl bg-surface shadow-xs">
               <table className="w-full text-xs">
@@ -1975,9 +2272,9 @@ export default function StudentPaymentDetails({
                             </div>
                           </td>
 
-                          {/* Class Name */}
+                          {/* Class / Workshop Name */}
                           <td className="p-3 text-gray-800 font-medium text-start">
-                            {v.class?.name || (locale === "ar" ? "ورشة عمل / دورة" : "Atelier / Formation")}
+                            {v.class?.name || v.workshop?.title || (locale === "ar" ? "ورشة عمل / دورة" : "Atelier / Formation")}
                           </td>
 
                           {/* Payment Type */}
@@ -2051,24 +2348,51 @@ export default function StudentPaymentDetails({
                               )}
 
                               {/* Print Receipt button */}
-                              <PrintTicketButton
-                                voucher={{
-                                  ...v,
-                                  student: student as any,
-                                  class: (v.class || classMetrics[0]?.class || {
-                                    name: locale === "ar" ? "فوج دراسي" : "Groupe",
-                                    branch: {
-                                      name:
-                                        v.series?.issuingBranch?.name ||
-                                        v.issuingBranch?.name ||
-                                        student.registeredBranch?.name ||
-                                        availableBranches.find((b) => b.id === v.issuingBranchId)?.name ||
-                                        availableBranches[0]?.name ||
-                                        "ECOLE",
-                                    },
-                                  }) as any,
-                                } as any}
-                              />
+                              {(() => {
+                                const isWorkshopVoucher = Boolean(v.workshopId || v.paymentType === "WORKSHOP");
+                                const fallbackBranchName =
+                                  v.workshop?.Branch?.name ||
+                                  v.series?.issuingBranch?.name ||
+                                  v.issuingBranch?.name ||
+                                  student.registeredBranch?.name ||
+                                  availableBranches.find((b) => b.id === v.issuingBranchId)?.name ||
+                                  availableBranches[0]?.name ||
+                                  "ECOLE";
+                                return (
+                                  <PrintTicketButton
+                                    voucher={{
+                                      ...v,
+                                      student: student as any,
+                                      class: (v.class ||
+                                        (!isWorkshopVoucher ? classMetrics[0]?.class : null) || {
+                                          name: isWorkshopVoucher
+                                            ? v.workshop?.title || (locale === "ar" ? "ورشة عمل / دورة" : "Atelier")
+                                            : locale === "ar"
+                                            ? "فوج دراسي"
+                                            : "Groupe",
+                                          branch: { name: fallbackBranchName },
+                                        }) as any,
+                                    } as any}
+                                    remainingSessions={
+                                      !isWorkshopVoucher && v.paymentType !== "REVISION_SESSION"
+                                        ? classMetric?.effectiveRemainingSessions
+                                        : undefined
+                                    }
+                                    cycleRemainingFee={
+                                      !isWorkshopVoucher &&
+                                      v.paymentType !== "REVISION_SESSION" &&
+                                      classMetric &&
+                                      classMetric.cycleRemainingFee > 0
+                                        ? classMetric.cycleRemainingFee
+                                        : undefined
+                                    }
+                                    isPartial={
+                                      Boolean((v as any).isPartial) ||
+                                      (!isWorkshopVoucher && Boolean(classMetric?.perVoucherPartialMap?.[v.id]))
+                                    }
+                                  />
+                                );
+                              })()}
 
                               {/* Audit trail button */}
                               <button
@@ -2099,7 +2423,9 @@ export default function StudentPaymentDetails({
                   ) : (
                     <tr>
                       <td colSpan={7} className="p-8 text-center text-muted">
-                        {t("noVouchersScope")}
+                        {historyTab === "byGroup" && selectedVoucherGroup
+                          ? t("noVouchersForGroup", { group: selectedVoucherGroup.name })
+                          : t("noVouchersScope")}
                       </td>
                     </tr>
                   )}
@@ -2145,16 +2471,109 @@ export default function StudentPaymentDetails({
             >
               <Image src="/close.png" alt="close" width={16} height={16} />
             </button>
-            <PaymentForm
-              student={student as any}
-              classData={voucherModal.classData || classMetrics[0]?.class || { id: 1, name: locale === "ar" ? "فوج" : "Groupe", inscriptionFee: 0, pricePerCycle: 0 }}
-              setOpen={(open) => setVoucherModal({ ...voucherModal, isOpen: open })}
-              type={voucherModal.type}
-              data={voucherModal.voucher}
-              defaultInscriptionFee={configuredInscriptionFee}
-              amountOwedByStudent={voucherModal.amountOwed}
-              isBookPaid={voucherModal.isBookPaid}
-            />
+            {(() => {
+              const isWorkshopVoucherEdit =
+                voucherModal.type === "update" &&
+                voucherModal.voucher &&
+                Boolean(voucherModal.voucher.workshopId || voucherModal.voucher.paymentType === "WORKSHOP");
+
+              if (isWorkshopVoucherEdit && voucherModal.voucher) {
+                const targetVoucher = voucherModal.voucher;
+                return (
+                  <form
+                    className="p-5 flex flex-col gap-4 font-sans"
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const fd = new FormData(e.currentTarget);
+                      const amountVal = Number(fd.get("amount"));
+                      const reasonVal = String(fd.get("reason") || "").trim();
+                      if (!Number.isFinite(amountVal) || amountVal < 0) {
+                        toast.error(locale === "ar" ? "المبلغ غير صالح." : "Montant invalide.");
+                        return;
+                      }
+                      if (!reasonVal) {
+                        toast.error(locale === "ar" ? "سبب التعديل مطلوب." : "Le motif est requis.");
+                        return;
+                      }
+                      const res = await editVoucher(
+                        { success: false, error: false },
+                        {
+                          voucherId: targetVoucher.id,
+                          fieldName: "amount",
+                          newValue: String(amountVal),
+                          amount: amountVal,
+                          reason: reasonVal,
+                        }
+                      );
+                      if (res.success) {
+                        toast.success(res.message);
+                        setVoucherModal({ isOpen: false, type: "create" });
+                        router.refresh();
+                      } else {
+                        toast.error(res.message);
+                      }
+                    }}
+                  >
+                    <h3 className="text-base font-bold text-gray-900 border-b pb-2">
+                      {t("editVoucherTitle")}
+                    </h3>
+                    <p className="text-xs text-gray-600">
+                      {targetVoucher.workshop?.title || (locale === "ar" ? "ورشة عمل / دورة" : "Atelier")} — #{targetVoucher.number}
+                    </p>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-semibold text-gray-600">
+                        {locale === "ar" ? "المبلغ (دج)" : "Montant (DZD)"}
+                      </label>
+                      <input
+                        name="amount"
+                        type="number"
+                        min="0"
+                        step="any"
+                        defaultValue={Number(targetVoucher.amount)}
+                        required
+                        className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-semibold text-gray-600">
+                        {locale === "ar" ? "سبب التعديل *" : "Motif de modification *"}
+                      </label>
+                      <textarea
+                        name="reason"
+                        rows={2}
+                        required
+                        className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm"
+                      />
+                    </div>
+                    <Button type="submit" variant="primary" size="lg" className="w-full">
+                      {locale === "ar" ? "حفظ التعديل" : "Enregistrer"}
+                    </Button>
+                  </form>
+                );
+              }
+
+              const modalMetric = voucherModal.classData?.id
+                ? classMetricsMap.get(voucherModal.classData.id)
+                : classMetrics[0];
+              return (
+                <PaymentForm
+                  student={student as any}
+                  classData={voucherModal.classData || classMetrics[0]?.class || { id: 1, name: locale === "ar" ? "فوج" : "Groupe", inscriptionFee: 0, pricePerCycle: 0 }}
+                  setOpen={(open) => setVoucherModal({ ...voucherModal, isOpen: open })}
+                  type={voucherModal.type}
+                  data={voucherModal.voucher}
+                  defaultInscriptionFee={configuredInscriptionFee}
+                  remainingSessions={modalMetric?.effectiveRemainingSessions}
+                  cycleRemainingFee={
+                    modalMetric && modalMetric.cycleRemainingFee > 0
+                      ? modalMetric.cycleRemainingFee
+                      : undefined
+                  }
+                  amountOwedByStudent={voucherModal.amountOwed}
+                  isBookPaid={voucherModal.isBookPaid}
+                />
+              );
+            })()}
           </div>
         </div>
       )}

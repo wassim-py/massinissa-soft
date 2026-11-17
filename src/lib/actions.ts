@@ -37,10 +37,16 @@ import {
   FamilySchema,
   EnrollmentTransferSchema,
   WorkshopSchema,
+  workshopSchema,
   RegisterParticipantSchema,
+  registerParticipantSchema,
   WorkshopPaymentSchema,
+  workshopPaymentSchema,
   RefundSchema,
+  enrollmentDiscountSchema,
+  EnrollmentDiscountSchema,
 } from "./formValidationSchemas";
+import { parseToAlgiersDate, formatAlgiersDate } from "./algiersDate";
 import prisma from "./prisma";
 import { Prisma } from "@prisma/client";
 import { v2 as cloudinary } from "cloudinary";
@@ -53,9 +59,27 @@ import { getDailyRevenueDashboardData } from "./revenue";
 import { normalizeOutcomeFundingSource } from "./financeConstants";
 import { syncOutcomeWithCaisseNoire, cleanupCaisseNoireLinks } from "./caisseNoireSync";
 import { getTranslations } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, computeEnrollmentInscriptionStatus, resolvePayerCredit, isLessonApplicableToEnrollment, extractSameTeacherHeldFromTransfers } from "./studentBilling";
+import {
+  classifyStudentAttendanceHistory,
+  computeStudentConsumedSessions,
+  computeStudentConsecutiveAbsences,
+  computeStudentCreditAndSessions,
+  computeStudentSessionFee,
+  buildVoucherBillingSnapshot,
+  formatDiscountBadgeLabel,
+  normalizePayerStatus,
+  computeEnrollmentInscriptionStatus,
+  resolvePayerCredit,
+  isLessonApplicableToEnrollment,
+  extractSameTeacherHeldFromTransfers,
+} from "./studentBilling";
 import { getFixedInscriptionFeeAction, getFormationInscriptionFeeAction, getActiveTrimester } from "./configurationActions";
 import { splitFullName, getLessonDateTime, getAlgiersDateInfo, getAlgiersWeekBounds, serializeForClient } from "./utils";
+import {
+  ACTIVE_CLASS_WHERE,
+  isClassInactive,
+  isLessonVisibleForClassStatus,
+} from "./classStatus";
 import {
   resolveOrCreateLessonForDate,
   findSiblingRecurringLessonIds,
@@ -420,6 +444,141 @@ export const deleteClass = async (
   }
 };
 
+export const toggleClassStatusAction = async ({
+  classId,
+  isPaused,
+}: {
+  classId: number;
+  isPaused: boolean;
+}): Promise<{
+  success: boolean;
+  error: boolean;
+  message: string;
+  isPaused?: boolean;
+  pausedAt?: string | null;
+}> => {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner) {
+      return {
+        success: false,
+        error: true,
+        message: "Action réservée au propriétaire / هذا الإجراء متاح للمالك فقط.",
+      };
+    }
+
+    const numericId = Number(classId);
+    if (!numericId || isNaN(numericId)) {
+      return {
+        success: false,
+        error: true,
+        message: "Identifiant de groupe invalide / معرف الفوج غير صالح.",
+      };
+    }
+
+    const existing = await prisma.class.findUnique({
+      where: { id: numericId },
+      select: {
+        id: true,
+        name: true,
+        branchId: true,
+        isFormation: true,
+        isCompleted: true,
+        completedAt: true,
+        isPaused: true,
+        pausedAt: true,
+      },
+    });
+
+    if (!existing) {
+      return {
+        success: false,
+        error: true,
+        message: "Groupe introuvable / الفوج غير موجود.",
+      };
+    }
+
+    const nextIsPaused = Boolean(isPaused);
+    const now = new Date();
+    const updateData: {
+      isPaused: boolean;
+      pausedAt: Date | null;
+      isCompleted?: boolean;
+      completedAt?: Date | null;
+    } = {
+      isPaused: nextIsPaused,
+      pausedAt: nextIsPaused ? now : null,
+    };
+
+    // When reopening a regular group (or if a regular group had isCompleted set), ensure it is fully active
+    if (!nextIsPaused && !existing.isFormation && existing.isCompleted) {
+      updateData.isCompleted = false;
+      updateData.completedAt = null;
+    }
+
+    const updated = await prisma.class.update({
+      where: { id: numericId },
+      data: updateData,
+      select: {
+        id: true,
+        isPaused: true,
+        pausedAt: true,
+      },
+    });
+
+    try {
+      await prisma.auditLog.create({
+        data: {
+          entityType: "CLASS",
+          entityId: String(numericId),
+          action: nextIsPaused ? "CLOSE_OR_PAUSE_GROUP" : "REOPEN_GROUP",
+          branchId: existing.branchId,
+          userId: session.userId || session.rawRole || "owner",
+          userName: session.userId || session.rawRole || "Owner",
+          oldValue: existing.isPaused || existing.isCompleted ? "PAUSED_OR_CLOSED" : "ACTIVE",
+          newValue: nextIsPaused ? "PAUSED_OR_CLOSED" : "ACTIVE",
+          details: nextIsPaused
+            ? `Groupe "${existing.name}" fermé / mis en pause (emploi du temps libéré, données préservées)`
+            : `Groupe "${existing.name}" réouvert / repris`,
+        },
+      });
+    } catch (auditErr) {
+      console.warn("Audit log creation skipped in toggleClassStatusAction:", auditErr);
+    }
+
+    safeRevalidatePath("/list/classes");
+    safeRevalidatePath(`/list/classes/${numericId}`);
+    safeRevalidatePath("/list/lessons");
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath(`/list/attendance/class/${numericId}`);
+    safeRevalidatePath("/list/payments");
+    safeRevalidatePath(`/list/payments/class/${numericId}`);
+    safeRevalidatePath("/list/formations");
+    safeRevalidatePath(`/list/formations/${numericId}`);
+    safeRevalidatePath("/admin");
+    safeRevalidatePath("/teacher");
+    safeRevalidatePath("/student");
+    safeRevalidatePath("/parent");
+
+    return {
+      success: true,
+      error: false,
+      message: nextIsPaused
+        ? `Le groupe "${existing.name}" a été fermé / mis en pause. Son créneau est désormais libre dans l'emploi du temps. / تم إغلاق / إيقاف الفوج "${existing.name}" مؤقتاً وتحرير توقيته في الجدول.`
+        : `Le groupe "${existing.name}" a été réouvert avec succès. / تمت إعادة فتح الفوج "${existing.name}" بنجاح.`,
+      isPaused: updated.isPaused,
+      pausedAt: updated.pausedAt ? updated.pausedAt.toISOString() : null,
+    };
+  } catch (err: any) {
+    console.error("toggleClassStatusAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "Échec de la mise à jour du statut du groupe / فشل في تحديث حالة الفوج.",
+    };
+  }
+};
+
 // =================================================================
 // TEACHER ACTIONS
 // =================================================================
@@ -722,6 +881,22 @@ export const createStudent = async (
 
     // Connect student to enrollments if classes selected
     if (data.classes && data.classes.length > 0) {
+      const requestedClassIds = data.classes.map((cid) => Number(cid)).filter((cid) => !isNaN(cid) && cid > 0);
+      if (requestedClassIds.length > 0) {
+        const requestedClasses = await prisma.class.findMany({
+          where: { id: { in: requestedClassIds } },
+          select: { id: true, name: true, isCompleted: true, isPaused: true },
+        });
+        const inactivePick = requestedClasses.find((c) => isClassInactive(c));
+        if (inactivePick) {
+          return {
+            success: false,
+            error: true,
+            message: `Impossible d'inscrire un nouvel élève dans le groupe fermé / en pause "${inactivePick.name}" / لا يمكن تسجيل تلميذ جديد في الفوج المغلق / المتوقف "${inactivePick.name}".`,
+          };
+        }
+      }
+
       const years = await prisma.$queryRaw<Array<{ id: number }>>`
         SELECT id FROM "AcademicYear" ORDER BY "startDate" DESC LIMIT 1
       `;
@@ -851,14 +1026,39 @@ export const updateStudent = async (
       const currentEnrollments = await prisma.enrollment.findMany({
         where: { studentId: data.id },
         include: {
+          class: { select: { id: true, name: true, isCompleted: true, isPaused: true } },
           transfersFrom: true,
           transfersTo: true,
         },
       });
 
-      // 1. Un-enroll or delete classes not selected
+      // Validate that no NEW enrollment targets a closed/paused class
+      for (const classId of selectedClassIds) {
+        const existingEnr = currentEnrollments.find((e) => e.classId === classId);
+        const isAlreadyActiveOrSuspended =
+          existingEnr && (existingEnr.status === "ACTIVE" || existingEnr.status === "SUSPENDED");
+        if (!isAlreadyActiveOrSuspended) {
+          const targetCls = await prisma.class.findUnique({
+            where: { id: classId },
+            select: { id: true, name: true, isCompleted: true, isPaused: true },
+          });
+          if (isClassInactive(targetCls)) {
+            return {
+              success: false,
+              error: true,
+              message: `Impossible d'inscrire l'élève dans le groupe fermé / en pause "${targetCls?.name || classId}" / لا يمكن تسجيل التلميذ في الفوج المغلق / المتوقف "${targetCls?.name || classId}".`,
+            };
+          }
+        }
+      }
+
+      // 1. Un-enroll or delete classes not selected (preserve enrollments in closed/paused groups)
       for (const enr of currentEnrollments) {
         if (!selectedClassIds.includes(enr.classId)) {
+          if (isClassInactive(enr.class)) {
+            // Never strip historical enrollments in closed/paused groups during profile edits
+            continue;
+          }
           if (enr.transfersFrom.length > 0 || enr.transfersTo.length > 0) {
             if (enr.status !== "UNENROLLED" && enr.status !== "TRANSFERRED") {
               await prisma.enrollment.update({
@@ -1051,6 +1251,7 @@ export const deleteStudent = async (
     await prisma.$executeRaw`DELETE FROM "LevelTest" WHERE "studentId" = ${id}`;
     await prisma.$executeRaw`DELETE FROM "WorkshopAttendance" WHERE "studentId" = ${id}`;
     await prisma.$executeRaw`DELETE FROM "WorkshopParticipant" WHERE "studentId" = ${id}`;
+    await prisma.$executeRaw`DELETE FROM "EnrollmentPayerHistory" WHERE "enrollmentId" IN (SELECT id FROM "Enrollment" WHERE "studentId" = ${id})`;
     await prisma.$executeRaw`DELETE FROM "EnrollmentTransfer" WHERE "fromEnrollmentId" IN (SELECT id FROM "Enrollment" WHERE "studentId" = ${id}) OR "toEnrollmentId" IN (SELECT id FROM "Enrollment" WHERE "studentId" = ${id})`;
     await prisma.$executeRaw`DELETE FROM "Enrollment" WHERE "studentId" = ${id}`;
     await prisma.$executeRaw`DELETE FROM "Attendance" WHERE "studentId" = ${id}`;
@@ -1342,6 +1543,7 @@ export const checkForConflicts = async ({
         WHERE l."teacherId" = ${teacherId}
           AND l.id NOT IN (${Prisma.join(excludedIds)})
           AND (c."isCompleted" = false OR c."isCompleted" IS NULL)
+          AND (c."isPaused" = false OR c."isPaused" IS NULL)
           AND (
             (l."startsAt" < ${endsAt} AND l."endsAt" > ${startsAt})
             OR
@@ -1380,6 +1582,7 @@ export const checkForConflicts = async ({
         )
           AND l.id NOT IN (${Prisma.join(excludedIds)})
           AND (c."isCompleted" = false OR c."isCompleted" IS NULL)
+          AND (c."isPaused" = false OR c."isPaused" IS NULL)
           AND (
             (l."startsAt" < ${endsAt} AND l."endsAt" > ${startsAt})
             OR
@@ -1406,6 +1609,7 @@ export const checkForConflicts = async ({
         WHERE l."classroomId" = ${Number(classroomId)}
           AND l.id NOT IN (${Prisma.join(excludedIds)})
           AND (c."isCompleted" = false OR c."isCompleted" IS NULL)
+          AND (c."isPaused" = false OR c."isPaused" IS NULL)
           AND l."isTeacherAbsent" = false
           AND (
             (l."startsAt" < ${endsAt} AND l."endsAt" > ${startsAt})
@@ -1456,12 +1660,19 @@ export const createLesson = async (
 
     // 2. Fetch class and auto-fetch head teacher (docs/architecture.md §7.5)
     const classRows = await prisma.$queryRaw<any[]>`
-      SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId" FROM "Class" WHERE id = ${classId} LIMIT 1
+      SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId", "isCompleted", "isPaused" FROM "Class" WHERE id = ${classId} LIMIT 1
     `;
     if (classRows.length === 0) {
       return { success: false, error: true, message: "Classe introuvable / الفوج المحدد غير موجود." };
     }
     const classRecord = classRows[0];
+    if (isClassInactive(classRecord)) {
+      return {
+        success: false,
+        error: true,
+        message: `Impossible de programmer une séance pour le groupe fermé / en pause "${classRecord.name}" / لا يمكن برمجة حصة للفوج المغلق / المتوقف "${classRecord.name}".`,
+      };
+    }
     const teacherId = classRecord.teacherId;
     if (!teacherId) {
       return { success: false, error: true, message: "Aucun enseignant principal assigné à cette classe / هذا الفوج ليس لديه أستاذ رئيسي معين." };
@@ -1543,11 +1754,18 @@ export const createLesson = async (
         .filter((id) => !isNaN(id) && id > 0 && id !== classId);
       if (parsedIds.length > 0) {
         const additionalRows = await prisma.$queryRaw<any[]>`
-          SELECT id, name, "teacherId", "levelId", "formationLevelId"
+          SELECT id, name, "teacherId", "levelId", "formationLevelId", "isCompleted", "isPaused"
           FROM "Class"
           WHERE id IN (${Prisma.join(parsedIds)})
         `;
         for (const ar of additionalRows) {
+          if (isClassInactive(ar)) {
+            return {
+              success: false,
+              error: true,
+              message: `Impossible d'inclure le groupe fermé / en pause "${ar.name}" / لا يمكن تضمين الفوج المغلق / المتوقف "${ar.name}".`,
+            };
+          }
           if (ar.teacherId !== teacherId) {
             return {
               success: false,
@@ -1745,12 +1963,19 @@ export const updateLesson = async (
 
     // 3. Fetch class and auto-fetch head teacher
     const classRows = await prisma.$queryRaw<any[]>`
-      SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId" FROM "Class" WHERE id = ${classId} LIMIT 1
+      SELECT id, name, "teacherId", "branchId", "levelId", "formationLevelId", "isCompleted", "isPaused" FROM "Class" WHERE id = ${classId} LIMIT 1
     `;
     if (classRows.length === 0) {
       return { success: false, error: true, message: "Classe introuvable / الفوج المحدد غير موجود." };
     }
     const classRecord = classRows[0];
+    if (isClassInactive(classRecord)) {
+      return {
+        success: false,
+        error: true,
+        message: `Impossible de modifier ou programmer une séance pour le groupe fermé / en pause "${classRecord.name}" / لا يمكن تعديل أو برمجة حصة للفوج المغلق / المتوقف "${classRecord.name}".`,
+      };
+    }
     const teacherId = classRecord.teacherId;
     if (!teacherId) {
       return { success: false, error: true, message: "Aucun enseignant principal assigné à cette classe / هذا الفوج ليس لديه أستاذ رئيسي معين." };
@@ -1809,11 +2034,18 @@ export const updateLesson = async (
         .filter((id) => !isNaN(id) && id > 0 && id !== classId);
       if (parsedIds.length > 0) {
         const additionalRows = await prisma.$queryRaw<any[]>`
-          SELECT id, name, "teacherId", "levelId", "formationLevelId"
+          SELECT id, name, "teacherId", "levelId", "formationLevelId", "isCompleted", "isPaused"
           FROM "Class"
           WHERE id IN (${Prisma.join(parsedIds)})
         `;
         for (const ar of additionalRows) {
+          if (isClassInactive(ar)) {
+            return {
+              success: false,
+              error: true,
+              message: `Impossible d'inclure le groupe fermé / en pause "${ar.name}" / لا يمكن تضمين الفوج المغلق / المتوقف "${ar.name}".`,
+            };
+          }
           if (ar.teacherId !== teacherId) {
             return {
               success: false,
@@ -2137,7 +2369,7 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
     const hostBranchId = baseCheck.branchId || baseCheck.classroom?.branchId;
     const hasAbsenceBranchPerm =
       session.isOwner ||
-      canUserAccessBranch(session.rawRole, session.branchIds, hostBranchId);
+      (session.isOwnerOrAdmin && canUserAccessBranch(session.rawRole, session.branchIds, hostBranchId));
 
     if (!hasAbsenceBranchPerm) {
       return {
@@ -2160,6 +2392,7 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
         classId: true,
         teacherId: true,
         isTeacherAbsent: true,
+        lessonGroups: { select: { classId: true } },
       },
     });
 
@@ -2194,11 +2427,24 @@ export const toggleTeacherLessonAbsenceAction = async (input: {
     });
 
     safeRevalidatePath("/list/lessons");
+    safeRevalidatePath("/list/attendance");
     safeRevalidatePath(`/list/attendance/take/${targetLessonId}`);
-    if (lesson.classId) {
-      safeRevalidatePath(`/list/attendance/class/${lesson.classId}`);
-      safeRevalidatePath(`/list/payments/class/${lesson.classId}`);
+    const affectedClassIds = new Set<number>();
+    if (lesson.classId) affectedClassIds.add(lesson.classId);
+    if (lesson.lessonGroups) {
+      for (const lg of lesson.lessonGroups) {
+        affectedClassIds.add(lg.classId);
+      }
     }
+    for (const cId of affectedClassIds) {
+      safeRevalidatePath(`/list/attendance/class/${cId}`);
+      safeRevalidatePath(`/list/payments/class/${cId}`);
+      safeRevalidatePath(`/list/formations/${cId}`);
+    }
+    if (affectedClassIds.size > 0) {
+      safeRevalidatePath("/list/formations");
+    }
+    safeRevalidatePath("/list/students");
     safeRevalidatePath(`/list/teachers/${lesson.teacherId}`);
     safeRevalidatePath("/list/finance");
     safeRevalidatePath("/list/payroll");
@@ -2596,7 +2842,20 @@ export const saveAttendance = async (
               studentId: { in: absentStudentIds },
               classId: lessonInfo.classId,
             },
-            select: { studentId: true, enrolledAt: true, payerStatus: true },
+            select: {
+              studentId: true,
+              enrolledAt: true,
+              payerStatus: true,
+              discountType: true,
+              discountValue: true,
+              class: {
+                select: {
+                  pricePerCycle: true,
+                  isFormation: true,
+                  FormationLevel: { select: { lumpSumPrice: true } },
+                },
+              },
+            },
           }),
         ]);
 
@@ -2610,7 +2869,23 @@ export const saveAttendance = async (
           const sAtts = allAttendances.filter((a) => a.studentId === sid);
           const sCatchUps = allCatchUps.filter((c) => c.studentId === sid);
           const enrInfo = enrollmentMap.get(sid);
-          const hasPaidCycle = voucherStudentIds.has(sid) || enrInfo?.payerStatus === "NON_PAYER";
+          const isZeroFeeDiscount =
+            enrInfo?.payerStatus === "DISCOUNTED" &&
+            computeStudentSessionFee({
+              payerStatus: "DISCOUNTED",
+              discountType: enrInfo.discountType,
+              discountValue: enrInfo.discountValue,
+              pricePerCycle: Number(
+                enrInfo.class?.isFormation
+                  ? enrInfo.class?.FormationLevel?.lumpSumPrice ?? enrInfo.class?.pricePerCycle ?? 0
+                  : enrInfo.class?.pricePerCycle ?? 0
+              ),
+              isFormation: Boolean(enrInfo.class?.isFormation),
+            }).studentCycleFee <= 0;
+          const hasPaidCycle =
+            voucherStudentIds.has(sid) ||
+            enrInfo?.payerStatus === "NON_PAYER" ||
+            isZeroFeeDiscount;
 
           const consecutive = computeStudentConsecutiveAbsences({
             lessons: classLessons,
@@ -2725,6 +3000,14 @@ export const autoSaveLessonAttendanceAction = async (lessonId: number): Promise<
         startsAt: true,
         endsAt: true,
         isTeacherAbsent: true,
+        class: {
+          select: {
+            isCompleted: true,
+            completedAt: true,
+            isPaused: true,
+            pausedAt: true,
+          },
+        },
         classroom: { select: { branchId: true } },
         lessonGroups: { select: { classId: true } },
       },
@@ -2737,6 +3020,16 @@ export const autoSaveLessonAttendanceAction = async (lessonId: number): Promise<
     // Teacher absent lessons preserve credit and are not recorded as unexcused student absences
     if (lessonInfo.isTeacherAbsent) {
       return { success: true, error: false, message: "Séance avec professeur absent ignorée", skipped: true };
+    }
+
+    // Closed/paused groups: never auto-mark students as absent for lessons ending after the group was closed/paused
+    if (!isLessonVisibleForClassStatus(lessonInfo.endsAt, lessonInfo.class)) {
+      return {
+        success: true,
+        error: false,
+        message: "Séance d'un groupe fermé / en pause ignorée",
+        skipped: true,
+      };
     }
 
     const targetClassIds = [
@@ -2838,7 +3131,20 @@ export const autoSaveLessonAttendanceAction = async (lessonId: number): Promise<
               studentId: { in: absentStudentIds },
               classId: lessonInfo.classId,
             },
-            select: { studentId: true, enrolledAt: true, payerStatus: true },
+            select: {
+              studentId: true,
+              enrolledAt: true,
+              payerStatus: true,
+              discountType: true,
+              discountValue: true,
+              class: {
+                select: {
+                  pricePerCycle: true,
+                  isFormation: true,
+                  FormationLevel: { select: { lumpSumPrice: true } },
+                },
+              },
+            },
           }),
         ]);
 
@@ -2852,7 +3158,23 @@ export const autoSaveLessonAttendanceAction = async (lessonId: number): Promise<
           const sAtts = allAttendances.filter((a) => a.studentId === sid);
           const sCatchUps = allCatchUps.filter((c) => c.studentId === sid);
           const enrInfo = enrollmentMap.get(sid);
-          const hasPaidCycle = voucherStudentIds.has(sid) || enrInfo?.payerStatus === "NON_PAYER";
+          const isZeroFeeDiscount =
+            enrInfo?.payerStatus === "DISCOUNTED" &&
+            computeStudentSessionFee({
+              payerStatus: "DISCOUNTED",
+              discountType: enrInfo.discountType,
+              discountValue: enrInfo.discountValue,
+              pricePerCycle: Number(
+                enrInfo.class?.isFormation
+                  ? enrInfo.class?.FormationLevel?.lumpSumPrice ?? enrInfo.class?.pricePerCycle ?? 0
+                  : enrInfo.class?.pricePerCycle ?? 0
+              ),
+              isFormation: Boolean(enrInfo.class?.isFormation),
+            }).studentCycleFee <= 0;
+          const hasPaidCycle =
+            voucherStudentIds.has(sid) ||
+            enrInfo?.payerStatus === "NON_PAYER" ||
+            isZeroFeeDiscount;
 
           const consecutive = computeStudentConsecutiveAbsences({
             lessons: classLessons,
@@ -2927,6 +3249,7 @@ export const autoSaveEndedLessonsAction = async (branchId?: number): Promise<{
       where: {
         endsAt: { lte: now, gte: sevenDaysAgo },
         isTeacherAbsent: false,
+        class: ACTIVE_CLASS_WHERE,
         ...(branchId ? { branchId } : {}),
       },
       select: { id: true },
@@ -3222,13 +3545,40 @@ export const markSingleAttendanceAction = async (input: {
                 studentId: input.studentId,
                 classId: lessonInfo.classId,
               },
-              select: { enrolledAt: true, payerStatus: true },
+              select: {
+                enrolledAt: true,
+                payerStatus: true,
+                discountType: true,
+                discountValue: true,
+                class: {
+                  select: {
+                    pricePerCycle: true,
+                    isFormation: true,
+                    FormationLevel: { select: { lumpSumPrice: true } },
+                  },
+                },
+              },
             }),
           ]);
 
+          const isZeroFeeDiscount =
+            studentEnr?.payerStatus === "DISCOUNTED" &&
+            computeStudentSessionFee({
+              payerStatus: "DISCOUNTED",
+              discountType: studentEnr.discountType,
+              discountValue: studentEnr.discountValue,
+              pricePerCycle: Number(
+                studentEnr.class?.isFormation
+                  ? studentEnr.class?.FormationLevel?.lumpSumPrice ?? studentEnr.class?.pricePerCycle ?? 0
+                  : studentEnr.class?.pricePerCycle ?? 0
+              ),
+              isFormation: Boolean(studentEnr.class?.isFormation),
+            }).studentCycleFee <= 0;
+
           const hasPaidCycle =
             studentVouchers.some((v) => Number(v.amount || 0) > 0) ||
-            studentEnr?.payerStatus === "NON_PAYER";
+            studentEnr?.payerStatus === "NON_PAYER" ||
+            isZeroFeeDiscount;
 
           const consecutiveAbsences = computeStudentConsecutiveAbsences({
             lessons: classLessons,
@@ -3486,6 +3836,7 @@ export async function searchCatchUpCandidatesAction(
       where: {
         teacherId: targetTeacherId,
         isCompleted: false,
+        isPaused: false,
         ...(isFormation
           ? { isFormation: true, formationLevelId: targetFormationLevelId }
           : { isFormation: false, levelId: targetLevelId }),
@@ -3649,11 +4000,15 @@ export async function searchCatchUpCandidatesAction(
             classId: { in: matchingClassIds },
             class: {
               isCompleted: false,
+              isPaused: false,
             },
           },
           select: {
             status: true,
             payerStatus: true,
+            discountType: true,
+            discountValue: true,
+            payerHistory: { orderBy: { effectiveFrom: "asc" } },
             creditResetOffset: true,
             transfersFrom: true,
             transfersTo: {
@@ -3829,6 +4184,9 @@ export async function searchCatchUpCandidatesAction(
           pricePerCycle: Number(cls.pricePerCycle || 0),
           isFormation: Boolean(cls.isFormation),
           payerStatus: enr.payerStatus || s.payerStatus || "NORMAL",
+          discountType: (enr as any).discountType,
+          discountValue: (enr as any).discountValue,
+          payerHistory: (enr as any).payerHistory,
           siblingDiscountPercentage: siblingDiscountPct,
           isSiblingWaived: isSiblingWaived100,
           tuitionVouchers: vTuition,
@@ -4604,8 +4962,19 @@ export async function recordRevisionVisitorAction(params: {
         },
         include: {
           student: true,
-          class: true,
-          series: true,
+          class: {
+            include: {
+              branch: { select: { id: true, name: true } },
+              level: { select: { id: true, name: true } },
+            },
+          },
+          series: {
+            include: {
+              issuingBranch: { select: { id: true, name: true } },
+              targetBranch: { select: { id: true, name: true } },
+              level: { select: { id: true, name: true } },
+            },
+          },
         },
       });
       createdVoucherResult = voucher;
@@ -5082,6 +5451,7 @@ export async function searchStudentsForEnrollmentAction({
             },
             transfersFrom: true,
             transfersTo: true,
+            payerHistory: { orderBy: { effectiveFrom: "asc" } },
           },
         },
       },
@@ -5140,6 +5510,9 @@ export async function searchStudentsForEnrollmentAction({
             pricePerCycle: Number(cls.pricePerCycle || 0),
             isFormation: Boolean(cls.isFormation),
             payerStatus: enr.payerStatus || s.payerStatus || "NORMAL",
+            discountType: (enr as any).discountType,
+            discountValue: (enr as any).discountValue,
+            payerHistory: (enr as any).payerHistory,
             siblingDiscountPercentage: siblingDiscountPct,
             isSiblingWaived: isSiblingWaived100,
             tuitionVouchers: vTuition,
@@ -5220,11 +5593,27 @@ export async function enrollStudentInClassAction({
 
     const targetClass = await prisma.class.findUnique({
       where: { id: classId },
-      select: { id: true, name: true, branchId: true, inscriptionFee: true, isFormation: true },
+      select: {
+        id: true,
+        name: true,
+        branchId: true,
+        inscriptionFee: true,
+        isFormation: true,
+        isCompleted: true,
+        isPaused: true,
+      },
     });
 
     if (!targetClass) {
       return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود." };
+    }
+
+    if (isClassInactive(targetClass)) {
+      return {
+        success: false,
+        error: true,
+        message: `Impossible d'inscrire un élève dans le groupe fermé / en pause "${targetClass.name}" / لا يمكن تسجيل تلميذ في الفوج المغلق / المتوقف "${targetClass.name}".`,
+      };
     }
 
     if (!canUserAccessBranch(session.rawRole, session.branchIds, targetClass.branchId)) {
@@ -5301,16 +5690,37 @@ export async function enrollStudentInClassAction({
           ? targetClass.inscriptionFee
           : new Prisma.Decimal(defaultFee);
 
-      await prisma.enrollment.update({
-        where: { id: existingEnrollment.id },
-        data: {
-          status: "ACTIVE",
-          enrolledAt: new Date(),
-          payerStatus: "NORMAL",
-          academicYearId,
-          inscriptionFeeCharged: shouldChargeInsc,
-          inscriptionFeeAmount: shouldChargeInsc ? effectiveFee : null,
-        },
+      await prisma.$transaction(async (tx) => {
+        const now = new Date();
+        await tx.enrollmentPayerHistory.updateMany({
+          where: { enrollmentId: existingEnrollment.id, effectiveTo: null },
+          data: { effectiveTo: now },
+        });
+        await tx.enrollment.update({
+          where: { id: existingEnrollment.id },
+          data: {
+            status: "ACTIVE",
+            enrolledAt: now,
+            payerStatus: "NORMAL",
+            discountType: null,
+            discountValue: null,
+            discountReason: null,
+            discountUpdatedBy: null,
+            discountUpdatedAt: null,
+            academicYearId,
+            inscriptionFeeCharged: shouldChargeInsc,
+            inscriptionFeeAmount: shouldChargeInsc ? effectiveFee : null,
+          },
+        });
+        await tx.enrollmentPayerHistory.create({
+          data: {
+            enrollmentId: existingEnrollment.id,
+            payerStatus: "NORMAL",
+            reason: "Réinscription au groupe",
+            changedBy: session.userId || "admin",
+            effectiveFrom: now,
+          },
+        });
       });
 
       try {
@@ -5348,16 +5758,28 @@ export async function enrollStudentInClassAction({
         ? targetClass.inscriptionFee
         : new Prisma.Decimal(defaultFee);
 
-    await prisma.enrollment.create({
-      data: {
-        studentId,
-        classId,
-        academicYearId,
-        inscriptionFeeCharged: shouldChargeInsc,
-        inscriptionFeeAmount: shouldChargeInsc ? effectiveFee : null,
-        payerStatus: "NORMAL",
-        enrolledAt: new Date(),
-      },
+    await prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const createdEnrollment = await tx.enrollment.create({
+        data: {
+          studentId,
+          classId,
+          academicYearId,
+          inscriptionFeeCharged: shouldChargeInsc,
+          inscriptionFeeAmount: shouldChargeInsc ? effectiveFee : null,
+          payerStatus: "NORMAL",
+          enrolledAt: now,
+        },
+      });
+      await tx.enrollmentPayerHistory.create({
+        data: {
+          enrollmentId: createdEnrollment.id,
+          payerStatus: "NORMAL",
+          reason: "Inscription initiale",
+          changedBy: session.userId || "admin",
+          effectiveFrom: now,
+        },
+      });
     });
 
     try {
@@ -5642,7 +6064,13 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
 
     const targetClass = await prisma.class.findUnique({
       where: { id: payload.classId },
-      include: { branch: true, FormationLevel: true },
+      include: {
+        branch: true,
+        level: true,
+        FormationLevel: true,
+        teacherClassRates: true,
+        teacher: { include: { TeacherPayRate: true } },
+      },
     });
     if (!targetClass) {
       return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود." };
@@ -5650,11 +6078,139 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
 
     const student = await prisma.student.findUnique({
       where: { id: payload.studentId },
-      include: { family: true },
+      include: {
+        family: {
+          include: {
+            payerStudent: {
+              include: {
+                enrollments: {
+                  include: {
+                    transfersFrom: true,
+                    transfersTo: { include: { fromEnrollment: { include: { class: true } } } },
+                    class: {
+                      select: {
+                        id: true,
+                        pricePerCycle: true,
+                        isFormation: true,
+                        FormationLevel: true,
+                        teacherId: true,
+                        teacherClassRates: true,
+                        teacher: {
+                          include: {
+                            TeacherPayRate: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+                vouchers: {
+                  where: { isVoided: false, paymentType: { in: ["TUITION_4SESSION", "FORMATION"] } },
+                  include: { refunds: true },
+                },
+                attendances: {
+                  where: { lesson: { isFree: false } },
+                  include: {
+                    lesson: {
+                      select: {
+                        id: true,
+                        startsAt: true,
+                        isFree: true,
+                        isTeacherAbsent: true,
+                        classId: true,
+                        lessonGroups: { select: { classId: true } },
+                      },
+                    },
+                  },
+                },
+                catchUpAttendances: {
+                  include: {
+                    missedLesson: {
+                      select: {
+                        id: true,
+                        startsAt: true,
+                        isFree: true,
+                        isTeacherAbsent: true,
+                        classId: true,
+                        lessonGroups: { select: { classId: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     });
     if (!student) {
       return { success: false, error: true, message: "Élève introuvable / التلميذ غير موجود." };
     }
+
+    const existingEnrollmentForSnap = await prisma.enrollment.findFirst({
+      where: { studentId: payload.studentId, classId: payload.classId },
+      orderBy: { id: "desc" },
+    });
+    const enrPayerStatusForSnap =
+      existingEnrollmentForSnap?.payerStatus || student.payerStatus || "NORMAL";
+    const isFormationClassForSnap = Boolean(
+      targetClass.isFormation ||
+        targetClass.formationLevelId != null ||
+        targetClass.FormationLevel != null
+    );
+    const teacherClassOverrideForSnap = (targetClass.teacherClassRates as any[])?.find(
+      (tcr: any) => tcr.teacherId === targetClass.teacherId
+    )?.percentage;
+    const teacherPctForSnap =
+      teacherClassOverrideForSnap != null
+        ? Number(teacherClassOverrideForSnap)
+        : (targetClass.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+        ? Number((targetClass.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+
+    let isPayerInClassForSnap = false;
+    let isPayerActiveAndPaidForSnap = true;
+    let siblingDiscountPctForSnap = 0;
+    if (
+      !isFormationClassForSnap &&
+      enrPayerStatusForSnap === "NORMAL" &&
+      student.family?.payerStudentId &&
+      student.family.payerStudentId !== student.id &&
+      (student.family as any)?.payerStudent
+    ) {
+      const payerStu = (student.family as any).payerStudent;
+      isPayerInClassForSnap = (payerStu.enrollments || []).some(
+        (pe: any) => pe.classId === payload.classId && (pe.status === "ACTIVE" || !pe.status)
+      );
+      if (isPayerInClassForSnap) {
+        const payerResSnap = resolvePayerCredit({
+          payerStudent: payerStu,
+          classId: payload.classId,
+          classPricePerCycle: Number(targetClass.pricePerCycle || 0),
+          isFormation: false,
+        });
+        isPayerActiveAndPaidForSnap = payerResSnap.isPayerActiveAndPaid;
+        if (isPayerActiveAndPaidForSnap) {
+          siblingDiscountPctForSnap = Number((student.family as any)?.discountPercentage ?? 50);
+        }
+      }
+    }
+
+    const baseTuitionPriceForSnap = isFormationClassForSnap
+      ? Number(targetClass.FormationLevel?.lumpSumPrice ?? targetClass.pricePerCycle ?? 0)
+      : Number(targetClass.pricePerCycle ?? 0);
+
+    const tuitionSnapshot = buildVoucherBillingSnapshot({
+      payerStatus: enrPayerStatusForSnap,
+      discountType: existingEnrollmentForSnap?.discountType,
+      discountValue: existingEnrollmentForSnap?.discountValue,
+      pricePerCycle: baseTuitionPriceForSnap,
+      teacherPercentage: teacherPctForSnap,
+      isFormation: isFormationClassForSnap,
+      isSiblingWaived: siblingDiscountPctForSnap >= 100,
+      siblingDiscountPercentage: siblingDiscountPctForSnap,
+      isPayerActiveAndPaid: isPayerActiveAndPaidForSnap,
+    });
 
     const targetBranchId = targetClass.branchId;
     const isCrossBranch = issuingBranchId !== targetBranchId;
@@ -5666,6 +6222,11 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
         scope: seriesScope,
         ...(isCrossBranch ? { targetBranchId } : {}),
       },
+      include: {
+        issuingBranch: true,
+        targetBranch: true,
+        level: true,
+      },
       orderBy: { id: "asc" },
     });
 
@@ -5676,6 +6237,11 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
           scope: seriesScope,
           targetBranchId: isCrossBranch ? targetBranchId : null,
           currentNumber: isCrossBranch ? 50 : 100,
+        },
+        include: {
+          issuingBranch: true,
+          targetBranch: true,
+          level: true,
         },
       });
     }
@@ -5716,6 +6282,8 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
     let voucherNumber = 0;
     const issuedItems: Array<{ type: string; labelFr: string; labelAr: string; amount: number }> = [];
     let totalAmount = 0;
+    let tuitionCreatedIsPartial = false;
+    let tuitionCreatedRemaining: number | undefined = undefined;
 
     await prisma.$transaction(async (tx) => {
       const updatedSeries = await tx.voucherSeries.update({
@@ -5731,7 +6299,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
         const isFormationClass = Boolean(targetClass.isFormation || targetClass.formationLevelId != null || targetClass.FormationLevel != null);
         const paymentType = isFormationClass ? "FORMATION" : "TUITION_4SESSION";
         const labelFr = isFormationClass ? "Frais de formation" : "Cycle d'études (4 séances)";
-        const labelAr = isFormationClass ? "رسوم الدورة التكوينية" : "اشتراك دراسي (4 حصص)";
+        const labelAr = isFormationClass ? "رسوم الدورة التكوينية" : "اشتراك دراسي";
 
         issuedItems.push({
           type: paymentType,
@@ -5745,7 +6313,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
         let completesVoucherIdVal: number | null = null;
 
         if (isFormationClass) {
-          const fullPrice = Number(targetClass.FormationLevel?.lumpSumPrice ?? targetClass.pricePerCycle ?? 0);
+          const fullPrice = tuitionSnapshot.effectiveCyclePrice;
           if (fullPrice > 0) {
             const prevVouchers = await tx.voucher.findMany({
               where: {
@@ -5783,6 +6351,10 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
           }
         }
 
+        tuitionCreatedIsPartial = isPartial;
+        tuitionCreatedRemaining =
+          remainingBalanceVal !== null ? remainingBalanceVal : undefined;
+
         await tx.voucher.create({
           data: {
             seriesId: series!.id,
@@ -5799,6 +6371,16 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
             issuedBy: session.userId || "admin",
             isVoided: false,
             trimesterId: activeTrimesterId,
+            appliedPayerStatus: tuitionSnapshot.appliedPayerStatus,
+            baseCyclePrice: new Prisma.Decimal(tuitionSnapshot.baseCyclePrice),
+            effectiveCyclePrice: new Prisma.Decimal(tuitionSnapshot.effectiveCyclePrice),
+            effectiveSessionPrice: new Prisma.Decimal(tuitionSnapshot.effectiveSessionPrice),
+            discountType: tuitionSnapshot.discountType,
+            discountValue:
+              tuitionSnapshot.discountValue !== null
+                ? new Prisma.Decimal(tuitionSnapshot.discountValue)
+                : null,
+            teacherPayWeight: new Prisma.Decimal(tuitionSnapshot.teacherPayWeight),
           },
         });
 
@@ -5935,7 +6517,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
         const shouldChargeInsc = isFormation
           ? true
           : (inscAmt > 0 || paidClassIds.size < 3 || paidClassIds.has(payload.classId));
-        await tx.enrollment.create({
+        const createdEnr = await tx.enrollment.create({
           data: {
             studentId: payload.studentId,
             classId: payload.classId,
@@ -5947,6 +6529,15 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
                 : new Prisma.Decimal(requiredFee)
               : null,
             payerStatus: "NORMAL",
+          },
+        });
+        await tx.enrollmentPayerHistory.create({
+          data: {
+            enrollmentId: createdEnr.id,
+            payerStatus: "NORMAL",
+            reason: "Inscription initiale (paiement)",
+            changedBy: session.userId || "admin",
+            effectiveFrom: new Date(),
           },
         });
       } else if (enr.status === "SUSPENDED") {
@@ -5978,11 +6569,251 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
       }
     } catch {}
 
+    const isFormationClass = Boolean(
+      targetClass.isFormation ||
+        targetClass.formationLevelId != null ||
+        targetClass.FormationLevel != null
+    );
+    let bundleRemainingSessions: number | undefined = undefined;
+    let bundleSessionsCount: number | undefined = undefined;
+    let bundleCycleRemainingFee: number | undefined = tuitionCreatedRemaining;
+    let bundleIsPartial = tuitionCreatedIsPartial;
+
+    try {
+      if (!isFormationClass) {
+        const [freshEnrollment, classVouchers, studentAttendances, classLessons, studentCatchUps] =
+          await Promise.all([
+            prisma.enrollment.findFirst({
+              where: { studentId: payload.studentId, classId: payload.classId },
+              orderBy: { id: "desc" },
+              include: {
+                transfersFrom: true,
+                transfersTo: {
+                  include: {
+                    fromEnrollment: {
+                      include: { class: true },
+                    },
+                  },
+                },
+                payerHistory: { orderBy: { effectiveFrom: "asc" } },
+              },
+            }),
+            prisma.voucher.findMany({
+              where: { studentId: payload.studentId, classId: payload.classId },
+              include: { refunds: true },
+              orderBy: { issuedAt: "desc" },
+            }),
+            prisma.attendance.findMany({
+              where: {
+                studentId: payload.studentId,
+                lesson: {
+                  isFree: false,
+                  OR: [
+                    { classId: payload.classId },
+                    { lessonGroups: { some: { classId: payload.classId } } },
+                  ],
+                },
+              },
+              include: {
+                lesson: {
+                  select: {
+                    id: true,
+                    startsAt: true,
+                    isFree: true,
+                    isTeacherAbsent: true,
+                    classId: true,
+                    lessonGroups: { select: { classId: true } },
+                  },
+                },
+              },
+            }),
+            prisma.lesson.findMany({
+              where: {
+                OR: [
+                  { classId: payload.classId },
+                  { lessonGroups: { some: { classId: payload.classId } } },
+                ],
+              },
+              select: {
+                id: true,
+                startsAt: true,
+                isFree: true,
+                isTeacherAbsent: true,
+                classId: true,
+                lessonGroups: { select: { classId: true } },
+              },
+            }),
+            prisma.catchUpAttendance.findMany({
+              where: { studentId: payload.studentId },
+              include: {
+                missedLesson: {
+                  select: {
+                    id: true,
+                    startsAt: true,
+                    isFree: true,
+                    isTeacherAbsent: true,
+                    classId: true,
+                    lessonGroups: { select: { classId: true } },
+                  },
+                },
+              },
+            }),
+          ]);
+
+        const effectivePayerStatus =
+          freshEnrollment?.payerStatus || student.payerStatus || "NORMAL";
+        const isPayerInThisClass = Boolean(
+          student.familyId && student.family?.payerStudentId === student.id
+        );
+        const siblingDiscountPercentage =
+          student.familyId &&
+          !isPayerInThisClass &&
+          student.family?.discountPercentage !== undefined
+            ? Number(student.family.discountPercentage)
+            : undefined;
+        const isSiblingWaived100 = Boolean(
+          siblingDiscountPercentage !== undefined && siblingDiscountPercentage >= 100
+        );
+
+        let payerRemainingCredit: number | undefined = undefined;
+        let isPayerActiveAndPaid = true;
+
+        if (student.family?.payerStudentId && !isPayerInThisClass) {
+          const payerStudent = await prisma.student.findUnique({
+            where: { id: student.family.payerStudentId },
+            include: {
+              family: true,
+              vouchers: {
+                where: {
+                  isVoided: false,
+                  paymentType: { in: ["TUITION_4SESSION", "FORMATION"] },
+                },
+                include: { refunds: true },
+              },
+              attendances: {
+                where: { lesson: { isFree: false } },
+                include: {
+                  lesson: {
+                    select: {
+                      id: true,
+                      startsAt: true,
+                      isFree: true,
+                      isTeacherAbsent: true,
+                      classId: true,
+                      lessonGroups: { select: { classId: true } },
+                    },
+                  },
+                },
+              },
+              enrollments: {
+                include: {
+                  transfersFrom: true,
+                  transfersTo: {
+                    include: { fromEnrollment: { include: { class: true } } },
+                  },
+                  class: { select: { id: true, pricePerCycle: true, isFormation: true } },
+                },
+              },
+              catchUpAttendances: {
+                include: {
+                  missedLesson: {
+                    select: {
+                      id: true,
+                      startsAt: true,
+                      isFree: true,
+                      isTeacherAbsent: true,
+                      classId: true,
+                      lessonGroups: { select: { classId: true } },
+                    },
+                  },
+                },
+              },
+            },
+          });
+
+          if (payerStudent) {
+            const payerRes = resolvePayerCredit({
+              payerStudent,
+              classId: payload.classId,
+              classPricePerCycle: Number(targetClass.pricePerCycle || 0),
+              isFormation: false,
+            });
+            if (payerRes) {
+              payerRemainingCredit = payerRes.netSessions;
+              isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+            }
+          }
+        }
+
+        const relevantCatchUps = studentCatchUps.filter(
+          (cu: any) =>
+            cu.missedLesson?.classId === payload.classId ||
+            cu.missedLesson?.lessonGroups?.some((lg: any) => lg.classId === payload.classId)
+        );
+
+        const creditMetrics = computeStudentCreditAndSessions({
+          pricePerCycle: Number(targetClass.pricePerCycle || 0),
+          isFormation: false,
+          payerStatus: effectivePayerStatus,
+          discountType: freshEnrollment?.discountType,
+          discountValue: freshEnrollment?.discountValue,
+          payerHistory: (freshEnrollment as any)?.payerHistory,
+          teacherPercentage: teacherPctForSnap,
+          siblingDiscountPercentage,
+          isSiblingWaived: isSiblingWaived100,
+          isPayerSiblingPaid: isPayerActiveAndPaid,
+          isPayerActiveAndPaid,
+          tuitionVouchers: classVouchers.filter(
+            (v) => v.paymentType === "TUITION_4SESSION"
+          ),
+          transfersIn: freshEnrollment?.transfersTo || [],
+          transfersOut: freshEnrollment?.transfersFrom || [],
+          creditResetOffset: freshEnrollment?.creditResetOffset || 0,
+          attendances: studentAttendances,
+          lessons: classLessons,
+          catchUps: relevantCatchUps,
+          payerRemainingCredit,
+          enrolledAt: freshEnrollment?.enrolledAt,
+          enrollmentStatus: freshEnrollment?.status,
+        });
+
+        if (!creditMetrics.isNonPayer) {
+          bundleRemainingSessions =
+            creditMetrics.isSiblingWaived && payerRemainingCredit !== undefined
+              ? payerRemainingCredit
+              : creditMetrics.netSessions;
+        }
+        if (creditMetrics.cycleRemainingFee > 0) {
+          bundleCycleRemainingFee = creditMetrics.cycleRemainingFee;
+          if (tuitionItem) {
+            bundleIsPartial = true;
+          }
+        }
+        if (tuitionItem && creditMetrics.effectiveLessonPrice > 0) {
+          const exactSessions = Number(tuitionItem.amount) / creditMetrics.effectiveLessonPrice;
+          if (exactSessions >= 1) {
+            bundleSessionsCount =
+              Math.abs(exactSessions - Math.round(exactSessions)) < 0.01
+                ? Math.round(exactSessions)
+                : Math.floor(exactSessions);
+          }
+        }
+      }
+    } catch (metricsErr) {
+      console.warn("Could not compute post-payment ticket metrics:", metricsErr);
+    }
+
     const bundle = {
       voucherNumber,
       seriesId: series.id,
       seriesScope,
       totalAmount,
+      paymentType:
+        issuedItems.length === 1
+          ? issuedItems[0].type
+          : isFormationClass
+          ? "FORMATION"
+          : "MULTI_ITEM",
       student: {
         id: student.id,
         globalNumber: student.globalNumber,
@@ -5992,8 +6823,41 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
       class: {
         id: targetClass.id,
         name: targetClass.name,
+        isFormation: targetClass.isFormation,
+        branchId: targetClass.branchId,
+        branch: targetClass.branch
+          ? { id: targetClass.branch.id, name: targetClass.branch.name }
+          : null,
+        level: targetClass.level
+          ? { id: targetClass.level.id, name: targetClass.level.name }
+          : null,
+      },
+      series: {
+        id: series.id,
+        scope: series.scope,
+        issuingBranch: (series as any).issuingBranch
+          ? { name: (series as any).issuingBranch.name }
+          : null,
+        targetBranch: (series as any).targetBranch
+          ? { name: (series as any).targetBranch.name }
+          : null,
+        level: (series as any).level ? { name: (series as any).level.name } : null,
       },
       items: issuedItems,
+      sessionsCount: bundleSessionsCount,
+      remainingSessions: bundleRemainingSessions,
+      cycleRemainingFee: bundleCycleRemainingFee,
+      isPartial: bundleIsPartial,
+      discountInfo:
+        tuitionItem && normalizePayerStatus(tuitionSnapshot.appliedPayerStatus) === "DISCOUNTED"
+          ? {
+              appliedPayerStatus: tuitionSnapshot.appliedPayerStatus,
+              discountType: tuitionSnapshot.discountType,
+              discountValue: tuitionSnapshot.discountValue,
+              baseCyclePrice: tuitionSnapshot.baseCyclePrice,
+              effectiveCyclePrice: tuitionSnapshot.effectiveCyclePrice,
+            }
+          : null,
       issuedAt: new Date().toISOString(),
       issuedBy: session.userId || "admin",
       issuingBranchId,
@@ -6234,7 +7098,15 @@ export const issueVoucher = async (
     // 1. Fetch Class and determine targetBranchId
     const targetClass = await prisma.class.findUnique({
       where: { id: data.classId },
-      include: { FormationLevel: true },
+      include: {
+        FormationLevel: true,
+        teacherClassRates: true,
+        teacher: {
+          include: {
+            TeacherPayRate: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+          },
+        },
+      },
     });
     if (!targetClass) {
       return { success: false, error: true, message: "القسم المحدد غير موجود." };
@@ -6280,16 +7152,60 @@ export const issueVoucher = async (
       });
     }
 
+    const existingEnrForVoucher = await prisma.enrollment.findFirst({
+      where: { studentId: data.studentId, classId: data.classId },
+      orderBy: { id: "desc" },
+    });
+    const enrPayerStatusForVoucher =
+      existingEnrForVoucher?.payerStatus || student.payerStatus || "NORMAL";
+    const tOverrideForVoucher = (targetClass.teacherClassRates as any[])?.find(
+      (tcr: any) => tcr.teacherId === targetClass.teacherId
+    )?.percentage;
+    const teacherPctForVoucher =
+      tOverrideForVoucher != null
+        ? Number(tOverrideForVoucher)
+        : (targetClass.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+        ? Number((targetClass.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+
     let finalAmount = Number(data.amount);
     let noteAppend = "";
     let isWaivedSibling = false;
     let isWaivedInscription = false;
     let feeOverridden = false;
     let feeOverrideNote = data.feeOverrideNote || null;
+    let siblingDiscountPctApplied = 0;
+    let isPayerActiveAndPaidForVoucher = true;
 
-    // RULE §2.4: Sibling discount — percentage discount for siblings of designated payer; inscription and book fees unaffected
-    // Formations excluded; primary payer must be active and paid
-    if (data.paymentType === "TUITION_4SESSION" && !isFormationClass) {
+    // Explicit Owner discount takes precedence over sibling discount and auto-fills discounted fee if amount <= 0
+    if (
+      (resolvedPaymentType === "TUITION_4SESSION" || resolvedPaymentType === "FORMATION") &&
+      enrPayerStatusForVoucher === "DISCOUNTED"
+    ) {
+      const baseFee = isFormationClass
+        ? Number(targetClass.FormationLevel?.lumpSumPrice ?? targetClass.pricePerCycle ?? 0)
+        : Number(targetClass.pricePerCycle ?? 0);
+      const feeCalc = computeStudentSessionFee({
+        payerStatus: "DISCOUNTED",
+        discountType: existingEnrForVoucher?.discountType,
+        discountValue: existingEnrForVoucher?.discountValue,
+        pricePerCycle: baseFee,
+        teacherPercentage: teacherPctForVoucher,
+        isFormation: isFormationClass,
+      });
+      if (isNaN(finalAmount) || finalAmount < 0) {
+        finalAmount = feeCalc.studentCycleFee;
+      }
+      const label = formatDiscountBadgeLabel(
+        existingEnrForVoucher?.discountType,
+        existingEnrForVoucher?.discountValue,
+        "ar"
+      );
+      noteAppend = `[تخفيض المالك: ${label}]`;
+    }
+
+    // RULE §2.4: Sibling discount — applies only when status is NORMAL (not DISCOUNTED / NON_PAYER / SCHOOL_FEES_ONLY)
+    if (data.paymentType === "TUITION_4SESSION" && !isFormationClass && enrPayerStatusForVoucher === "NORMAL") {
       const family = student.family;
       if (family && family.payerStudentId && family.payerStudentId !== student.id) {
         let isPayerActiveAndPaid = false;
@@ -6303,7 +7219,6 @@ export const issueVoucher = async (
           },
         });
         if (payerStudent) {
-          // Sibling discount applies ONLY if designated payer sibling is actively enrolled in THIS group
           const isPayerInThisClass = (payerStudent.enrollments || []).some(
             (e) => e.classId === targetClass.id && (e.status === "ACTIVE" || !e.status)
           );
@@ -6318,8 +7233,10 @@ export const issueVoucher = async (
           }
         }
 
+        isPayerActiveAndPaidForVoucher = isPayerActiveAndPaid;
         if (isPayerActiveAndPaid) {
           const discountPct = Number(family.discountPercentage ?? 50);
+          siblingDiscountPctApplied = discountPct;
           if (discountPct >= 100) {
             finalAmount = 0;
             isWaivedSibling = true;
@@ -6334,6 +7251,23 @@ export const issueVoucher = async (
         }
       }
     }
+
+    const voucherSnapshot =
+      resolvedPaymentType === "TUITION_4SESSION" || resolvedPaymentType === "FORMATION"
+        ? buildVoucherBillingSnapshot({
+            payerStatus: enrPayerStatusForVoucher,
+            discountType: existingEnrForVoucher?.discountType,
+            discountValue: existingEnrForVoucher?.discountValue,
+            pricePerCycle: isFormationClass
+              ? Number(targetClass.FormationLevel?.lumpSumPrice ?? targetClass.pricePerCycle ?? 0)
+              : Number(targetClass.pricePerCycle ?? 0),
+            teacherPercentage: teacherPctForVoucher,
+            isFormation: isFormationClass,
+            isSiblingWaived: isWaivedSibling,
+            siblingDiscountPercentage: siblingDiscountPctApplied,
+            isPayerActiveAndPaid: isPayerActiveAndPaidForVoucher,
+          })
+        : null;
 
     // RULE §2.1: Inscription fee
     if (data.paymentType === "INSCRIPTION") {
@@ -6450,6 +7384,20 @@ export const issueVoucher = async (
           issuedBy: session.userId || "admin",
           isVoided: false,
           trimesterId: (data as any).trimesterId ? Number((data as any).trimesterId) : activeTrimesterId,
+          ...(voucherSnapshot
+            ? {
+                appliedPayerStatus: voucherSnapshot.appliedPayerStatus,
+                baseCyclePrice: new Prisma.Decimal(voucherSnapshot.baseCyclePrice),
+                effectiveCyclePrice: new Prisma.Decimal(voucherSnapshot.effectiveCyclePrice),
+                effectiveSessionPrice: new Prisma.Decimal(voucherSnapshot.effectiveSessionPrice),
+                discountType: voucherSnapshot.discountType,
+                discountValue:
+                  voucherSnapshot.discountValue !== null
+                    ? new Prisma.Decimal(voucherSnapshot.discountValue)
+                    : null,
+                teacherPayWeight: new Prisma.Decimal(voucherSnapshot.teacherPayWeight),
+              }
+            : {}),
         },
         include: {
           class: {
@@ -6513,7 +7461,7 @@ export const issueVoucher = async (
         : paidClassIds.size < 3 || paidClassIds.has(data.classId);
 
       if (!existingEnrollment) {
-        await tx.enrollment.create({
+        const createdEnr = await tx.enrollment.create({
           data: {
             studentId: data.studentId,
             classId: data.classId,
@@ -6528,6 +7476,15 @@ export const issueVoucher = async (
               : null,
             feeOverriddenByOwner: feeOverridden,
             feeOverrideNote: feeOverrideNote,
+          },
+        });
+        await tx.enrollmentPayerHistory.create({
+          data: {
+            enrollmentId: createdEnr.id,
+            payerStatus: "NORMAL",
+            reason: "Inscription initiale (reçu)",
+            changedBy: session.userId || "admin",
+            effectiveFrom: new Date(),
           },
         });
       } else {
@@ -6604,6 +7561,84 @@ export const recordPayment = async (
     paymentType: (data as any).paymentType || "TUITION_4SESSION",
   });
 };
+
+async function executeVoucherEditTx(
+  tx: Prisma.TransactionClient,
+  voucher: any,
+  updates: Record<string, any>,
+  auditLogs: Array<{ fieldName: string; oldValue: string; newValue: string }>,
+  reason: string,
+  editedBy: string
+) {
+  // 1. Create audit logs in VoucherEdit
+  for (const log of auditLogs) {
+    await tx.voucherEdit.create({
+      data: {
+        voucherId: voucher.id,
+        editedBy,
+        editedAt: new Date(),
+        fieldName: log.fieldName,
+        oldValue: log.oldValue,
+        newValue: log.newValue,
+        reason,
+      },
+    });
+  }
+
+  // If amount is edited to 0, automatically mark voucher as VOIDED
+  if (updates.amount !== undefined && Number(updates.amount) <= 0) {
+    updates.isVoided = true;
+    updates.status = "VOIDED";
+  } else if (updates.isVoided === true && voucher.status !== "REFUNDED") {
+    updates.status = "VOIDED";
+  } else if (updates.isVoided === false && voucher.status === "VOIDED") {
+    updates.status = voucher.isRefund ? "REFUND" : "ACTIVE";
+  }
+
+  // 2. Update voucher with lastEdited stamp
+  await tx.voucher.update({
+    where: { id: voucher.id },
+    data: {
+      ...updates,
+      lastEditedAt: new Date(),
+      lastEditedBy: editedBy,
+    },
+  });
+
+  // 3. Reconcile DailyLedger if amount, paymentType or isVoided changed
+  const oldAmount = Number(voucher.amount);
+  const newAmount = updates.amount !== undefined ? Number(updates.amount) : oldAmount;
+  const oldType = resolveLedgerType(voucher.paymentType, voucher.class?.isFormation ?? false);
+  const newPaymentType = updates.paymentType || voucher.paymentType;
+  const newType = resolveLedgerType(newPaymentType, voucher.class?.isFormation ?? false);
+  const isNowVoided = updates.isVoided !== undefined ? updates.isVoided : voucher.isVoided;
+  const wasVoided = voucher.isVoided;
+
+  if (wasVoided !== isNowVoided || oldAmount !== newAmount || oldType !== newType) {
+    const ledgerSign = voucher.isRefund ? -1 : 1;
+    if (!wasVoided && oldAmount > 0) {
+      await upsertDailyLedger(tx, {
+        branchId: voucher.issuingBranchId,
+        date: voucher.issuedAt,
+        type: oldType,
+        amount: -oldAmount * ledgerSign,
+      });
+    }
+    if (!isNowVoided && newAmount > 0) {
+      await upsertDailyLedger(tx, {
+        branchId: voucher.issuingBranchId,
+        date: voucher.issuedAt,
+        type: newType,
+        amount: newAmount * ledgerSign,
+      });
+    }
+  }
+
+  // 3b. Recompute workshop participant financial totals & status inside the same transaction
+  if (voucher.workshopId) {
+    await syncWorkshopParticipantTotals(tx, voucher.workshopId, voucher.studentId);
+  }
+}
 
 // EDIT VOUCHER WITH AUDIT TRAIL (§2.3 & §1.2)
 export const editVoucher = async (
@@ -6696,66 +7731,9 @@ export const editVoucher = async (
       return { success: false, error: true, message: "لم يتم تغيير أي حقل في الوصل." };
     }
 
-    await prisma.$transaction(async (tx) => {
-      // 1. Create audit logs in VoucherEdit
-      for (const log of auditLogs) {
-        await tx.voucherEdit.create({
-          data: {
-            voucherId: voucher.id,
-            editedBy: session.userId || "admin",
-            editedAt: new Date(),
-            fieldName: log.fieldName,
-            oldValue: log.oldValue,
-            newValue: log.newValue,
-            reason: data.reason,
-          },
-        });
-      }
-
-      // If amount is edited to 0, automatically mark voucher as VOIDED
-      if (updates.amount !== undefined && Number(updates.amount) <= 0) {
-        updates.isVoided = true;
-        updates.status = "VOIDED";
-      }
-
-      // 2. Update voucher with lastEdited stamp
-      await tx.voucher.update({
-        where: { id: voucher.id },
-        data: {
-          ...updates,
-          lastEditedAt: new Date(),
-          lastEditedBy: session.userId || "admin",
-        },
-      });
-
-      // 3. Reconcile DailyLedger if amount, paymentType or isVoided changed
-      const oldAmount = Number(voucher.amount);
-      const newAmount = updates.amount !== undefined ? Number(updates.amount) : oldAmount;
-      const oldType = resolveLedgerType(voucher.paymentType, voucher.class?.isFormation ?? false);
-      const newPaymentType = updates.paymentType || voucher.paymentType;
-      const newType = resolveLedgerType(newPaymentType, voucher.class?.isFormation ?? false);
-      const isNowVoided = updates.isVoided !== undefined ? updates.isVoided : voucher.isVoided;
-      const wasVoided = voucher.isVoided;
-
-      if (wasVoided !== isNowVoided || oldAmount !== newAmount || oldType !== newType) {
-        if (!wasVoided && oldAmount > 0) {
-          await upsertDailyLedger(tx, {
-            branchId: voucher.issuingBranchId,
-            date: voucher.issuedAt,
-            type: oldType,
-            amount: -oldAmount,
-          });
-        }
-        if (!isNowVoided && newAmount > 0) {
-          await upsertDailyLedger(tx, {
-            branchId: voucher.issuingBranchId,
-            date: voucher.issuedAt,
-            type: newType,
-            amount: newAmount,
-          });
-        }
-      }
-    });
+    await prisma.$transaction((tx) =>
+      executeVoucherEditTx(tx, voucher, updates, auditLogs, data.reason, session.userId || "admin")
+    );
 
     await revalidateFinancialRoutes({
       classId: voucher.classId,
@@ -6763,6 +7741,10 @@ export const editVoucher = async (
       branchId: voucher.issuingBranchId,
       workshopId: voucher.workshopId,
     });
+    if (voucher.workshopId) {
+      safeRevalidatePath(`/list/attendance/workshop/${voucher.workshopId}`);
+      safeRevalidatePath(`/list/attendance`);
+    }
     return { success: true, error: false, message: "تم تعديل الوصل وتسجيل أثر المراجعة بنجاح." };
   } catch (err: any) {
     console.error("editVoucher error:", err);
@@ -6853,14 +7835,27 @@ export const transferEnrollmentCredit = async (
     const fromEnrollment = await prisma.enrollment.findUnique({
       where: { id: fromEnrollmentId },
       include: {
-        class: { include: { lessons: true, branch: true } },
+        class: {
+          include: {
+            lessons: true,
+            branch: true,
+            teacherClassRates: true,
+            teacher: {
+              include: {
+                TeacherPayRate: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+              },
+            },
+          },
+        },
         student: {
           include: {
+            family: true,
             enrollments: { select: { classId: true, status: true } },
           },
         },
         academicYear: true,
         transfersFrom: true,
+        payerHistory: { orderBy: { effectiveFrom: "asc" } },
         transfersTo: {
           include: {
             fromEnrollment: {
@@ -6877,10 +7872,26 @@ export const transferEnrollmentCredit = async (
     // 2. Fetch destination Class
     const toClass = await prisma.class.findUnique({
       where: { id: toClassId },
-      include: { branch: true },
+      include: {
+        branch: true,
+        teacherClassRates: true,
+        teacher: {
+          include: {
+            TeacherPayRate: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+          },
+        },
+      },
     });
     if (!toClass) {
       return { success: false, error: true, message: "القسم الجديد غير موجود." };
+    }
+
+    if (isClassInactive(toClass)) {
+      return {
+        success: false,
+        error: true,
+        message: `Impossible de transférer un élève vers le groupe fermé / en pause "${toClass.name}" / لا يمكن تحويل التلميذ إلى الفوج المغلق / المتوقف "${toClass.name}".`,
+      };
     }
 
     // Enforce same-level transfer rule (§Transfer Architecture)
@@ -6921,6 +7932,15 @@ export const transferEnrollmentCredit = async (
             inscriptionFeeCharged: true, // Keep true so that transfer-based status check handles payment accurately instead of phantom-waiving
             feeOverriddenByOwner: false,
             status: "ACTIVE",
+          },
+        });
+        await tx.enrollmentPayerHistory.create({
+          data: {
+            enrollmentId: toEnrollment.id,
+            payerStatus: "NORMAL",
+            reason: "Transfert vers ce groupe",
+            changedBy: session.userId || "admin",
+            effectiveFrom: new Date(),
           },
         });
       } else if (toEnrollment.status !== "ACTIVE") {
@@ -6992,10 +8012,24 @@ export const transferEnrollmentCredit = async (
         },
       });
 
+      const fromTeacherOverride = (fromEnrollment.class.teacherClassRates as any[])?.find(
+        (tcr: any) => tcr.teacherId === fromEnrollment.class.teacherId
+      )?.percentage;
+      const fromTeacherPct =
+        fromTeacherOverride != null
+          ? Number(fromTeacherOverride)
+          : (fromEnrollment.class.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+          ? Number((fromEnrollment.class.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+          : null;
+
       const creditMetricsFrom = computeStudentCreditAndSessions({
         pricePerCycle: Number(fromEnrollment.class.pricePerCycle || 0),
         isFormation: Boolean(fromEnrollment.class.isFormation),
         payerStatus: fromEnrollment.payerStatus || fromEnrollment.student?.payerStatus || "NORMAL",
+        discountType: (fromEnrollment as any).discountType,
+        discountValue: (fromEnrollment as any).discountValue,
+        payerHistory: (fromEnrollment as any).payerHistory,
+        teacherPercentage: fromTeacherPct,
         tuitionVouchers: studentVouchers,
         transfersIn: fromEnrollment.transfersTo || [],
         transfersOut: fromEnrollment.transfersFrom || [],
@@ -7020,23 +8054,34 @@ export const transferEnrollmentCredit = async (
       }
       finalTransferredSessions = requestedSessions;
 
-      // Calculate unit session price
+      // Calculate unit session price honoring snapshotted voucher slot values
       const transferWithAmount = (fromEnrollment.transfersTo || []).find(
         (t) => Number(t.amount) > 0 && t.transferredSessions > 0
       );
 
       let sessionPrice = 0;
-      if (creditMetricsFrom.effectiveLessonPrice > 0) {
-        sessionPrice = creditMetricsFrom.effectiveLessonPrice;
-      } else if (fromEnrollment.class.pricePerCycle && Number(fromEnrollment.class.pricePerCycle) > 0) {
-        sessionPrice = Number(fromEnrollment.class.pricePerCycle) / 4;
-      } else if (transferWithAmount) {
-        sessionPrice = Number(transferWithAmount.amount) / transferWithAmount.transferredSessions;
-      } else if (toClass.pricePerCycle && Number(toClass.pricePerCycle) > 0) {
-        sessionPrice = Number(toClass.pricePerCycle) / 4;
+      const transferableTailSlots =
+        finalTransferredSessions > 0 && creditMetricsFrom.slotSchedule.slots.length >= finalTransferredSessions
+          ? creditMetricsFrom.slotSchedule.slots.slice(
+              creditMetricsFrom.slotSchedule.slots.length - finalTransferredSessions
+            )
+          : [];
+      if (transferableTailSlots.length > 0) {
+        const totalSlotValue = transferableTailSlots.reduce((s, slot) => s + slot.unitPrice, 0);
+        sessionPrice = totalSlotValue / transferableTailSlots.length;
+        transferredAmount = Math.round(totalSlotValue);
+      } else {
+        if (creditMetricsFrom.effectiveLessonPrice > 0) {
+          sessionPrice = creditMetricsFrom.effectiveLessonPrice;
+        } else if (fromEnrollment.class.pricePerCycle && Number(fromEnrollment.class.pricePerCycle) > 0) {
+          sessionPrice = Number(fromEnrollment.class.pricePerCycle) / 4;
+        } else if (transferWithAmount) {
+          sessionPrice = Number(transferWithAmount.amount) / transferWithAmount.transferredSessions;
+        } else if (toClass.pricePerCycle && Number(toClass.pricePerCycle) > 0) {
+          sessionPrice = Number(toClass.pricePerCycle) / 4;
+        }
+        transferredAmount = Math.round(Number(finalTransferredSessions) * sessionPrice);
       }
-
-      transferredAmount = Math.round(Number(finalTransferredSessions) * sessionPrice);
 
       // Count held trailing absences to document if open-ended absences were transferred
       const heldSessions = creditMetricsFrom.openEndedHeldSessions;
@@ -7051,11 +8096,32 @@ export const transferEnrollmentCredit = async (
           toClass.teacherId &&
           fromClass.teacherId === toClass.teacherId
       );
+      const toTeacherOverride = (toClass.teacherClassRates as any[])?.find(
+        (tcr: any) => tcr.teacherId === toClass.teacherId
+      )?.percentage;
+      const toTeacherPct =
+        toTeacherOverride != null
+          ? Number(toTeacherOverride)
+          : (toClass.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+          ? Number((toClass.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+          : null;
+      const toEffectiveSessionPrice = computeStudentSessionFee({
+        payerStatus: toEnrollment?.payerStatus || "NORMAL",
+        discountType: (toEnrollment as any)?.discountType,
+        discountValue: (toEnrollment as any)?.discountValue,
+        pricePerCycle: Number(toClass.pricePerCycle || 0),
+        teacherPercentage: toTeacherPct,
+        isFormation: Boolean(toClass.isFormation),
+      }).studentSessionFee;
+
       const isDifferentPrice =
         transferredAmount > 0 &&
-        Number(fromClass.pricePerCycle || 0) > 0 &&
-        Number(toClass.pricePerCycle || 0) > 0 &&
-        Math.abs(Number(fromClass.pricePerCycle) - Number(toClass.pricePerCycle)) >= 1;
+        ((Number(fromClass.pricePerCycle || 0) > 0 &&
+          Number(toClass.pricePerCycle || 0) > 0 &&
+          Math.abs(Number(fromClass.pricePerCycle) - Number(toClass.pricePerCycle)) >= 1) ||
+          (sessionPrice > 0 &&
+            toEffectiveSessionPrice > 0 &&
+            Math.abs(sessionPrice - toEffectiveSessionPrice) >= 1));
 
       const metaTags: string[] = [];
       if (transferredHeldSessions > 0) {
@@ -7158,6 +8224,7 @@ export const cancelEnrollmentTransfer = async (transferId: number) => {
             class: { include: { branch: true } },
             transfersFrom: true,
             transfersTo: true,
+            payerHistory: { orderBy: { effectiveFrom: "asc" } },
           },
         },
         toEnrollment: {
@@ -7165,6 +8232,7 @@ export const cancelEnrollmentTransfer = async (transferId: number) => {
             student: true,
             class: { include: { branch: true } },
             transfersFrom: true,
+            payerHistory: { orderBy: { effectiveFrom: "asc" } },
             transfersTo: {
               include: {
                 fromEnrollment: {
@@ -7336,6 +8404,9 @@ export const cancelEnrollmentTransfer = async (transferId: number) => {
             transfer.toEnrollment.payerStatus ||
             transfer.toEnrollment.student?.payerStatus ||
             "NORMAL",
+          discountType: (transfer.toEnrollment as any).discountType,
+          discountValue: (transfer.toEnrollment as any).discountValue,
+          payerHistory: (transfer.toEnrollment as any).payerHistory,
           tuitionVouchers: targetTuitionVouchers,
           transfersIn: remainingTransfersIn,
           transfersOut: transfersOutOnTarget,
@@ -7863,7 +8934,16 @@ export const createRefund = async (
       where: { id: data.voucherId! },
       include: {
         refunds: true,
-        class: true,
+        class: {
+          include: {
+            teacherClassRates: true,
+            teacher: {
+              include: {
+                TeacherPayRate: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -7886,6 +8966,15 @@ export const createRefund = async (
     const totalRefundedSoFar = voucher.refunds.reduce((sum, r) => sum + Number(r.amount), 0);
     const voucherAmount = Number(voucher.amount);
     const unrefundedVoucherMoney = Math.max(0, voucherAmount - totalRefundedSoFar);
+
+    // Validation 0: Cannot refund a refund voucher
+    if (voucher.isRefund) {
+      return {
+        success: false,
+        error: true,
+        message: "لا يمكن استرداد وصل استرداد. يرجى اختيار وصل الدفع الأصلي. / Impossible de rembourser un reçu de remboursement.",
+      };
+    }
 
     // Validation 1: Cannot refund an already fully refunded or voided voucher
     if (voucher.isVoided || unrefundedVoucherMoney <= 0) {
@@ -8008,13 +9097,6 @@ export const createRefund = async (
         if (payerInClass) {
           siblingDiscountPct = Number((student.family as any)?.discountPercentage ?? 50);
         }
-        if (payerInClass && siblingDiscountPct >= 100) {
-          return {
-            success: false,
-            error: true,
-            message: "لا يمكن استرداد مبالغ لطالب معفى بموجب تخفيض الأخوة. / Aucun remboursement pour un élève exonéré fratrie.",
-          };
-        }
       }
 
       // Calculate consumed sessions using Massinissa School rules:
@@ -8046,13 +9128,14 @@ export const createRefund = async (
         }),
       ]);
 
-      // Transfers
+      // Transfers & Enrollment (including discount / payerHistory)
       const enrollment = await prisma.enrollment.findFirst({
         where: {
           studentId: voucher.studentId,
           classId: voucher.classId,
         },
         include: {
+          payerHistory: { orderBy: { effectiveFrom: "asc" } },
           transfersFrom: true,
           transfersTo: {
             include: {
@@ -8063,19 +9146,17 @@ export const createRefund = async (
           },
         },
       });
-      const cyclePrice = Math.max(0, Number(voucher.class?.pricePerCycle || 0));
-      const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-      const transferredOut = enrollment?.transfersFrom?.reduce((sum, t) => sum + t.transferredSessions, 0) || 0;
-      const transferredIn = (enrollment?.transfersTo || []).reduce((sum, t) => {
-        const fromCyclePrice = Number((t as any).fromEnrollment?.class?.pricePerCycle || 0);
-        const isCrossPrice =
-          (typeof t.notes === "string" && t.notes.includes("[PRICE_DIFF_VIREMENT]")) ||
-          (fromCyclePrice > 0 && cyclePrice > 0 && Math.abs(fromCyclePrice - cyclePrice) >= 1);
-        if (isCrossPrice && baseLessonPrice > 0 && Number(t.amount || 0) > 0) {
-          return sum + Math.floor(Number(t.amount) / baseLessonPrice);
-        }
-        return sum + t.transferredSessions;
-      }, 0);
+
+      const enrPayerStatus = enrollment?.payerStatus || student?.payerStatus || "NORMAL";
+      // Sibling 100% waiver rejection only applies when enrollment is NOT explicitly DISCOUNTED by Owner
+      if (enrPayerStatus !== "DISCOUNTED" && siblingDiscountPct >= 100) {
+        return {
+          success: false,
+          error: true,
+          message: "لا يمكن استرداد مبالغ لطالب معفى بموجب تخفيض الأخوة. / Aucun remboursement pour un élève exonéré fratrie.",
+        };
+      }
+
       const offset = Number(enrollment?.creditResetOffset || 0);
       const latestIn = (enrollment?.transfersTo || []).reduce(
         (maxMs: number | null, t: any) => {
@@ -8092,71 +9173,44 @@ export const createRefund = async (
         referenceDate: new Date(),
         creditResetOffset: offset,
         postTransferStartAfter: latestIn ? new Date(latestIn) : null,
+        payerHistory: (enrollment as any)?.payerHistory,
       });
 
       trailingHeldLessonIds = classifiedHistory.filter((h) => h.isHeld).map((h) => h.lessonId);
-      const sameTeacherHeld = extractSameTeacherHeldFromTransfers(enrollment?.transfersTo);
-      const hasPostTransferPresence = classifiedHistory.some(
-        (h) =>
-          h.isConsumedCredit &&
-          (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE")
-      );
-      const resolvedSameTeacherHeld = hasPostTransferPresence ? sameTeacherHeld : 0;
 
-      // Settled consumed sessions (PRESENT, INTERLEAVED_ABSENCE, FORFEITED_DROPOUT, CAUGHT_UP_ABSENCE, SUSPENDED_ABSENCE) are non-refundable.
-      // Unresolved trailing absences (TRAILING_ABSENCE_HELD) and unconsumed sessions remain fully refund-eligible per Rule 5 & §7.22.
-      const settledConsumedSessions =
-        classifiedHistory.filter(
-          (h) =>
-            h.isConsumedCredit &&
-            (h.classification === "PRESENT" ||
-              h.classification === "INTERLEAVED_ABSENCE" ||
-              h.classification === "FORFEITED_DROPOUT" ||
-              h.classification === "CAUGHT_UP_ABSENCE" ||
-              h.classification === "SUSPENDED_ABSENCE")
-        ).length +
-        classifiedHistory.filter((h) => h.bothPresentAndCaughtUp).length +
-        resolvedSameTeacherHeld;
+      const refundTeacherOverride = (voucher.class?.teacherClassRates as any[])?.find(
+        (tcr: any) => tcr.teacherId === voucher.class?.teacherId
+      )?.percentage;
+      const refundTeacherPct =
+        refundTeacherOverride != null
+          ? Number(refundTeacherOverride)
+          : (voucher.class?.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+          ? Number((voucher.class?.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+          : null;
 
-      const effectiveLessonPrice =
-        siblingDiscountPct > 0 && siblingDiscountPct < 100
-          ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-          : siblingDiscountPct >= 100
-          ? 0
-          : baseLessonPrice;
+      const creditMetricsForRefund = computeStudentCreditAndSessions({
+        pricePerCycle: Number(voucher.class?.pricePerCycle || 0),
+        isFormation: false,
+        payerStatus: enrPayerStatus,
+        discountType: (enrollment as any)?.discountType,
+        discountValue: (enrollment as any)?.discountValue,
+        payerHistory: (enrollment as any)?.payerHistory,
+        siblingDiscountPercentage: siblingDiscountPct,
+        isSiblingWaived: siblingDiscountPct >= 100,
+        teacherPercentage: refundTeacherPct,
+        tuitionVouchers: studentClassVouchers,
+        transfersIn: enrollment?.transfersTo || [],
+        transfersOut: enrollment?.transfersFrom || [],
+        creditResetOffset: offset,
+        attendances: studentAttendances,
+        lessons: classLessons,
+        catchUps: studentCatchUps,
+        enrolledAt: enrollment?.enrolledAt,
+        enrollmentStatus: enrollment?.status,
+      });
 
-      // Calculate total paid tuition and purchased sessions minus prior refunds
-      let totalPaidTuition = 0;
-      let totalPurchased = 0;
-      for (const v of studentClassVouchers) {
-        if (v.isVoided || v.isRefund || v.status === "REFUNDED") continue;
-        const vAmount = Number(v.amount || 0);
-        const vRefunded = v.refunds.reduce((sum, r) => sum + Number(r.amount || 0), 0);
-        totalPaidTuition += Math.max(0, vAmount - vRefunded);
-        if (effectiveLessonPrice <= 0) {
-          const refundedSessions = vAmount > 0 ? Math.floor(vRefunded / (vAmount / 4)) : 0;
-          totalPurchased += Math.max(0, 4 - refundedSessions);
-        }
-      }
-      if (effectiveLessonPrice > 0) {
-        totalPurchased = Math.floor(totalPaidTuition / effectiveLessonPrice);
-      }
-
-      const netRefundableSessions = (totalPurchased + transferredIn - transferredOut + offset) - settledConsumedSessions;
-      const unconsumedInCycle = Math.max(0, Math.min(4, netRefundableSessions));
-      let maxRefundableByConsumption = 0;
-      if (effectiveLessonPrice > 0) {
-        maxRefundableByConsumption = Math.max(
-          0,
-          Math.round(
-            totalPaidTuition +
-              (transferredIn - transferredOut + offset - settledConsumedSessions) * effectiveLessonPrice
-          )
-        );
-      } else {
-        const pricePerSession = voucherAmount / 4;
-        maxRefundableByConsumption = Math.round(unconsumedInCycle * pricePerSession);
-      }
+      const unconsumedInCycle = creditMetricsForRefund.refundableSessions;
+      const maxRefundableByConsumption = creditMetricsForRefund.refundableAmount;
       const maxRefundable = Math.min(unrefundedVoucherMoney, maxRefundableByConsumption);
 
       if (maxRefundable <= 0) {
@@ -8316,17 +9370,11 @@ export const createRefund = async (
             });
           }
         }
-        if (voucher.workshopId) {
-          await tx.workshopParticipant.updateMany({
-            where: {
-              studentId: voucher.studentId,
-              workshopId: voucher.workshopId,
-            },
-            data: {
-              status: "REFUNDED",
-            },
-          });
-        }
+      }
+
+      // Always recalculate workshop participant financial totals & status (partial or full refund)
+      if (voucher.workshopId) {
+        await syncWorkshopParticipantTotals(tx, voucher.workshopId, voucher.studentId);
       }
 
       // 5. Create VoucherEdit audit log
@@ -8390,6 +9438,10 @@ export const createRefund = async (
         workshopId: voucher.workshopId,
       });
       safeRevalidatePath(`/list/reports`);
+      if (voucher.workshopId) {
+        safeRevalidatePath(`/list/attendance/workshop/${voucher.workshopId}`);
+        safeRevalidatePath(`/list/attendance`);
+      }
       if (voucher.classId && (voucher.class?.isFormation || voucher.paymentType === "FORMATION")) {
         safeRevalidatePath(`/list/formations/${voucher.classId}`);
         safeRevalidatePath(`/list/formations`);
@@ -8412,8 +9464,164 @@ export const createRefund = async (
 };
 
 // =================================================================
-// WORKSHOP ACTIONS
+// WORKSHOP ACTIONS & HELPERS
 // =================================================================
+
+function assertWorkshopPermission(
+  session: Awaited<ReturnType<typeof getAuthSession>>,
+  action: "create" | "update" | "delete",
+  branchId?: number | null
+): string | null {
+  if (!session.userId) {
+    return "Non authentifié / غير مصادق عليه.";
+  }
+  const hasPerm =
+    session.isOwner ||
+    session.isOwnerOrAdmin ||
+    session.can(action, "workshops");
+  if (!hasPerm) {
+    return "Action non autorisée / غير مصرح لك بهذا الإجراء.";
+  }
+  if (
+    branchId !== undefined &&
+    branchId !== null &&
+    !session.isOwner &&
+    !canUserAccessBranch(session.rawRole, session.branchIds, branchId)
+  ) {
+    return "Accès non autorisé pour ce siège / غير مصرح لك بالوصول إلى هذا الفرع.";
+  }
+  return null;
+}
+
+async function resolveWorkshopVoucherSeries(
+  tx: Prisma.TransactionClient,
+  issuingBranchId: number,
+  targetBranchId: number
+) {
+  const isCrossBranch = issuingBranchId !== targetBranchId;
+  const seriesScope = isCrossBranch ? "CROSS_BRANCH" : "LOCAL_LEVEL";
+
+  let series = await tx.voucherSeries.findFirst({
+    where: {
+      issuingBranchId,
+      scope: seriesScope,
+      ...(isCrossBranch ? { targetBranchId } : {}),
+    },
+    orderBy: { id: "asc" },
+  });
+
+  if (!series) {
+    series = await tx.voucherSeries.create({
+      data: {
+        issuingBranchId,
+        scope: seriesScope,
+        targetBranchId: isCrossBranch ? targetBranchId : null,
+        currentNumber: isCrossBranch ? 50 : 100,
+      },
+    });
+  }
+
+  return series;
+}
+
+async function syncWorkshopParticipantTotals(
+  tx: Prisma.TransactionClient,
+  workshopId: number,
+  studentId: string,
+  options?: { reactivateIfSuspended?: boolean }
+) {
+  const [workshop, participant, vouchers] = await Promise.all([
+    tx.workshop.findUnique({
+      where: { id: workshopId },
+      select: { totalPrice: true },
+    }),
+    tx.workshopParticipant.findFirst({
+      where: { workshopId, studentId },
+    }),
+    tx.voucher.findMany({
+      where: { workshopId, studentId },
+    }),
+  ]);
+
+  if (!workshop || !participant) return null;
+
+  const workshopPrice = Number(workshop.totalPrice || 0);
+  let totalPaid = 0;
+  let totalRefunded = 0;
+
+  for (const v of vouchers) {
+    if (v.isRefund) {
+      if (!v.isVoided) {
+        totalRefunded += Number(v.amount);
+      }
+    } else if (!v.isVoided || v.status === "REFUNDED") {
+      totalPaid += Number(v.amount);
+    }
+  }
+
+  const netPaid = Math.max(0, totalPaid - totalRefunded);
+  const preservePaused =
+    !options?.reactivateIfSuspended &&
+    (participant.status === "SUSPENDED" || participant.status === "INACTIVE");
+
+  let nextStatus = participant.status;
+  if (totalRefunded > 0 && netPaid <= 0) {
+    nextStatus = "REFUNDED";
+  } else if (!preservePaused) {
+    nextStatus = netPaid >= workshopPrice ? "PAID_IN_FULL" : "OWED";
+  }
+
+  return tx.workshopParticipant.update({
+    where: { id: participant.id },
+    data: {
+      totalPaid: new Prisma.Decimal(totalPaid),
+      totalRefunded: new Prisma.Decimal(totalRefunded),
+      status: nextStatus,
+    },
+  });
+}
+
+export const searchStudentsForWorkshopAction = async (query: string) => {
+  try {
+    const session = await getAuthSession();
+    if (
+      !session.userId ||
+      (!session.isOwner && !session.isOwnerOrAdmin && !session.can("view", "workshops"))
+    ) {
+      return [];
+    }
+
+    const clean = query.trim();
+    if (!clean) return [];
+
+    const students = await prisma.student.findMany({
+      where: {
+        ...(!session.isOwner && session.branchIds.length > 0
+          ? { registeredBranchId: { in: session.branchIds } }
+          : {}),
+        OR: [
+          { name: { contains: clean, mode: "insensitive" } },
+          { phone: { contains: clean, mode: "insensitive" } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        sex: true,
+        globalNumber: true,
+        registeredBranch: { select: { name: true } },
+      },
+      orderBy: { name: "asc" },
+      take: 15,
+    });
+
+    return serializeForClient(students);
+  } catch (err) {
+    console.error("searchStudentsForWorkshopAction error:", err);
+    return [];
+  }
+};
 
 export const createWorkshop = async (
   currentState: CurrentState,
@@ -8422,34 +9630,85 @@ export const createWorkshop = async (
   try {
     const session = await getAuthSession();
     const activeBranchId = await getActiveBranchId();
-    const branchId = (data as any).branchId ? Number((data as any).branchId) : (activeBranchId || session.branchIds[0] || 1);
-    await prisma.$transaction(async (tx) => {
+    const normalizedInput = {
+      ...data,
+      price:
+        data.price !== undefined
+          ? data.price
+          : (data as any).totalPrice !== undefined
+          ? (data as any).totalPrice
+          : 0,
+      teacherName:
+        data.teacherName ||
+        (data as any).guestTeacher ||
+        (data as any).teacher ||
+        "",
+    };
+
+    const parsed = workshopSchema.safeParse(normalizedInput);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: true,
+        message: parsed.error.issues[0]?.message || "بيانات الدورة غير صالحة / Données de l'atelier invalides.",
+      };
+    }
+
+    const requestedBranchId = parsed.data.branchId ? Number(parsed.data.branchId) : null;
+    const branchId = session.isOwner
+      ? requestedBranchId || activeBranchId || session.branchIds[0] || 1
+      : activeBranchId || session.branchIds[0] || 1;
+
+    const authErr = assertWorkshopPermission(session, "create", branchId);
+    if (authErr) {
+      return { success: false, error: true, message: authErr };
+    }
+
+    const parsedSessions = parsed.data.sessions.map((s) => {
+      const startsAt = parseToAlgiersDate(s.startTime);
+      const endsAt = parseToAlgiersDate(s.endTime);
+      if (!startsAt || !endsAt || endsAt <= startsAt) {
+        throw new Error("توقيت الحصة غير صالح / Horaire de séance invalide.");
+      }
+      return { startsAt, endsAt };
+    });
+
+    const created = await prisma.$transaction(async (tx) => {
       const newWorkshop = await tx.workshop.create({
         data: {
-          title: data.title,
-          description: data.description || "",
-          totalPrice: data.price !== undefined ? data.price : ((data as any).totalPrice !== undefined ? (data as any).totalPrice : 0),
-          guestTeacher: data.teacherName || (data as any).guestTeacher || (data as any).teacher || "Professeur Invité",
-          branchId: branchId,
+          title: parsed.data.title.trim(),
+          description: parsed.data.description?.trim() || "",
+          totalPrice: parsed.data.price,
+          guestTeacher: parsed.data.teacherName.trim() || "Professeur Invité",
+          branchId,
         },
       });
 
-      if (data.sessions && data.sessions.length > 0) {
+      if (parsedSessions.length > 0) {
         await tx.workshopSession.createMany({
-          data: data.sessions.map((session) => ({
+          data: parsedSessions.map((s) => ({
             workshopId: newWorkshop.id,
-            startsAt: new Date(session.startTime),
-            endsAt: new Date(session.endTime),
+            startsAt: s.startsAt,
+            endsAt: s.endsAt,
           })),
         });
       }
+
+      return newWorkshop;
     });
 
     safeRevalidatePath("/list/workshops");
+    safeRevalidatePath(`/list/workshops/${created.id}`);
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath("/admin");
     return { success: true, error: false, message: "Atelier créé avec succès / تم انشاء الدورة بنجاح." };
-  } catch (err) {
+  } catch (err: any) {
     console.log(err);
-    return { success: false, error: true, message: "Échec de la création de l'atelier / فشل في انشاء الدورة." };
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "Échec de la création de l'atelier / فشل في انشاء الدورة.",
+    };
   }
 };
 
@@ -8461,38 +9720,134 @@ export const updateWorkshop = async (
     return { success: false, error: true, message: "Identifiant d'atelier manquant / لا يوجد معرف الدورة." };
   }
   try {
+    const session = await getAuthSession();
+    const existingWorkshop = await prisma.workshop.findUnique({
+      where: { id: Number(data.id) },
+      select: { id: true, branchId: true, totalPrice: true },
+    });
+    if (!existingWorkshop) {
+      return { success: false, error: true, message: "Atelier introuvable / الدورة غير موجودة." };
+    }
+
+    const authErr = assertWorkshopPermission(session, "update", existingWorkshop.branchId);
+    if (authErr) {
+      return { success: false, error: true, message: authErr };
+    }
+
+    const normalizedInput = {
+      ...data,
+      price:
+        data.price !== undefined
+          ? data.price
+          : (data as any).totalPrice !== undefined
+          ? (data as any).totalPrice
+          : 0,
+      teacherName:
+        data.teacherName ||
+        (data as any).guestTeacher ||
+        (data as any).teacher ||
+        "",
+    };
+
+    const parsed = workshopSchema.safeParse(normalizedInput);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: true,
+        message: parsed.error.issues[0]?.message || "بيانات الدورة غير صالحة / Données de l'atelier invalides.",
+      };
+    }
+
+    const parsedSessions = parsed.data.sessions.map((s) => {
+      const startsAt = parseToAlgiersDate(s.startTime);
+      const endsAt = parseToAlgiersDate(s.endTime);
+      if (!startsAt || !endsAt || endsAt <= startsAt) {
+        throw new Error("توقيت الحصة غير صالح / Horaire de séance invalide.");
+      }
+      return { id: s.id, startsAt, endsAt };
+    });
+
+    const nextBranchId =
+      session.isOwner && parsed.data.branchId
+        ? Number(parsed.data.branchId)
+        : existingWorkshop.branchId;
+    const nextPrice = Number(parsed.data.price);
+    const priceChanged = Number(existingWorkshop.totalPrice) !== nextPrice;
+
     await prisma.$transaction(async (tx) => {
       await tx.workshop.update({
-        where: { id: data.id },
+        where: { id: existingWorkshop.id },
         data: {
-          title: data.title,
-          description: data.description || "",
-          totalPrice: data.price !== undefined ? data.price : ((data as any).totalPrice !== undefined ? (data as any).totalPrice : 0),
-          guestTeacher: data.teacherName || (data as any).guestTeacher || (data as any).teacher || "Professeur Invité",
+          title: parsed.data.title.trim(),
+          description: parsed.data.description?.trim() || "",
+          totalPrice: nextPrice,
+          guestTeacher: parsed.data.teacherName.trim() || "Professeur Invité",
+          ...(session.isOwner && parsed.data.branchId ? { branchId: nextBranchId } : {}),
         },
       });
 
-      await tx.workshopSession.deleteMany({
-        where: { workshopId: data.id },
+      // Preserve existing WorkshopSession IDs & WorkshopAttendance rows on update
+      const existingSessions = await tx.workshopSession.findMany({
+        where: { workshopId: existingWorkshop.id },
+        select: { id: true },
       });
+      const existingIds = new Set(existingSessions.map((s) => s.id));
+      const keptIds = new Set<number>();
 
-      if (data.sessions && data.sessions.length > 0) {
-        await tx.workshopSession.createMany({
-          data: data.sessions.map((session) => ({
-            workshopId: data.id!,
-            startsAt: new Date(session.startTime),
-            endsAt: new Date(session.endTime),
-          })),
+      for (const sess of parsedSessions) {
+        if (sess.id && existingIds.has(sess.id)) {
+          keptIds.add(sess.id);
+          await tx.workshopSession.update({
+            where: { id: sess.id },
+            data: { startsAt: sess.startsAt, endsAt: sess.endsAt },
+          });
+        } else {
+          await tx.workshopSession.create({
+            data: {
+              workshopId: existingWorkshop.id,
+              startsAt: sess.startsAt,
+              endsAt: sess.endsAt,
+            },
+          });
+        }
+      }
+
+      const removedIds = existingSessions
+        .filter((s) => !keptIds.has(s.id))
+        .map((s) => s.id);
+      if (removedIds.length > 0) {
+        await tx.workshopAttendance.deleteMany({
+          where: { sessionId: { in: removedIds } },
         });
+        await tx.workshopSession.deleteMany({
+          where: { id: { in: removedIds } },
+        });
+      }
+
+      if (priceChanged) {
+        const participants = await tx.workshopParticipant.findMany({
+          where: { workshopId: existingWorkshop.id },
+          select: { studentId: true },
+        });
+        for (const p of participants) {
+          await syncWorkshopParticipantTotals(tx, existingWorkshop.id, p.studentId);
+        }
       }
     });
 
     safeRevalidatePath("/list/workshops");
-    safeRevalidatePath(`/list/workshops/${data.id}`);
+    safeRevalidatePath(`/list/workshops/${existingWorkshop.id}`);
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath(`/list/attendance/workshop/${existingWorkshop.id}`);
+    safeRevalidatePath("/admin");
     return { success: true, error: false, message: "Atelier mis à jour avec succès / تم تحديث الدورة بنجاح." };
-  } catch (err) {
+  } catch (err: any) {
     console.log(err);
-    return { success: false, error: true, message: "Échec de la mise à jour de l'atelier / فشل في تحديث الدورة." };
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "Échec de la mise à jour de l'atelier / فشل في تحديث الدورة.",
+    };
   }
 };
 
@@ -8501,12 +9856,69 @@ export const deleteWorkshop = async (
   currentState: CurrentState,
   data: FormData
 ) => {
-  const id = data.get("id") as string;
+  const idStr = data.get("id") as string;
+  const workshopId = parseInt(idStr, 10);
+  if (isNaN(workshopId)) {
+    return { success: false, error: true, message: "Identifiant d'atelier invalide / معرف الدورة غير صالح." };
+  }
   try {
-    await prisma.workshop.delete({
-      where: { id: parseInt(id) },
+    const session = await getAuthSession();
+    const workshop = await prisma.workshop.findUnique({
+      where: { id: workshopId },
+      select: { id: true, branchId: true },
     });
+    if (!workshop) {
+      return { success: false, error: true, message: "Atelier introuvable / الدورة غير موجودة." };
+    }
+
+    const authErr = assertWorkshopPermission(session, "delete", workshop.branchId);
+    if (authErr) {
+      return { success: false, error: true, message: authErr };
+    }
+
+    const activeVouchersCount = await prisma.voucher.count({
+      where: {
+        workshopId,
+        isVoided: false,
+        isRefund: false,
+      },
+    });
+    if (activeVouchersCount > 0) {
+      return {
+        success: false,
+        error: true,
+        message:
+          "Impossible de supprimer un atelier ayant des reçus de paiement actifs. Remboursez ou annulez les reçus d'abord. / لا يمكن حذف دورة تحتوي على وصولات دفع نشطة. يرجى استرداد أو إلغاء الوصولات أولاً.",
+      };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const sessRows = await tx.workshopSession.findMany({
+        where: { workshopId },
+        select: { id: true },
+      });
+      const sessionIds = sessRows.map((s) => s.id);
+      if (sessionIds.length > 0) {
+        await tx.workshopAttendance.deleteMany({
+          where: { sessionId: { in: sessionIds } },
+        });
+      }
+      await tx.workshopSession.deleteMany({
+        where: { workshopId },
+      });
+      await tx.workshopParticipant.deleteMany({
+        where: { workshopId },
+      });
+      await tx.workshop.delete({
+        where: { id: workshopId },
+      });
+    });
+
     safeRevalidatePath("/list/workshops");
+    safeRevalidatePath(`/list/workshops/${workshopId}`);
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath(`/list/attendance/workshop/${workshopId}`);
+    safeRevalidatePath("/admin");
     return { success: true, error: false, message: "Atelier supprimé avec succès / تم حذف الدورة بنجاح." };
   } catch (err) {
     console.log(err);
@@ -8519,6 +9931,124 @@ export const deleteWorkshop = async (
 // WORKSHOP MANAGEMENT ACTIONS
 // =================================================================
 
+async function registerWorkshopParticipantTx(
+  tx: Prisma.TransactionClient,
+  params: {
+    workshop: { id: number; branchId: number; totalPrice: any };
+    branchId: number;
+    studentId?: string;
+    cleanName: string;
+    cleanPhone: string | null;
+    participantGender: "MALE" | "FEMALE";
+    initialAmount: number;
+    issuedBy: string;
+  }
+) {
+  const { workshop, branchId, cleanName, cleanPhone, participantGender, initialAmount, issuedBy } = params;
+  const workshopPrice = Number(workshop.totalPrice);
+
+  let student = params.studentId
+    ? await tx.student.findUnique({ where: { id: params.studentId } })
+    : null;
+
+  if (params.studentId && !student) {
+    throw new Error("التلميذ المحدد غير موجود / Élève sélectionné introuvable.");
+  }
+
+  if (!student) {
+    student = cleanPhone
+      ? await tx.student.findFirst({
+          where: { name: { equals: cleanName, mode: "insensitive" }, phone: cleanPhone },
+        })
+      : await tx.student.findFirst({
+          where: {
+            name: { equals: cleanName, mode: "insensitive" },
+            phone: null,
+            registeredBranchId: branchId,
+          },
+        });
+  }
+
+  if (!student) {
+    const globalNumber = await getNextGlobalStudentNumber(tx);
+    student = await tx.student.create({
+      data: {
+        id: `student_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        globalNumber,
+        name: cleanName,
+        phone: cleanPhone,
+        sex: participantGender,
+        registeredBranchId: branchId,
+      },
+    });
+  }
+
+  const duplicate = await tx.workshopParticipant.findFirst({
+    where: { workshopId: workshop.id, studentId: student.id },
+  });
+  if (duplicate) {
+    throw new Error("هذا التلميذ مسجل بالفعل في هذه الدورة. / Ce participant est déjà inscrit à cet atelier.");
+  }
+
+  let createdVoucherNumber: number | null = null;
+  if (initialAmount > 0) {
+    const series = await resolveWorkshopVoucherSeries(tx, branchId, workshop.branchId);
+    const updatedSeries = await tx.voucherSeries.update({
+      where: { id: series.id },
+      data: { currentNumber: { increment: 1 } },
+    });
+    createdVoucherNumber = updatedSeries.currentNumber;
+
+    await tx.voucher.create({
+      data: {
+        seriesId: series.id,
+        number: updatedSeries.currentNumber,
+        studentId: student.id,
+        workshopId: workshop.id,
+        classId: null,
+        issuingBranchId: branchId,
+        targetBranchId: workshop.branchId,
+        paymentType: "WORKSHOP",
+        amount: new Prisma.Decimal(initialAmount),
+        isPartial: initialAmount < workshopPrice,
+        remainingBalance:
+          initialAmount < workshopPrice ? new Prisma.Decimal(workshopPrice - initialAmount) : null,
+        issuedBy,
+        isVoided: false,
+        status: "ACTIVE",
+      },
+    });
+
+    await upsertDailyLedger(tx, {
+      branchId,
+      date: new Date(),
+      type: "ATELIER_FORMATION",
+      amount: initialAmount,
+    });
+  }
+
+  // Auto-assign chair number for this gender in this workshop (§7.14)
+  const maxChair = await tx.workshopParticipant.aggregate({
+    where: { workshopId: workshop.id, gender: participantGender },
+    _max: { chairNumber: true },
+  });
+  const nextChairNumber = (maxChair._max.chairNumber || 0) + 1;
+
+  await tx.workshopParticipant.create({
+    data: {
+      workshopId: workshop.id,
+      studentId: student.id,
+      gender: participantGender,
+      chairNumber: nextChairNumber,
+      status: initialAmount >= workshopPrice ? "PAID_IN_FULL" : "OWED",
+      totalPaid: initialAmount,
+      totalRefunded: 0,
+    },
+  });
+
+  return { studentId: student.id, createdVoucherNumber };
+}
+
 // Action to register a new participant and optionally record their first payment via Voucher
 export const registerParticipant = async (
   currentState: CurrentState,
@@ -8526,9 +10056,17 @@ export const registerParticipant = async (
 ) => {
   // Triggers financial cache revalidation via revalidateFinancialRoutes (/list/daily-ledger, /list/revenue)
   try {
+    const parsed = registerParticipantSchema.safeParse(data);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: true,
+        message: parsed.error.issues[0]?.message || "بيانات التسجيل غير صالحة / Données d'inscription invalides.",
+      };
+    }
+
     const session = await getAuthSession();
     const activeBranchId = await getActiveBranchId();
-    const branchId = activeBranchId || session.branchIds[0] || 1;
 
     const workshop = await prisma.workshop.findUnique({
       where: { id: data.workshopId },
@@ -8537,132 +10075,62 @@ export const registerParticipant = async (
       return { success: false, error: true, message: "Atelier introuvable / الورشة المحددة غير موجودة." };
     }
 
-    const targetBranchId = workshop.branchId;
-    const isCrossBranch = branchId !== targetBranchId;
-    const seriesScope = isCrossBranch ? "CROSS_BRANCH" : "LOCAL_LEVEL";
-    const initialAmount = data.amount && data.amount > 0 ? Number(data.amount) : 0;
+    const branchId = session.isOwner
+      ? activeBranchId || workshop.branchId
+      : activeBranchId || session.branchIds[0] || workshop.branchId;
 
-    let series: any = null;
-    if (initialAmount > 0) {
-      series = await prisma.voucherSeries.findFirst({
-        where: {
-          issuingBranchId: branchId,
-          scope: seriesScope,
-          ...(isCrossBranch ? { targetBranchId: targetBranchId } : {}),
-        },
-        orderBy: { id: "asc" },
-      });
-
-      if (!series) {
-        series = await prisma.voucherSeries.create({
-          data: {
-            issuingBranchId: branchId,
-            scope: seriesScope,
-            targetBranchId: isCrossBranch ? targetBranchId : null,
-            currentNumber: isCrossBranch ? 50 : 100,
-          },
-        });
-      }
+    const authErr = assertWorkshopPermission(session, "create", branchId);
+    if (authErr) {
+      return { success: false, error: true, message: authErr };
     }
 
-    let createdVoucherNumber: number | null = null;
+    const initialAmount = parsed.data.amount && parsed.data.amount > 0 ? Number(parsed.data.amount) : 0;
+    const workshopPrice = Number(workshop.totalPrice);
+    if (initialAmount > workshopPrice) {
+      return {
+        success: false,
+        error: true,
+        message: `المبلغ المدفوع (${initialAmount} دج) يتجاوز سعر الدورة (${workshopPrice} دج). / Le montant payé (${initialAmount} DZD) dépasse le tarif de l'atelier (${workshopPrice} DZD).`,
+      };
+    }
 
-    await prisma.$transaction(async (tx) => {
-      let student = await tx.student.findFirst({
-        where: { name: data.name, ...(data.phone ? { phone: data.phone } : {}) },
-      });
-      if (!student) {
-        const globalNumber = await getNextGlobalStudentNumber(tx);
-        student = await tx.student.create({
-          data: {
-            id: `student_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-            globalNumber,
-            name: data.name,
-            phone: data.phone || null,
-            registeredBranchId: branchId,
-          },
-        });
-      }
-
-      if (initialAmount > 0 && series) {
-        const updatedSeries = await tx.voucherSeries.update({
-          where: { id: series.id },
-          data: { currentNumber: { increment: 1 } },
-        });
-        createdVoucherNumber = updatedSeries.currentNumber;
-
-        await tx.voucher.create({
-          data: {
-            seriesId: series.id,
-            number: updatedSeries.currentNumber,
-            studentId: student.id,
-            workshopId: workshop.id,
-            classId: null,
-            issuingBranchId: branchId,
-            targetBranchId: targetBranchId,
-            paymentType: "WORKSHOP",
-            amount: new Prisma.Decimal(initialAmount),
-            isPartial: initialAmount < Number(workshop.totalPrice),
-            remainingBalance: initialAmount < Number(workshop.totalPrice) ? new Prisma.Decimal(Number(workshop.totalPrice) - initialAmount) : null,
-            issuedBy: session.userId || "admin",
-            isVoided: false,
-            status: "ACTIVE",
-          },
-        });
-
-        // Update DailyLedger at issuing branch where cash is physically collected
-        await upsertDailyLedger(tx, {
-          branchId: branchId,
-          date: new Date(),
-          type: "ATELIER_FORMATION",
-          amount: initialAmount,
-        });
-      }
-
-      const isPaidInFull = initialAmount >= Number(workshop.totalPrice);
-
-      // Auto-assign chair number for this gender in this workshop (§7.14)
-      // Continuous counter starting at 1, kept separately per gender (boys 1,2,3...; girls 1,2,3... independently)
-      const participantGender = data.gender || "MALE";
-      const maxChair = await tx.workshopParticipant.aggregate({
-        where: {
-          workshopId: data.workshopId,
-          gender: participantGender,
-        },
-        _max: { chairNumber: true },
-      });
-      const nextChairNumber = (maxChair._max.chairNumber || 0) + 1;
-
-      await tx.workshopParticipant.create({
-        data: {
-          workshopId: data.workshopId,
-          studentId: student.id,
-          gender: participantGender,
-          chairNumber: nextChairNumber,
-          status: isPaidInFull ? "PAID_IN_FULL" : "OWED",
-          totalPaid: initialAmount,
-          totalRefunded: 0,
-        },
-      });
-    });
+    const result = await prisma.$transaction((tx) =>
+      registerWorkshopParticipantTx(tx, {
+        workshop,
+        branchId,
+        studentId: parsed.data.studentId,
+        cleanName: parsed.data.name.trim(),
+        cleanPhone: parsed.data.phone?.trim() || null,
+        participantGender: parsed.data.gender || "MALE",
+        initialAmount,
+        issuedBy: session.userId || "admin",
+      })
+    );
 
     try {
       await revalidateFinancialRoutes({
         workshopId: data.workshopId,
-        branchId: branchId,
+        studentId: result.studentId,
+        branchId,
       });
-      safeRevalidatePath(`/list/workshops/${data.workshopId}`);
+      safeRevalidatePath(`/list/workshops/${workshop.id}`);
+      safeRevalidatePath(`/list/attendance`);
+      safeRevalidatePath(`/list/attendance/workshop/${workshop.id}`);
     } catch (_) {}
-    return { 
-      success: true, 
-      error: false, 
-      message: createdVoucherNumber 
-        ? `Participant inscrit avec succès (Reçu #${createdVoucherNumber}) / تم تسجيل التلميذ بنجاح وإصدار وصل رقم #${createdVoucherNumber}.`
-        : "Participant inscrit avec succès / تم تسجيل التلميذ بنجاح." 
+    return {
+      success: true,
+      error: false,
+      message: result.createdVoucherNumber
+        ? `Participant inscrit avec succès (Reçu #${result.createdVoucherNumber}) / تم تسجيل التلميذ بنجاح وإصدار وصل رقم #${result.createdVoucherNumber}.`
+        : "Participant inscrit avec succès / تم تسجيل التلميذ بنجاح.",
     };
-  } catch (err) {
+  } catch (err: any) {
     console.error("registerParticipant error:", err);
-    return { success: false, error: true, message: "Échec de l'inscription du participant / فشل في تسجيل التلميذ." };
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "Échec de l'inscription du participant / فشل في تسجيل التلميذ.",
+    };
   }
 };
 
@@ -8672,27 +10140,46 @@ export const updateWorkshopParticipant = async (
   data: RegisterParticipantSchema & { id: number } // Reuse schema, but ensure ID is present
 ) => {
   if (!data.id) {
-    return { success: false, error: true, message: "لا يوجد معرف للتلميذ." };
+    return { success: false, error: true, message: "لا يوجد معرف للتلميذ / Identifiant participant manquant." };
   }
   try {
+    const session = await getAuthSession();
     const participant = await prisma.workshopParticipant.findUnique({
-      where: { id: data.id },
+      where: { id: Number(data.id) },
+      include: { workshop: { select: { branchId: true } } },
     });
-    if (participant) {
-      await prisma.student.update({
+    if (!participant) {
+      return { success: false, error: true, message: "المشارك غير موجود / Participant introuvable." };
+    }
+
+    const authErr = assertWorkshopPermission(session, "update", participant.workshop.branchId);
+    if (authErr) {
+      return { success: false, error: true, message: authErr };
+    }
+
+    const cleanName = data.name.trim();
+    const cleanPhone = data.phone?.trim() || null;
+    if (!cleanName) {
+      return { success: false, error: true, message: "اسم التلميذ مطلوب / Le nom est requis." };
+    }
+
+    const participantGender = data.gender || participant.gender;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.student.update({
         where: { id: participant.studentId },
         data: {
-          name: data.name,
-          phone: data.phone || null,
+          name: cleanName,
+          phone: cleanPhone,
+          sex: participantGender,
         },
       });
 
-      const participantGender = data.gender || participant.gender;
       let chairNumber = participant.chairNumber;
 
       // If gender was changed or chairNumber was missing, recalculate next chair number for the new gender
       if (data.gender && data.gender !== participant.gender) {
-        const maxChair = await prisma.workshopParticipant.aggregate({
+        const maxChair = await tx.workshopParticipant.aggregate({
           where: {
             workshopId: participant.workshopId,
             gender: participantGender,
@@ -8701,7 +10188,7 @@ export const updateWorkshopParticipant = async (
         });
         chairNumber = (maxChair._max.chairNumber || 0) + 1;
       } else if (!chairNumber) {
-        const maxChair = await prisma.workshopParticipant.aggregate({
+        const maxChair = await tx.workshopParticipant.aggregate({
           where: {
             workshopId: participant.workshopId,
             gender: participantGender,
@@ -8711,22 +10198,24 @@ export const updateWorkshopParticipant = async (
         chairNumber = (maxChair._max.chairNumber || 0) + 1;
       }
 
-      await prisma.workshopParticipant.update({
+      await tx.workshopParticipant.update({
         where: { id: participant.id },
         data: {
           gender: participantGender,
           chairNumber: chairNumber,
         },
       });
-    }
+    });
 
     try {
-      safeRevalidatePath(`/list/workshops/${data.workshopId}`);
+      safeRevalidatePath(`/list/workshops/${participant.workshopId}`);
+      safeRevalidatePath(`/list/attendance/workshop/${participant.workshopId}`);
+      safeRevalidatePath(`/list/students/${participant.studentId}`);
     } catch (_) {}
-    return { success: true, error: false, message: "تم تحديث معلومات التلميذ بنجاح." };
+    return { success: true, error: false, message: "Participant mis à jour avec succès / تم تحديث معلومات التلميذ بنجاح." };
   } catch (err) {
     console.log(err);
-    return { success: false, error: true, message: "فشل في تحديث معلومات التلميذ." };
+    return { success: false, error: true, message: "Échec de la mise à jour / فشل في تحديث معلومات التلميذ." };
   }
 };
 
@@ -8735,18 +10224,170 @@ export const deleteWorkshopParticipant = async (
   data: FormData
 ) => {
   const id = data.get("id") as string;
-  const workshopId = data.get("workshopId") as string;
+  const participantId = parseInt(id, 10);
+  if (isNaN(participantId)) {
+    return { success: false, error: true, message: "معرف المشارك غير صالح / Identifiant invalide." };
+  }
   try {
-    await prisma.workshopParticipant.delete({
-      where: { id: parseInt(id) },
+    const session = await getAuthSession();
+    const participant = await prisma.workshopParticipant.findUnique({
+      where: { id: participantId },
+      include: { workshop: { select: { branchId: true } } },
     });
-    safeRevalidatePath(`/list/workshops/${workshopId}`);
-    return { success: true, error: false, message: "تم حذف التلميذ بنجاح." };
+    if (!participant) {
+      return { success: false, error: true, message: "المشارك غير موجود / Participant introuvable." };
+    }
+
+    const authErr = assertWorkshopPermission(session, "delete", participant.workshop.branchId);
+    if (authErr) {
+      return { success: false, error: true, message: authErr };
+    }
+
+    const activeVouchersCount = await prisma.voucher.count({
+      where: {
+        workshopId: participant.workshopId,
+        studentId: participant.studentId,
+        isVoided: false,
+        isRefund: false,
+      },
+    });
+    if (activeVouchersCount > 0) {
+      return {
+        success: false,
+        error: true,
+        message:
+          "Impossible de supprimer un participant ayant des paiements actifs. Remboursez ou annulez les reçus d'abord. / لا يمكن حذف مشارك لديه وصولات دفع نشطة. يرجى استرداد أو إلغاء الوصولات أولاً.",
+      };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const sessRows = await tx.workshopSession.findMany({
+        where: { workshopId: participant.workshopId },
+        select: { id: true },
+      });
+      const sessionIds = sessRows.map((s) => s.id);
+      if (sessionIds.length > 0) {
+        await tx.workshopAttendance.deleteMany({
+          where: {
+            studentId: participant.studentId,
+            sessionId: { in: sessionIds },
+          },
+        });
+      }
+      await tx.workshopParticipant.delete({
+        where: { id: participant.id },
+      });
+    });
+
+    safeRevalidatePath("/list/workshops");
+    safeRevalidatePath(`/list/workshops/${participant.workshopId}`);
+    safeRevalidatePath("/list/attendance");
+    safeRevalidatePath(`/list/attendance/workshop/${participant.workshopId}`);
+    safeRevalidatePath("/admin");
+    return { success: true, error: false, message: "Participant supprimé avec succès / تم حذف التلميذ بنجاح." };
   } catch (err) {
     console.log(err);
-    return { success: false, error: true, message: "فشل في حذف التلميذ." };
+    return { success: false, error: true, message: "Échec de la suppression / فشل في حذف التلميذ." };
   }
 };
+
+async function executeWorkshopPaymentTx(
+  tx: Prisma.TransactionClient,
+  params: {
+    participantId: number;
+    paymentAmount: number;
+    issuingBranchId: number;
+    issuedBy: string;
+  }
+) {
+  const { participantId, paymentAmount, issuingBranchId, issuedBy } = params;
+  const participant = await tx.workshopParticipant.findUnique({
+    where: { id: participantId },
+    include: { workshop: true, Student: true },
+  });
+  if (!participant) {
+    throw new Error("المشارك غير موجود / Participant introuvable.");
+  }
+
+  const workshop = participant.workshop;
+  const targetBranchId = workshop.branchId;
+  const workshopPrice = Number(workshop.totalPrice);
+  const existingNetPaid = Math.max(0, Number(participant.totalPaid) - Number(participant.totalRefunded || 0));
+  const remainingOwed = Math.max(0, workshopPrice - existingNetPaid);
+
+  if (remainingOwed <= 0) {
+    throw new Error(
+      "المشارك مسدد بالكامل بالفعل ولا توجد مستحقات متبقية. / Le participant a déjà réglé l'intégralité des frais."
+    );
+  }
+  if (paymentAmount > remainingOwed) {
+    throw new Error(
+      `المبلغ المطلوب (${paymentAmount.toLocaleString()} دج) يتجاوز المبلغ المتبقي (${remainingOwed.toLocaleString()} دج). / Le montant (${paymentAmount} DZD) dépasse le reste à payer (${remainingOwed} DZD).`
+    );
+  }
+
+  const series = await resolveWorkshopVoucherSeries(tx, issuingBranchId, targetBranchId);
+  const updatedSeries = await tx.voucherSeries.update({
+    where: { id: series.id },
+    data: { currentNumber: { increment: 1 } },
+  });
+  const voucherNumber = updatedSeries.currentNumber;
+
+  const newRemainingAfterPayment = Math.max(0, remainingOwed - paymentAmount);
+  const isPaidInFull = newRemainingAfterPayment <= 0;
+
+  const priorPartialVouchers = await tx.voucher.findMany({
+    where: {
+      workshopId: workshop.id,
+      studentId: participant.studentId,
+      isPartial: true,
+      isVoided: false,
+      isRefund: false,
+    },
+    orderBy: { issuedAt: "desc" },
+    select: { id: true },
+  });
+
+  const createdVoucher = await tx.voucher.create({
+    data: {
+      seriesId: series.id,
+      number: voucherNumber,
+      studentId: participant.studentId,
+      workshopId: workshop.id,
+      classId: null,
+      issuingBranchId,
+      targetBranchId,
+      paymentType: "WORKSHOP",
+      amount: new Prisma.Decimal(paymentAmount),
+      isPartial: !isPaidInFull,
+      remainingBalance: !isPaidInFull ? new Prisma.Decimal(newRemainingAfterPayment) : null,
+      completesVoucherId: isPaidInFull && priorPartialVouchers.length > 0 ? priorPartialVouchers[0].id : null,
+      issuedBy,
+      isVoided: false,
+      status: "ACTIVE",
+    },
+  });
+
+  if (isPaidInFull && priorPartialVouchers.length > 0) {
+    await tx.voucher.updateMany({
+      where: { id: { in: priorPartialVouchers.map((v) => v.id) } },
+      data: { isPartial: false, remainingBalance: new Prisma.Decimal(0) },
+    });
+  }
+
+  await upsertDailyLedger(tx, {
+    branchId: issuingBranchId,
+    date: new Date(),
+    type: "ATELIER_FORMATION",
+    amount: paymentAmount,
+  });
+
+  await syncWorkshopParticipantTotals(tx, workshop.id, participant.studentId, {
+    reactivateIfSuspended: true,
+  });
+
+  return createdVoucher;
+}
 
 // Action to record a subsequent payment for a workshop participant via digital Voucher (§1.2 & §1.7)
 export const addWorkshopPayment = async (
@@ -8754,134 +10395,113 @@ export const addWorkshopPayment = async (
   data: WorkshopPaymentSchema
 ) => {
   try {
+    const parsed = workshopPaymentSchema.safeParse(data);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: true,
+        message: parsed.error.issues[0]?.message || "بيانات الدفع غير صالحة / Données de paiement invalides.",
+      };
+    }
+
+    const paymentAmount = Number(parsed.data.amount);
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+      return {
+        success: false,
+        error: true,
+        message: "يجب أن يكون مبلغ الدفع أكبر من الصفر. / Le montant doit être supérieur à 0.",
+      };
+    }
+
     const session = await getAuthSession();
     const activeBranchId = await getActiveBranchId();
-    const issuingBranchId = activeBranchId || session.branchIds[0] || 1;
 
-    const participant = await prisma.workshopParticipant.findUnique({
-      where: { id: data.participantId },
-      include: { workshop: true, Student: true },
+    const participantPreview = await prisma.workshopParticipant.findUnique({
+      where: { id: parsed.data.participantId },
+      include: { workshop: true },
     });
-    if (!participant) {
-      return { success: false, error: true, message: "المشارك غير موجود." };
+    if (!participantPreview) {
+      return { success: false, error: true, message: "المشارك غير موجود / Participant introuvable." };
     }
 
-    const workshop = participant.workshop;
-    const targetBranchId = workshop.branchId;
-    const isCrossBranch = issuingBranchId !== targetBranchId;
-    const seriesScope = isCrossBranch ? "CROSS_BRANCH" : "LOCAL_LEVEL";
-    const paymentAmount = Number(data.amount);
+    const workshop = participantPreview.workshop;
+    const issuingBranchId = session.isOwner
+      ? activeBranchId || workshop.branchId
+      : activeBranchId || session.branchIds[0] || workshop.branchId;
 
-    let series = await prisma.voucherSeries.findFirst({
-      where: {
-        issuingBranchId: issuingBranchId,
-        scope: seriesScope,
-        ...(isCrossBranch ? { targetBranchId: targetBranchId } : {}),
-      },
-      orderBy: { id: "asc" },
-    });
-
-    if (!series) {
-      series = await prisma.voucherSeries.create({
-        data: {
-          issuingBranchId: issuingBranchId,
-          scope: seriesScope,
-          targetBranchId: isCrossBranch ? targetBranchId : null,
-          currentNumber: isCrossBranch ? 50 : 100,
-        },
-      });
+    const authErr = assertWorkshopPermission(session, "create", issuingBranchId);
+    if (authErr) {
+      return { success: false, error: true, message: authErr };
     }
 
-    let createdVoucher: any = null;
-
-    await prisma.$transaction(async (tx) => {
-      const updatedSeries = await tx.voucherSeries.update({
-        where: { id: series.id },
-        data: { currentNumber: { increment: 1 } },
-      });
-      const voucherNumber = updatedSeries.currentNumber;
-
-      const newTotalPaid = Number(participant.totalPaid) + paymentAmount;
-      const netPaid = newTotalPaid - Number(participant.totalRefunded || 0);
-      const isPaidInFull = netPaid >= Number(workshop.totalPrice);
-
-      createdVoucher = await tx.voucher.create({
-        data: {
-          seriesId: series.id,
-          number: voucherNumber,
-          studentId: participant.studentId,
-          workshopId: workshop.id,
-          classId: null,
-          issuingBranchId: issuingBranchId,
-          targetBranchId: targetBranchId,
-          paymentType: "WORKSHOP",
-          amount: new Prisma.Decimal(paymentAmount),
-          isPartial: !isPaidInFull,
-          remainingBalance: !isPaidInFull ? new Prisma.Decimal(Number(workshop.totalPrice) - netPaid) : null,
-          issuedBy: session.userId || "admin",
-          isVoided: false,
-          status: "ACTIVE",
-        },
-      });
-
-      // Update DailyLedger at issuing branch where cash is physically collected
-      await upsertDailyLedger(tx, {
-        branchId: issuingBranchId,
-        date: new Date(),
-        type: "ATELIER_FORMATION",
-        amount: paymentAmount,
-      });
-
-      // Update workshopParticipant totalPaid and status
-      await tx.workshopParticipant.update({
-        where: { id: participant.id },
-        data: {
-          totalPaid: { increment: paymentAmount },
-          status: isPaidInFull ? "PAID_IN_FULL" : "OWED",
-        },
-      });
-    });
+    const createdVoucher = await prisma.$transaction((tx) =>
+      executeWorkshopPaymentTx(tx, {
+        participantId: parsed.data.participantId,
+        paymentAmount,
+        issuingBranchId,
+        issuedBy: session.userId || "admin",
+      })
+    );
 
     await revalidateFinancialRoutes({
       workshopId: workshop.id,
-      studentId: participant.studentId,
+      studentId: participantPreview.studentId,
       branchId: issuingBranchId,
     });
-    safeRevalidatePath(`/list/workshops/${data.workshopId}`);
-    return { 
-      success: true, 
-      error: false, 
-      message: `تم إصدار الوصل رقم #${createdVoucher?.number} وتسجيل الدفع بنجاح.` 
+    safeRevalidatePath(`/list/workshops/${workshop.id}`);
+    safeRevalidatePath(`/list/attendance`);
+    safeRevalidatePath(`/list/attendance/workshop/${workshop.id}`);
+    return {
+      success: true,
+      error: false,
+      message: `تم إصدار الوصل رقم #${createdVoucher?.number} وتسجيل الدفع بنجاح. / Reçu #${createdVoucher?.number} émis avec succès.`,
     };
-  } catch (err) {
+  } catch (err: any) {
     console.error("addWorkshopPayment error:", err);
-    return { success: false, error: true, message: "فشل في تسجيل الدفع وإصدار الوصل." };
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "فشل في تسجيل الدفع وإصدار الوصل. / Échec de l'enregistrement du paiement.",
+    };
   }
 };
 
-// Action to update an existing workshop payment
+// Action to update an existing workshop payment voucher (delegates to editVoucher for full audit & ledger sync)
 export const updateWorkshopPayment = async (
   currentState: CurrentState,
   data: WorkshopPaymentSchema
 ) => {
   if (!data.id) {
-    return { success: false, error: true, message: "لا يوجد معرف لعملية الدفع." };
+    return { success: false, error: true, message: "لا يوجد معرف لعملية الدفع / Identifiant de reçu manquant." };
   }
   try {
-    await prisma.workshopParticipant.update({
-      where: { id: data.participantId },
-      data: {
-        totalPaid: data.amount,
-      },
+    const voucher = await prisma.voucher.findUnique({
+      where: { id: Number(data.id) },
+      select: { id: true, workshopId: true },
     });
-    await revalidateFinancialRoutes({
-      workshopId: data.workshopId,
+    if (!voucher || !voucher.workshopId) {
+      return { success: false, error: true, message: "الوصل غير موجود / Reçu introuvable." };
+    }
+    const res = await editVoucher(currentState, {
+      voucherId: voucher.id,
+      fieldName: "amount",
+      newValue: String(data.amount),
+      amount: Number(data.amount),
+      reason: data.notes?.trim() || "تعديل مبلغ وصل الورشة / Modification du montant de l'atelier",
     });
-    safeRevalidatePath(`/list/workshops/${data.workshopId}`);
-    return { success: true, error: false, message: "تم تحديث عملية الدفع بنجاح." };
-  } catch (err) {
+    if (res.success) {
+      await revalidateFinancialRoutes({
+        workshopId: data.workshopId,
+      });
+    }
+    return res;
+  } catch (err: any) {
     console.log(err);
-    return { success: false, error: true, message: "فشل في تحديث عملية الدفع." };
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "فشل في تحديث عملية الدفع. / Échec de la mise à jour.",
+    };
   }
 };
 
@@ -8898,7 +10518,7 @@ export const saveWorkshopAttendance = async (
   );
 
   if (attendanceEntries.length === 0) {
-    return { success: false, error: true, message: "لم يتم إرسال بيانات الحضور." };
+    return { success: false, error: true, message: "لم يتم إرسال بيانات الحضور. / Aucune donnée de présence soumise." };
   }
 
   const workshopSession = await prisma.workshopSession.findUnique({
@@ -8906,11 +10526,12 @@ export const saveWorkshopAttendance = async (
     include: { workshop: { select: { branchId: true } } },
   });
   if (!workshopSession) {
-    return { success: false, error: true, message: "لم يتم العثور على حصص الدورة." };
+    return { success: false, error: true, message: "لم يتم العثور على حصص الدورة. / Séance introuvable." };
   }
 
   const session = await getAuthSession();
-  if (!session.isOwner && !canUserAccessBranch(session.rawRole, session.branchIds, workshopSession.workshop.branchId)) {
+  const authErr = assertWorkshopPermission(session, "update", workshopSession.workshop.branchId);
+  if (authErr) {
     return {
       success: false,
       error: true,
@@ -8919,38 +10540,46 @@ export const saveWorkshopAttendance = async (
   }
 
   try {
-    for (const [key, value] of attendanceEntries) {
-      const participantId = parseInt(key.substring(key.indexOf("[") + 1, key.indexOf("]")));
-      const isPresent = (value as string) === "PRESENT";
-      const participant = await prisma.workshopParticipant.findUnique({ where: { id: participantId } });
-      if (!participant) continue;
+    await prisma.$transaction(async (tx) => {
+      for (const [key, value] of attendanceEntries) {
+        const participantId = parseInt(key.substring(key.indexOf("[") + 1, key.indexOf("]")), 10);
+        if (isNaN(participantId)) continue;
 
-      const existing = await prisma.workshopAttendance.findFirst({
-        where: { sessionId, studentId: participant.studentId },
-      });
-      if (existing) {
-        await prisma.workshopAttendance.update({
-          where: { id: existing.id },
-          data: { status: isPresent ? "PRESENT" : "ABSENT" },
+        const participant = await tx.workshopParticipant.findUnique({
+          where: { id: participantId },
         });
-      } else {
-        await prisma.workshopAttendance.create({
-          data: {
-            sessionId,
-            studentId: participant.studentId,
-            status: isPresent ? "PRESENT" : "ABSENT",
-          },
+        if (!participant || participant.workshopId !== workshopSession.workshopId) continue;
+        if (["SUSPENDED", "REFUNDED", "INACTIVE"].includes(participant.status)) continue;
+
+        const isPresent = (value as string) === "PRESENT";
+        const existing = await tx.workshopAttendance.findFirst({
+          where: { sessionId, studentId: participant.studentId },
         });
+        if (existing) {
+          await tx.workshopAttendance.update({
+            where: { id: existing.id },
+            data: { status: isPresent ? "PRESENT" : "ABSENT" },
+          });
+        } else {
+          await tx.workshopAttendance.create({
+            data: {
+              sessionId,
+              studentId: participant.studentId,
+              status: isPresent ? "PRESENT" : "ABSENT",
+            },
+          });
+        }
       }
-    }
+    });
 
     safeRevalidatePath("/admin");
     safeRevalidatePath("/list/attendance");
+    safeRevalidatePath(`/list/attendance/workshop/${workshopSession.workshopId}`);
     safeRevalidatePath(`/list/workshops/${workshopSession.workshopId}`);
-    return { success: true, error: false, message: "تم حفظ الحضور بنجاح." };
+    return { success: true, error: false, message: "تم حفظ الحضور بنجاح. / Présences enregistrées avec succès." };
   } catch (err: any) {
     console.log(err);
-    return { success: false, error: true, message: "فشل في حفظ الحضور." };
+    return { success: false, error: true, message: "فشل في حفظ الحضور. / Échec de l'enregistrement des présences." };
   }
 };
 
@@ -9172,6 +10801,7 @@ export const exportToExcel = async (
                   },
                   transfersFrom: true,
                   transfersTo: true,
+                  payerHistory: { orderBy: { effectiveFrom: "asc" } },
                 },
                 orderBy: { enrolledAt: 'asc' },
               },
@@ -9316,6 +10946,9 @@ export const exportToExcel = async (
               pricePerCycle: Number(classTarget.pricePerCycle || 0),
               isFormation,
               payerStatus: enrPayerStatus,
+              discountType: (enrollment as any).discountType,
+              discountValue: (enrollment as any).discountValue,
+              payerHistory: (enrollment as any).payerHistory,
               siblingDiscountPercentage: siblingDiscountPct,
               isSiblingWaived: isSiblingWaived100,
               isPayerSiblingPaid: isPayerActiveAndPaid,
@@ -9333,18 +10966,31 @@ export const exportToExcel = async (
             });
 
             const consumed = creditMetrics.attendedSessions;
-            const remaining = isSiblingWaived100
+            const remaining = creditMetrics.isSiblingWaived
               ? 0
-              : isWaivedSibling && payerCredit
+              : !creditMetrics.isDiscounted && isWaivedSibling && payerCredit
               ? payerCredit.netSessions
               : creditMetrics.netSessions;
 
             // Status label
+            const discountTagAr = creditMetrics.isDiscounted
+              ? `تخفيض ${formatDiscountBadgeLabel((enrollment as any).discountType, (enrollment as any).discountValue, "ar")}`
+              : "";
             let statusText = "غير دافع";
             if (creditMetrics.isNonPayer) {
               statusText = "معفى من الرسوم";
-            } else if (isSiblingWaived100) {
+            } else if (creditMetrics.isZeroFeeDiscount) {
+              statusText = `معفى (${discountTagAr})`;
+            } else if (creditMetrics.isSiblingWaived) {
               statusText = isPayerActiveAndPaid ? "معفى (أخ دافع)" : "غير دافع (أخ)";
+            } else if (creditMetrics.isDiscounted) {
+              if (remaining >= 2) {
+                statusText = `دافع (${discountTagAr})`;
+              } else if (remaining === 1) {
+                statusText = `قريب الانتهاء (${discountTagAr})`;
+              } else {
+                statusText = `غير دافع (${discountTagAr})`;
+              }
             } else if (creditMetrics.isSchoolFeesOnly) {
               if (remaining >= 2) {
                 statusText = `دافع (${remaining} حصص - حصة المدرسة)`;
@@ -9505,6 +11151,7 @@ export const exportToExcel = async (
                         },
                         transfersFrom: true,
                         transfersTo: true,
+                        payerHistory: { orderBy: { effectiveFrom: "asc" } },
                     },
                     orderBy: [
                         { student: { name: 'asc' } },
@@ -9708,8 +11355,9 @@ export const exportToExcel = async (
             const isSiblingWaived100 = isWaivedSibling && siblingDiscountPct >= 100;
             const isNonPayer = enrPayerStatus === "NON_PAYER" || enrPayerStatus === "FREE_ALL" || enrPayerStatus === "FREE_TUITION";
             const isSchoolOnly = enrPayerStatus === "SCHOOL_FEES_ONLY";
+            const isDiscounted = enrPayerStatus === "DISCOUNTED";
 
-            const payerCredit = isWaivedSibling && family?.payerStudent
+            const payerCredit = !isDiscounted && isWaivedSibling && family?.payerStudent
                 ? resolvePayerCredit({
                     payerStudent: family.payerStudent,
                     classId: classData.id,
@@ -9717,14 +11365,16 @@ export const exportToExcel = async (
                     isFormation: Boolean((classData as any).isFormation),
                 })
                 : null;
-            const isPayerActiveAndPaid = isWaivedSibling
+            const isPayerActiveAndPaid = !isDiscounted && isWaivedSibling
                 ? Boolean(payerCredit?.isPayerActiveAndPaid)
                 : true;
 
             // Determine row identity fill color
             let rowIdentityFill = C_WHITE;
-            if (isNonPayer || isWaivedSibling) {
+            if (isNonPayer || (!isDiscounted && isWaivedSibling)) {
                 rowIdentityFill = C_ORANGE_ROW; // Orange row for siblings & non-payers
+            } else if (isDiscounted) {
+                rowIdentityFill = 'FFE2EFDA'; // Soft Mint Green for Owner-discounted students
             } else if (isSchoolOnly) {
                 rowIdentityFill = C_BLUE_ROW; // Blue row for school-part payers
             }
@@ -9762,10 +11412,13 @@ export const exportToExcel = async (
                 pricePerCycle: Number(classData.pricePerCycle || 0),
                 isFormation: Boolean(classData.isFormation),
                 payerStatus: enrPayerStatus,
+                discountType: (enrollment as any).discountType,
+                discountValue: (enrollment as any).discountValue,
+                payerHistory: (enrollment as any).payerHistory,
                 siblingDiscountPercentage: siblingDiscountPct,
                 isSiblingWaived: isSiblingWaived100,
                 isPayerSiblingPaid: isPayerActiveAndPaid,
-                payerRemainingCredit: isWaivedSibling && !isSiblingWaived100 ? payerCredit?.netSessions : undefined,
+                payerRemainingCredit: !isDiscounted && isWaivedSibling && !isSiblingWaived100 ? payerCredit?.netSessions : undefined,
                 tuitionVouchers,
                 transfersIn: enrollment.transfersTo,
                 transfersOut: enrollment.transfersFrom,
@@ -9778,9 +11431,9 @@ export const exportToExcel = async (
               enrollmentStatus: enrollment.status,
             });
 
-            const paidSessionsCount = isNonPayer || isSiblingWaived100
+            const paidSessionsCount = isNonPayer || creditMetrics.isSiblingWaived || creditMetrics.isZeroFeeDiscount
                 ? 9999
-                : isWaivedSibling && payerCredit
+                : !isDiscounted && isWaivedSibling && payerCredit
                 ? Math.max(0, payerCredit.netSessions + creditMetrics.attendedSessions)
                 : Math.max(0, creditMetrics.purchasedSessions + creditMetrics.transferredIn - creditMetrics.transferredOut);
 
@@ -9994,7 +11647,7 @@ export const exportToExcel = async (
 
             return {
                 chairNumber: p.chairNumber ?? "-",
-                name: p.Student.name,
+                name: p.Student?.name || `Élève #${p.studentId}`,
                 gender: p.gender === "FEMALE" ? "Female / أنثى" : "Male / ذكر",
                 netPaid: netPaid,
                 paymentStatus: p.status,
@@ -10022,6 +11675,9 @@ export const exportToExcel = async (
                     orderBy: { startsAt: 'asc' }
                 },
                 participants: {
+                    where: {
+                        status: { notIn: ["SUSPENDED", "REFUNDED", "INACTIVE"] },
+                    },
                     include: {
                         Student: true,
                     },
@@ -10046,7 +11702,7 @@ export const exportToExcel = async (
             { header: "Genre / الجنس", key: "gender", width: 14 },
             { header: "Téléphone / الهاتف", key: "phone", width: 16 },
             ...wsData.sessions.map((s, idx) => ({
-                header: `Séance ${idx + 1}\n${new Date(s.startsAt).toLocaleDateString('fr-DZ')}`,
+                header: `Séance ${idx + 1}\n${formatAlgiersDate(s.startsAt, 'fr')}`,
                 key: `session_${s.id}`,
                 width: 16,
             })),
@@ -10121,6 +11777,7 @@ export const exportToExcel = async (
         const incomeVouchers = await prisma.voucher.findMany({
           where: {
             isVoided: false,
+            isRefund: false,
             issuedAt: { gte: startOfRange, lte: endOfRange },
             ...(options?.classId && { classId: options.classId }),
           },
@@ -12610,6 +14267,14 @@ export async function updateStudentPayerStatusAction(
       };
     }
 
+    if (newStatus === "DISCOUNTED") {
+      return {
+        success: false,
+        error: true,
+        message: "La remise s'applique par groupe uniquement / التخفيض يطبق على مستوى كل فوج على حدة.",
+      };
+    }
+
     const validStatuses = ["NORMAL", "NON_PAYER", "SCHOOL_FEES_ONLY"];
     const targetStatus = validStatuses.includes(newStatus) ? newStatus : "NORMAL";
 
@@ -12695,7 +14360,405 @@ export async function updateStudentPayerStatusAction(
 /**
  * Update an enrollment's payerStatus per §7.18.
  * Allows toggling between NORMAL, NON_PAYER, and SCHOOL_FEES_ONLY for a specific enrolled group.
- * Preserves all historical vouchers and logs an immutable audit event.
+/**
+ * Owner-only action to add or edit a student discount on a specific enrolled group (`Enrollment`).
+ * Supports PERCENT (% off), FIXED_AMOUNT (-DZD off), and CUSTOM_PRICE (custom DZD price).
+ * Records an immutable EnrollmentPayerHistory period + AuditLog so past vouchers & sessions stay untouched.
+ */
+export async function setEnrollmentDiscountAction(
+  input: EnrollmentDiscountSchema
+): Promise<{
+  success: boolean;
+  error: boolean;
+  message: string;
+  payerStatus?: string;
+  discountType?: string | null;
+  discountValue?: number | null;
+  enrollmentId?: number;
+}> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner || !session.can("create", "student_discounts")) {
+      return {
+        success: false,
+        error: true,
+        message:
+          "Action réservée au propriétaire uniquement / هذا الإجراء متاح للمالك فقط.",
+      };
+    }
+
+    const parsed = enrollmentDiscountSchema.safeParse(input);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: true,
+        message:
+          parsed.error.errors[0]?.message ||
+          "Données de remise invalides / بيانات التخفيض غير صالحة.",
+      };
+    }
+
+    const { studentId, enrollmentId, discountType, discountValue, reason } = parsed.data;
+
+    const enrollment = await prisma.enrollment.findUnique({
+      where: { id: enrollmentId },
+      include: {
+        class: {
+          include: {
+            branch: true,
+            FormationLevel: true,
+          },
+        },
+        student: { select: { id: true, name: true, registeredBranchId: true } },
+        payerHistory: { orderBy: { effectiveFrom: "asc" } },
+      },
+    });
+
+    if (!enrollment || enrollment.studentId !== studentId) {
+      return {
+        success: false,
+        error: true,
+        message: "Inscription introuvable / التسجيل غير موجود.",
+      };
+    }
+
+    const isFormation = Boolean(
+      enrollment.class.isFormation ||
+        enrollment.class.formationLevelId != null ||
+        enrollment.class.FormationLevel != null
+    );
+    const baseCyclePrice = isFormation
+      ? Number(
+          enrollment.class.FormationLevel?.lumpSumPrice ??
+            enrollment.class.pricePerCycle ??
+            0
+        )
+      : Number(enrollment.class.pricePerCycle ?? 0);
+
+    if (discountType === "PERCENT") {
+      if (discountValue <= 0 || discountValue > 100) {
+        return {
+          success: false,
+          error: true,
+          message:
+            "Le pourcentage de remise doit être compris entre 0,01% et 100% / يجب أن تكون نسبة التخفيض بين 0.01% و 100%.",
+        };
+      }
+    } else if (discountType === "FIXED_AMOUNT") {
+      if (baseCyclePrice <= 0 || discountValue <= 0 || discountValue > baseCyclePrice) {
+        return {
+          success: false,
+          error: true,
+          message: `Le montant de remise doit être supérieur à 0 et ne pas dépasser le tarif de base (${baseCyclePrice.toLocaleString()} DZD) / يجب أن يكون مبلغ التخفيض أكبر من 0 ولا يتجاوز السعر الأساسي (${baseCyclePrice.toLocaleString()} دج).`,
+        };
+      }
+    } else if (discountType === "CUSTOM_PRICE") {
+      if (discountValue < 0 || (baseCyclePrice > 0 && discountValue >= baseCyclePrice)) {
+        return {
+          success: false,
+          error: true,
+          message: `Le tarif réduit doit être inférieur au tarif de base (${baseCyclePrice.toLocaleString()} DZD) / يجب أن يكون السعر المخفض أقل من السعر الأساسي (${baseCyclePrice.toLocaleString()} دج).`,
+        };
+      }
+    }
+
+    const oldStatus = enrollment.payerStatus || "NORMAL";
+    const oldDiscountType = enrollment.discountType || null;
+    const oldDiscountValue =
+      enrollment.discountValue !== null && enrollment.discountValue !== undefined
+        ? Number(enrollment.discountValue)
+        : null;
+    const isEditingExistingDiscount = oldStatus === "DISCOUNTED";
+    const cleanReason = reason?.trim() || null;
+    const actor = session.userId || "owner";
+    const now = new Date();
+
+    await prisma.$transaction(async (tx) => {
+      if (!enrollment.payerHistory || enrollment.payerHistory.length === 0) {
+        await tx.enrollmentPayerHistory.create({
+          data: {
+            enrollmentId,
+            payerStatus: oldStatus,
+            discountType: oldDiscountType,
+            discountValue:
+              oldDiscountValue !== null ? new Prisma.Decimal(oldDiscountValue) : null,
+            reason: "Baseline initiale",
+            changedBy: "SYSTEM",
+            effectiveFrom: enrollment.enrolledAt,
+            effectiveTo: now,
+          },
+        });
+      } else {
+        await tx.enrollmentPayerHistory.updateMany({
+          where: { enrollmentId, effectiveTo: null },
+          data: { effectiveTo: now },
+        });
+      }
+
+      await tx.enrollmentPayerHistory.create({
+        data: {
+          enrollmentId,
+          payerStatus: "DISCOUNTED",
+          discountType,
+          discountValue: new Prisma.Decimal(discountValue),
+          reason: cleanReason,
+          changedBy: actor,
+          effectiveFrom: now,
+        },
+      });
+
+      await tx.enrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          payerStatus: "DISCOUNTED",
+          discountType,
+          discountValue: new Prisma.Decimal(discountValue),
+          discountReason: cleanReason,
+          discountUpdatedBy: actor,
+          discountUpdatedAt: now,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          entityType: "ENROLLMENT",
+          entityId: String(enrollmentId),
+          action: isEditingExistingDiscount
+            ? "EDIT_ENROLLMENT_DISCOUNT"
+            : "ADD_ENROLLMENT_DISCOUNT",
+          branchId: enrollment.class.branchId,
+          userId: actor,
+          userName: actor,
+          oldValue: JSON.stringify({
+            payerStatus: oldStatus,
+            discountType: oldDiscountType,
+            discountValue: oldDiscountValue,
+          }),
+          newValue: JSON.stringify({
+            payerStatus: "DISCOUNTED",
+            discountType,
+            discountValue,
+            reason: cleanReason,
+          }),
+          details: `${isEditingExistingDiscount ? "Modification" : "Ajout"} de remise propriétaire (${formatDiscountBadgeLabel(discountType, discountValue, "fr")}) sur le groupe "${enrollment.class.name}" pour "${enrollment.student.name}"`,
+        },
+      });
+    });
+
+    try {
+      await revalidateFinancialRoutes({
+        classId: enrollment.classId,
+        studentId,
+        branchId: enrollment.class.branchId,
+      });
+      safeRevalidatePath(`/list/students/${studentId}`);
+      safeRevalidatePath("/list/students");
+      safeRevalidatePath("/list/payments");
+      safeRevalidatePath(`/list/payments/class/${enrollment.classId}`);
+      safeRevalidatePath(`/list/classes/${enrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/class/${enrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/take/${enrollment.classId}`);
+      safeRevalidatePath(`/list/formations/${enrollment.classId}`);
+      safeRevalidatePath("/list/payroll");
+      safeRevalidatePath("/admin");
+    } catch {}
+
+    const badgeFr = formatDiscountBadgeLabel(discountType, discountValue, "fr");
+    const badgeAr = formatDiscountBadgeLabel(discountType, discountValue, "ar");
+
+    return {
+      success: true,
+      error: false,
+      message: `Groupe "${enrollment.class.name}" : remise (${badgeFr}) enregistrée / فوج "${enrollment.class.name}": تم حفظ التخفيض (${badgeAr}) بنجاح.`,
+      payerStatus: "DISCOUNTED",
+      discountType,
+      discountValue,
+      enrollmentId,
+    };
+  } catch (err: any) {
+    console.error("setEnrollmentDiscountAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message:
+        err.message ||
+        "Erreur lors de l'enregistrement de la remise / حدث خطأ أثناء حفظ التخفيض.",
+    };
+  }
+}
+
+/**
+ * Owner-only action to delete/remove an enrollment discount and transition the enrollment
+ * to a target payerStatus (defaults to NORMAL).
+ */
+export async function removeEnrollmentDiscountAction({
+  studentId,
+  enrollmentId,
+  targetStatus = "NORMAL",
+  reason,
+}: {
+  studentId: string;
+  enrollmentId: number;
+  targetStatus?: "NORMAL" | "NON_PAYER" | "SCHOOL_FEES_ONLY";
+  reason?: string | null;
+}): Promise<{
+  success: boolean;
+  error: boolean;
+  message: string;
+  payerStatus?: string;
+  enrollmentId?: number;
+}> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner || !session.can("delete", "student_discounts")) {
+      return {
+        success: false,
+        error: true,
+        message:
+          "Action réservée au propriétaire uniquement / حذف التخفيض متاح للمالك فقط.",
+      };
+    }
+
+    const validTargets = ["NORMAL", "NON_PAYER", "SCHOOL_FEES_ONLY"];
+    const nextStatus = validTargets.includes(targetStatus) ? targetStatus : "NORMAL";
+
+    const enrollment = await prisma.enrollment.findUnique({
+      where: { id: enrollmentId },
+      include: {
+        class: { include: { branch: true } },
+        student: { select: { id: true, name: true } },
+        payerHistory: { orderBy: { effectiveFrom: "asc" } },
+      },
+    });
+
+    if (!enrollment || enrollment.studentId !== studentId) {
+      return {
+        success: false,
+        error: true,
+        message: "Inscription introuvable / التسجيل غير موجود.",
+      };
+    }
+
+    const oldStatus = enrollment.payerStatus || "NORMAL";
+    const oldDiscountType = enrollment.discountType || null;
+    const oldDiscountValue =
+      enrollment.discountValue !== null && enrollment.discountValue !== undefined
+        ? Number(enrollment.discountValue)
+        : null;
+    const actor = session.userId || "owner";
+    const now = new Date();
+    const cleanReason = reason?.trim() || "Suppression de la remise propriétaire";
+
+    await prisma.$transaction(async (tx) => {
+      if (!enrollment.payerHistory || enrollment.payerHistory.length === 0) {
+        await tx.enrollmentPayerHistory.create({
+          data: {
+            enrollmentId,
+            payerStatus: oldStatus,
+            discountType: oldDiscountType,
+            discountValue:
+              oldDiscountValue !== null ? new Prisma.Decimal(oldDiscountValue) : null,
+            reason: "Baseline initiale",
+            changedBy: "SYSTEM",
+            effectiveFrom: enrollment.enrolledAt,
+            effectiveTo: now,
+          },
+        });
+      } else {
+        await tx.enrollmentPayerHistory.updateMany({
+          where: { enrollmentId, effectiveTo: null },
+          data: { effectiveTo: now },
+        });
+      }
+
+      await tx.enrollmentPayerHistory.create({
+        data: {
+          enrollmentId,
+          payerStatus: nextStatus,
+          discountType: null,
+          discountValue: null,
+          reason: cleanReason,
+          changedBy: actor,
+          effectiveFrom: now,
+        },
+      });
+
+      await tx.enrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          payerStatus: nextStatus,
+          discountType: null,
+          discountValue: null,
+          discountReason: null,
+          discountUpdatedBy: actor,
+          discountUpdatedAt: now,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          entityType: "ENROLLMENT",
+          entityId: String(enrollmentId),
+          action: "DELETE_ENROLLMENT_DISCOUNT",
+          branchId: enrollment.class.branchId,
+          userId: actor,
+          userName: actor,
+          oldValue: JSON.stringify({
+            payerStatus: oldStatus,
+            discountType: oldDiscountType,
+            discountValue: oldDiscountValue,
+          }),
+          newValue: JSON.stringify({
+            payerStatus: nextStatus,
+            discountType: null,
+            discountValue: null,
+          }),
+          details: `Suppression de remise propriétaire sur le groupe "${enrollment.class.name}" pour "${enrollment.student.name}" -> ${nextStatus}`,
+        },
+      });
+    });
+
+    try {
+      await revalidateFinancialRoutes({
+        classId: enrollment.classId,
+        studentId,
+        branchId: enrollment.class.branchId,
+      });
+      safeRevalidatePath(`/list/students/${studentId}`);
+      safeRevalidatePath("/list/students");
+      safeRevalidatePath("/list/payments");
+      safeRevalidatePath(`/list/payments/class/${enrollment.classId}`);
+      safeRevalidatePath(`/list/classes/${enrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/class/${enrollment.classId}`);
+      safeRevalidatePath(`/list/attendance/take/${enrollment.classId}`);
+      safeRevalidatePath(`/list/formations/${enrollment.classId}`);
+      safeRevalidatePath("/list/payroll");
+      safeRevalidatePath("/admin");
+    } catch {}
+
+    return {
+      success: true,
+      error: false,
+      message: `Groupe "${enrollment.class.name}" : remise supprimée (statut : ${nextStatus}) / فوج "${enrollment.class.name}": تم حذف التخفيض بنجاح.`,
+      payerStatus: nextStatus,
+      enrollmentId,
+    };
+  } catch (err: any) {
+    console.error("removeEnrollmentDiscountAction error:", err);
+    return {
+      success: false,
+      error: true,
+      message:
+        err.message ||
+        "Erreur lors de la suppression de la remise / حدث خطأ أثناء حذف التخفيض.",
+    };
+  }
+}
+
+/**
+ * Update an enrollment's payerStatus per §7.18.
+ * Allows toggling between NORMAL, NON_PAYER, and SCHOOL_FEES_ONLY for a specific enrolled group.
+ * Enforces Owner-only lock when an enrollment is DISCOUNTED.
  */
 export async function updateEnrollmentPayerStatusAction(
   studentId: string,
@@ -12718,14 +14781,27 @@ export async function updateEnrollmentPayerStatusAction(
       };
     }
 
+    if (newStatus === "DISCOUNTED") {
+      return {
+        success: false,
+        error: true,
+        message:
+          "Veuillez configurer la remise via la fenêtre dédiée au propriétaire / يرجى ضبط التخفيض من نافذة التخفيض الخاصة بالمالك.",
+      };
+    }
+
     const validStatuses = ["NORMAL", "NON_PAYER", "SCHOOL_FEES_ONLY"];
-    const targetStatus = validStatuses.includes(newStatus) ? newStatus : "NORMAL";
+    const targetStatus = (validStatuses.includes(newStatus) ? newStatus : "NORMAL") as
+      | "NORMAL"
+      | "NON_PAYER"
+      | "SCHOOL_FEES_ONLY";
 
     const enrollment = await prisma.enrollment.findUnique({
       where: { id: enrollmentId },
       include: {
         class: { include: { branch: true } },
         student: { select: { id: true, name: true, registeredBranchId: true } },
+        payerHistory: { orderBy: { effectiveFrom: "asc" } },
       },
     });
 
@@ -12748,11 +14824,68 @@ export async function updateEnrollmentPayerStatusAction(
 
     const oldStatus = enrollment.payerStatus || "NORMAL";
 
-    await prisma.$executeRaw`
-      UPDATE "Enrollment"
-      SET "payerStatus" = ${targetStatus}
-      WHERE id = ${enrollmentId}
-    `;
+    // Owner-Only Lock: Branch admins cannot overwrite or remove an Owner-configured discount
+    if (oldStatus === "DISCOUNTED") {
+      if (!session.isOwner) {
+        return {
+          success: false,
+          error: true,
+          message:
+            "Ce groupe bénéficie d'une remise propriétaire. Seul le propriétaire peut modifier ou supprimer cette remise / هذا الفوج يستفيد من تخفيض خاص بالمالك، لا يمكن تعديله أو حذفه إلا من طرف المالك.",
+        };
+      }
+      return removeEnrollmentDiscountAction({
+        studentId,
+        enrollmentId,
+        targetStatus,
+        reason: `Transition de DISCOUNTED vers ${targetStatus} par le propriétaire`,
+      });
+    }
+
+    const actor = session.userId || session.rawRole || "system";
+    const now = new Date();
+
+    await prisma.$transaction(async (tx) => {
+      if (!enrollment.payerHistory || enrollment.payerHistory.length === 0) {
+        await tx.enrollmentPayerHistory.create({
+          data: {
+            enrollmentId,
+            payerStatus: oldStatus,
+            reason: "Baseline initiale",
+            changedBy: "SYSTEM",
+            effectiveFrom: enrollment.enrolledAt,
+            effectiveTo: now,
+          },
+        });
+      } else {
+        await tx.enrollmentPayerHistory.updateMany({
+          where: { enrollmentId, effectiveTo: null },
+          data: { effectiveTo: now },
+        });
+      }
+
+      await tx.enrollmentPayerHistory.create({
+        data: {
+          enrollmentId,
+          payerStatus: targetStatus,
+          discountType: null,
+          discountValue: null,
+          reason: `Changement de statut: ${oldStatus} -> ${targetStatus}`,
+          changedBy: actor,
+          effectiveFrom: now,
+        },
+      });
+
+      await tx.enrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          payerStatus: targetStatus,
+          discountType: null,
+          discountValue: null,
+          discountReason: null,
+        },
+      });
+    });
 
     // Audit trail
     try {
@@ -12762,8 +14895,8 @@ export async function updateEnrollmentPayerStatusAction(
           entityId: String(enrollmentId),
           action: "UPDATE_ENROLLMENT_PAYER_STATUS",
           branchId: branchId,
-          userId: session.userId || session.rawRole || "system",
-          userName: session.userId || session.rawRole || "Admin",
+          userId: actor,
+          userName: actor,
           oldValue: oldStatus,
           newValue: targetStatus,
           details: `Statut de paiement du groupe "${enrollment.class.name}" modifié de ${oldStatus} à ${targetStatus}`,
@@ -12776,7 +14909,12 @@ export async function updateEnrollmentPayerStatusAction(
     safeRevalidatePath(`/list/students/${studentId}`);
     safeRevalidatePath("/list/students");
     safeRevalidatePath("/list/payments");
+    safeRevalidatePath(`/list/payments/class/${enrollment.classId}`);
     safeRevalidatePath(`/list/classes/${enrollment.classId}`);
+    safeRevalidatePath(`/list/attendance/class/${enrollment.classId}`);
+    safeRevalidatePath(`/list/attendance/take/${enrollment.classId}`);
+    safeRevalidatePath("/list/payroll");
+    safeRevalidatePath("/admin");
 
     const statusLabelsFr: Record<string, string> = {
       NORMAL: "Normal (par défaut)",
@@ -12843,6 +14981,12 @@ export async function unsuspendEnrollmentWithDebtClearance(
         class: {
           include: {
             branch: true,
+            teacherClassRates: true,
+            teacher: {
+              include: {
+                TeacherPayRate: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+              },
+            },
             lessons: {
               where: { isFree: false },
               select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true },
@@ -12893,6 +15037,7 @@ export async function unsuspendEnrollmentWithDebtClearance(
         },
         transfersFrom: true,
         transfersTo: true,
+        payerHistory: { orderBy: { effectiveFrom: "asc" } },
       },
     });
 
@@ -12942,34 +15087,54 @@ export async function unsuspendEnrollmentWithDebtClearance(
       });
       isPayerInClass = Boolean(payerEnrollmentInClass);
     }
-    const isSiblingDiscount = isPayerInClass;
+    const isDiscounted = enrollment.payerStatus === "DISCOUNTED";
+    const isSiblingDiscount = !isDiscounted && isPayerInClass;
     const siblingDiscountPct = isSiblingDiscount
       ? Number((family as any)?.discountPercentage ?? 50)
       : 0;
     const isSiblingWaived100 = isSiblingDiscount && siblingDiscountPct >= 100;
 
     const cyclePrice = Number(c.pricePerCycle || 0);
-    const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-    const effectiveLessonPrice =
-      siblingDiscountPct > 0 && siblingDiscountPct < 100
-        ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-        : isSiblingWaived100
-        ? 0
-        : baseLessonPrice;
+    const tClassOverride = (c.teacherClassRates as any[])?.find(
+      (tcr: any) => tcr.teacherId === c.teacherId
+    )?.percentage;
+    const teacherPercentage =
+      tClassOverride != null
+        ? Number(tClassOverride)
+        : (c.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+        ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+
+    const effectiveLessonPrice = computeStudentSessionFee({
+      payerStatus: enrollment.payerStatus === "SUSPENDED" ? "NORMAL" : enrollment.payerStatus,
+      discountType: (enrollment as any).discountType,
+      discountValue: (enrollment as any).discountValue,
+      pricePerCycle: cyclePrice,
+      teacherPercentage,
+      isSiblingWaived: isSiblingWaived100,
+      siblingDiscountPercentage: siblingDiscountPct,
+    }).studentSessionFee;
 
     let priorPurchasedSessions = 0;
     if (isSiblingWaived100) {
       priorPurchasedSessions = 16;
-    } else if (effectiveLessonPrice > 0) {
-      let totalPaidTuition = 0;
-      priorTuitionVouchers.forEach((v: any) => {
+    } else if (priorTuitionVouchers.length > 0 || effectiveLessonPrice > 0) {
+      for (const v of priorTuitionVouchers) {
+        if (v.isVoided || v.isRefund || v.status === "REFUNDED") continue;
         const vAmount = Number(v.amount || 0);
         const vRefunded = v.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0) || 0;
-        totalPaidTuition += Math.max(0, vAmount - vRefunded);
-      });
-      priorPurchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
-    } else {
-      priorPurchasedSessions = priorTuitionVouchers.length * 4;
+        const vNet = Math.max(0, vAmount - vRefunded);
+        const vUnitPrice =
+          v.effectiveSessionPrice !== undefined && v.effectiveSessionPrice !== null
+            ? Number(v.effectiveSessionPrice)
+            : effectiveLessonPrice;
+        if (vUnitPrice > 0) {
+          priorPurchasedSessions += Math.floor((vNet + 1e-6) / vUnitPrice);
+        } else if (vAmount > 0 && cyclePrice <= 0) {
+          const refundedSessions = Math.floor(vRefunded / (vAmount / 4));
+          priorPurchasedSessions += Math.max(0, 4 - refundedSessions);
+        }
+      }
     }
 
     const transferredOut = enrollment.transfersFrom.reduce((sum: number, t: any) => sum + t.transferredSessions, 0);
@@ -13007,18 +15172,20 @@ export async function unsuspendEnrollmentWithDebtClearance(
         missedLessonId: cu.missedLessonId,
         catchUpLessonId: cu.catchUpLessonId,
       })),
+      payerHistory: (enrollment as any).payerHistory,
     });
 
     const currentOffset = enrollment.creditResetOffset || 0;
     const priorRawCredit = (priorPurchasedSessions + transferredIn - transferredOut) - priorAttendedSessions + currentOffset;
 
     const newCreditResetOffset = priorRawCredit < 0 ? currentOffset - priorRawCredit : currentOffset;
+    const preservedPayerStatus = enrollment.payerStatus === "SUSPENDED" ? "NORMAL" : enrollment.payerStatus;
 
     await client.enrollment.update({
       where: { id: enrollment.id },
       data: {
         status: "ACTIVE",
-        payerStatus: enrollment.payerStatus === "SUSPENDED" ? "NORMAL" : enrollment.payerStatus,
+        payerStatus: preservedPayerStatus,
         creditResetOffset: newCreditResetOffset,
       },
     });
@@ -13034,7 +15201,7 @@ export async function unsuspendEnrollmentWithDebtClearance(
           userId: params.actorId || "system",
           userName: params.actorName || "Système",
           oldValue: `status:SUSPENDED,priorCredit:${priorRawCredit}`,
-          newValue: `status:ACTIVE,payerStatus:NORMAL,creditResetOffset:${newCreditResetOffset}`,
+          newValue: `status:ACTIVE,payerStatus:${preservedPayerStatus},creditResetOffset:${newCreditResetOffset}`,
           details: `Rétablissement automatique (${params.trigger === "PAYMENT" ? "Paiement" : params.trigger === "ATTENDANCE" ? "Présence" : "Manuel"}) dans "${c.name}". ${
             priorRawCredit < 0
               ? `Dettes antérieures (${Math.abs(priorRawCredit)} séances) effacées.`
@@ -13214,14 +15381,14 @@ export async function toggleEnrollmentSuspensionAction(
         enrollmentId,
       };
     } else {
-      // If already active and normal, return immediately without touching credit
-      if (oldStatus === "ACTIVE" && oldPayerStatus === "NORMAL") {
+      // If already active, return immediately without touching credit
+      if (oldStatus === "ACTIVE" && oldPayerStatus !== "SUSPENDED") {
         return {
           success: true,
           error: false,
-          message: `Groupe "${enrollment.class.name}" : élève déjà en statut normal / التلميذ في الحالة العادية بالفعل`,
+          message: `Groupe "${enrollment.class.name}" : élève déjà actif / التلميذ مفعل بالفعل`,
           status: "ACTIVE",
-          payerStatus: "NORMAL",
+          payerStatus: oldPayerStatus,
           enrollmentId,
         };
       }
@@ -13239,9 +15406,9 @@ export async function toggleEnrollmentSuspensionAction(
       return {
         success: true,
         error: false,
-        message: `Groupe "${enrollment.class.name}" : réinscrit en statut Normal. Dettes antérieures effacées et crédit réinitialisé / تم إعادة التلميذ للحالة العادية وتصفير الديون بنجاح`,
+        message: `Groupe "${enrollment.class.name}" : réinscrit avec succès. Dettes antérieures effacées et crédit réinitialisé / تم إعادة التلميذ وتصفير الديون بنجاح`,
         status: "ACTIVE",
-        payerStatus: "NORMAL",
+        payerStatus: oldPayerStatus === "SUSPENDED" ? "NORMAL" : oldPayerStatus,
         enrollmentId,
       };
     }
@@ -13280,6 +15447,10 @@ export interface BiometricScanLiveBillingInfo {
   payerStatus: string;
   isNonPayer: boolean;
   isSchoolFeesOnly: boolean;
+  isDiscounted?: boolean;
+  discountType?: string | null;
+  discountValue?: number | null;
+  discountLabel?: string | null;
   hasPayerSibling: boolean;
   isSiblingWaived: boolean;
   hasSiblingDiscount: boolean;
@@ -13324,6 +15495,7 @@ export async function getBiometricScansLiveBillingAction(
               include: {
                 enrollments: {
                   include: {
+                    payerHistory: { orderBy: { effectiveFrom: "asc" } },
                     transfersFrom: true,
                     transfersTo: {
                       include: {
@@ -13388,6 +15560,7 @@ export async function getBiometricScansLiveBillingAction(
         },
         enrollments: {
           include: {
+            payerHistory: { orderBy: { effectiveFrom: "asc" } },
             transfersFrom: true,
             transfersTo: {
               include: {
@@ -13472,7 +15645,7 @@ export async function getBiometricScansLiveBillingAction(
 
       const allEnrollments = student.enrollments || [];
       const activeEnrollments = allEnrollments.filter(
-        (e: any) => (e.status === "ACTIVE" || !e.status) && !e.class?.isCompleted
+        (e: any) => (e.status === "ACTIVE" || !e.status) && !isClassInactive(e.class)
       );
 
       // Resolve target enrollment for this scan
@@ -13528,10 +15701,6 @@ export async function getBiometricScansLiveBillingAction(
           targetClass?.FormationLevel ||
           targetClass?.formationLevelId
       );
-      const formationPrice = isFormation
-        ? Number(targetClass?.FormationLevel?.lumpSumPrice ?? targetClass?.pricePerCycle ?? 0)
-        : 0;
-
       const enrPayerStatus: string =
         targetEnrollment?.payerStatus || student.payerStatus || "NORMAL";
       const isNonPayer =
@@ -13539,6 +15708,30 @@ export async function getBiometricScansLiveBillingAction(
         enrPayerStatus === "FREE_ALL" ||
         enrPayerStatus === "FREE_TUITION";
       const isSchoolFeesOnly = enrPayerStatus === "SCHOOL_FEES_ONLY";
+      const isDiscounted = enrPayerStatus === "DISCOUNTED";
+      const enrDiscountType: string | null = targetEnrollment?.discountType ?? null;
+      const enrDiscountValue: number | null =
+        targetEnrollment?.discountValue !== undefined && targetEnrollment?.discountValue !== null
+          ? Number(targetEnrollment.discountValue)
+          : null;
+      const discountLabel = isDiscounted
+        ? formatDiscountBadgeLabel(enrDiscountType, enrDiscountValue, "fr")
+        : null;
+
+      const baseFormationPrice = isFormation
+        ? Number(targetClass?.FormationLevel?.lumpSumPrice ?? targetClass?.pricePerCycle ?? 0)
+        : 0;
+      const formationPrice = isFormation
+        ? isDiscounted
+          ? computeStudentSessionFee({
+              payerStatus: "DISCOUNTED",
+              discountType: enrDiscountType,
+              discountValue: enrDiscountValue,
+              pricePerCycle: baseFormationPrice,
+              isFormation: true,
+            }).studentCycleFee
+          : baseFormationPrice
+        : 0;
 
       const hasPayerSiblingInFamily = Boolean(
         student.family?.payerStudentId &&
@@ -13730,6 +15923,9 @@ export async function getBiometricScansLiveBillingAction(
             : Number(targetClass.pricePerCycle || 0),
           isFormation,
           payerStatus: enrPayerStatus,
+          discountType: enrDiscountType,
+          discountValue: enrDiscountValue,
+          payerHistory: targetEnrollment?.payerHistory,
           siblingDiscountPercentage: rawFamilyDiscountPct,
           isSiblingWaived,
           isPayerSiblingPaid: isPayerActiveAndPaid,
@@ -13749,7 +15945,7 @@ export async function getBiometricScansLiveBillingAction(
 
         if (isFormation) {
           remainingCredits = null;
-        } else if (isSiblingWaived) {
+        } else if (creditMetrics.isSiblingWaived) {
           remainingCredits = payerRemainingCredit ?? 0;
         } else {
           remainingCredits = creditMetrics.netSessions;
@@ -13772,9 +15968,13 @@ export async function getBiometricScansLiveBillingAction(
         payerStatus: enrPayerStatus,
         isNonPayer,
         isSchoolFeesOnly,
+        isDiscounted,
+        discountType: enrDiscountType,
+        discountValue: enrDiscountValue,
+        discountLabel,
         hasPayerSibling: isPayerInThisClass,
-        isSiblingWaived,
-        hasSiblingDiscount,
+        isSiblingWaived: !isDiscounted && isSiblingWaived,
+        hasSiblingDiscount: !isDiscounted && hasSiblingDiscount,
         siblingDiscountPct: rawFamilyDiscountPct,
         isPayerSiblingPaid: isPayerActiveAndPaid,
         payerRemainingCredit,

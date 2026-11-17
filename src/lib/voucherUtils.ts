@@ -372,3 +372,268 @@ export function calculateVoucherTotals(
     formattedNet: formatDZD(net, locale),
   };
 }
+
+export const PAYMENT_TYPE_LABELS: Record<string, { ar: string; fr: string }> = {
+  INSCRIPTION: { ar: "حقوق التسجيل", fr: "Frais d'inscription" },
+  TUITION_4SESSION: { ar: "اشتراك دراسي", fr: "Cycle d'études (4 séances)" },
+  TUITION: { ar: "الدراسة", fr: "Études" },
+  BOOK: { ar: "رسوم الكتب المدرسية", fr: "Frais des livres" },
+  EXTRA_SESSION: { ar: "حصة إضافية", fr: "Séance supplémentaire" },
+  CATCHUP: { ar: "حصة استدراكية", fr: "Séance de rattrapage" },
+  REVISION_SESSION: { ar: "حصة مراجعة (زائر)", fr: "Séance de révision (Visiteur)" },
+  FORMATION: { ar: "دفع التكوين اللغوي", fr: "Formation linguistique" },
+  WORKSHOP: { ar: "دفع الورشة / الدورة", fr: "Atelier / Formation courte" },
+  MULTI_ITEM: { ar: "دفع مجمّع", fr: "Paiement combiné" },
+};
+
+/**
+ * Returns a bilingual (Arabic / French) display label for a voucher payment type.
+ */
+export function getPaymentTypeLabel(
+  paymentType: string | null | undefined,
+  locale: string = "ar"
+): string {
+  if (!paymentType) return "";
+  const entry = PAYMENT_TYPE_LABELS[paymentType];
+  if (!entry) return paymentType;
+  return locale === "ar" ? entry.ar : entry.fr;
+}
+
+export type VoucherTicketStatusInfo = {
+  isVoided: boolean;
+  isRefundVoucher: boolean;
+  isRefunded: boolean;
+  isPartiallyRefunded: boolean;
+  isPartialPayment: boolean;
+  totalRefunded: number;
+  effectiveAmount: number;
+  restToCompleteCycle: number | undefined;
+};
+
+/**
+ * Resolves unified display badges (Refund, Refunded, Partially Refunded, Voided, Partial)
+ * and remaining balance / 1-cycle fee completion amounts for thermal tickets.
+ * Guardrail: When a voucher is PARTIALLY_REFUNDED, `voucher.remainingBalance` tracks
+ * unrefunded money in DB and must NOT be treated as an unpaid tuition balance.
+ */
+export function resolveVoucherTicketStatus(
+  voucher: any,
+  options?: {
+    cycleRemainingFee?: number;
+    remainingBalance?: number;
+    isPartial?: boolean;
+  }
+): VoucherTicketStatusInfo {
+  const rawAmount = Number(
+    voucher?.totalAmount !== undefined && voucher?.totalAmount !== null
+      ? voucher.totalAmount
+      : voucher?.amount ?? 0
+  );
+  const absAmount = Number.isFinite(rawAmount) ? Math.abs(rawAmount) : 0;
+  const status = String(voucher?.status || "").toUpperCase();
+
+  const isVoided = Boolean(voucher?.isVoided || status === "VOIDED");
+  const isRefundVoucher = Boolean(voucher?.isRefund || status === "REFUND");
+
+  const refundsArray = Array.isArray(voucher?.refunds) ? voucher.refunds : [];
+  const refundsSum = refundsArray.reduce(
+    (sum: number, r: any) => sum + Math.abs(Number(r?.amount || 0)),
+    0
+  );
+
+  let totalRefunded = 0;
+  if (!isRefundVoucher) {
+    if (status === "REFUNDED") {
+      totalRefunded = refundsSum > 0 ? refundsSum : absAmount;
+    } else if (status === "PARTIALLY_REFUNDED") {
+      if (refundsSum > 0) {
+        totalRefunded = refundsSum;
+      } else if (
+        voucher?.remainingBalance !== null &&
+        voucher?.remainingBalance !== undefined
+      ) {
+        totalRefunded = Math.max(
+          0,
+          absAmount - Math.abs(Number(voucher.remainingBalance || 0))
+        );
+      }
+    } else if (refundsSum > 0) {
+      totalRefunded = refundsSum;
+    }
+  }
+
+  const isRefunded = Boolean(
+    !isRefundVoucher &&
+      (status === "REFUNDED" ||
+        (absAmount > 0 && totalRefunded >= absAmount - 0.01 && totalRefunded > 0))
+  );
+  const isPartiallyRefunded = Boolean(
+    !isRefundVoucher &&
+      !isRefunded &&
+      (status === "PARTIALLY_REFUNDED" || totalRefunded > 0)
+  );
+
+  const items = Array.isArray(voucher?.items) ? voucher.items : [];
+  const paymentType = String(voucher?.paymentType || "");
+  const isCycleApplicableType =
+    paymentType === "TUITION_4SESSION" ||
+    paymentType === "FORMATION" ||
+    paymentType === "WORKSHOP" ||
+    Boolean(voucher?.class?.isFormation) ||
+    items.some(
+      (it: any) =>
+        it?.type === "TUITION_4SESSION" ||
+        it?.type === "FORMATION" ||
+        it?.type === "WORKSHOP"
+    );
+
+  const explicitCycleFee =
+    options?.cycleRemainingFee !== undefined && options?.cycleRemainingFee !== null
+      ? Number(options.cycleRemainingFee)
+      : undefined;
+  const explicitRemainingBalance =
+    options?.remainingBalance !== undefined && options?.remainingBalance !== null
+      ? Number(options.remainingBalance)
+      : undefined;
+  const voucherIsPartialFlag = Boolean(voucher?.isPartial);
+  const optionIsPartialFlag = options?.isPartial;
+
+  let restToCompleteCycle: number | undefined;
+  if (!isVoided && !isRefundVoucher && !isRefunded) {
+    if (
+      explicitCycleFee !== undefined &&
+      explicitCycleFee > 0 &&
+      paymentType !== "REVISION_SESSION" &&
+      (isCycleApplicableType ||
+        voucherIsPartialFlag ||
+        Boolean(optionIsPartialFlag) ||
+        paymentType === "MULTI_ITEM" ||
+        !paymentType)
+    ) {
+      restToCompleteCycle = Math.round(explicitCycleFee);
+    } else if (
+      !isPartiallyRefunded &&
+      explicitRemainingBalance !== undefined &&
+      explicitRemainingBalance > 0
+    ) {
+      restToCompleteCycle = Math.round(explicitRemainingBalance);
+    } else if (
+      !isPartiallyRefunded &&
+      voucherIsPartialFlag &&
+      voucher?.remainingBalance !== null &&
+      voucher?.remainingBalance !== undefined &&
+      Number(voucher.remainingBalance) > 0
+    ) {
+      restToCompleteCycle = Math.round(Number(voucher.remainingBalance));
+    }
+  }
+
+  let isPartialPayment = false;
+  if (!isVoided && !isRefundVoucher && !isRefunded && !isPartiallyRefunded) {
+    if (optionIsPartialFlag !== undefined) {
+      isPartialPayment = Boolean(voucherIsPartialFlag || optionIsPartialFlag);
+    } else {
+      isPartialPayment = Boolean(
+        voucherIsPartialFlag ||
+          (restToCompleteCycle !== undefined &&
+            restToCompleteCycle > 0 &&
+            isCycleApplicableType)
+      );
+    }
+  }
+
+  return {
+    isVoided,
+    isRefundVoucher,
+    isRefunded,
+    isPartiallyRefunded,
+    isPartialPayment,
+    totalRefunded,
+    effectiveAmount: absAmount,
+    restToCompleteCycle,
+  };
+}
+
+/**
+ * Combines sibling non-refund, non-voided vouchers that share the same seriesId,
+ * sequential voucher number (> 0), and Algiers payment date into a single multi-item
+ * print object while preserving status/refund fields on the primary voucher.
+ */
+export function buildVoucherBundleForPrint<T extends Record<string, any>>(
+  primaryVoucher: T,
+  siblingVouchers?: any[]
+): T {
+  if (!primaryVoucher) return primaryVoucher;
+  if (Array.isArray(primaryVoucher.items) && primaryVoucher.items.length > 0) {
+    return primaryVoucher;
+  }
+  if (
+    primaryVoucher.isRefund ||
+    primaryVoucher.status === "REFUND" ||
+    primaryVoucher.isVoided
+  ) {
+    return primaryVoucher;
+  }
+  if (!Array.isArray(siblingVouchers) || siblingVouchers.length === 0) {
+    return primaryVoucher;
+  }
+
+  const num = Number(primaryVoucher.number || 0);
+  const seriesId = primaryVoucher.seriesId;
+  if (!seriesId || !(num > 0)) {
+    return primaryVoucher;
+  }
+
+  const primaryDateKey = formatPaymentDate(primaryVoucher.issuedAt);
+  const seenIds = new Set<string | number>();
+  const matched: any[] = [];
+
+  const pushIfUnique = (v: any) => {
+    if (!v) return;
+    const key = v.id !== undefined && v.id !== null ? v.id : `${v.paymentType}-${v.amount}`;
+    if (seenIds.has(key)) return;
+    seenIds.add(key);
+    matched.push(v);
+  };
+
+  pushIfUnique(primaryVoucher);
+
+  for (const v of siblingVouchers) {
+    if (!v) continue;
+    if (v.isVoided || v.isRefund || v.status === "REFUND") continue;
+    if (v.seriesId !== seriesId || Number(v.number || 0) !== num) continue;
+    const vDateKey = formatPaymentDate(v.issuedAt);
+    if (primaryDateKey && vDateKey && vDateKey !== primaryDateKey) continue;
+    pushIfUnique(v);
+  }
+
+  if (matched.length <= 1) {
+    return primaryVoucher;
+  }
+
+  const items = matched.map((v) => {
+    const pType = String(v.paymentType || "TUITION_4SESSION");
+    const entry = PAYMENT_TYPE_LABELS[pType];
+    return {
+      type: pType,
+      labelAr: entry?.ar || pType,
+      labelFr: entry?.fr || pType,
+      label: entry?.fr || pType,
+      amount: Number(v.amount || 0),
+    };
+  });
+
+  const totalAmount = items.reduce((sum, it) => sum + Number(it.amount || 0), 0);
+  const mergedRefunds = matched.flatMap((v) =>
+    Array.isArray(v.refunds) ? v.refunds : []
+  );
+
+  return {
+    ...primaryVoucher,
+    isPartial:
+      Boolean(primaryVoucher.isPartial) || matched.some((v) => Boolean(v.isPartial)),
+    refunds: mergedRefunds.length > 0 ? mergedRefunds : primaryVoucher.refunds,
+    items,
+    totalAmount,
+  };
+}

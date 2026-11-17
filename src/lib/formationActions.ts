@@ -10,6 +10,8 @@ import { upsertDailyLedger } from "@/lib/ledger";
 import { checkForConflicts } from "@/lib/actions";
 import { getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 import { revalidateFinancialRoutes } from "@/lib/revalidation";
+import { buildVoucherBillingSnapshot } from "@/lib/studentBilling";
+import { ACTIVE_CLASS_WHERE, isClassInactive } from "@/lib/classStatus";
 
 function safeRevalidatePath(path: string) {
   try {
@@ -455,6 +457,14 @@ export async function enrollStudentInFormationGroup(data: {
       return { success: false, error: true, message: "Groupe introuvable ou non conforme / الفوج المحدد غير موجود أو ليس فوج تكوين لغوي" };
     }
 
+    if (isClassInactive(targetClass)) {
+      return {
+        success: false,
+        error: true,
+        message: `Impossible d'inscrire un élève dans le groupe de formation fermé / en pause (${targetClass.name}) / لا يمكن تسجيل تلميذ في الفوج التكويني المغلق / المتوقف (${targetClass.name})`,
+      };
+    }
+
     if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, targetClass.branchId)) {
       return { success: false, error: true, message: "Non autorisé à inscrire dans cette succursale / غير مصرح لك بالتسجيل في هذا الفرع" };
     }
@@ -601,6 +611,7 @@ export async function recordLevelTest(data: {
           where: {
             isFormation: true,
             formationLevelId: nextLevel.id,
+            ...ACTIVE_CLASS_WHERE,
           },
           include: {
             branch: true,
@@ -652,6 +663,7 @@ export async function getNextLevelFormationGroups(nextLevelId: number): Promise<
       where: {
         isFormation: true,
         formationLevelId: nextLevelId,
+        ...ACTIVE_CLASS_WHERE,
       },
       include: {
         branch: true,
@@ -726,6 +738,14 @@ export async function levelUpStudent(data: {
 
     if (!targetClass || !targetClass.isFormation || !targetClass.FormationLevel) {
       return { success: false, error: true, message: "Groupe cible invalide / الفوج المستهدف غير صالح" };
+    }
+
+    if (isClassInactive(targetClass)) {
+      return {
+        success: false,
+        error: true,
+        message: `Impossible de promouvoir l'élève vers le groupe fermé / en pause (${targetClass.name}) / لا يمكن ترقية التلميذ إلى الفوج المغلق / المتوقف (${targetClass.name})`,
+      };
     }
 
     if (targetClass.FormationLevel.languageId !== test.FormationLevel.languageId) {
@@ -1043,7 +1063,16 @@ export async function recordFormationLumpSumPayment(data: {
 
     const targetClass = await prisma.class.findUnique({
       where: { id: data.classId },
-      include: { FormationLevel: true, branch: true },
+      include: {
+        FormationLevel: true,
+        branch: true,
+        teacherClassRates: true,
+        teacher: {
+          include: {
+            TeacherPayRate: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+          },
+        },
+      },
     });
 
     if (!targetClass || !targetClass.isFormation) {
@@ -1062,6 +1091,31 @@ export async function recordFormationLumpSumPayment(data: {
     if (!student) {
       return { success: false, error: true, message: "Élève sélectionné introuvable / التلميذ المحدد غير موجود" };
     }
+
+    const enrollmentForSnap = await prisma.enrollment.findFirst({
+      where: { studentId: data.studentId, classId: data.classId },
+      orderBy: { id: "desc" },
+    });
+    const tOverride = (targetClass.teacherClassRates as any[])?.find(
+      (tcr: any) => tcr.teacherId === targetClass.teacherId
+    )?.percentage;
+    const teacherPercentage =
+      tOverride != null
+        ? Number(tOverride)
+        : (targetClass.teacher as any)?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+        ? Number((targetClass.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+    const baseFormationPrice = Number(
+      targetClass.FormationLevel?.lumpSumPrice ?? targetClass.pricePerCycle ?? 0
+    );
+    const formationSnapshot = buildVoucherBillingSnapshot({
+      payerStatus: enrollmentForSnap?.payerStatus || student.payerStatus || "NORMAL",
+      discountType: enrollmentForSnap?.discountType,
+      discountValue: enrollmentForSnap?.discountValue,
+      pricePerCycle: baseFormationPrice,
+      teacherPercentage,
+      isFormation: true,
+    });
 
     const finalAmount = Number(data.amount) || 0;
     const bookFee = Number(data.bookFeeAmount) || 0;
@@ -1124,6 +1178,16 @@ export async function recordFormationLumpSumPayment(data: {
             remainingBalance: data.remainingBalance ? new Prisma.Decimal(data.remainingBalance) : null,
             issuedBy: session.userId || "admin",
             isVoided: false,
+            appliedPayerStatus: formationSnapshot.appliedPayerStatus,
+            baseCyclePrice: new Prisma.Decimal(formationSnapshot.baseCyclePrice),
+            effectiveCyclePrice: new Prisma.Decimal(formationSnapshot.effectiveCyclePrice),
+            effectiveSessionPrice: new Prisma.Decimal(formationSnapshot.effectiveSessionPrice),
+            discountType: formationSnapshot.discountType,
+            discountValue:
+              formationSnapshot.discountValue !== null
+                ? new Prisma.Decimal(formationSnapshot.discountValue)
+                : null,
+            teacherPayWeight: new Prisma.Decimal(formationSnapshot.teacherPayWeight),
           },
           include: {
             class: {
@@ -1455,7 +1519,7 @@ export async function getFormationClosurePreview(classId: number): Promise<Actio
     });
 
     const subsequentLevelsData = nextLevels.map((lvl) => {
-      const activeClass = lvl.Class.find((c) => !c.isCompleted) || lvl.Class[0] || null;
+      const activeClass = lvl.Class.find((c) => !isClassInactive(c)) || lvl.Class[0] || null;
       // Also get passed students for this level's active class (in case it gets closed too)
       let activeClassPassedCount = 0;
       if (activeClass) {
@@ -1616,7 +1680,7 @@ export async function closeFormationLevelsWithCascade(data: {
         let activeClass =
           lNum === startLevelNum
             ? startingClass
-            : lvlDef.Class.find((c) => !c.isCompleted) || lvlDef.Class[0];
+            : lvlDef.Class.find((c) => !isClassInactive(c)) || lvlDef.Class[0];
 
         if (!activeClass) continue;
 
@@ -1683,7 +1747,7 @@ export async function closeFormationLevelsWithCascade(data: {
             }
           } else {
             // Next level is NOT closed: enroll with old registered students in existing active class
-            targetClass = nextLevelDef.Class.find((c) => !c.isCompleted);
+            targetClass = nextLevelDef.Class.find((c) => !isClassInactive(c));
             if (!targetClass) {
               targetClass = await tx.class.create({
                 data: {
@@ -1926,6 +1990,14 @@ export async function addFormationSession(data: {
       return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود" };
     }
 
+    if (isClassInactive(targetClass)) {
+      return {
+        success: false,
+        error: true,
+        message: `Impossible de programmer une séance pour le groupe fermé / en pause "${targetClass.name}" / لا يمكن برمجة حصة للفوج المغلق / المتوقف "${targetClass.name}"`,
+      };
+    }
+
     if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, targetClass.branchId)) {
       return { success: false, error: true, message: "Non autorisé à programmer une séance dans cette succursale / غير مصرح لك ببرمجة حصة في هذا الفرع" };
     }
@@ -2054,6 +2126,14 @@ export async function updateFormationSession(data: {
     });
     if (!targetClass) {
       return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود" };
+    }
+
+    if (isClassInactive(targetClass)) {
+      return {
+        success: false,
+        error: true,
+        message: `Impossible de modifier une séance pour le groupe fermé / en pause "${targetClass.name}" / لا يمكن تعديل حصة للفوج المغلق / المتوقف "${targetClass.name}"`,
+      };
     }
 
     if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, targetClass.branchId)) {

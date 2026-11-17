@@ -152,19 +152,33 @@ export async function mergeStudents(
 
       if (existingTargetEnr) {
         // Both students enrolled in the same class: deduplicate
-        // If source was charged inscription fee and target wasn't, mark target as charged
+        const enrollmentUpdateData: Record<string, any> = {};
         if (sourceEnr.inscriptionFeeCharged && !existingTargetEnr.inscriptionFeeCharged) {
+          enrollmentUpdateData.inscriptionFeeCharged = true;
+          enrollmentUpdateData.inscriptionFeeAmount =
+            sourceEnr.inscriptionFeeAmount ?? existingTargetEnr.inscriptionFeeAmount;
+        }
+        // Preserve Owner discount if source enrollment was DISCOUNTED and target enrollment was NORMAL
+        if (sourceEnr.payerStatus === "DISCOUNTED" && existingTargetEnr.payerStatus === "NORMAL") {
+          enrollmentUpdateData.payerStatus = "DISCOUNTED";
+          enrollmentUpdateData.discountType = sourceEnr.discountType;
+          enrollmentUpdateData.discountValue = sourceEnr.discountValue;
+          enrollmentUpdateData.discountReason = sourceEnr.discountReason;
+          enrollmentUpdateData.discountUpdatedBy = sourceEnr.discountUpdatedBy;
+          enrollmentUpdateData.discountUpdatedAt = sourceEnr.discountUpdatedAt;
+        }
+        if (Object.keys(enrollmentUpdateData).length > 0) {
           await tx.enrollment.update({
             where: { id: existingTargetEnr.id },
-            data: {
-              inscriptionFeeCharged: true,
-              inscriptionFeeAmount:
-                sourceEnr.inscriptionFeeAmount ?? existingTargetEnr.inscriptionFeeAmount,
-            },
+            data: enrollmentUpdateData,
           });
         }
 
-        // Re-point any transfer records
+        // Re-point payer history & transfer records
+        await tx.enrollmentPayerHistory.updateMany({
+          where: { enrollmentId: sourceEnr.id },
+          data: { enrollmentId: existingTargetEnr.id },
+        });
         await tx.enrollmentTransfer.updateMany({
           where: { fromEnrollmentId: sourceEnr.id },
           data: { fromEnrollmentId: existingTargetEnr.id },
@@ -256,19 +270,35 @@ export async function mergeStudents(
         const combinedRefunded = new Decimal(existing.totalRefunded.toString()).plus(
           new Decimal(part.totalRefunded.toString())
         );
-        await tx.workshopParticipant.update({
+        const netPaid = combinedPaid.minus(combinedRefunded);
+        const ws = await tx.workshop.findUnique({
+          where: { id: part.workshopId },
+          select: { totalPrice: true },
+        });
+        const totalPriceDec = new Decimal((ws?.totalPrice ?? 0).toString());
+        const nextStatus =
+          combinedRefunded.gt(0) && netPaid.lte(0)
+            ? "REFUNDED"
+            : netPaid.gte(totalPriceDec)
+            ? "PAID_IN_FULL"
+            : "OWED";
+
+        const updatedExisting = await tx.workshopParticipant.update({
           where: { id: existing.id },
           data: {
             totalPaid: combinedPaid,
             totalRefunded: combinedRefunded,
+            status: nextStatus,
           },
         });
+        targetPartMap.set(part.workshopId, updatedExisting);
         await tx.workshopParticipant.delete({ where: { id: part.id } });
       } else {
-        await tx.workshopParticipant.update({
+        const moved = await tx.workshopParticipant.update({
           where: { id: part.id },
           data: { studentId: target.id },
         });
+        targetPartMap.set(part.workshopId, moved);
       }
       summary.workshopsMoved++;
     }

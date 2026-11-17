@@ -8,9 +8,16 @@ import Image from "next/image";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { FilterTabs } from "@/components/ui/FilterTabs";
 import { serializeForClient } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
 import { Prisma } from "@prisma/client";
+import {
+  ACTIVE_CLASS_WHERE,
+  INACTIVE_CLASS_WHERE,
+  isClassInactive,
+  normalizeClassFilterStatus,
+} from "@/lib/classStatus";
 
 const FormationsListPage = async (
   props: {
@@ -21,17 +28,44 @@ const FormationsListPage = async (
   const role = await getAuthRole();
   const t = await getTranslations("formations");
   const locale = await getLocale();
-  const { page, search } = searchParams;
+  const { page, search, status } = searchParams;
+  const activeStatus = normalizeClassFilterStatus(status);
   const p = page ? parseInt(page) : 1;
+
+  const createFilterUrl = (nextStatus: string) => {
+    const params = new URLSearchParams();
+    if (nextStatus && nextStatus !== "active") params.set("status", nextStatus);
+    if (search) params.set("search", search);
+    const qs = params.toString();
+    return qs ? `/${locale}/list/formations?${qs}` : `/${locale}/list/formations`;
+  };
 
   let formations: any[] = [];
   let count = 0;
 
   try {
     const whereClause: Prisma.LanguageWhereInput = {
-      FormationLevel: {
-        some: {},
-      },
+      FormationLevel:
+        activeStatus === "active"
+          ? {
+              some: {
+                OR: [
+                  { Class: { none: {} } },
+                  { Class: { some: { isFormation: true, ...ACTIVE_CLASS_WHERE } } },
+                ],
+              },
+            }
+          : activeStatus === "inactive"
+          ? {
+              some: {
+                Class: {
+                  some: { isFormation: true, ...INACTIVE_CLASS_WHERE },
+                },
+              },
+            }
+          : {
+              some: {},
+            },
     };
 
     if (search) {
@@ -135,6 +169,11 @@ const FormationsListPage = async (
 
       const isCompleted =
         allClasses.length > 0 && allClasses.every((c) => c.isCompleted);
+      const isPaused =
+        allClasses.length > 0 &&
+        allClasses.every((c) => isClassInactive(c)) &&
+        allClasses.some((c) => c.isPaused);
+      const hasPausedClasses = allClasses.some((c) => c.isPaused);
 
       const editData = firstClass
         ? {
@@ -171,6 +210,8 @@ const FormationsListPage = async (
         branch: firstClass?.branch,
         ageGroup: firstClass?.ageGroup,
         isCompleted,
+        isPaused,
+        hasPausedClasses,
         totalSessions,
         totalParticipants,
         editData,
@@ -191,6 +232,32 @@ const FormationsListPage = async (
           role === "admin" ? { table: "formation", type: "create" } : null
         }
       />
+
+      <div className="flex flex-wrap items-center gap-2 pb-2 border-b border-border/60">
+        <span className="text-xs font-bold text-muted ms-1">
+          {locale === "ar" ? "الحالة:" : "Statut :"}
+        </span>
+        <FilterTabs
+          activeTab={activeStatus}
+          tabs={[
+            {
+              id: "active",
+              label: locale === "ar" ? "التكوينات النشطة" : "Formations actives",
+              href: createFilterUrl("active"),
+            },
+            {
+              id: "inactive",
+              label: locale === "ar" ? "المغلقة / المتوقفة" : "Fermées / En pause",
+              href: createFilterUrl("inactive"),
+            },
+            {
+              id: "all",
+              label: locale === "ar" ? "الكل" : "Toutes",
+              href: createFilterUrl("all"),
+            },
+          ]}
+        />
+      </div>
 
       {formations.length > 0 ? (
         <>
@@ -228,14 +295,29 @@ const FormationsListPage = async (
                     </div>
                     <div className="flex flex-col items-end gap-1.5 shrink-0">
                       <Badge
-                        variant={formation.isCompleted ? "success" : "neutral"}
+                        variant={
+                          formation.isPaused
+                            ? "warning"
+                            : formation.isCompleted
+                            ? "success"
+                            : "neutral"
+                        }
                         size="sm"
                         withDot
                       >
-                        {formation.isCompleted
+                        {formation.isPaused
+                          ? locale === "ar"
+                            ? "مغلق / متوقف"
+                            : "Fermé / En pause"
+                          : formation.isCompleted
                           ? t("levelCompletedBadge")
                           : t("levelActiveBadge")}
                       </Badge>
+                      {!formation.isPaused && formation.hasPausedClasses && (
+                        <Badge variant="warning" size="sm">
+                          {locale === "ar" ? "مستوى متوقف" : "Niveau en pause"}
+                        </Badge>
+                      )}
                       <Badge variant="primary" size="sm" className="font-mono">
                         {formation.priceDisplay}
                       </Badge>

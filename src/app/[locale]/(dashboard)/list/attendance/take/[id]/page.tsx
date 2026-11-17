@@ -330,6 +330,7 @@ const TakeAttendancePage = async (
                   },
                 },
               },
+              payerHistory: { orderBy: { effectiveFrom: "asc" } },
             },
           },
           catchUpAttendances: {
@@ -431,6 +432,9 @@ const TakeAttendancePage = async (
       pricePerCycle: Number(v.missedLesson.class.pricePerCycle || 0),
       isFormation: Boolean(v.missedLesson.class.isFormation),
       payerStatus: vPayerStatus,
+      discountType: (vEnr as any)?.discountType,
+      discountValue: (vEnr as any)?.discountValue != null ? Number((vEnr as any).discountValue) : null,
+      payerHistory: (vEnr as any)?.payerHistory || [],
       siblingDiscountPercentage: siblingDiscountPct,
       isSiblingWaived: isSiblingWaived100,
       tuitionVouchers: vTuitionVouchers,
@@ -505,8 +509,23 @@ const TakeAttendancePage = async (
                 isVoided: false,
               },
               include: {
-                class: { select: { id: true, name: true } },
-                series: { select: { id: true, scope: true } },
+                student: {
+                  select: { id: true, name: true, globalNumber: true, phone: true },
+                },
+                refunds: true,
+                class: {
+                  include: {
+                    branch: { select: { id: true, name: true } },
+                    level: { select: { id: true, name: true } },
+                  },
+                },
+                series: {
+                  include: {
+                    issuingBranch: { select: { id: true, name: true } },
+                    targetBranch: { select: { id: true, name: true } },
+                    level: { select: { id: true, name: true } },
+                  },
+                },
               },
               orderBy: { issuedAt: "desc" },
               take: 1,
@@ -606,6 +625,19 @@ const TakeAttendancePage = async (
             },
             include: {
               refunds: true,
+              class: {
+                include: {
+                  branch: { select: { id: true, name: true } },
+                  level: { select: { id: true, name: true } },
+                },
+              },
+              series: {
+                include: {
+                  issuingBranch: { select: { id: true, name: true } },
+                  targetBranch: { select: { id: true, name: true } },
+                  level: { select: { id: true, name: true } },
+                },
+              },
             },
             orderBy: { issuedAt: "desc" },
           },
@@ -620,6 +652,7 @@ const TakeAttendancePage = async (
                   },
                 },
               },
+              payerHistory: { orderBy: { effectiveFrom: "asc" } },
               class: { select: { id: true, pricePerCycle: true, isFormation: true } },
             },
           },
@@ -756,6 +789,7 @@ const TakeAttendancePage = async (
                   },
                 },
               },
+              payerHistory: { orderBy: { effectiveFrom: "asc" } },
               class: { select: { id: true, pricePerCycle: true, isFormation: true } },
             },
           },
@@ -948,6 +982,11 @@ const TakeAttendancePage = async (
       pricePerCycle: Number(studentClass?.pricePerCycle || 0),
       isFormation: Boolean(studentClass?.isFormation),
       payerStatus: effectivePayerStatus,
+      discountType: enrollment?.discountType || null,
+      discountValue: enrollment?.discountValue != null ? Number(enrollment.discountValue) : null,
+      discountReason: enrollment?.discountReason || null,
+      payerHistory: enrollment?.payerHistory || [],
+      enrollments: details?.enrollments || [],
       enrollmentStatus,
       isSuspended: isSuspendedOrInactive,
       isRefunded,
@@ -1025,6 +1064,7 @@ const TakeAttendancePage = async (
           initialSearch={searchQuery}
           studentRelatedData={serializeForClient(studentRelatedData) as any}
           canCreateStudent={canCreateStudent}
+          canManageTeacherAbsence={session.isOwnerOrAdmin}
           allClasses={serializeForClient(Array.from(classesMap.values())) as any}
         />
       </CardContent>

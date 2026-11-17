@@ -10,6 +10,12 @@ import { Badge } from "@/components/ui/Badge";
 import { FilterTabs } from "@/components/ui/FilterTabs";
 import { getTranslations, getLocale } from "next-intl/server";
 import { BookOpen, GraduationCap, Sparkles } from "lucide-react";
+import {
+  ACTIVE_CLASS_WHERE,
+  INACTIVE_CLASS_WHERE,
+  isClassInactive,
+  normalizeClassFilterStatus,
+} from "@/lib/classStatus";
 
 type AttendanceItem = {
   id: number;
@@ -22,11 +28,12 @@ type AttendanceItem = {
   studentCount: number;
   sessionCount: number;
   href: string;
+  isInactive?: boolean;
 };
 
 const AttendanceListPage = async (
   props: {
-    searchParams: Promise<{ studentId?: string; search?: string; branchId?: string; type?: string; page?: string }>;
+    searchParams: Promise<{ studentId?: string; search?: string; branchId?: string; type?: string; status?: string; page?: string }>;
   }
 ) => {
   const searchParams = await props.searchParams;
@@ -54,8 +61,9 @@ const AttendanceListPage = async (
 
   const isOwner = session.isOwner;
   const activeBranchId = await getActiveBranchId();
-  const { search, type = "all" } = searchParams;
+  const { search, type = "all", status } = searchParams;
   const activeType = ["all", "classes", "formations", "workshops"].includes(type) ? type : "all";
+  const activeStatus = normalizeClassFilterStatus(status);
 
   // Fetch all branches for owner filter tabs
   const branches = await prisma.branch.findMany({
@@ -100,12 +108,14 @@ const AttendanceListPage = async (
       : (locale === "ar" ? `سجلات الحضور والغياب — ${branchName}` : `Registre des présences — ${branchName}`);
 
   // Helper to preserve URL params across tab changes
-  const createFilterUrl = (overrides: { branchId?: string | number; type?: string }) => {
+  const createFilterUrl = (overrides: { branchId?: string | number; type?: string; status?: string }) => {
     const params = new URLSearchParams();
     const branchVal = overrides.branchId !== undefined ? String(overrides.branchId) : String(selectedBranchId);
     if (branchVal) params.set("branchId", branchVal);
     const typeVal = overrides.type !== undefined ? overrides.type : activeType;
     if (typeVal && typeVal !== "all") params.set("type", typeVal);
+    const statusVal = overrides.status !== undefined ? overrides.status : activeStatus;
+    if (statusVal && statusVal !== "active") params.set("status", statusVal);
     if (search) params.set("search", search);
     return `/list/attendance?${params.toString()}`;
   };
@@ -124,12 +134,20 @@ const AttendanceListPage = async (
       workshopWhere.branchId = selectedBranchId;
     }
 
+    if (activeStatus === "active") {
+      Object.assign(classWhere, ACTIVE_CLASS_WHERE);
+    } else if (activeStatus === "inactive") {
+      Object.assign(classWhere, INACTIVE_CLASS_WHERE);
+    }
+
     if (search) {
       const searchConditions = [
         { name: { contains: search, mode: "insensitive" } },
         { teacher: { name: { contains: search, mode: "insensitive" } } },
       ];
-      if (classWhere.OR) {
+      if (classWhere.AND) {
+        classWhere.AND.push({ OR: searchConditions });
+      } else if (classWhere.OR) {
         classWhere.AND = [
           { OR: classWhere.OR },
           { OR: searchConditions },
@@ -148,7 +166,7 @@ const AttendanceListPage = async (
     const [rawClassCount, rawFormationCount, rawWorkshopCount] = await Promise.all([
       prisma.class.count({ where: { ...classWhere, isFormation: false } }),
       prisma.class.count({ where: { ...classWhere, isFormation: true } }),
-      prisma.workshop.count({ where: workshopWhere }),
+      activeStatus === "inactive" ? Promise.resolve(0) : prisma.workshop.count({ where: workshopWhere }),
     ]);
 
     classCount = rawClassCount;
@@ -175,6 +193,8 @@ const AttendanceListPage = async (
           id: true,
           name: true,
           isFormation: true,
+          isCompleted: true,
+          isPaused: true,
           branchId: true,
           branch: { select: { id: true, name: true } },
           teacher: { select: { id: true, name: true } },
@@ -215,10 +235,11 @@ const AttendanceListPage = async (
           studentCount: c._count.enrollments,
           sessionCount: c._count.lessons,
           href: `/list/attendance/class/${c.id}`,
+          isInactive: isClassInactive(c),
         });
       }
     } else if (activeType === "workshops") {
-      const rawWorkshops = await prisma.workshop.findMany({
+      const rawWorkshops = activeStatus === "inactive" ? [] : await prisma.workshop.findMany({
         where: workshopWhere,
         skip,
         take: ITEM_PER_PAGE,
@@ -231,7 +252,9 @@ const AttendanceListPage = async (
           Branch: { select: { id: true, name: true } },
           _count: {
             select: {
-              participants: true,
+              participants: {
+                where: { status: { notIn: ["SUSPENDED", "REFUNDED", "INACTIVE"] } },
+              },
               sessions: true,
             },
           },
@@ -269,6 +292,8 @@ const AttendanceListPage = async (
             id: true,
             name: true,
             isFormation: true,
+            isCompleted: true,
+            isPaused: true,
             branchId: true,
             branch: { select: { id: true, name: true } },
             teacher: { select: { id: true, name: true } },
@@ -309,11 +334,12 @@ const AttendanceListPage = async (
             studentCount: c._count.enrollments,
             sessionCount: c._count.lessons,
             href: `/list/attendance/class/${c.id}`,
+            isInactive: isClassInactive(c),
           });
         }
 
         const remainingTake = ITEM_PER_PAGE - items.length;
-        if (remainingTake > 0) {
+        if (remainingTake > 0 && activeStatus !== "inactive") {
           const rawWorkshops = await prisma.workshop.findMany({
             where: workshopWhere,
             skip: 0,
@@ -327,7 +353,9 @@ const AttendanceListPage = async (
               Branch: { select: { id: true, name: true } },
               _count: {
                 select: {
-                  participants: true,
+                  participants: {
+                    where: { status: { notIn: ["SUSPENDED", "REFUNDED", "INACTIVE"] } },
+                  },
                   sessions: true,
                 },
               },
@@ -353,7 +381,7 @@ const AttendanceListPage = async (
             });
           }
         }
-      } else {
+      } else if (activeStatus !== "inactive") {
         const workshopSkip = skip - totalClasses;
         const rawWorkshops = await prisma.workshop.findMany({
           where: workshopWhere,
@@ -368,7 +396,9 @@ const AttendanceListPage = async (
             Branch: { select: { id: true, name: true } },
             _count: {
               select: {
-                participants: true,
+                participants: {
+                  where: { status: { notIn: ["SUSPENDED", "REFUNDED", "INACTIVE"] } },
+                },
                 sessions: true,
               },
             },
@@ -418,6 +448,33 @@ const AttendanceListPage = async (
           searchPlaceholder={t("searchPlaceholder")}
           createAction={null}
         />
+
+        {/* Status Tabs: Active vs Closed / Paused */}
+        <div className="flex flex-wrap items-center gap-2 mt-4 pb-3 border-b border-border/60">
+          <span className="text-xs font-bold text-muted ms-2">
+            {locale === "ar" ? "الحالة:" : "Statut :"}
+          </span>
+          <FilterTabs
+            activeTab={activeStatus}
+            tabs={[
+              {
+                id: "active",
+                label: locale === "ar" ? "الأفواج النشطة" : "Groupes actifs",
+                href: createFilterUrl({ status: "active" }),
+              },
+              {
+                id: "inactive",
+                label: locale === "ar" ? "المغلقة / المتوقفة" : "Fermés / En pause",
+                href: createFilterUrl({ status: "inactive" }),
+              },
+              {
+                id: "all",
+                label: locale === "ar" ? "الكل" : "Tous",
+                href: createFilterUrl({ status: "all" }),
+              },
+            ]}
+          />
+        </div>
 
         {/* Category Tabs: All, Regular Classes, Formations, Dawarat (Workshops) */}
         <div className="flex flex-wrap items-center gap-2 mt-4 pb-4 border-b border-border/70">
@@ -502,9 +559,9 @@ const AttendanceListPage = async (
                 key={`${item.category}-${item.id}`}
                 className="block group"
               >
-                <Card className="p-5 border-border/80 group-hover:border-primary/50 group-hover:shadow-md transition-all flex flex-col h-full">
+                <Card className={`p-5 border-border/80 group-hover:border-primary/50 group-hover:shadow-md transition-all flex flex-col h-full ${item.isInactive ? "bg-amber-50/20" : ""}`}>
                   <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <div className="w-10 h-10 rounded-full bg-primary-light flex items-center justify-center shrink-0">
                         <Image
                           src={iconSrc}
@@ -516,6 +573,11 @@ const AttendanceListPage = async (
                       <Badge variant={badgeVariant as any} size="sm">
                         {badgeLabel}
                       </Badge>
+                      {item.isInactive && (
+                        <Badge variant="warning" size="sm" withDot>
+                          {locale === "ar" ? "مغلق / متوقف" : "Fermé / En pause"}
+                        </Badge>
+                      )}
                     </div>
 
                     {(isOwner || selectedBranchId === "all") && (

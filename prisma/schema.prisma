@@ -110,6 +110,8 @@ model Class {
   pricePerCycle         Decimal?
   isCompleted           Boolean                @default(false)
   completedAt           DateTime?
+  isPaused              Boolean                @default(false)
+  pausedAt              DateTime?
   branch                Branch                 @relation(fields: [branchId], references: [id])
   teacher               Teacher?               @relation(fields: [teacherId], references: [id])
   level                 Level?                 @relation(fields: [levelId], references: [id])
@@ -129,6 +131,7 @@ model Class {
   @@index([formationLevelId])
   @@index([isFormation, branchId])
   @@index([isCompleted])
+  @@index([isPaused])
 }
 
 model Lesson {
@@ -333,23 +336,29 @@ model AuditLog {
 }
 
 model Enrollment {
-  id                    Int                  @id @default(autoincrement())
+  id                    Int                      @id @default(autoincrement())
   studentId             String
   classId               Int
   academicYearId        Int
-  enrolledAt            DateTime             @default(now())
+  enrolledAt            DateTime                 @default(now())
   inscriptionFeeCharged Boolean
   inscriptionFeeAmount  Decimal?
-  payerStatus           String               @default("NORMAL")
-  status                String               @default("ACTIVE")
-  feeOverriddenByOwner  Boolean              @default(false)
+  payerStatus           String                   @default("NORMAL")
+  discountType          String?
+  discountValue         Decimal?                 @db.Decimal(10, 2)
+  discountReason        String?
+  discountUpdatedBy     String?
+  discountUpdatedAt     DateTime?
+  status                String                   @default("ACTIVE")
+  feeOverriddenByOwner  Boolean                  @default(false)
   feeOverrideNote       String?
-  creditResetOffset     Int                  @default(0)
-  academicYear          AcademicYear         @relation(fields: [academicYearId], references: [id])
-  class                 Class                @relation(fields: [classId], references: [id])
-  student               Student              @relation(fields: [studentId], references: [id])
-  transfersFrom         EnrollmentTransfer[] @relation("FromEnrollment")
-  transfersTo           EnrollmentTransfer[] @relation("ToEnrollment")
+  creditResetOffset     Int                      @default(0)
+  academicYear          AcademicYear             @relation(fields: [academicYearId], references: [id])
+  class                 Class                    @relation(fields: [classId], references: [id])
+  student               Student                  @relation(fields: [studentId], references: [id])
+  transfersFrom         EnrollmentTransfer[]     @relation("FromEnrollment")
+  transfersTo           EnrollmentTransfer[]     @relation("ToEnrollment")
+  payerHistory          EnrollmentPayerHistory[]
 
   @@index([studentId])
   @@index([classId])
@@ -359,6 +368,21 @@ model Enrollment {
   @@index([enrolledAt])
   @@index([status])
   @@index([studentId, classId, status])
+}
+
+model EnrollmentPayerHistory {
+  id            Int        @id @default(autoincrement())
+  enrollmentId  Int
+  payerStatus   String
+  discountType  String?
+  discountValue Decimal?   @db.Decimal(10, 2)
+  reason        String?
+  changedBy     String
+  effectiveFrom DateTime   @default(now())
+  effectiveTo   DateTime?
+  enrollment    Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@index([enrollmentId, effectiveFrom])
 }
 
 model EnrollmentTransfer {
@@ -557,9 +581,16 @@ model Voucher {
   lastEditedAt       DateTime?
   lastEditedBy       String?
   trimesterId        Int?
-  isRefund           Boolean       @default(false)
-  refundForVoucherId Int?
-  refundFor          Voucher?      @relation("VoucherRefundLink", fields: [refundForVoucherId], references: [id])
+  isRefund              Boolean       @default(false)
+  refundForVoucherId    Int?
+  appliedPayerStatus    String?
+  baseCyclePrice        Decimal?      @db.Decimal(10, 2)
+  effectiveCyclePrice   Decimal?      @db.Decimal(10, 2)
+  effectiveSessionPrice Decimal?      @db.Decimal(10, 2)
+  discountType          String?
+  discountValue         Decimal?      @db.Decimal(10, 2)
+  teacherPayWeight      Decimal?      @db.Decimal(6, 4)
+  refundFor             Voucher?      @relation("VoucherRefundLink", fields: [refundForVoucherId], references: [id])
   refundVouchers     Voucher[]     @relation("VoucherRefundLink")
   class              Class?        @relation(fields: [classId], references: [id])
   workshop           Workshop?     @relation(fields: [workshopId], references: [id])

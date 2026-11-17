@@ -24,6 +24,8 @@ export default function FormationSchedule({
     name: string;
     branchId: number;
     teacherId?: string | null;
+    isPaused?: boolean;
+    isCompleted?: boolean;
   };
   sessions: Array<{
     id: number;
@@ -45,6 +47,7 @@ export default function FormationSchedule({
   const [isAddSessionOpen, setIsAddSessionOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<any | null>(null);
   const [deletingSession, setDeletingSession] = useState<any | null>(null);
+  const isGroupInactive = Boolean(formationClass.isPaused || formationClass.isCompleted);
 
   return (
     <>
@@ -60,7 +63,7 @@ export default function FormationSchedule({
               <span>{locale === "ar" ? "عرض سجل الحضور الكامل ←" : "Feuille de présence complète →"}</span>
             </Link>
           </div>
-          {role === "admin" && (
+          {role === "admin" && !isGroupInactive && (
             <Button
               variant="primary"
               size="icon"

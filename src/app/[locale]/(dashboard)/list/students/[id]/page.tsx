@@ -15,10 +15,18 @@ import { DataTable, Column } from "@/components/ui/DataTable";
 import { StudentAvatar } from "@/components/ui/UserAvatar";
 import { serializeForClient } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
-import { computeStudentSessionFee, computeStudentConsumedSessions, computeStudentCreditAndSessions, resolvePayerCredit, isLessonApplicableToEnrollment } from "@/lib/studentBilling";
+import {
+  computeStudentSessionFee,
+  computeStudentConsumedSessions,
+  computeStudentCreditAndSessions,
+  resolvePayerCredit,
+  isLessonApplicableToEnrollment,
+  formatDiscountBadgeLabel,
+} from "@/lib/studentBilling";
 import StudentPayerStatusControl from "@/components/students/StudentPayerStatusControl";
 import { getFixedInscriptionFeeAction } from "@/lib/configurationActions";
 import { formatDZD, getAlgiersDateInfo } from "@/lib/algiersDate";
+import { ACTIVE_CLASS_WHERE, isClassInactive } from "@/lib/classStatus";
 import {
   Calendar,
   Building2,
@@ -30,6 +38,7 @@ import {
   CheckCircle2,
   Sparkles,
   ShieldAlert,
+  Tag,
   MapPin,
   User,
 } from "lucide-react";
@@ -219,6 +228,9 @@ const SingleStudentPage = async (
                 },
                 orderBy: { transferredAt: "desc" },
               },
+              payerHistory: {
+                orderBy: { effectiveFrom: "asc" },
+              },
             },
             orderBy: { enrolledAt: "asc" },
           },
@@ -235,6 +247,14 @@ const SingleStudentPage = async (
                 include: {
                   branch: true,
                   level: true,
+                },
+              },
+              workshop: {
+                select: {
+                  id: true,
+                  title: true,
+                  branchId: true,
+                  Branch: { select: { id: true, name: true } },
                 },
               },
               edits: {
@@ -287,6 +307,7 @@ const SingleStudentPage = async (
         },
       }),
       prisma.class.findMany({
+        where: ACTIVE_CLASS_WHERE,
         select: {
           id: true,
           name: true,
@@ -358,10 +379,6 @@ const SingleStudentPage = async (
           totalPaidFormation += Math.max(0, vAmount - vRefunded);
         });
       }
-      const isLevelPaid = isFormation && totalPaidFormation >= formationLevelPrice && formationLevelPrice > 0;
-      const isLevelPartiallyPaid = isFormation && totalPaidFormation > 0 && totalPaidFormation < formationLevelPrice;
-      const levelRemainingBalance = Math.max(0, formationLevelPrice - totalPaidFormation);
-
       let groupPayerActiveAndPaid = false;
       let groupPayerRemainingCredit: number | undefined = undefined;
       if (isPayerInThisGroup && studentPaymentData?.family?.payerStudent) {
@@ -382,6 +399,13 @@ const SingleStudentPage = async (
       const groupIsSiblingWaived100 = isPayerInThisGroup && groupSiblingDiscountPct >= 100;
 
       const enrStatus = enr.payerStatus || "NORMAL";
+      const enrDiscountType: string | null = (enr as any).discountType ?? null;
+      const enrDiscountValue: number | null =
+        (enr as any).discountValue !== undefined && (enr as any).discountValue !== null
+          ? Number((enr as any).discountValue)
+          : null;
+      const enrDiscountReason: string | null = (enr as any).discountReason ?? null;
+
       const classCatchUps = (studentPaymentData?.catchUpAttendances || []).filter(
         (cu: any) => {
           const isDirectClass = cu.missedLesson?.classId === c.id;
@@ -400,10 +424,34 @@ const SingleStudentPage = async (
           ? Number((c.teacher as any).TeacherPayRate[0].percentageOfSessionFee)
           : null;
 
+      const feeCalc = computeStudentSessionFee({
+        payerStatus: enrStatus,
+        discountType: enrDiscountType,
+        discountValue: enrDiscountValue,
+        pricePerCycle: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
+        teacherPercentage,
+        isSiblingWaived: groupIsSiblingWaived100,
+        siblingDiscountPercentage: groupSiblingDiscountPct,
+        isFormation,
+        isPayerActiveAndPaid: groupPayerActiveAndPaid,
+      });
+
+      const effectiveFormationPrice = isFormation ? feeCalc.studentCycleFee : formationLevelPrice;
+      const isLevelPaid =
+        isFormation &&
+        (effectiveFormationPrice <= 0 ||
+          (totalPaidFormation >= effectiveFormationPrice && effectiveFormationPrice > 0));
+      const isLevelPartiallyPaid =
+        isFormation && totalPaidFormation > 0 && totalPaidFormation < effectiveFormationPrice;
+      const levelRemainingBalance = Math.max(0, effectiveFormationPrice - totalPaidFormation);
+
       const creditMetrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(c?.pricePerCycle || 0),
         isFormation,
         payerStatus: enrStatus,
+        discountType: enrDiscountType,
+        discountValue: enrDiscountValue,
+        payerHistory: (enr as any).payerHistory,
         siblingDiscountPercentage: groupSiblingDiscountPct,
         isSiblingWaived: groupIsSiblingWaived100,
         isPayerActiveAndPaid: groupPayerActiveAndPaid,
@@ -440,16 +488,10 @@ const SingleStudentPage = async (
       const transferredOut = creditMetrics.transferredOut;
       const attendedSessions = creditMetrics.attendedSessions;
       const netSessions = creditMetrics.netSessions;
-
-      const feeCalc = computeStudentSessionFee({
-        payerStatus: enrStatus,
-        pricePerCycle: Number(c.pricePerCycle || 0),
-        teacherPercentage,
-        isSiblingWaived: groupIsSiblingWaived100,
-        siblingDiscountPercentage: groupSiblingDiscountPct,
-        isFormation,
-        isPayerActiveAndPaid: groupPayerActiveAndPaid,
-      });
+      const discountLabel =
+        enrStatus === "DISCOUNTED"
+          ? formatDiscountBadgeLabel(enrDiscountType, enrDiscountValue, locale === "ar" ? "ar" : "fr")
+          : null;
 
       return {
         enrollmentId: enr.id,
@@ -461,16 +503,25 @@ const SingleStudentPage = async (
         isFormation,
         formationLevelName: (c as any).FormationLevel?.name || null,
         formationLanguageName: (c as any).FormationLevel?.Language?.name || null,
-        formationLevelPrice,
+        formationLevelPrice: effectiveFormationPrice,
+        baseCyclePrice: isFormation ? formationLevelPrice : Number(c.pricePerCycle || 0),
         totalPaidFormation,
         isLevelPaid,
         isLevelPartiallyPaid,
         levelRemainingBalance,
         teacherName: c.teacher?.name || null,
         netSessions,
-        isSiblingWaived: groupIsSiblingWaived100,
-        hasPayerSibling: isPayerInThisGroup,
+        isSiblingWaived: creditMetrics.isSiblingWaived,
+        hasPayerSibling: !creditMetrics.isDiscounted && isPayerInThisGroup,
+        hasSiblingDiscount: groupSiblingDiscount,
+        siblingDiscountPercentage: groupSiblingDiscountPct,
         isNonPayer: enrStatus === "NON_PAYER",
+        isDiscounted: enrStatus === "DISCOUNTED",
+        isZeroFeeDiscount: creditMetrics.isZeroFeeDiscount,
+        discountType: enrDiscountType,
+        discountValue: enrDiscountValue,
+        discountReason: enrDiscountReason,
+        discountLabel,
         payerStatus: enrStatus,
         status:
           (enr as any).status === "TRANSFERRED" ||
@@ -481,6 +532,7 @@ const SingleStudentPage = async (
         studentCycleFee: feeCalc.studentCycleFee,
         schoolPercentage: feeCalc.schoolPercentage,
         teacherPercentage: feeCalc.teacherPercentage,
+        isClassInactive: isClassInactive(c),
       };
     });
 
@@ -510,7 +562,7 @@ const SingleStudentPage = async (
     const expiringGroupsCount = sortedActiveGroupSummaries.filter((g) => !g.isFormation && g.netSessions === 1).length;
 
     const classIds = (studentPaymentData?.enrollments || [])
-      .filter((e) => (e as any).status === "ACTIVE" || !(e as any).status)
+      .filter((e) => ((e as any).status === "ACTIVE" || !(e as any).status) && !isClassInactive(e.class))
       .map((e) => e.classId);
 
     // UPCOMING LESSONS ACROSS THE WHOLE SCHOOL (§1.0 - Rule 2):
@@ -707,6 +759,14 @@ const SingleStudentPage = async (
                     <span>{t("badgeNonPayer")}: {g.className}</span>
                   </Badge>
                 ))}
+                {groupSummaries.filter((g) => g.status !== "SUSPENDED" && g.payerStatus === "DISCOUNTED").map((g) => (
+                  <Badge key={`disc-${g.enrollmentId}`} variant="primary" size="sm" withDot className="bg-violet-100 text-violet-900 border border-violet-300 font-bold">
+                    <Tag className="w-3 h-3 text-violet-700" />
+                    <span>
+                      {locale === "ar" ? "تخفيض" : "Remise"} ({g.discountLabel}): {g.className}
+                    </span>
+                  </Badge>
+                ))}
                 {groupSummaries.filter((g) => g.payerStatus === "SCHOOL_FEES_ONLY").map((g) => (
                   <Badge key={`sf-${g.enrollmentId}`} variant="warning" size="sm" withDot className="font-bold">
                     <ShieldAlert className="w-3 h-3 text-warning" />
@@ -780,9 +840,18 @@ const SingleStudentPage = async (
                   branchName: g.branchName,
                   payerStatus: g.payerStatus,
                   status: g.status,
+                  discountType: g.discountType,
+                  discountValue: g.discountValue,
+                  discountReason: g.discountReason,
+                  pricePerCycle: g.baseCyclePrice,
+                  isFormation: g.isFormation,
+                  teacherPercentage: g.teacherPercentage,
+                  hasSiblingDiscount: g.hasSiblingDiscount,
+                  siblingDiscountPercentage: g.siblingDiscountPercentage,
                 }))}
                 currentStatus={s.payerStatus || "NORMAL"}
                 canEdit={canEditStatus}
+                isOwner={Boolean(session.isOwner)}
               />
             </div>
           </Card>
@@ -834,8 +903,13 @@ const SingleStudentPage = async (
                           }`}
                         >
                           <div className="flex flex-col">
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <span className={`font-bold ${isTransferred ? "text-gray-500 line-through decoration-gray-400" : "text-gray-900"}`}>{g.className}</span>
+                              {g.isClassInactive && (
+                                <Badge variant="warning" size="sm" withDot>
+                                  {locale === "ar" ? "فوج مغلق / متوقف" : "Groupe fermé / en pause"}
+                                </Badge>
+                              )}
                               <Badge variant="secondary" size="sm">
                                 <Building2 className="w-3 h-3 inline me-1" />
                                 {g.branchName}
@@ -853,6 +927,11 @@ const SingleStudentPage = async (
                               {g.payerStatus === "NON_PAYER" && (
                                 <Badge variant="success" size="sm">
                                   {t("badgeNonPayer")}
+                                </Badge>
+                              )}
+                              {g.payerStatus === "DISCOUNTED" && (
+                                <Badge variant="primary" size="sm" className="bg-violet-100 text-violet-900 border border-violet-300 font-semibold">
+                                  {locale === "ar" ? `تخفيض (${g.discountLabel})` : `Remise (${g.discountLabel})`}
                                 </Badge>
                               )}
                               {g.payerStatus === "SCHOOL_FEES_ONLY" && (

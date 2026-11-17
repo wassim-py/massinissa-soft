@@ -16,9 +16,10 @@ import {
   resolvePayerCredit,
   computeEnrollmentInscriptionStatus,
   isLessonApplicableToEnrollment,
+  formatDiscountBadgeLabel,
 } from "@/lib/studentBilling";
 import { toast } from "react-toastify";
-import { formatVoucherDisplay } from "@/lib/voucherUtils";
+import { formatVoucherDisplay, buildVoucherBundleForPrint } from "@/lib/voucherUtils";
 import { useTranslations, useLocale } from "next-intl";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { FilterTabs, FilterTabItem } from "@/components/ui/FilterTabs";
@@ -400,6 +401,7 @@ export default function PaymentGrid({
     const isPayerInThisClass = Boolean(payerEnrollmentInClass);
 
     let isPayerActiveAndPaid = false;
+    let payerNetSessions: number | undefined = undefined;
     if (isPayerInThisClass && payerEnrollmentInClass) {
       const targetPayerStudent = {
         ...payerEnrollmentInClass.student,
@@ -422,6 +424,7 @@ export default function PaymentGrid({
         isFormation: Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId),
       });
       isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
+      payerNetSessions = payerRes.netSessions;
     }
 
     const isSiblingDiscount = Boolean(isPayerInThisClass && isPayerActiveAndPaid);
@@ -434,14 +437,43 @@ export default function PaymentGrid({
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
     const formationVouchers = activeVouchers.filter((v) => v.paymentType === "FORMATION");
 
-    const formationPrice = Number(classData.pricePerCycle || 0);
+    const enrPayerStatus = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
+    const enrDiscountType = (enrollment as any).discountType || null;
+    const enrDiscountValue = (enrollment as any).discountValue != null ? Number((enrollment as any).discountValue) : null;
+    const enrPayerHistory = (enrollment as any).payerHistory || [];
+
+    const teacherClassOverride = (classData.teacherClassRates as any[])?.find(
+      (tcr: any) => tcr.teacherId === classData.teacherId
+    )?.percentage;
+    const teacherPercentage = teacherClassOverride != null
+      ? Number(teacherClassOverride)
+      : classData.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
+        ? Number(classData.teacher.TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+
+    const baseFormationPrice = Number(classData.pricePerCycle || 0);
+    const formationFeeCalc = isFormation
+      ? computeStudentSessionFee({
+          pricePerCycle: baseFormationPrice,
+          isFormation: true,
+          payerStatus: enrPayerStatus,
+          discountType: enrDiscountType,
+          discountValue: enrDiscountValue,
+          siblingDiscountPercentage: siblingDiscountPct,
+          isSiblingWaived: isSiblingWaived100,
+          teacherPercentage,
+        })
+      : null;
+    const formationPrice = formationFeeCalc ? formationFeeCalc.studentCycleFee : baseFormationPrice;
     const totalPaidFormation = formationVouchers.reduce((sum: number, v: any) => {
       const paid = Number(v.amount || 0);
       const refunded = (v.refunds || []).reduce((rSum: number, r: any) => rSum + Number(r.amount || 0), 0);
       return sum + Math.max(0, paid - refunded);
     }, 0);
     const formationRemaining = Math.max(0, formationPrice - totalPaidFormation);
-    const isFormationPaidInFull = formationPrice > 0 && totalPaidFormation >= formationPrice;
+    const isFormationPaidInFull =
+      (formationPrice === 0 && (enrPayerStatus === "NON_PAYER" || enrPayerStatus === "DISCOUNTED")) ||
+      (formationPrice > 0 && totalPaidFormation >= formationPrice);
     const isFormationPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
 
     // Consumed non-free sessions (accounting for Massinissa absence rules)
@@ -457,8 +489,6 @@ export default function PaymentGrid({
       }
     });
 
-    const enrPayerStatus = (enrollment as any).payerStatus || (student as any).payerStatus || "NORMAL";
-
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(
       (cu: any) =>
         cu.recordedBy !== "transfer" &&
@@ -466,19 +496,13 @@ export default function PaymentGrid({
           classData.lessons.some((l: any) => l.id === cu.missedLessonId))
     );
 
-    const teacherClassOverride = (classData.teacherClassRates as any[])?.find(
-      (tcr: any) => tcr.teacherId === classData.teacherId
-    )?.percentage;
-    const teacherPercentage = teacherClassOverride != null
-      ? Number(teacherClassOverride)
-      : classData.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
-        ? Number(classData.teacher.TeacherPayRate[0].percentageOfSessionFee)
-        : null;
-
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: Number(classData.pricePerCycle || 0),
       isFormation,
       payerStatus: enrPayerStatus,
+      discountType: enrDiscountType,
+      discountValue: enrDiscountValue,
+      payerHistory: enrPayerHistory,
       siblingDiscountPercentage: siblingDiscountPct,
       isSiblingWaived: isSiblingWaived100,
       isPayerActiveAndPaid,
@@ -592,9 +616,31 @@ export default function PaymentGrid({
       partialTransferRemainderDzd: creditMetrics.partialTransferRemainderDzd || 0,
       refundableAmount,
       effectiveLessonPrice,
+      effectiveCycleFee: creditMetrics.effectiveCycleFee,
+      cycleRemainingFee: isFormation
+        ? formationRemaining > 0
+          ? formationRemaining
+          : 0
+        : creditMetrics.cycleRemainingFee,
+      effectiveRemainingSessions:
+        !isFormation && enrPayerStatus !== "NON_PAYER"
+          ? isSiblingWaived100 && payerNetSessions !== undefined
+            ? payerNetSessions
+            : netSessions
+          : undefined,
       status: computedStatus,
       isNonPayer: enrPayerStatus === "NON_PAYER",
       isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
+      isDiscounted: creditMetrics.isDiscounted,
+      discountType: creditMetrics.discountType,
+      discountValue: creditMetrics.discountValue,
+      discountBadgeLabel: creditMetrics.isDiscounted
+        ? formatDiscountBadgeLabel(
+            creditMetrics.discountType,
+            creditMetrics.discountValue,
+            locale === "ar" ? "ar" : "fr"
+          )
+        : null,
       bookReceivedCount,
       totalBooks: classBooks.length,
       bookStatus,
@@ -1070,6 +1116,13 @@ export default function PaymentGrid({
                 {locale === "ar" ? "حصة المدرسة فقط" : "Frais école seuls"}
               </Badge>
             )}
+            {item.isDiscounted && (
+              <Badge variant="secondary" size="sm" className="bg-violet-100 text-violet-900 border border-violet-300 font-semibold">
+                {locale === "ar"
+                  ? `مخفّض${item.discountBadgeLabel ? ` (${item.discountBadgeLabel})` : ""}`
+                  : `Remise${item.discountBadgeLabel ? ` (${item.discountBadgeLabel})` : ""}`}
+              </Badge>
+            )}
             {item.transferredIn > 0 && (
               <Badge
                 variant="secondary"
@@ -1233,7 +1286,14 @@ export default function PaymentGrid({
                   {locale === "ar" ? "حصة المدرسة" : "Part école"}
                 </span>
               )}
-              {item.hasPayerSibling && (
+              {item.isDiscounted && (
+                <span className="text-[10px] text-violet-800 font-semibold">
+                  {locale === "ar"
+                    ? `مخفّض${item.discountBadgeLabel ? ` (${item.discountBadgeLabel})` : ""}`
+                    : `Remise${item.discountBadgeLabel ? ` (${item.discountBadgeLabel})` : ""}`}
+                </span>
+              )}
+              {item.hasPayerSibling && !item.isDiscounted && (
                 <span className="text-[10px] text-muted font-medium">
                   {locale === "ar" ? "أخ دافع" : "Remise fratrie"}
                 </span>
@@ -1330,10 +1390,14 @@ export default function PaymentGrid({
             {!isTransferred && item.latestVoucher && (
               <PrintTicketButton
                 voucher={{
-                  ...item.latestVoucher,
+                  ...buildVoucherBundleForPrint(item.latestVoucher, item.activeVouchers),
                   student: s,
                   class: classData,
                 }}
+                remainingSessions={item.effectiveRemainingSessions}
+                cycleRemainingFee={
+                  item.cycleRemainingFee > 0 ? item.cycleRemainingFee : undefined
+                }
               />
             )}
           </div>
@@ -1473,6 +1537,13 @@ export default function PaymentGrid({
                             {locale === "ar" ? "محول" : "Transféré"}
                           </Badge>
                         )}
+                        {item.isDiscounted && (
+                          <Badge variant="secondary" size="sm" className="bg-violet-100 text-violet-900 border border-violet-300 font-semibold">
+                            {locale === "ar"
+                              ? `مخفّض${item.discountBadgeLabel ? ` (${item.discountBadgeLabel})` : ""}`
+                              : `Remise${item.discountBadgeLabel ? ` (${item.discountBadgeLabel})` : ""}`}
+                          </Badge>
+                        )}
                         {item.transferredIn > 0 && (
                           <Badge
                             variant="secondary"
@@ -1591,7 +1662,14 @@ export default function PaymentGrid({
                               {locale === "ar" ? "حصة المدرسة" : "Part école"}
                             </span>
                           )}
-                          {item.hasPayerSibling && (
+                          {item.isDiscounted && (
+                            <span className="text-[10px] text-violet-800 font-semibold">
+                              {locale === "ar"
+                                ? `مخفّض${item.discountBadgeLabel ? ` (${item.discountBadgeLabel})` : ""}`
+                                : `Remise${item.discountBadgeLabel ? ` (${item.discountBadgeLabel})` : ""}`}
+                            </span>
+                          )}
+                          {item.hasPayerSibling && !item.isDiscounted && (
                             <span className="text-[10px] text-muted font-medium">
                               {locale === "ar" ? "أخ دافع" : "Remise fratrie"}
                             </span>
@@ -1677,10 +1755,14 @@ export default function PaymentGrid({
                     {item.latestVoucher && (
                       <PrintTicketButton
                         voucher={{
-                          ...item.latestVoucher,
+                          ...buildVoucherBundleForPrint(item.latestVoucher, item.activeVouchers),
                           student: s,
                           class: classData,
                         }}
+                        remainingSessions={item.effectiveRemainingSessions}
+                        cycleRemainingFee={
+                          item.cycleRemainingFee > 0 ? item.cycleRemainingFee : undefined
+                        }
                       />
                     )}
                   </div>
@@ -1718,14 +1800,27 @@ export default function PaymentGrid({
             >
               <X className="w-5 h-5" />
             </button>
-            <PaymentForm
-              student={voucherModal.student}
-              classData={classData}
-              setOpen={(open) => setVoucherModal({ ...voucherModal, isOpen: open })}
-              type={voucherModal.type}
-              data={voucherModal.voucher}
-              defaultInscriptionFee={configuredInscriptionFee}
-            />
+            {(() => {
+              const modalItem = processedStudents.find(
+                (ps) => ps.student.id === voucherModal.student?.id
+              );
+              return (
+                <PaymentForm
+                  student={voucherModal.student}
+                  classData={classData}
+                  setOpen={(open) => setVoucherModal({ ...voucherModal, isOpen: open })}
+                  type={voucherModal.type}
+                  data={voucherModal.voucher}
+                  remainingSessions={modalItem?.effectiveRemainingSessions}
+                  cycleRemainingFee={
+                    modalItem && modalItem.cycleRemainingFee > 0
+                      ? modalItem.cycleRemainingFee
+                      : undefined
+                  }
+                  defaultInscriptionFee={configuredInscriptionFee}
+                />
+              );
+            })()}
           </div>
         </div>,
         document.body

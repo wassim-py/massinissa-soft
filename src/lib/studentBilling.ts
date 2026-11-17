@@ -7,10 +7,46 @@
  *    Sessions still consume credit and count in attendance/payroll normally.
  * 3. SCHOOL_FEES_ONLY: Student pays only the school's percentage share:
  *    (100% - TeacherPayRate.percentageOfSessionFee), skipping teacher's cut.
- *    Teacher payroll for the session is unaffected (teacher earns normal percentage).
+ *    Teacher payroll for the session is unaffected (teacher earns normal percentage -> 0 for SFO).
+ * 4. DISCOUNTED: Owner-configured tuition discount per enrollment
+ *    (PERCENT, FIXED_AMOUNT, or CUSTOM_PRICE). Teacher & school share the discount proportionally.
  */
 
-export type StudentPayerStatus = "NORMAL" | "NON_PAYER" | "SCHOOL_FEES_ONLY";
+export type DiscountType = "PERCENT" | "FIXED_AMOUNT" | "CUSTOM_PRICE";
+
+export type StudentPayerStatus = "NORMAL" | "NON_PAYER" | "SCHOOL_FEES_ONLY" | "DISCOUNTED";
+
+export interface EnrollmentPayerHistoryEntry {
+  id?: number;
+  payerStatus: string;
+  discountType?: string | null;
+  discountValue?: any;
+  effectiveFrom: Date | string;
+  effectiveTo?: Date | string | null;
+}
+
+export interface PaidSessionSlot {
+  voucherId?: number;
+  unitPrice: number;
+  teacherPayWeight: number;
+  appliedPayerStatus: StudentPayerStatus;
+  source: "VOUCHER" | "TRANSFER";
+}
+
+export interface PaidSessionSlotSchedule {
+  slots: PaidSessionSlot[];
+  purchasedSlots: PaidSessionSlot[];
+  totalPaidTuition: number;
+  crossPriceTransferAmount: number;
+  samePriceTransferredSessions: number;
+  purchasedSessions: number;
+  transferredIn: number;
+  transferredOut: number;
+  unconvertedPartialCashDzd: number;
+  partialTransferPaidDzd?: number;
+  partialTransferRemainderDzd?: number;
+  unlimitedFreeClass: boolean;
+}
 
 export interface SessionFeeCalculation {
   baseSessionFee: number;
@@ -24,12 +60,213 @@ export interface SessionFeeCalculation {
   payerStatus: StudentPayerStatus;
   isSiblingWaived: boolean;
   siblingDiscountPercentage?: number;
+  isDiscounted: boolean;
+  discountType?: DiscountType | null;
+  discountValue?: number | null;
+  discountAmountPerCycle?: number;
+  effectiveDiscountPercent?: number;
+  teacherPayWeight: number;
+}
+
+export function normalizeDiscountType(discountType?: string | null): DiscountType | null {
+  if (discountType === "PERCENT") return "PERCENT";
+  if (discountType === "FIXED_AMOUNT") return "FIXED_AMOUNT";
+  if (discountType === "CUSTOM_PRICE") return "CUSTOM_PRICE";
+  return null;
 }
 
 export function normalizePayerStatus(status?: string | null): StudentPayerStatus {
   if (status === "NON_PAYER") return "NON_PAYER";
   if (status === "SCHOOL_FEES_ONLY") return "SCHOOL_FEES_ONLY";
+  if (status === "DISCOUNTED") return "DISCOUNTED";
   return "NORMAL";
+}
+
+/**
+ * Computes the discounted cycle/formation price given base fee and discount config.
+ */
+export function computeDiscountedCycleFee({
+  baseCycleFee,
+  discountType,
+  discountValue,
+}: {
+  baseCycleFee: number;
+  discountType?: string | null;
+  discountValue?: any;
+}): {
+  studentCycleFee: number;
+  discountAmountPerCycle: number;
+  effectiveDiscountPercent: number;
+  normalizedType: DiscountType | null;
+  normalizedValue: number | null;
+} {
+  const base = Math.max(0, Number(baseCycleFee || 0));
+  const normType = normalizeDiscountType(discountType);
+  const parsedVal = discountValue !== undefined && discountValue !== null && discountValue !== ""
+    ? Number(discountValue)
+    : null;
+
+  if (!normType || parsedVal === null || !Number.isFinite(parsedVal) || parsedVal < 0) {
+    return {
+      studentCycleFee: Math.round(base * 100) / 100,
+      discountAmountPerCycle: 0,
+      effectiveDiscountPercent: 0,
+      normalizedType: normType,
+      normalizedValue: parsedVal,
+    };
+  }
+
+  let studentCycleFee = base;
+  if (normType === "PERCENT") {
+    const pct = Math.max(0, Math.min(100, parsedVal));
+    studentCycleFee = Math.round(base * (1 - pct / 100) * 100) / 100;
+  } else if (normType === "FIXED_AMOUNT") {
+    const off = base > 0 ? Math.min(base, parsedVal) : 0;
+    studentCycleFee = Math.max(0, Math.round((base - off) * 100) / 100);
+  } else if (normType === "CUSTOM_PRICE") {
+    const custom = base > 0 ? Math.min(base, parsedVal) : parsedVal;
+    studentCycleFee = Math.max(0, Math.round(custom * 100) / 100);
+  }
+
+  const discountAmountPerCycle = Math.max(0, Math.round((base - studentCycleFee) * 100) / 100);
+  const effectiveDiscountPercent =
+    base > 0
+      ? Math.round((discountAmountPerCycle / base) * 10000) / 100
+      : studentCycleFee === 0
+      ? 100
+      : 0;
+
+  return {
+    studentCycleFee,
+    discountAmountPerCycle,
+    effectiveDiscountPercent,
+    normalizedType: normType,
+    normalizedValue: parsedVal,
+  };
+}
+
+/**
+ * Formats a concise human-readable discount badge label across French and Arabic UIs.
+ */
+export function formatDiscountBadgeLabel(
+  discountType?: string | null,
+  discountValue?: any,
+  locale: "fr" | "ar" = "fr"
+): string {
+  const normType = normalizeDiscountType(discountType);
+  const val = Number(discountValue ?? 0);
+  if (!normType || !Number.isFinite(val)) {
+    return locale === "ar" ? "تخفيض" : "Remise";
+  }
+  const currency = locale === "ar" ? "دج" : "DA";
+  const formattedVal = Math.round(val).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ");
+  if (normType === "PERCENT") {
+    return `-${val}%`;
+  }
+  if (normType === "FIXED_AMOUNT") {
+    return `-${formattedVal} ${currency}`;
+  }
+  return `${formattedVal} ${currency}`;
+}
+
+/**
+ * Resolves the active payer status & discount configuration at a given lesson timestamp.
+ */
+export function resolvePayerPeriodAtDate(
+  date: Date | string,
+  payerHistory?: EnrollmentPayerHistoryEntry[] | null,
+  fallbackStatus?: string | null,
+  fallbackDiscountType?: string | null,
+  fallbackDiscountValue?: any
+): {
+  payerStatus: StudentPayerStatus;
+  discountType: DiscountType | null;
+  discountValue: number | null;
+} {
+  if (!payerHistory || payerHistory.length === 0) {
+    return {
+      payerStatus: normalizePayerStatus(fallbackStatus),
+      discountType: normalizeDiscountType(fallbackDiscountType),
+      discountValue:
+        fallbackDiscountValue !== undefined && fallbackDiscountValue !== null
+          ? Number(fallbackDiscountValue)
+          : null,
+    };
+  }
+
+  const targetMs = new Date(date).getTime();
+  if (!Number.isFinite(targetMs)) {
+    const latest = payerHistory[payerHistory.length - 1];
+    return {
+      payerStatus: normalizePayerStatus(latest.payerStatus),
+      discountType: normalizeDiscountType(latest.discountType),
+      discountValue:
+        latest.discountValue !== undefined && latest.discountValue !== null
+          ? Number(latest.discountValue)
+          : null,
+    };
+  }
+
+  const sorted = [...payerHistory].sort((a, b) => {
+    const diff = new Date(a.effectiveFrom).getTime() - new Date(b.effectiveFrom).getTime();
+    if (diff !== 0) return diff;
+    return Number(a.id || 0) - Number(b.id || 0);
+  });
+
+  // 1. Exact half-open window [effectiveFrom, effectiveTo) match
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const entry = sorted[i];
+    const fromMs = new Date(entry.effectiveFrom).getTime();
+    const toMs = entry.effectiveTo ? new Date(entry.effectiveTo).getTime() : Infinity;
+    if (targetMs >= fromMs && targetMs < toMs) {
+      return {
+        payerStatus: normalizePayerStatus(entry.payerStatus),
+        discountType: normalizeDiscountType(entry.discountType),
+        discountValue:
+          entry.discountValue !== undefined && entry.discountValue !== null
+            ? Number(entry.discountValue)
+            : null,
+      };
+    }
+  }
+
+  // 2. If lesson happened before earliest recorded effectiveFrom (e.g. same-day grace window), use earliest entry
+  const firstFromMs = new Date(sorted[0].effectiveFrom).getTime();
+  if (targetMs < firstFromMs) {
+    return {
+      payerStatus: normalizePayerStatus(sorted[0].payerStatus),
+      discountType: normalizeDiscountType(sorted[0].discountType),
+      discountValue:
+        sorted[0].discountValue !== undefined && sorted[0].discountValue !== null
+          ? Number(sorted[0].discountValue)
+          : null,
+    };
+  }
+
+  // 3. Fallback: latest entry with effectiveFrom <= targetMs (or final entry)
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const entry = sorted[i];
+    if (new Date(entry.effectiveFrom).getTime() <= targetMs) {
+      return {
+        payerStatus: normalizePayerStatus(entry.payerStatus),
+        discountType: normalizeDiscountType(entry.discountType),
+        discountValue:
+          entry.discountValue !== undefined && entry.discountValue !== null
+            ? Number(entry.discountValue)
+            : null,
+      };
+    }
+  }
+
+  const last = sorted[sorted.length - 1];
+  return {
+    payerStatus: normalizePayerStatus(last.payerStatus),
+    discountType: normalizeDiscountType(last.discountType),
+    discountValue:
+      last.discountValue !== undefined && last.discountValue !== null
+        ? Number(last.discountValue)
+        : null,
+  };
 }
 
 /**
@@ -37,6 +274,8 @@ export function normalizePayerStatus(status?: string | null): StudentPayerStatus
  */
 export function computeStudentSessionFee({
   payerStatus,
+  discountType,
+  discountValue,
   pricePerCycle,
   teacherPercentage,
   isSiblingWaived = false,
@@ -45,6 +284,8 @@ export function computeStudentSessionFee({
   isPayerActiveAndPaid = true,
 }: {
   payerStatus?: string | null;
+  discountType?: string | null;
+  discountValue?: any;
   pricePerCycle: number;
   teacherPercentage?: number | null;
   isSiblingWaived?: boolean;
@@ -54,14 +295,12 @@ export function computeStudentSessionFee({
 }): SessionFeeCalculation {
   const normStatus = normalizePayerStatus(payerStatus);
   const baseCycleFee = Math.max(0, Number(pricePerCycle || 0));
-  const baseSessionFee = baseCycleFee > 0 ? baseCycleFee / 4 : 0;
+  const baseSessionFee = isFormation ? baseCycleFee : (baseCycleFee > 0 ? baseCycleFee / 4 : 0);
 
   // Teacher percentage (defaults to 0 if not set, capped between 0 and 100)
   const tPercent = Math.max(0, Math.min(100, Number(teacherPercentage || 0)));
   const sPercent = Math.max(0, 100 - tPercent);
 
-  // Teacher cut in payroll per Wassim's rule:
-  // Teacher is ONLY paid for NORMAL paying students; teacher earns 0 for NON_PAYER and SCHOOL_FEES_ONLY.
   const normalTeacherCut = (baseSessionFee * tPercent) / 100;
   const schoolCut = (baseSessionFee * sPercent) / 100;
 
@@ -74,15 +313,56 @@ export function computeStudentSessionFee({
       schoolPercentage: sPercent,
       studentSessionFee: 0,
       studentCycleFee: 0,
-      teacherCut: 0, // Teacher does NOT get paid for non-paying students
+      teacherCut: 0,
       schoolCut: 0,
       payerStatus: normStatus,
       isSiblingWaived: false,
       siblingDiscountPercentage: 0,
+      isDiscounted: false,
+      discountType: null,
+      discountValue: null,
+      discountAmountPerCycle: 0,
+      effectiveDiscountPercent: 0,
+      teacherPayWeight: 0,
     };
   }
 
-  // 2. Sibling discount (percentage discount, default 50% / half-price)
+  // 2. Owner-configured Enrollment Discount (takes precedence over Sibling Discount to avoid double discounting)
+  if (normStatus === "DISCOUNTED") {
+    const disc = computeDiscountedCycleFee({
+      baseCycleFee,
+      discountType,
+      discountValue,
+    });
+    const studentCycleFee = disc.studentCycleFee;
+    const studentSessionFee = isFormation ? studentCycleFee : studentCycleFee / 4;
+    const teacherCut = Math.round(((studentSessionFee * tPercent) / 100) * 100) / 100;
+    const discSchoolCut = Math.max(0, Math.round((studentSessionFee - teacherCut) * 100) / 100);
+    const teacherPayWeight =
+      baseSessionFee > 0 ? Math.max(0, Math.min(1, studentSessionFee / baseSessionFee)) : 0;
+
+    return {
+      baseSessionFee,
+      baseCycleFee,
+      teacherPercentage: tPercent,
+      schoolPercentage: sPercent,
+      studentSessionFee,
+      studentCycleFee,
+      teacherCut,
+      schoolCut: discSchoolCut,
+      payerStatus: normStatus,
+      isSiblingWaived: false,
+      siblingDiscountPercentage: 0,
+      isDiscounted: true,
+      discountType: disc.normalizedType,
+      discountValue: disc.normalizedValue,
+      discountAmountPerCycle: disc.discountAmountPerCycle,
+      effectiveDiscountPercent: disc.effectiveDiscountPercent,
+      teacherPayWeight,
+    };
+  }
+
+  // 3. Sibling discount (percentage discount, default 50% / half-price)
   // Formations are excluded from sibling discounts, and payer must be active & paid
   const isEligibleForSiblingDiscount = !isFormation && (isPayerActiveAndPaid ?? true);
   const effectiveDiscount = isEligibleForSiblingDiscount
@@ -106,6 +386,12 @@ export function computeStudentSessionFee({
       payerStatus: normStatus,
       isSiblingWaived: true,
       siblingDiscountPercentage: 100,
+      isDiscounted: false,
+      discountType: null,
+      discountValue: null,
+      discountAmountPerCycle: 0,
+      effectiveDiscountPercent: 0,
+      teacherPayWeight: 0,
     };
   }
 
@@ -113,7 +399,7 @@ export function computeStudentSessionFee({
     const discountRate = effectiveDiscount / 100;
     const studentCycleFee = baseCycleFee * (1 - discountRate);
     const studentSessionFee = baseSessionFee * (1 - discountRate);
-    // Option 2 (Proportional split): Teacher and school share the sibling discount proportionally
+    // Proportional split: Teacher and school share the sibling discount proportionally
     const discountedTeacherCut = (studentSessionFee * tPercent) / 100;
     const discountedSchoolCut = (studentSessionFee * sPercent) / 100;
 
@@ -129,10 +415,16 @@ export function computeStudentSessionFee({
       payerStatus: normStatus,
       isSiblingWaived: false,
       siblingDiscountPercentage: effectiveDiscount,
+      isDiscounted: false,
+      discountType: null,
+      discountValue: null,
+      discountAmountPerCycle: 0,
+      effectiveDiscountPercent: 0,
+      teacherPayWeight: Math.max(0, Math.min(1, 1 - discountRate)),
     };
   }
 
-  // 3. School-fees-only (§7.18):
+  // 4. School-fees-only (§7.18):
   // Charge ONLY the school's percentage share (100% - TeacherPayRate.percentageOfSessionFee)
   // Teacher does NOT get paid for school-fees-only students
   if (normStatus === "SCHOOL_FEES_ONLY") {
@@ -145,14 +437,20 @@ export function computeStudentSessionFee({
       schoolPercentage: sPercent,
       studentSessionFee,
       studentCycleFee,
-      teacherCut: 0, // Teacher does NOT get paid for school-fees-only students
+      teacherCut: 0,
       schoolCut,
       payerStatus: normStatus,
       isSiblingWaived: false,
+      isDiscounted: false,
+      discountType: null,
+      discountValue: null,
+      discountAmountPerCycle: 0,
+      effectiveDiscountPercent: 0,
+      teacherPayWeight: 0,
     };
   }
 
-  // 4. Normal (§7.18): Standard tuition
+  // 5. Normal (§7.18): Standard tuition
   return {
     baseSessionFee,
     baseCycleFee,
@@ -160,11 +458,17 @@ export function computeStudentSessionFee({
     schoolPercentage: sPercent,
     studentSessionFee: baseSessionFee,
     studentCycleFee: baseCycleFee,
-    teacherCut: normalTeacherCut, // Teacher earns normal percentage
+    teacherCut: normalTeacherCut,
     schoolCut,
     payerStatus: normStatus,
     isSiblingWaived: false,
     siblingDiscountPercentage: 0,
+    isDiscounted: false,
+    discountType: null,
+    discountValue: null,
+    discountAmountPerCycle: 0,
+    effectiveDiscountPercent: 0,
+    teacherPayWeight: 1,
   };
 }
 
@@ -173,6 +477,8 @@ export function computeStudentSessionFee({
  */
 export function computeStudentOwedForSessions({
   payerStatus,
+  discountType,
+  discountValue,
   pricePerCycle,
   teacherPercentage,
   sessionCount,
@@ -180,6 +486,8 @@ export function computeStudentOwedForSessions({
   siblingDiscountPercentage,
 }: {
   payerStatus?: string | null;
+  discountType?: string | null;
+  discountValue?: any;
   pricePerCycle: number;
   teacherPercentage?: number | null;
   sessionCount: number;
@@ -189,12 +497,94 @@ export function computeStudentOwedForSessions({
   if (sessionCount <= 0) return 0;
   const { studentSessionFee } = computeStudentSessionFee({
     payerStatus,
+    discountType,
+    discountValue,
     pricePerCycle,
     teacherPercentage,
     isSiblingWaived,
     siblingDiscountPercentage,
   });
   return studentSessionFee * sessionCount;
+}
+
+export interface VoucherBillingSnapshot {
+  appliedPayerStatus: StudentPayerStatus;
+  baseCyclePrice: number;
+  effectiveCyclePrice: number;
+  effectiveSessionPrice: number;
+  discountType: string | null;
+  discountValue: number | null;
+  teacherPayWeight: number;
+}
+
+/**
+ * Computes the immutable billing snapshot saved onto a Voucher at issuance time
+ * so future payer-type edits or discount deletions never corrupt historical credits or payroll.
+ */
+export function buildVoucherBillingSnapshot({
+  payerStatus,
+  discountType,
+  discountValue,
+  pricePerCycle,
+  teacherPercentage,
+  isFormation = false,
+  isSiblingWaived = false,
+  siblingDiscountPercentage,
+  isPayerActiveAndPaid = true,
+}: {
+  payerStatus?: string | null;
+  discountType?: string | null;
+  discountValue?: any;
+  pricePerCycle: number;
+  teacherPercentage?: number | null;
+  isFormation?: boolean;
+  isSiblingWaived?: boolean;
+  siblingDiscountPercentage?: number | null;
+  isPayerActiveAndPaid?: boolean;
+}): VoucherBillingSnapshot {
+  const feeCalc = computeStudentSessionFee({
+    payerStatus,
+    discountType,
+    discountValue,
+    pricePerCycle,
+    teacherPercentage,
+    isFormation,
+    isSiblingWaived,
+    siblingDiscountPercentage,
+    isPayerActiveAndPaid,
+  });
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const round4 = (n: number) => Math.round(n * 10000) / 10000;
+
+  let snapDiscountType: string | null = null;
+  let snapDiscountValue: number | null = null;
+
+  if (feeCalc.isDiscounted) {
+    snapDiscountType = feeCalc.discountType ?? null;
+    snapDiscountValue =
+      feeCalc.discountValue !== undefined && feeCalc.discountValue !== null
+        ? Number(feeCalc.discountValue)
+        : null;
+  } else if (
+    feeCalc.payerStatus === "NORMAL" &&
+    (feeCalc.siblingDiscountPercentage ?? 0) > 0
+  ) {
+    snapDiscountType = "SIBLING";
+    snapDiscountValue = Number(feeCalc.siblingDiscountPercentage);
+  }
+
+  return {
+    appliedPayerStatus: feeCalc.payerStatus,
+    baseCyclePrice: round2(feeCalc.baseCycleFee),
+    effectiveCyclePrice: round2(feeCalc.studentCycleFee),
+    effectiveSessionPrice: round2(
+      isFormation ? feeCalc.studentCycleFee : feeCalc.studentSessionFee
+    ),
+    discountType: snapDiscountType,
+    discountValue: snapDiscountValue,
+    teacherPayWeight: round4(feeCalc.teacherPayWeight),
+  };
 }
 
 export type AttendanceClassification =
@@ -206,7 +596,8 @@ export type AttendanceClassification =
   | "TRAILING_ABSENCE_HELD"
   | "FORFEITED_DROPOUT"
   | "TEACHER_ABSENT"
-  | "SUSPENDED_ABSENCE";
+  | "SUSPENDED_ABSENCE"
+  | "NON_PAYER_EXEMPT";
 
 export interface StudentAttendanceHistoryItem {
   lessonId: number;
@@ -232,6 +623,7 @@ export interface StudentAttendanceHistoryItem {
  * 7. FORFEITED_DROPOUT: Student missed >=60 calendar days (2 months) without attending (money retained 100% by school, 0 teacher pay, non-refundable).
  * 8. TEACHER_ABSENT: Teacher marked absent for lesson (0 credit deducted, student credit untouched, 0 teacher pay).
  * 9. SUSPENDED_ABSENCE: Absence during student suspension / debt clearance period (0 teacher pay, forgiven past debts).
+ * 10. NON_PAYER_EXEMPT: Lesson attended/missed while enrollment was NON_PAYER (0 credit consumed, 0 teacher pay).
  */
 export function classifyStudentAttendanceHistory({
   lessons,
@@ -240,6 +632,7 @@ export function classifyStudentAttendanceHistory({
   referenceDate = new Date(),
   creditResetOffset = 0,
   postTransferStartAfter = null,
+  payerHistory = null,
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
@@ -253,6 +646,7 @@ export function classifyStudentAttendanceHistory({
   referenceDate?: Date;
   creditResetOffset?: number;
   postTransferStartAfter?: Date | string | null;
+  payerHistory?: EnrollmentPayerHistoryEntry[] | null;
 }): StudentAttendanceHistoryItem[] {
   // Sort lessons chronologically
   const sortedLessons = [...lessons]
@@ -408,6 +802,26 @@ export function classifyStudentAttendanceHistory({
         isHeld: false,
       });
       continue;
+    }
+
+    // Lessons occurring during a NON_PAYER period consume 0 credit and generate 0 teacher pay,
+    // preserving clean accounting if the student later transitions to DISCOUNTED or NORMAL.
+    if (payerHistory && payerHistory.length > 0) {
+      const periodAtLesson = resolvePayerPeriodAtDate(startsAt, payerHistory);
+      if (periodAtLesson.payerStatus === "NON_PAYER") {
+        history.push({
+          lessonId: lesson.id,
+          startsAt,
+          status: (rawStatus as any) || "ABSENT",
+          isCatchUp: hasCatchUp,
+          classification: "NON_PAYER_EXEMPT",
+          isConsumedCredit: false,
+          isTeacherPayable: false,
+          isRefundable: false,
+          isHeld: false,
+        });
+        continue;
+      }
     }
 
     if (hasCatchUp) {
@@ -621,6 +1035,7 @@ export function computeStudentConsumedSessions({
   lessons,
   attendances,
   catchUps = [],
+  payerHistory = null,
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean }>;
   attendances: Array<{ lessonId: number; status: string }>;
@@ -631,6 +1046,7 @@ export function computeStudentConsumedSessions({
     recordedBy?: string | null;
     isTransferCatchUp?: boolean;
   }>;
+  payerHistory?: EnrollmentPayerHistoryEntry[] | null;
 }): number {
   if (!lessons || lessons.length === 0 || !attendances || attendances.length === 0) {
     const validCatchUps = (catchUps || []).filter(
@@ -642,6 +1058,7 @@ export function computeStudentConsumedSessions({
     lessons,
     attendances,
     catchUps,
+    payerHistory,
   });
   const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
   const lessonIds = new Set(lessons.map((l) => l.id));
@@ -814,18 +1231,29 @@ export interface ComputeStudentCreditParams {
   pricePerCycle: number;
   isFormation?: boolean;
   payerStatus?: string | null;
+  discountType?: string | null;
+  discountValue?: any;
+  payerHistory?: EnrollmentPayerHistoryEntry[] | null;
   siblingDiscountPercentage?: number | null;
   isSiblingWaived?: boolean;
   isPayerSiblingPaid?: boolean;
   isPayerActiveAndPaid?: boolean | null;
   teacherPercentage?: number | null;
   tuitionVouchers?: Array<{
+    id?: number;
     amount?: any;
     isVoided?: boolean;
     isRefund?: boolean;
     status?: string | null;
     issuedAt?: Date | string | null;
-    refunds?: Array<{ amount?: any }>;
+    appliedPayerStatus?: string | null;
+    baseCyclePrice?: any;
+    effectiveCyclePrice?: any;
+    effectiveSessionPrice?: any;
+    discountType?: string | null;
+    discountValue?: any;
+    teacherPayWeight?: any;
+    refunds?: Array<{ amount?: any; createdAt?: Date | string | null; refundedAt?: Date | string | null }>;
   }>;
   transfersIn?: Array<{
     transferredSessions: number;
@@ -871,6 +1299,8 @@ export interface StudentCreditResult {
   creditResetOffset: number;
   netSessions: number;
   effectiveLessonPrice: number;
+  effectiveCycleFee: number;
+  cycleRemainingFee: number;
   totalPaidTuition: number;
   netRefundableSessions: number;
   refundableSessions: number;
@@ -883,6 +1313,12 @@ export interface StudentCreditResult {
   isNonPayer: boolean;
   isSiblingWaived: boolean;
   isSchoolFeesOnly: boolean;
+  isDiscounted: boolean;
+  discountType?: DiscountType | null;
+  discountValue?: number | null;
+  isZeroFeeDiscount: boolean;
+  teacherPayWeight: number;
+  slotSchedule: PaidSessionSlotSchedule;
   status: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER";
 }
 
@@ -1138,6 +1574,9 @@ export function resolvePayerCredit({
       pricePerCycle: Number(enr.class?.pricePerCycle || 0),
       isFormation: isEnrFormation,
       payerStatus: enr.payerStatus || payerStudent.payerStatus || "NORMAL",
+      discountType: enr.discountType,
+      discountValue: enr.discountValue,
+      payerHistory: enr.payerHistory,
       teacherPercentage: enrTeacherPercentage,
       tuitionVouchers: vouchers,
       transfersIn: enr.transfersTo || [],
@@ -1152,13 +1591,21 @@ export function resolvePayerCredit({
     let isThisEnrollmentPaid = false;
     if (isEnrFormation) {
       const lumpSum = Number((enr.class as any)?.FormationLevel?.lumpSumPrice ?? enr.class?.pricePerCycle ?? 0);
+      const effectiveFormationFee = computeStudentSessionFee({
+        payerStatus: enr.payerStatus || payerStudent.payerStatus || "NORMAL",
+        discountType: enr.discountType,
+        discountValue: enr.discountValue,
+        pricePerCycle: lumpSum,
+        teacherPercentage: enrTeacherPercentage,
+        isFormation: true,
+      }).studentCycleFee;
       const paid = vouchers.reduce((sum: number, v: any) => sum + Number(v.amount || 0), 0);
-      if (paid >= lumpSum && lumpSum > 0) {
+      if (effectiveFormationFee <= 0 || paid >= effectiveFormationFee) {
         hasAnyPaidActiveEnrollment = true;
         isThisEnrollmentPaid = true;
       }
     } else {
-      if (metrics.netSessions >= 1) {
+      if (metrics.netSessions >= 1 || metrics.isZeroFeeDiscount) {
         hasAnyPaidActiveEnrollment = true;
         isThisEnrollmentPaid = true;
       }
@@ -1448,6 +1895,384 @@ export function isLessonApplicableToEnrollment(
 }
 
 /**
+ * Builds an ordered FIFO schedule of paid session slots from tuition vouchers and transfers,
+ * honoring per-voucher billing snapshots (`effectiveSessionPrice`, `teacherPayWeight`, `appliedPayerStatus`)
+ * so future payer-status or discount changes never corrupt historical session counts or payroll weights.
+ */
+export function buildPaidSessionSlotSchedule({
+  pricePerCycle,
+  isFormation = false,
+  payerStatus = "NORMAL",
+  discountType,
+  discountValue,
+  siblingDiscountPercentage,
+  isSiblingWaived = false,
+  isPayerActiveAndPaid = true,
+  teacherPercentage,
+  tuitionVouchers = [],
+  transfersIn = 0,
+  transfersOut = 0,
+  referenceDate,
+}: {
+  pricePerCycle: number;
+  isFormation?: boolean;
+  payerStatus?: string | null;
+  discountType?: string | null;
+  discountValue?: any;
+  siblingDiscountPercentage?: number | null;
+  isSiblingWaived?: boolean;
+  isPayerActiveAndPaid?: boolean | null;
+  teacherPercentage?: number | null;
+  tuitionVouchers?: ComputeStudentCreditParams["tuitionVouchers"];
+  transfersIn?: ComputeStudentCreditParams["transfersIn"];
+  transfersOut?: ComputeStudentCreditParams["transfersOut"];
+  referenceDate?: Date;
+}): PaidSessionSlotSchedule {
+  const isForm = Boolean(isFormation);
+  const normStatus = normalizePayerStatus(payerStatus);
+  const isNonPayer = normStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
+  const isSchoolFeesOnly = normStatus === "SCHOOL_FEES_ONLY";
+  const isDiscounted = normStatus === "DISCOUNTED";
+
+  // Owner-configured DISCOUNTED takes precedence over automatic Sibling Discount.
+  const isEligibleForSiblingDiscount = !isForm && !isDiscounted && (isPayerActiveAndPaid ?? true);
+  const siblingDiscountPct = isEligibleForSiblingDiscount
+    ? (siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
+        ? Number(siblingDiscountPercentage)
+        : isSiblingWaived
+        ? 100
+        : 0)
+    : 0;
+  const isSiblingWaived100 = siblingDiscountPct >= 100;
+
+  const cyclePrice = Math.max(0, Number(pricePerCycle || 0));
+  const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+
+  const validVouchers = (tuitionVouchers || [])
+    .filter((v) => {
+      if (v.isVoided || v.isRefund || v.status === "REFUNDED") return false;
+      if (referenceDate && v.issuedAt && new Date(v.issuedAt) > referenceDate) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const ta = a.issuedAt ? new Date(a.issuedAt).getTime() : 0;
+      const tb = b.issuedAt ? new Date(b.issuedAt).getTime() : 0;
+      if (ta !== tb) return ta - tb;
+      return Number(a.id || 0) - Number(b.id || 0);
+    });
+
+  // Determine current enrollment rate (for transfers & un-snapshotted vouchers)
+  let currentEffectiveLessonPrice = baseLessonPrice;
+  let currentTeacherPayWeight = baseLessonPrice > 0 ? 1 : 0;
+  let isZeroFeeDiscount = false;
+
+  if (isNonPayer || isSiblingWaived100) {
+    currentEffectiveLessonPrice = 0;
+    currentTeacherPayWeight = 0;
+  } else if (isDiscounted) {
+    const fee = computeStudentSessionFee({
+      payerStatus: "DISCOUNTED",
+      discountType,
+      discountValue,
+      pricePerCycle: cyclePrice,
+      teacherPercentage,
+      isFormation: isForm,
+    });
+    currentEffectiveLessonPrice = isForm ? fee.studentCycleFee : fee.studentSessionFee;
+    currentTeacherPayWeight = fee.teacherPayWeight;
+    isZeroFeeDiscount = fee.studentCycleFee <= 0;
+  } else if (isSchoolFeesOnly) {
+    currentTeacherPayWeight = 0;
+    if (teacherPercentage !== undefined && teacherPercentage !== null) {
+      const tPercent = Math.max(0, Math.min(100, Number(teacherPercentage)));
+      const sPercent = Math.max(0, 100 - tPercent);
+      currentEffectiveLessonPrice = (baseLessonPrice * sPercent) / 100;
+    } else {
+      const firstPositiveVoucher = validVouchers.find((v) => Number(v.amount || 0) > 0);
+      if (firstPositiveVoucher && Number(firstPositiveVoucher.amount) < cyclePrice) {
+        currentEffectiveLessonPrice = Number(firstPositiveVoucher.amount) / 4;
+      } else {
+        currentEffectiveLessonPrice = baseLessonPrice;
+      }
+    }
+  } else if (siblingDiscountPct > 0 && siblingDiscountPct < 100) {
+    currentEffectiveLessonPrice = baseLessonPrice * (1 - siblingDiscountPct / 100);
+    currentTeacherPayWeight = Math.max(0, Math.min(1, 1 - siblingDiscountPct / 100));
+  }
+
+  let totalPaidTuition = 0;
+  let crossPriceTransferAmount = 0;
+  let samePriceTransferredSessions = 0;
+  let unlimitedFreeClass = cyclePrice <= 0 && !isNonPayer && !isDiscounted && !isSiblingWaived100 && !isSchoolFeesOnly;
+
+  type FundingEvent =
+    | { kind: "VOUCHER"; ts: number; order: number; voucher: NonNullable<ComputeStudentCreditParams["tuitionVouchers"]>[number] }
+    | { kind: "TRANSFER_IN"; ts: number; order: number; transfer: any };
+
+  const events: FundingEvent[] = [];
+  validVouchers.forEach((v, idx) => {
+    const ts = v.issuedAt ? new Date(v.issuedAt).getTime() : 0;
+    events.push({ kind: "VOUCHER", ts: Number.isFinite(ts) ? ts : 0, order: idx, voucher: v });
+  });
+
+  if (typeof transfersIn === "number") {
+    samePriceTransferredSessions = transfersIn;
+  } else if (Array.isArray(transfersIn)) {
+    transfersIn.forEach((t, idx) => {
+      if (referenceDate && t?.transferredAt && new Date(t.transferredAt) > referenceDate) {
+        return;
+      }
+      const ts = t?.transferredAt ? new Date(t.transferredAt).getTime() : 0;
+      events.push({ kind: "TRANSFER_IN", ts: Number.isFinite(ts) ? ts : 0, order: 100000 + idx, transfer: t });
+    });
+  }
+
+  events.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts - b.ts;
+    return a.order - b.order;
+  });
+
+  const cashBuckets = new Map<string, { cash: number; unitPrice: number; weight: number; status: StudentPayerStatus }>();
+  const combinedSlots: PaidSessionSlot[] = [];
+  const purchasedSlots: PaidSessionSlot[] = [];
+  const transferInSlots: PaidSessionSlot[] = [];
+
+  const emitSlotsFromBucket = (
+    bucketKey: string,
+    unitPrice: number,
+    weight: number,
+    status: StudentPayerStatus,
+    addCash: number,
+    source: "VOUCHER" | "TRANSFER",
+    voucherId?: number
+  ) => {
+    let entry = cashBuckets.get(bucketKey);
+    if (!entry) {
+      entry = { cash: 0, unitPrice, weight, status };
+      cashBuckets.set(bucketKey, entry);
+    }
+    entry.cash += addCash;
+    if (unitPrice > 0) {
+      const whole = Math.floor((entry.cash + 1e-6) / unitPrice);
+      for (let k = 0; k < whole; k++) {
+        const slot: PaidSessionSlot = {
+          voucherId,
+          unitPrice,
+          teacherPayWeight: weight,
+          appliedPayerStatus: status,
+          source,
+        };
+        combinedSlots.push(slot);
+        if (source === "VOUCHER") purchasedSlots.push(slot);
+        else transferInSlots.push(slot);
+      }
+      entry.cash = Math.max(0, entry.cash - whole * unitPrice);
+      if (entry.cash < 0.01) entry.cash = 0;
+    }
+  };
+
+  if (typeof transfersIn === "number" && transfersIn > 0) {
+    for (let k = 0; k < transfersIn; k++) {
+      const slot: PaidSessionSlot = {
+        unitPrice: currentEffectiveLessonPrice,
+        teacherPayWeight: currentTeacherPayWeight,
+        appliedPayerStatus: normStatus,
+        source: "TRANSFER",
+      };
+      combinedSlots.push(slot);
+      transferInSlots.push(slot);
+    }
+  }
+
+  for (const ev of events) {
+    if (ev.kind === "VOUCHER") {
+      const v = ev.voucher;
+      const vAmount = Number(v.amount || 0);
+      const vRefunded = (v.refunds || []).reduce((sum, r) => {
+        if (referenceDate) {
+          const rDate = r.createdAt || r.refundedAt;
+          if (rDate && new Date(rDate) > referenceDate) return sum;
+        }
+        return sum + Number(r.amount || 0);
+      }, 0);
+      const vNet = Math.max(0, vAmount - vRefunded);
+      totalPaidTuition += vNet;
+
+      if (isForm) continue;
+
+      const hasSnapshot =
+        v.appliedPayerStatus !== undefined && v.appliedPayerStatus !== null ||
+        (v.effectiveSessionPrice !== undefined && v.effectiveSessionPrice !== null);
+
+      let vStatus: StudentPayerStatus = normStatus;
+      let vUnitPrice = currentEffectiveLessonPrice;
+      let vWeight = currentTeacherPayWeight;
+
+      if (hasSnapshot) {
+        vStatus = normalizePayerStatus(v.appliedPayerStatus || normStatus);
+        if (vStatus === "NON_PAYER") {
+          vUnitPrice = 0;
+          vWeight = 0;
+        } else {
+          vUnitPrice =
+            v.effectiveSessionPrice !== undefined && v.effectiveSessionPrice !== null
+              ? Math.max(0, Number(v.effectiveSessionPrice))
+              : currentEffectiveLessonPrice;
+          if (vStatus === "SCHOOL_FEES_ONLY") {
+            vWeight = 0;
+          } else if (v.teacherPayWeight !== undefined && v.teacherPayWeight !== null) {
+            vWeight = Math.max(0, Math.min(1, Number(v.teacherPayWeight)));
+          } else {
+            vWeight = baseLessonPrice > 0 ? Math.max(0, Math.min(1, vUnitPrice / baseLessonPrice)) : 0;
+          }
+        }
+      } else if (unlimitedFreeClass) {
+        // Legacy class with pricePerCycle = 0: treat each paid voucher as 4 sessions
+        const refundedSessions = vAmount > 0 ? Math.floor(vRefunded / (vAmount / 4)) : 0;
+        const count = Math.max(0, 4 - refundedSessions);
+        const fallbackPrice = vAmount > 0 ? vAmount / 4 : 0;
+        for (let k = 0; k < count; k++) {
+          const slot: PaidSessionSlot = {
+            voucherId: v.id,
+            unitPrice: fallbackPrice,
+            teacherPayWeight: 1,
+            appliedPayerStatus: "NORMAL",
+            source: "VOUCHER",
+          };
+          combinedSlots.push(slot);
+          purchasedSlots.push(slot);
+        }
+        continue;
+      }
+
+      if (vUnitPrice > 0 && vNet > 0) {
+        const key = `${vUnitPrice.toFixed(2)}|${vWeight.toFixed(4)}|${vStatus}`;
+        emitSlotsFromBucket(key, vUnitPrice, vWeight, vStatus, vNet, "VOUCHER", v.id);
+      }
+    } else {
+      const t = ev.transfer;
+      if (isForm) continue;
+      const notes = String(t?.notes || "");
+      const hasPriceDiffTag = notes.includes("[PRICE_DIFF_VIREMENT]");
+      const fromCyclePrice =
+        t?.fromEnrollment?.class?.pricePerCycle !== undefined &&
+        t?.fromEnrollment?.class?.pricePerCycle !== null
+          ? Number(t.fromEnrollment.class.pricePerCycle)
+          : null;
+
+      let fromEffectiveSessionPrice = fromCyclePrice !== null ? fromCyclePrice / 4 : null;
+      if (fromCyclePrice !== null && t?.fromEnrollment?.payerStatus === "DISCOUNTED") {
+        fromEffectiveSessionPrice = computeStudentSessionFee({
+          payerStatus: "DISCOUNTED",
+          discountType: t.fromEnrollment.discountType,
+          discountValue: t.fromEnrollment.discountValue,
+          pricePerCycle: fromCyclePrice,
+          isFormation: false,
+        }).studentSessionFee;
+      }
+
+      const isDifferentCyclePrice =
+        hasPriceDiffTag ||
+        (fromCyclePrice !== null &&
+          fromCyclePrice > 0 &&
+          cyclePrice > 0 &&
+          Math.abs(fromCyclePrice - cyclePrice) >= 1) ||
+        (fromEffectiveSessionPrice !== null &&
+          fromEffectiveSessionPrice > 0 &&
+          currentEffectiveLessonPrice > 0 &&
+          Math.abs(fromEffectiveSessionPrice - currentEffectiveLessonPrice) >= 1);
+
+      const tAmount = Number(t?.amount || 0);
+      if (
+        isDifferentCyclePrice &&
+        tAmount > 0 &&
+        currentEffectiveLessonPrice > 0 &&
+        !isNonPayer &&
+        !isSiblingWaived100 &&
+        !isZeroFeeDiscount
+      ) {
+        crossPriceTransferAmount += tAmount;
+        const key = `${currentEffectiveLessonPrice.toFixed(2)}|${currentTeacherPayWeight.toFixed(4)}|${normStatus}`;
+        emitSlotsFromBucket(
+          key,
+          currentEffectiveLessonPrice,
+          currentTeacherPayWeight,
+          normStatus,
+          tAmount,
+          "TRANSFER"
+        );
+      } else {
+        const sessions = Math.max(0, Number(t?.transferredSessions || 0));
+        samePriceTransferredSessions += sessions;
+        if (!isNonPayer && !isSiblingWaived100 && !isZeroFeeDiscount) {
+          for (let k = 0; k < sessions; k++) {
+            const slot: PaidSessionSlot = {
+              unitPrice: currentEffectiveLessonPrice,
+              teacherPayWeight: currentTeacherPayWeight,
+              appliedPayerStatus: normStatus,
+              source: "TRANSFER",
+            };
+            combinedSlots.push(slot);
+            transferInSlots.push(slot);
+          }
+        }
+      }
+    }
+  }
+
+  const tOut =
+    typeof transfersOut === "number"
+      ? transfersOut
+      : (transfersOut || [])
+          .filter((t) => !referenceDate || !t?.transferredAt || new Date(t.transferredAt) <= referenceDate)
+          .reduce((sum, t) => sum + Number(t.transferredSessions || 0), 0);
+
+  const slotsAfterOut =
+    tOut > 0 ? combinedSlots.slice(0, Math.max(0, combinedSlots.length - tOut)) : combinedSlots;
+
+  let unconvertedPartialCashDzd = 0;
+  cashBuckets.forEach((b) => {
+    unconvertedPartialCashDzd += b.cash;
+  });
+  unconvertedPartialCashDzd = Math.round(unconvertedPartialCashDzd * 100) / 100;
+
+  let partialTransferPaidDzd: number | undefined = undefined;
+  let partialTransferRemainderDzd: number | undefined = undefined;
+  if (crossPriceTransferAmount > 0 && currentEffectiveLessonPrice > 0 && !isForm && !isNonPayer && !isSiblingWaived100 && !isZeroFeeDiscount) {
+    const currentKey = `${currentEffectiveLessonPrice.toFixed(2)}|${currentTeacherPayWeight.toFixed(4)}|${normStatus}`;
+    const currentCarry = cashBuckets.get(currentKey)?.cash || 0;
+    const effectiveCycleCost = currentEffectiveLessonPrice * 4;
+    // Also check modulo of current-tier slots if partial within 4-session cycle
+    const currentTierSlotCount = combinedSlots.filter(
+      (s) => Math.abs(s.unitPrice - currentEffectiveLessonPrice) < 0.01
+    ).length;
+    const currentTierCombinedCash = currentTierSlotCount * currentEffectiveLessonPrice + currentCarry;
+    if (effectiveCycleCost > 0 && currentTierCombinedCash % effectiveCycleCost !== 0) {
+      const mod = currentTierCombinedCash % effectiveCycleCost;
+      if (mod >= 1 && Math.abs(mod - effectiveCycleCost) >= 1) {
+        partialTransferPaidDzd = Math.round(mod);
+        partialTransferRemainderDzd = Math.round(effectiveCycleCost - partialTransferPaidDzd);
+      }
+    }
+  }
+
+  return {
+    slots: slotsAfterOut,
+    purchasedSlots,
+    totalPaidTuition,
+    crossPriceTransferAmount,
+    samePriceTransferredSessions,
+    purchasedSessions: purchasedSlots.length,
+    transferredIn: transferInSlots.length,
+    transferredOut: tOut,
+    unconvertedPartialCashDzd,
+    partialTransferPaidDzd,
+    partialTransferRemainderDzd,
+    unlimitedFreeClass,
+  };
+}
+
+/**
  * Canonical calculation of student credit and lesson metrics.
  * Ensures strict, identical calculation across all pages:
  * Student Profile, Group Payments Page, Attendance Taking Page, and Dashboard.
@@ -1456,6 +2281,9 @@ export function computeStudentCreditAndSessions({
   pricePerCycle,
   isFormation = false,
   payerStatus = "NORMAL",
+  discountType,
+  discountValue,
+  payerHistory = null,
   siblingDiscountPercentage,
   isSiblingWaived = false,
   isPayerSiblingPaid = true,
@@ -1476,8 +2304,9 @@ export function computeStudentCreditAndSessions({
   const normStatus = normalizePayerStatus(payerStatus);
   const isNonPayer = normStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
   const isSchoolFeesOnly = normStatus === "SCHOOL_FEES_ONLY";
+  const isDiscounted = normStatus === "DISCOUNTED";
 
-  const isEligibleForSiblingDiscount = !isForm && (isPayerActiveAndPaid ?? true);
+  const isEligibleForSiblingDiscount = !isForm && !isDiscounted && (isPayerActiveAndPaid ?? true);
   const siblingDiscountPct = isEligibleForSiblingDiscount
     ? (siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
         ? Number(siblingDiscountPercentage)
@@ -1488,62 +2317,74 @@ export function computeStudentCreditAndSessions({
   const isSiblingWaived100 = siblingDiscountPct >= 100;
 
   const cyclePrice = Math.max(0, Number(pricePerCycle || 0));
-  const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
+  const feeCalc = computeStudentSessionFee({
+    payerStatus: normStatus,
+    discountType,
+    discountValue,
+    pricePerCycle: cyclePrice,
+    teacherPercentage,
+    isSiblingWaived: siblingDiscountPct >= 100,
+    siblingDiscountPercentage: siblingDiscountPct,
+    isFormation: isForm,
+    isPayerActiveAndPaid,
+  });
 
   const validVouchers = tuitionVouchers.filter(
     (v) => !v.isVoided && !v.isRefund && v.status !== "REFUNDED"
   );
-  let totalPaidTuition = 0;
-  validVouchers.forEach((v) => {
-    const vAmount = Number(v.amount || 0);
-    const vRefunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
-    totalPaidTuition += Math.max(0, vAmount - vRefunded);
-  });
 
-  let effectiveLessonPrice = baseLessonPrice;
-  if (isSiblingWaived100 || isNonPayer) {
+  let effectiveLessonPrice = feeCalc.baseSessionFee;
+  if (isNonPayer || isSiblingWaived100) {
     effectiveLessonPrice = 0;
+  } else if (isDiscounted) {
+    effectiveLessonPrice = feeCalc.studentSessionFee;
   } else if (isSchoolFeesOnly) {
     if (teacherPercentage !== undefined && teacherPercentage !== null) {
-      const tPercent = Math.max(0, Math.min(100, Number(teacherPercentage)));
-      const sPercent = Math.max(0, 100 - tPercent);
-      effectiveLessonPrice = (baseLessonPrice * sPercent) / 100;
+      effectiveLessonPrice = feeCalc.studentSessionFee;
     } else {
       const firstPositiveVoucher = validVouchers.find((v) => Number(v.amount || 0) > 0);
       if (firstPositiveVoucher && Number(firstPositiveVoucher.amount) < cyclePrice) {
         effectiveLessonPrice = Number(firstPositiveVoucher.amount) / 4;
       } else {
-        effectiveLessonPrice = baseLessonPrice;
+        effectiveLessonPrice = feeCalc.baseSessionFee;
       }
     }
   } else if (siblingDiscountPct > 0 && siblingDiscountPct < 100) {
-    effectiveLessonPrice = baseLessonPrice * (1 - siblingDiscountPct / 100);
+    effectiveLessonPrice = feeCalc.studentSessionFee;
   }
 
-  let purchasedSessions = 0;
-  if (!isForm) {
-    if (isNonPayer || isSiblingWaived100) {
-      purchasedSessions = 0;
-    } else if (effectiveLessonPrice > 0) {
-      purchasedSessions = Math.floor(totalPaidTuition / effectiveLessonPrice);
-    } else {
-      validVouchers.forEach((v) => {
-        const vAmount = Number(v.amount || 0);
-        const vRefunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
-        const refundedSessions = vAmount > 0 ? Math.floor(vRefunded / (vAmount / 4)) : 0;
-        purchasedSessions += Math.max(0, 4 - refundedSessions);
-      });
-    }
-  }
+  const isZeroFeeDiscount = isDiscounted && feeCalc.studentCycleFee <= 0;
+
+  const slotSchedule = buildPaidSessionSlotSchedule({
+    pricePerCycle: cyclePrice,
+    isFormation: isForm,
+    payerStatus: normStatus,
+    discountType,
+    discountValue,
+    siblingDiscountPercentage,
+    isSiblingWaived,
+    isPayerActiveAndPaid,
+    teacherPercentage,
+    tuitionVouchers,
+    transfersIn,
+    transfersOut,
+  });
+
+  const {
+    totalPaidTuition,
+    crossPriceTransferAmount,
+    samePriceTransferredSessions,
+    purchasedSessions,
+    transferredIn: tIn,
+    transferredOut: tOut,
+    partialTransferPaidDzd,
+    partialTransferRemainderDzd,
+  } = slotSchedule;
 
   let latestTransferInTime: number | null = null;
   let sameTeacherHeldFromTransfers = 0;
-  let crossPriceTransferAmount = 0;
-  let samePriceTransferredSessions = 0;
 
-  if (typeof transfersIn === "number") {
-    samePriceTransferredSessions = transfersIn;
-  } else if (Array.isArray(transfersIn)) {
+  if (Array.isArray(transfersIn)) {
     for (const t of transfersIn) {
       if (t?.transferredAt) {
         const ms = new Date(t.transferredAt).getTime();
@@ -1556,42 +2397,6 @@ export function computeStudentCreditAndSessions({
       if (heldMatch && heldMatch[1]) {
         sameTeacherHeldFromTransfers += parseInt(heldMatch[1], 10);
       }
-
-      const hasPriceDiffTag = notes.includes("[PRICE_DIFF_VIREMENT]");
-      const fromCyclePrice =
-        t?.fromEnrollment?.class?.pricePerCycle !== undefined
-          ? Number(t.fromEnrollment.class.pricePerCycle)
-          : null;
-      const isDifferentCyclePrice =
-        hasPriceDiffTag ||
-        (fromCyclePrice !== null &&
-          fromCyclePrice > 0 &&
-          cyclePrice > 0 &&
-          Math.abs(fromCyclePrice - cyclePrice) >= 1);
-
-      const tAmount = Number(t?.amount || 0);
-      if (isDifferentCyclePrice && tAmount > 0 && effectiveLessonPrice > 0 && !isForm && !isNonPayer && !isSiblingWaived100) {
-        crossPriceTransferAmount += tAmount;
-      } else {
-        samePriceTransferredSessions += Number(t?.transferredSessions || 0);
-      }
-    }
-  }
-
-  let tIn = samePriceTransferredSessions;
-  let partialTransferPaidDzd: number | undefined = undefined;
-  let partialTransferRemainderDzd: number | undefined = undefined;
-
-  if (crossPriceTransferAmount > 0 && effectiveLessonPrice > 0 && !isForm && !isNonPayer && !isSiblingWaived100) {
-    const combinedTuitionAndTransfer = totalPaidTuition + crossPriceTransferAmount;
-    const totalCoveredSessions = Math.floor(combinedTuitionAndTransfer / effectiveLessonPrice);
-    const crossPriceSessions = Math.max(0, totalCoveredSessions - purchasedSessions);
-    tIn = samePriceTransferredSessions + crossPriceSessions;
-
-    const effectiveCycleCost = effectiveLessonPrice * 4;
-    if (effectiveCycleCost > 0 && combinedTuitionAndTransfer % effectiveCycleCost !== 0) {
-      partialTransferPaidDzd = Math.round(combinedTuitionAndTransfer % effectiveCycleCost);
-      partialTransferRemainderDzd = Math.round(effectiveCycleCost - partialTransferPaidDzd);
     }
   }
 
@@ -1607,25 +2412,16 @@ export function computeStudentCreditAndSessions({
   inTimes.sort((a, b) => a - b);
 
   const outTimes: number[] = [];
-  let earliestTransferOutTime: number | null = null;
   if (Array.isArray(transfersOut)) {
     for (const t of transfersOut) {
       if (t?.transferredAt) {
         const ms = new Date(t.transferredAt).getTime();
-        if (!isNaN(ms)) {
-          outTimes.push(ms);
-          earliestTransferOutTime =
-            earliestTransferOutTime === null ? ms : Math.min(earliestTransferOutTime, ms);
-        }
+        if (!isNaN(ms)) outTimes.push(ms);
       }
     }
   }
   outTimes.sort((a, b) => a - b);
 
-  const tOut =
-    typeof transfersOut === "number"
-      ? transfersOut
-      : (transfersOut || []).reduce((sum, t) => sum + Number(t.transferredSessions || 0), 0);
   const offset = Number(creditResetOffset || 0);
 
   // Relevant non-free lessons where this student has an attendance record or a catch-up
@@ -1655,9 +2451,6 @@ export function computeStudentCreditAndSessions({
   const enrolledAtMs = enrolledAt ? new Date(enrolledAt).getTime() : null;
   const hasValidEnrolledAt = enrolledAtMs !== null && !isNaN(enrolledAtMs);
 
-  // Track when the student first entered via transfer so pre-entry ABSENTs and
-  // pre-entry multi-group lessons remain excluded even after subsequent top-up transfers,
-  // while pre-transfer attendances for students already enrolled in this class are preserved.
   const isEntryViaTransfer =
     inTimes.length > 0 && (outTimes.length === 0 || inTimes[0] < outTimes[0]);
   const firstInThresholdMs = isEntryViaTransfer ? inTimes[0] - 2 * 60 * 60 * 1000 : null;
@@ -1701,7 +2494,6 @@ export function computeStudentCreditAndSessions({
     return false;
   };
 
-  // Identify multi-group lessons so pre-entry multi-group lessons stay excluded for fresh transfer-ins
   const multiGroupLessonIds = new Set<number>();
   if (lessons) {
     lessons.forEach((l: any) => {
@@ -1775,11 +2567,9 @@ export function computeStudentCreditAndSessions({
         relevantAttendances.push({ lessonId: a.lessonId, status: a.status });
       }
     });
-    // Also include any catch-ups whose missed lesson wasn't present in attendances
     (catchUps || []).forEach((c: any) => {
       const ml = c.missedLesson;
       const mlId = c.missedLessonId;
-      // Do not inject foreign missed lessons if this class is the host of the catch-up
       if (c.catchUpLessonId && seenLessonIds.has(c.catchUpLessonId) && !seenLessonIds.has(mlId)) {
         return;
       }
@@ -1799,7 +2589,6 @@ export function computeStudentCreditAndSessions({
     });
   }
 
-  // Only anchor absence tracking to the transfer timestamp when the student has no prior presence in this group
   const hasAllowedPreTransferPresence =
     postTransferThresholdMs !== null &&
     relevantLessons.some((l) => {
@@ -1819,6 +2608,7 @@ export function computeStudentCreditAndSessions({
             !hasAllowedPreTransferPresence && latestTransferInTime
               ? new Date(latestTransferInTime)
               : null,
+          payerHistory,
         })
       : [];
 
@@ -1829,13 +2619,15 @@ export function computeStudentCreditAndSessions({
     if (c.isTransferCatchUp || c.recordedBy === "transfer") {
       return;
     }
-    // Visiting student attending catch-up in this host class from another group:
-    // Does NOT consume credit in this host class.
     if (c.catchUpLessonId && relevantLessonIds.has(c.catchUpLessonId) && !relevantLessonIds.has(c.missedLessonId)) {
       return;
     }
     if (isExcludedByTransferWindow(c.missedLesson?.startsAt, c.missedLessonId)) {
       return;
+    }
+    if (payerHistory && payerHistory.length > 0 && c.missedLesson?.startsAt) {
+      const cuPeriod = resolvePayerPeriodAtDate(c.missedLesson.startsAt, payerHistory);
+      if (cuPeriod.payerStatus === "NON_PAYER") return;
     }
     const missedAccounted = accountedCatchUps.has(c.missedLessonId);
     const catchUpAccounted = c.catchUpLessonId ? accountedCatchUps.has(c.catchUpLessonId) : false;
@@ -1846,11 +2638,6 @@ export function computeStudentCreditAndSessions({
     }
   });
 
-  // Same-teacher group transfer rule:
-  // If trailing absences were transferred from a previous group taught by the SAME teacher:
-  // - Before the student attends any session in this new group, those trailing absences remain held in suspense.
-  // - Once the student attends (PRESENT or CAUGHT_UP_ABSENCE) in this new group, those trailing absences resolve
-  //   into consumed sessions (INTERLEAVED_ABSENCE) deducted from this new group's balance.
   const hasPostTransferPresence = history.some(
     (h) =>
       h.isConsumedCredit &&
@@ -1878,20 +2665,13 @@ export function computeStudentCreditAndSessions({
     extraCatchUpConsumed +
     resolvedSameTeacherHeld;
 
-  // Group transfer & refund alignment rule:
-  // Held sessions (open-ended trailing absences where teacher was NOT paid) are fully refundable AND transferable.
-  // When sessions are transferred out of this group (tOut > 0), they first draw from unheld remaining sessions,
-  // and any excess draws from held trailing absences. Absorbed held absences are neutralized so that the source group
-  // is not penalized with negative debt for sessions that were legitimately transferred to another group.
   const unheldRemainingBeforeTransfer = Math.max(0, (purchasedSessions + tIn) - attendedSessions + offset);
   const transferredExcess = Math.max(0, tOut - unheldRemainingBeforeTransfer);
   const absorbedHeldSessions = Math.min(heldSessions, transferredExcess);
   const effectiveAttendedSessions = attendedSessions - absorbedHeldSessions;
 
   let calculatedNetSessions = isForm ? 0 : (purchasedSessions + tIn - tOut) - effectiveAttendedSessions + offset;
-  if (isNonPayer) {
-    calculatedNetSessions = 0;
-  } else if (isSiblingWaived100) {
+  if (isNonPayer || isSiblingWaived100 || isZeroFeeDiscount) {
     calculatedNetSessions = 0;
   }
   const netSessions = calculatedNetSessions;
@@ -1902,8 +2682,19 @@ export function computeStudentCreditAndSessions({
   const transferableSessions = isForm ? 0 : Math.max(0, netRefundableSessions);
 
   let refundableAmount = 0;
-  if (!isForm && !isNonPayer && !isSiblingWaived100) {
-    if (effectiveLessonPrice > 0) {
+  if (!isForm && !isNonPayer && !isSiblingWaived100 && !isZeroFeeDiscount) {
+    if (slotSchedule.slots.length > 0 || slotSchedule.unconvertedPartialCashDzd > 0) {
+      const consumedHead = Math.max(0, settledConsumedSessions - offset);
+      if (consumedHead <= slotSchedule.slots.length) {
+        const unconsumedTailSlots = slotSchedule.slots.slice(consumedHead);
+        const tailValue = unconsumedTailSlots.reduce((sum, s) => sum + s.unitPrice, 0);
+        refundableAmount = Math.max(0, Math.round(tailValue + slotSchedule.unconvertedPartialCashDzd));
+      } else {
+        const deficit = consumedHead - slotSchedule.slots.length;
+        const deficitCost = deficit * (effectiveLessonPrice > 0 ? effectiveLessonPrice : 0);
+        refundableAmount = Math.max(0, Math.round(slotSchedule.unconvertedPartialCashDzd - deficitCost));
+      }
+    } else if (effectiveLessonPrice > 0) {
       refundableAmount = Math.max(
         0,
         Math.round(
@@ -1912,12 +2703,77 @@ export function computeStudentCreditAndSessions({
             (samePriceTransferredSessions - tOut - settledConsumedSessions + offset) * effectiveLessonPrice
         )
       );
+    }
+  }
+
+  const effectiveCycleFee =
+    !isForm && !isNonPayer && !isSiblingWaived100 && !isZeroFeeDiscount && effectiveLessonPrice > 0
+      ? Math.round(effectiveLessonPrice * 4 * 100) / 100
+      : 0;
+
+  // Compute remaining money needed to complete 1 full cycle fee against the current rate tier
+  let cycleRemainingFee = 0;
+  if (effectiveCycleFee > 0) {
+    let currentTierVoucherCash = 0;
+    let historicalSlotCount = 0;
+
+    validVouchers.forEach((v) => {
+      const vAmount = Number(v.amount || 0);
+      const vRefunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+      const vNet = Math.max(0, vAmount - vRefunded);
+      const vSnapPrice =
+        v.effectiveSessionPrice !== undefined && v.effectiveSessionPrice !== null
+          ? Number(v.effectiveSessionPrice)
+          : effectiveLessonPrice;
+      if (Math.abs(vSnapPrice - effectiveLessonPrice) < 0.01) {
+        currentTierVoucherCash += vNet;
+      } else if (vSnapPrice > 0) {
+        historicalSlotCount += Math.floor((vNet + 1e-6) / vSnapPrice);
+      }
+    });
+
+    const totalCurrentTierFunded =
+      currentTierVoucherCash +
+      crossPriceTransferAmount +
+      samePriceTransferredSessions * effectiveLessonPrice;
+
+    const isCycleMultiple = (val: number): boolean => {
+      if (val <= 0) return true;
+      const mod = val % effectiveCycleFee;
+      return mod < 1 || Math.abs(mod - effectiveCycleFee) < 1;
+    };
+
+    const currentTierConsumed = Math.max(0, effectiveAttendedSessions - historicalSlotCount);
+
+    if (tOut === 0) {
+      if (totalCurrentTierFunded > 0 && !isCycleMultiple(totalCurrentTierFunded)) {
+        const remainingMoneyCredit =
+          totalCurrentTierFunded - currentTierConsumed * effectiveLessonPrice;
+        if (remainingMoneyCredit >= effectiveCycleFee - 1 && isCycleMultiple(remainingMoneyCredit)) {
+          cycleRemainingFee = 0;
+        } else {
+          const mod = totalCurrentTierFunded % effectiveCycleFee;
+          cycleRemainingFee = Math.max(0, Math.round(effectiveCycleFee - mod));
+        }
+      }
     } else {
-      const latestValidVoucher = validVouchers[0];
-      const fallbackLessonPrice = latestValidVoucher
-        ? Number(latestValidVoucher.amount || 0) / 4
-        : 0;
-      refundableAmount = Math.max(0, Math.round(refundableSessions * fallbackLessonPrice));
+      const hasExplicitPartial =
+        partialTransferRemainderDzd !== undefined ||
+        validVouchers.some(
+          (v) =>
+            Boolean((v as any).isPartial) ||
+            (Number(v.amount || 0) > 0 && Number(v.amount || 0) < effectiveCycleFee - 1)
+        );
+      if (hasExplicitPartial) {
+        const remainingMoneyCredit = Math.max(
+          0,
+          totalCurrentTierFunded - (currentTierConsumed + tOut) * effectiveLessonPrice
+        );
+        if (remainingMoneyCredit > 0 && !isCycleMultiple(remainingMoneyCredit)) {
+          const mod = remainingMoneyCredit % effectiveCycleFee;
+          cycleRemainingFee = Math.max(0, Math.round(effectiveCycleFee - mod));
+        }
+      }
     }
   }
 
@@ -1926,6 +2782,8 @@ export function computeStudentCreditAndSessions({
     status = "PAID";
   } else if (isNonPayer) {
     status = "NON_PAYER";
+  } else if (isZeroFeeDiscount) {
+    status = "PAID";
   } else if (isSiblingWaived100) {
     status = isPayerSiblingPaid ? "SIBLING_WAIVED" : "UNPAID";
   } else if (netSessions >= 2) {
@@ -1944,6 +2802,8 @@ export function computeStudentCreditAndSessions({
     creditResetOffset: offset,
     netSessions,
     effectiveLessonPrice,
+    effectiveCycleFee,
+    cycleRemainingFee,
     totalPaidTuition,
     netRefundableSessions,
     refundableSessions,
@@ -1956,6 +2816,12 @@ export function computeStudentCreditAndSessions({
     isNonPayer,
     isSiblingWaived: isSiblingWaived100,
     isSchoolFeesOnly,
+    isDiscounted,
+    discountType: isDiscounted ? feeCalc.discountType : null,
+    discountValue: isDiscounted ? feeCalc.discountValue : null,
+    isZeroFeeDiscount,
+    teacherPayWeight: feeCalc.teacherPayWeight,
+    slotSchedule,
     status,
   };
 }

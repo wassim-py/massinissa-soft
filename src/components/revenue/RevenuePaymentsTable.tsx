@@ -142,7 +142,15 @@ export default function RevenuePaymentsTable({ vouchers }: RevenuePaymentsTableP
     return vouchers.filter((v) => {
       // Type filter
       if (selectedType !== "ALL") {
-        if (selectedType === "TUITION" && !v.paymentType.startsWith("TUITION")) return false;
+        if (
+          selectedType === "TUITION" &&
+          !v.paymentType.startsWith("TUITION") &&
+          v.paymentType !== "REVISION_SESSION" &&
+          v.paymentType !== "EXTRA_SESSION" &&
+          v.paymentType !== "CATCHUP"
+        ) {
+          return false;
+        }
         if (selectedType === "INSCRIPTION" && v.paymentType !== "INSCRIPTION") return false;
         if (selectedType === "BOOK" && v.paymentType !== "BOOK") return false;
         if (selectedType === "FORMATION" && v.paymentType !== "WORKSHOP" && v.paymentType !== "FORMATION") return false;
@@ -190,6 +198,8 @@ export default function RevenuePaymentsTable({ vouchers }: RevenuePaymentsTableP
       case "CATCHUP":
       case "EXTRA_SESSION":
         return <Badge variant="primary" size="sm">{t("tuitionCol")}</Badge>;
+      case "REVISION_SESSION":
+        return <Badge variant="primary" size="sm" className="bg-teal-100 text-teal-900 border-teal-300">{t("revisionSessionCol")}</Badge>;
       case "BOOK":
         return <Badge variant="warning" size="sm">{t("bookCol")}</Badge>;
       case "WORKSHOP":

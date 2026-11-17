@@ -9,6 +9,8 @@ import FormationSchedule from "@/components/formations/FormationSchedule";
 import FinishLevelButton from "@/components/formations/FinishLevelButton";
 import FinalLevelEnrollmentButton from "@/components/formations/FinalLevelEnrollmentButton";
 import DeleteFormationLevelModal from "@/components/formations/DeleteFormationLevelModal";
+import ClassStatusToggleButton from "@/components/groups/ClassStatusToggleButton";
+import { ACTIVE_CLASS_WHERE, isClassInactive } from "@/lib/classStatus";
 import Image from "next/image";
 import Link from "next/link";
 import {
@@ -163,7 +165,7 @@ export default async function FormationDetailsPage(props: {
   const activeClassId =
     requestedLevelClassId ||
     preselectedClassId ||
-    allLevelsInFormation[0]?.Class.find((c) => !c.isCompleted)?.id ||
+    allLevelsInFormation[0]?.Class.find((c) => !isClassInactive(c))?.id ||
     allLevelsInFormation[0]?.Class[0]?.id;
 
   if (!activeClassId) {
@@ -242,7 +244,7 @@ export default async function FormationDetailsPage(props: {
     const rawOtherFormations = await prisma.class.findMany({
       where: {
         isFormation: true,
-        isCompleted: false,
+        ...ACTIVE_CLASS_WHERE,
         id: { not: formationGroup.id },
       },
       include: {
@@ -276,6 +278,7 @@ export default async function FormationDetailsPage(props: {
       where: {
         isFormation: true,
         formationLevelId: nextLevel.id,
+        ...ACTIVE_CLASS_WHERE,
       },
       include: {
         branch: true,
@@ -326,8 +329,11 @@ export default async function FormationDetailsPage(props: {
         }),
         prisma.class.findMany({
           where: session.isOwner
-            ? {}
-            : { OR: [{ branchId: formationGroup.branchId }, { id: formationGroup.id }] },
+            ? { ...ACTIVE_CLASS_WHERE }
+            : {
+                ...ACTIVE_CLASS_WHERE,
+                OR: [{ branchId: formationGroup.branchId }, { id: formationGroup.id }],
+              },
           select: { id: true, name: true, levelId: true },
           orderBy: { name: "asc" },
         }),
@@ -399,6 +405,10 @@ export default async function FormationDetailsPage(props: {
       id: enr.id,
       enrolledAt: enr.enrolledAt,
       hasNeverAttended: !hasAttendedAnyLesson,
+      payerStatus: enr.payerStatus || "NORMAL",
+      discountType: enr.discountType || null,
+      discountValue: enr.discountValue != null ? Number(enr.discountValue) : null,
+      discountReason: enr.discountReason || null,
       student: {
         id: enr.student.id,
         globalNumber: enr.student.globalNumber,
@@ -518,9 +528,10 @@ export default async function FormationDetailsPage(props: {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-3">
           {allLevelsInFormation.map((lvl) => {
             const activeClass =
-              lvl.Class.find((c) => !c.isCompleted) || lvl.Class[0];
+              lvl.Class.find((c) => !isClassInactive(c)) || lvl.Class[0];
             const isCurrent = lvl.id === formationLevel.id;
             const isCompleted = activeClass ? activeClass.isCompleted : false;
+            const isPaused = activeClass ? Boolean(activeClass.isPaused) : false;
             const price = Number(
               lvl.lumpSumPrice || activeClass?.pricePerCycle || 0
             );
@@ -573,7 +584,11 @@ export default async function FormationDetailsPage(props: {
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       {activeClass ? (
-                        isCompleted ? (
+                        isPaused ? (
+                          <Badge variant="warning" size="sm" withDot>
+                            {locale === "ar" ? "مغلق / متوقف" : "Fermé / En pause"}
+                          </Badge>
+                        ) : isCompleted ? (
                           <Badge variant="success" size="sm" withDot>
                             {t("levelCompletedBadge")}
                           </Badge>
@@ -683,13 +698,23 @@ export default async function FormationDetailsPage(props: {
         {/* Level Switcher & Header Bar */}
         <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-bold uppercase tracking-wider text-primary bg-primary/10 px-2 py-0.5 rounded">
                 {locale === "ar" ? "المستوى الحالي" : "Niveau actif"}
               </span>
               <h2 className="text-lg md:text-xl font-bold text-gray-900">
                 {formationLevel.name}
               </h2>
+              <ClassStatusToggleButton
+                classId={formationGroup.id}
+                groupName={`${language.name} - ${formationLevel.name}`}
+                isPaused={Boolean(formationGroup.isPaused)}
+                isCompleted={Boolean(formationGroup.isCompleted)}
+                pausedAt={formationGroup.pausedAt}
+                completedAt={formationGroup.completedAt}
+                isOwner={session.isOwner}
+                showBadge
+              />
             </div>
             <p className="text-xs text-gray-500 mt-0.5">
               {language.name} • {t("taughtBy")}{" "}
@@ -725,6 +750,14 @@ export default async function FormationDetailsPage(props: {
             })}
           </div>
         </div>
+
+        {isClassInactive(formationGroup) && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs font-medium text-amber-900">
+            {locale === "ar"
+              ? "هذا الفوج التكويني مغلق / متوقف حالياً. أوقاته محررة في الجدول الأسبوعي، بينما تبقى جميع سجلات التلاميذ والمدفوعات والحضور متاحة بالكامل."
+              : "Ce groupe de formation est actuellement fermé / en pause. Ses créneaux sont libérés dans l'emploi du temps, tandis que tous les dossiers stagiaires, paiements et présences restent intégralement accessibles."}
+          </div>
+        )}
 
         {/* Final Level Closed Banner */}
         {isFinalLevel && formationGroup.isCompleted && (

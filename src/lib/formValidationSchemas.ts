@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseToAlgiersDate } from "./algiersDate";
 
 export const subjectSchema = z.object({
   id: z.coerce.number().optional(),
@@ -274,19 +275,25 @@ export type PaymentSchema = VoucherSchema;
 
 
 const workshopSessionSchema = z.object({
+    id: z.coerce.number().optional(),
     startTime: z.string().min(1, { message: "وقت بدء الحصة مطلوب!" }),
     endTime: z.string().min(1, { message: "وقت نهاية الحصة مطلوب!" }),
-}).refine((data) => new Date(data.endTime) > new Date(data.startTime), {
+}).refine((data) => {
+    const start = parseToAlgiersDate(data.startTime);
+    const end = parseToAlgiersDate(data.endTime);
+    return Boolean(start && end && end > start);
+}, {
     message: "وقت الانتهاء يجب أن يكون بعد وقت البدء",
     path: ["endTime"],
 });
 
 export const workshopSchema = z.object({
     id: z.coerce.number().optional(),
-    title: z.string().min(1, { message: "اسم الدورة مطلوب!" }),
+    title: z.string().trim().min(1, { message: "اسم الدورة مطلوب!" }),
     description: z.string().optional(),
-    price: z.coerce.number().min(0, { message: "يجب أن يكون المبلغ أكبر من 0." }),
-    teacherName: z.string().min(1, { message: "اسم الاستاذ مطلوب!" }),
+    price: z.coerce.number().min(0, { message: "يجب أن يكون المبلغ 0 أو أكثر." }),
+    teacherName: z.string().trim().min(1, { message: "اسم الاستاذ مطلوب!" }),
+    branchId: z.coerce.number().optional(),
     sessions: z.array(workshopSessionSchema).min(1, { message: "مطلوب حصة واحدة على الأقل!" }),
 });
 
@@ -295,11 +302,12 @@ export type WorkshopSchema = z.infer<typeof workshopSchema>;
 // UPDATED: Schema for registering a new participant with required gender and no email
 export const registerParticipantSchema = z.object({
   workshopId: z.coerce.number(),
-  name: z.string().min(1, { message: "الاسم الكامل مطلوب!" }),
+  studentId: z.string().optional(),
+  name: z.string().trim().min(1, { message: "الاسم الكامل مطلوب!" }),
   gender: z.enum(["MALE", "FEMALE"], { errorMap: () => ({ message: "الجنس مطلوب!" }) }),
   phone: z.string().optional(),
   // Initial payment fields are optional
-  amount: z.coerce.number().optional(),
+  amount: z.coerce.number().min(0, { message: "يجب أن يكون المبلغ 0 أو أكثر." }).optional(),
   notes: z.string().optional(),
 });
 
@@ -388,3 +396,15 @@ export const academicYearConfigSchema = z.object({
 });
 
 export type AcademicYearConfigSchema = z.infer<typeof academicYearConfigSchema>;
+
+export const discountTypeEnum = z.enum(["PERCENT", "FIXED_AMOUNT", "CUSTOM_PRICE"]);
+
+export const enrollmentDiscountSchema = z.object({
+  studentId: z.string().min(1),
+  enrollmentId: z.coerce.number().int().positive(),
+  discountType: discountTypeEnum,
+  discountValue: z.coerce.number().min(0, { message: "قيمة التخفيض غير صالحة / Valeur de remise invalide" }),
+  reason: z.string().max(300).optional().nullable(),
+});
+
+export type EnrollmentDiscountSchema = z.infer<typeof enrollmentDiscountSchema>;

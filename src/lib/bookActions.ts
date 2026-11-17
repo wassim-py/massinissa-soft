@@ -509,6 +509,10 @@ export async function getGroupBooksData(classId: number) {
       hasBooks: classData.hasBooks || books.length > 0,
       bookFee: classData.bookFee ? Number(classData.bookFee) : null,
       enrollmentsCount: classData.enrollments.length,
+      isPaused: classData.isPaused,
+      pausedAt: classData.pausedAt,
+      isCompleted: classData.isCompleted,
+      completedAt: classData.completedAt,
     },
     activeTrimester: activeTrimester
       ? {

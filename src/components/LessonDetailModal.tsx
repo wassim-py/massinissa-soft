@@ -5,9 +5,8 @@ import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations, useLocale } from "next-intl";
-import { ClipboardList, UserX, AlertTriangle, Lock } from "lucide-react";
-import { toast } from "react-toastify";
-import { toggleTeacherLessonAbsenceAction } from "@/lib/actions";
+import { ClipboardList, UserX, Lock } from "lucide-react";
+import TeacherAbsenceToggle from "./TeacherAbsenceToggle";
 
 type TimetableLesson = {
   id: number;
@@ -72,41 +71,10 @@ const LessonDetailModal = ({
 
   const [currentLessonId, setCurrentLessonId] = useState<number>(lesson.id);
   const [isTeacherAbsent, setIsTeacherAbsent] = useState<boolean>(Boolean(lesson.isTeacherAbsent));
-  const [isUpdating, setIsUpdating] = useState<boolean>(false);
 
   const lessonDateStr =
     lesson.instanceDate ||
     (isToday ? getAlgiersDateStr(new Date()) : getAlgiersDateStr(lesson.startsAt));
-
-  const handleToggleAbsence = async () => {
-    if (isUpdating || lesson.isWorkshop || currentLessonId <= 0) return;
-    const nextVal = !isTeacherAbsent;
-    setIsTeacherAbsent(nextVal);
-    setIsUpdating(true);
-
-    try {
-      const res = await toggleTeacherLessonAbsenceAction({
-        lessonId: currentLessonId,
-        isTeacherAbsent: nextVal,
-        dateStr: lessonDateStr || undefined,
-      });
-
-      if (res.success) {
-        const resolvedId = (res as any).lessonId || currentLessonId;
-        setCurrentLessonId(resolvedId);
-        toast.success(res.message);
-        onLessonUpdated?.(resolvedId, nextVal, lessonDateStr);
-      } else {
-        setIsTeacherAbsent(!nextVal); // revert
-        toast.error(res.message || "Erreur");
-      }
-    } catch {
-      setIsTeacherAbsent(!nextVal); // revert
-      toast.error(locale === "ar" ? "خطأ في الاتصال بالخادم" : "Erreur de connexion au serveur");
-    } finally {
-      setIsUpdating(false);
-    }
-  };
 
   const dateToFormat = lessonDateStr
     ? new Date(`${lessonDateStr}T12:00:00+01:00`)
@@ -163,61 +131,18 @@ const LessonDetailModal = ({
         <div className="space-y-3 text-sm">
           {/* Teacher Absence Toggler */}
           {!lesson.isWorkshop && lesson.id > 0 && (
-            <div className={`p-3.5 rounded-xl border transition-all ${
-              isTeacherAbsent
-                ? "bg-rose-50/90 border-rose-300 text-rose-950 shadow-xs"
-                : "bg-surface-subtle/60 border-border text-gray-700"
-            }`}>
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                    isTeacherAbsent ? "bg-rose-100 text-rose-700" : "bg-gray-100 text-gray-600"
-                  }`}>
-                    <UserX className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-gray-900">
-                        {locale === "ar" ? "غياب الأستاذ" : "Enseignant absent"}
-                      </span>
-                      {isTeacherAbsent && (
-                        <span className="bg-rose-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                          {locale === "ar" ? "مسجل كغائب" : "Marqué absent"}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-gray-500 mt-0.5 leading-tight">
-                      {locale === "ar"
-                        ? "رصيد التلاميذ لن يخصم، وسيتم تسجيل الغياب في كشف راتب الأستاذ."
-                        : "Le crédit des élèves reste intact et l'absence est reportée sur la paie."}
-                    </p>
-                  </div>
-                </div>
-
-                {canManage && (
-                  <button
-                    type="button"
-                    disabled={isUpdating}
-                    onClick={handleToggleAbsence}
-                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 disabled:opacity-50 ${
-                      isTeacherAbsent ? "bg-rose-600" : "bg-gray-300"
-                    }`}
-                    role="switch"
-                    aria-checked={isTeacherAbsent}
-                    aria-label={locale === "ar" ? "تبديل حالة غياب الأستاذ" : "Basculer l'absence de l'enseignant"}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                        isTeacherAbsent
-                          ? (locale === "ar" ? "-translate-x-5" : "translate-x-5")
-                          : "translate-x-0"
-                      }`}
-                    />
-                  </button>
-                )}
-              </div>
-            </div>
+            <TeacherAbsenceToggle
+              lessonId={currentLessonId}
+              isTeacherAbsent={isTeacherAbsent}
+              dateStr={lessonDateStr || undefined}
+              canManage={canManage}
+              variant="modal"
+              onOptimisticChange={setIsTeacherAbsent}
+              onSuccess={(resolvedId, nextVal, dateStr) => {
+                setCurrentLessonId(resolvedId);
+                onLessonUpdated?.(resolvedId, nextVal, dateStr);
+              }}
+            />
           )}
 
           <div className="flex justify-between">

@@ -19,6 +19,8 @@ export type StudentBalanceInfo = {
     netSessions?: number;
     status?: "PAID" | "EXPIRING" | "UNPAID" | "SIBLING_WAIVED" | "NON_PAYER";
     isSchoolFeesOnly?: boolean;
+    isDiscounted?: boolean;
+    discountLabel?: string | null;
     payerStatus?: string;
     hasPayerSibling?: boolean;
     levelPrice?: number;
@@ -908,6 +910,13 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         {(student.balance?.isSchoolFeesOnly || (student as any).payerStatus === "SCHOOL_FEES_ONLY") && (
                                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-100 text-sky-900 border border-sky-300 shadow-2xs leading-none">
                                                                 {locale === "ar" ? "حصة المدرسة" : "Part école"}
+                                                            </span>
+                                                        )}
+                                                        {(student.balance?.isDiscounted || (student as any).payerStatus === "DISCOUNTED") && (
+                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-900 border border-violet-300 shadow-2xs leading-none">
+                                                                {locale === "ar"
+                                                                    ? `مخفّض${student.balance?.discountLabel ? ` (${student.balance.discountLabel})` : ""}`
+                                                                    : `Remise${student.balance?.discountLabel ? ` (${student.balance.discountLabel})` : ""}`}
                                                             </span>
                                                         )}
                                                     </div>

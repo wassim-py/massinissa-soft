@@ -7,6 +7,10 @@ import {
   classifyStudentAttendanceHistory,
   isLessonApplicableToEnrollment,
   extractSameTeacherHeldFromTransfers,
+  buildPaidSessionSlotSchedule,
+  computeStudentSessionFee,
+  resolvePayerPeriodAtDate,
+  PaidSessionSlotSchedule,
 } from "./studentBilling";
 
 export interface TeacherPayrollCalculation {
@@ -134,96 +138,63 @@ export function normalizeDateToEndOfDay(date: Date | string): Date {
 }
 
 /**
- * Calculates the total number of paid sessions covered by vouchers/transfers for a student in a class as of a reference date.
+ * Builds the snapshot-aware paid session slot schedule for a student in a class as of referenceDate.
  */
-function computeAllowedPaidSessions(
+function computeStudentSlotScheduleForPayroll(
   studentId: string,
   classInfo: any,
   vouchers: any[],
-  referenceDate: Date
-): number {
+  referenceDate: Date,
+  teacherPercentage?: number | null
+): PaidSessionSlotSchedule {
   const enrollment = classInfo?.enrollments?.find((e: any) => e.studentId === studentId);
-  if (!enrollment) return 0;
-  const payerStatus = enrollment.payerStatus || "NORMAL";
-  if (payerStatus === "NON_PAYER" || payerStatus === "SCHOOL_FEES_ONLY") return 0;
-
-  const cyclePrice = Number(classInfo?.pricePerCycle || 0);
-  const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
-  if (baseLessonPrice <= 0) return 999;
+  if (!enrollment) {
+    return {
+      slots: [],
+      purchasedSlots: [],
+      totalPaidTuition: 0,
+      crossPriceTransferAmount: 0,
+      samePriceTransferredSessions: 0,
+      purchasedSessions: 0,
+      transferredIn: 0,
+      transferredOut: 0,
+      unconvertedPartialCashDzd: 0,
+      unlimitedFreeClass: false,
+    };
+  }
 
   const fam = enrollment.student?.family;
   const payerId = fam?.payerStudentId;
   const isPayerInClass = Boolean(
     payerId &&
-    payerId !== studentId &&
-    classInfo?.enrollments?.some(
-      (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
-    )
+      payerId !== studentId &&
+      classInfo?.enrollments?.some(
+        (e: any) =>
+          (e.studentId === payerId || e.student?.id === payerId) &&
+          (e.status === "ACTIVE" || !e.status)
+      )
   );
-  const isSiblingDiscount = isPayerInClass;
-  const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
-  if (siblingDiscountPct >= 100) return 0;
+  const siblingDiscountPct = isPayerInClass ? Number(fam?.discountPercentage ?? 50) : 0;
 
-  const effectiveLessonPrice = siblingDiscountPct > 0
-    ? baseLessonPrice * (1 - siblingDiscountPct / 100)
-    : baseLessonPrice;
-
-  // Filter valid vouchers matching this student and class (or general tuition) issued on or before referenceDate
   const studentVouchers = vouchers.filter((v: any) => {
     if (v.studentId !== studentId) return false;
     if (v.classId && v.classId !== classInfo.id) return false;
-    return new Date(v.issuedAt) <= referenceDate;
+    return true;
   });
 
-  let totalPaidTuition = 0;
-  studentVouchers.forEach((v: any) => {
-    const vAmount = Number(v.amount || 0);
-    const refundsSum = (v.refunds || [])
-      .filter((r: any) => new Date(r.createdAt || r.date || v.issuedAt) <= referenceDate)
-      .reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
-    totalPaidTuition += Math.max(0, vAmount - refundsSum);
+  return buildPaidSessionSlotSchedule({
+    pricePerCycle: Number(classInfo?.pricePerCycle || 0),
+    isFormation: Boolean(classInfo?.isFormation),
+    payerStatus: enrollment.payerStatus || "NORMAL",
+    discountType: enrollment.discountType,
+    discountValue: enrollment.discountValue,
+    siblingDiscountPercentage: siblingDiscountPct,
+    teacherPercentage,
+    tuitionVouchers: studentVouchers,
+    transfersIn: enrollment.transfersTo || [],
+    transfersOut: enrollment.transfersFrom || [],
+    referenceDate,
   });
-
-  let tIn = 0;
-  let crossPriceTransferAmount = 0;
-  const validTransfersIn = (enrollment.transfersTo || []).filter(
-    (t: any) => !t.transferredAt || new Date(t.transferredAt) <= referenceDate
-  );
-
-  for (const t of validTransfersIn) {
-    const fromPrice =
-      t?.fromEnrollment?.class?.pricePerCycle !== undefined &&
-      t?.fromEnrollment?.class?.pricePerCycle !== null
-        ? Number(t.fromEnrollment.class.pricePerCycle)
-        : null;
-    const isCrossPrice =
-      (typeof t?.notes === "string" && t.notes.includes("[PRICE_DIFF_VIREMENT]")) ||
-      (fromPrice !== null && fromPrice > 0 && cyclePrice > 0 && Math.abs(fromPrice - cyclePrice) > 0.01);
-
-    const tRefunded = (t.refunds || [])
-      .filter((r: any) => new Date(r.createdAt || r.date || t.transferredAt) <= referenceDate)
-      .reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
-
-    if (isCrossPrice && effectiveLessonPrice > 0) {
-      crossPriceTransferAmount += Math.max(0, Number(t.amount || 0) - tRefunded);
-    } else {
-      const refundedSessions = effectiveLessonPrice > 0 ? Math.round(tRefunded / effectiveLessonPrice) : 0;
-      tIn += Math.max(0, Number(t.transferredSessions || 0) - refundedSessions);
-    }
-  }
-
-  const totalMonetaryPoolForSessions = totalPaidTuition + crossPriceTransferAmount;
-  const purchasedSessions = effectiveLessonPrice > 0
-    ? Math.floor(totalMonetaryPoolForSessions / effectiveLessonPrice)
-    : 0;
-
-  const tOut = (enrollment.transfersFrom || [])
-    .filter((t: any) => !t.transferredAt || new Date(t.transferredAt) <= referenceDate)
-    .reduce((s: number, t: any) => s + Number(t.transferredSessions || 0), 0);
-
-  // Note: creditResetOffset is student debt forgiveness/clearance, NOT tuition received by the school.
-  // Therefore, teacher payable sessions must strictly reflect paid tuition and transfers (no offset).
-  return Math.max(0, purchasedSessions + tIn - tOut);
 }
 
 export interface BatchPayrollRequestItem {
@@ -305,6 +276,8 @@ export async function calculateTeachersPayrollBatch(
                 select: {
                   studentId: true,
                   payerStatus: true,
+                  discountType: true,
+                  discountValue: true,
                   status: true,
                   student: {
                     select: {
@@ -328,6 +301,8 @@ export async function calculateTeachersPayrollBatch(
                     select: {
                       studentId: true,
                       payerStatus: true,
+                      discountType: true,
+                      discountValue: true,
                       status: true,
                       student: {
                         select: {
@@ -503,6 +478,8 @@ export async function calculateTeachersPayrollBatch(
                       classId: true,
                       status: true,
                       payerStatus: true,
+                      discountType: true,
+                      discountValue: true,
                       class: { select: { teacherId: true } },
                     },
                   },
@@ -555,7 +532,13 @@ export async function calculateTeachersPayrollBatch(
             ...cv.student,
             enrollments: (cv.student.enrollments || [])
               .filter((e: any) => e.class?.teacherId === teacher.id)
-              .map(({ classId, status, payerStatus }: any) => ({ classId, status, payerStatus })),
+              .map(({ classId, status, payerStatus, discountType, discountValue }: any) => ({
+                classId,
+                status,
+                payerStatus,
+                discountType,
+                discountValue,
+              })),
           },
         });
       }
@@ -633,6 +616,7 @@ export async function calculateTeachersPayrollBatch(
             enrollments: {
               include: {
                 student: { select: { id: true, name: true } },
+                payerHistory: { orderBy: { effectiveFrom: "asc" } },
               },
             },
           },
@@ -729,11 +713,17 @@ export async function calculateTeachersPayrollBatch(
                   transfersTo: {
                     include: {
                       fromEnrollment: {
-                        select: { class: { select: { id: true, pricePerCycle: true } } },
+                        select: {
+                          payerStatus: true,
+                          discountType: true,
+                          discountValue: true,
+                          class: { select: { id: true, pricePerCycle: true } },
+                        },
                       },
                     },
                   },
                   transfersFrom: true,
+                  payerHistory: { orderBy: { effectiveFrom: "asc" } },
                   student: { select: { id: true, family: true } },
                 },
               },
@@ -985,7 +975,7 @@ export async function calculateTeachersPayrollBatch(
   return results;
 }
 
-async function computeTeacherPayrollFromData(params: {
+export async function computeTeacherPayrollFromData(params: {
   startDate: Date;
   endDate: Date;
   groupFilter: "all" | "normal" | "formation";
@@ -1079,17 +1069,18 @@ async function computeTeacherPayrollFromData(params: {
     }
   });
 
-  // Pre-calculate classification and voucher-payment status for all students in all classes as of endDate and startDate
+  // Pre-calculate classification and voucher-payment weights for all students in all classes as of endDate and startDate
   const studentStatusAtEnd = new Map<string, any>();
   const studentStatusAtStart = new Map<string, any>();
-  const studentPaidSessionAtEnd = new Map<string, boolean>();
-  const studentPaidSessionAtStart = new Map<string, boolean>();
-  const studentResolvedTransferHeldAtEnd = new Map<string, number>();
-  const studentResolvedTransferHeldAtStart = new Map<string, number>();
+  const studentSessionWeightAtEnd = new Map<string, number>();
+  const studentSessionWeightAtStart = new Map<string, number>();
+  const studentResolvedTransferHeldWeightAtEnd = new Map<string, number>();
+  const studentResolvedTransferHeldWeightAtStart = new Map<string, number>();
 
   for (const [cid, historyData] of classHistoryMap.entries()) {
     const enrolledStudents = historyData.classInfo?.enrollments || [];
     const enrolledStudentIds = new Set(enrolledStudents.map((e: any) => e.studentId));
+    const classTeacherPct = classRateMap.has(cid) ? classRateMap.get(cid)! : percentageOfSessionFee;
 
     const studentIds = Array.from(
       new Set([
@@ -1102,6 +1093,31 @@ async function computeTeacherPayrollFromData(params: {
     for (const sid of studentIds) {
       const enrollment = enrolledStudents.find((e: any) => e.studentId === sid);
       const creditResetOffset = Number(enrollment?.creditResetOffset || 0);
+      const payerHistory = enrollment?.payerHistory || null;
+
+      const resolveSlotWeight = (
+        slotIndexOneBased: number,
+        schedule: PaidSessionSlotSchedule,
+        lessonDate?: Date | string
+      ): number => {
+        if (schedule.unlimitedFreeClass) {
+          if (lessonDate) {
+            const period = resolvePayerPeriodAtDate(
+              lessonDate,
+              payerHistory,
+              enrollment?.payerStatus,
+              enrollment?.discountType,
+              enrollment?.discountValue
+            );
+            if (period.payerStatus === "NON_PAYER" || period.payerStatus === "SCHOOL_FEES_ONLY") {
+              return 0;
+            }
+          }
+          return 1;
+        }
+        const slot = schedule.slots[slotIndexOneBased - 1];
+        return slot ? slot.teacherPayWeight : 0;
+      };
 
       const studentAttMap = new Map<number, string>(
         historyData.attendances
@@ -1140,6 +1156,7 @@ async function computeTeacherPayrollFromData(params: {
         referenceDate: endDate,
         creditResetOffset,
         postTransferStartAfter: latestTransferInTimeAtEnd ? new Date(latestTransferInTimeAtEnd) : null,
+        payerHistory,
       });
       classifiedAtEnd.forEach((item) => {
         studentStatusAtEnd.set(`${sid}_${cid}_${item.lessonId}`, item);
@@ -1157,19 +1174,23 @@ async function computeTeacherPayrollFromData(params: {
             (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE")
         );
 
-      // Calculate paid session coverage as of endDate
-      const allowedAtEnd = computeAllowedPaidSessions(sid, historyData.classInfo, historyData.vouchers, endDate);
+      // Calculate paid session slot schedule & per-session weights as of endDate
+      const scheduleAtEnd = computeStudentSlotScheduleForPayroll(
+        sid,
+        historyData.classInfo,
+        historyData.vouchers,
+        endDate,
+        classTeacherPct
+      );
       let consumedSlotAtEnd = 0;
-      let paidTransferHeldAtEnd = 0;
+      let paidTransferHeldWeightAtEnd = 0;
       if (sameTeacherHeldAtEnd > 0 && hasPostTransferPresenceAtEnd) {
         for (let k = 0; k < sameTeacherHeldAtEnd; k++) {
           consumedSlotAtEnd += 1;
-          if (consumedSlotAtEnd <= allowedAtEnd) {
-            paidTransferHeldAtEnd += 1;
-          }
+          paidTransferHeldWeightAtEnd += resolveSlotWeight(consumedSlotAtEnd, scheduleAtEnd);
         }
       }
-      studentResolvedTransferHeldAtEnd.set(`${sid}_${cid}`, paidTransferHeldAtEnd);
+      studentResolvedTransferHeldWeightAtEnd.set(`${sid}_${cid}`, paidTransferHeldWeightAtEnd);
 
       const consumingLessonsAtEnd = classifiedAtEnd
         .filter(
@@ -1182,22 +1203,22 @@ async function computeTeacherPayrollFromData(params: {
 
       consumingLessonsAtEnd.forEach((item) => {
         consumedSlotAtEnd += 1;
-        const isCoveredPrimary = consumedSlotAtEnd <= allowedAtEnd;
-        studentPaidSessionAtEnd.set(`${sid}_${cid}_${item.lessonId}`, isCoveredPrimary);
-        studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}`, isCoveredPrimary);
+        const primaryWeight = resolveSlotWeight(consumedSlotAtEnd, scheduleAtEnd, item.startsAt);
+        studentSessionWeightAtEnd.set(`${sid}_${cid}_${item.lessonId}`, primaryWeight);
+        studentSessionWeightAtEnd.set(`${sid}_${item.lessonId}`, primaryWeight);
 
         if (item.bothPresentAndCaughtUp) {
           consumedSlotAtEnd += 1;
-          const isCoveredExtraCatchUp = consumedSlotAtEnd <= allowedAtEnd;
-          studentPaidSessionAtEnd.set(`${sid}_${cid}_${item.lessonId}_catchup`, isCoveredExtraCatchUp);
-          studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}_catchup`, isCoveredExtraCatchUp);
+          const extraCatchUpWeight = resolveSlotWeight(consumedSlotAtEnd, scheduleAtEnd, item.startsAt);
+          studentSessionWeightAtEnd.set(`${sid}_${cid}_${item.lessonId}_catchup`, extraCatchUpWeight);
+          studentSessionWeightAtEnd.set(`${sid}_${item.lessonId}_catchup`, extraCatchUpWeight);
         } else if (item.classification === "CAUGHT_UP_ABSENCE") {
-          studentPaidSessionAtEnd.set(`${sid}_${cid}_${item.lessonId}_catchup`, isCoveredPrimary);
-          studentPaidSessionAtEnd.set(`${sid}_${item.lessonId}_catchup`, isCoveredPrimary);
+          studentSessionWeightAtEnd.set(`${sid}_${cid}_${item.lessonId}_catchup`, primaryWeight);
+          studentSessionWeightAtEnd.set(`${sid}_${item.lessonId}_catchup`, primaryWeight);
         }
       });
 
-      // Classification & paid status as of startDate (for retroactive payouts)
+      // Classification & paid slot weights as of startDate (for retroactive payouts)
       const priorLessons = studentLessons.filter((l: any) => new Date(l.startsAt) < startDate);
       const validTransfersInAtStart = (enrollment?.transfersTo || []).filter(
         (t: any) => !t.transferredAt || new Date(t.transferredAt) < startDate
@@ -1219,6 +1240,7 @@ async function computeTeacherPayrollFromData(params: {
           referenceDate: startDate,
           creditResetOffset,
           postTransferStartAfter: latestTransferInTimeAtStart ? new Date(latestTransferInTimeAtStart) : null,
+          payerHistory,
         });
         classifiedAtStart.forEach((item) => {
           studentStatusAtStart.set(`${sid}_${cid}_${item.lessonId}`, item);
@@ -1236,18 +1258,22 @@ async function computeTeacherPayrollFromData(params: {
               (h.classification === "PRESENT" || h.classification === "CAUGHT_UP_ABSENCE")
           );
 
-        const allowedAtStart = computeAllowedPaidSessions(sid, historyData.classInfo, historyData.vouchers, startDate);
+        const scheduleAtStart = computeStudentSlotScheduleForPayroll(
+          sid,
+          historyData.classInfo,
+          historyData.vouchers,
+          startDate,
+          classTeacherPct
+        );
         let consumedSlotAtStart = 0;
-        let paidTransferHeldAtStart = 0;
+        let paidTransferHeldWeightAtStart = 0;
         if (sameTeacherHeldAtStart > 0 && hasPostTransferPresenceAtStart) {
           for (let k = 0; k < sameTeacherHeldAtStart; k++) {
             consumedSlotAtStart += 1;
-            if (consumedSlotAtStart <= allowedAtStart) {
-              paidTransferHeldAtStart += 1;
-            }
+            paidTransferHeldWeightAtStart += resolveSlotWeight(consumedSlotAtStart, scheduleAtStart);
           }
         }
-        studentResolvedTransferHeldAtStart.set(`${sid}_${cid}`, paidTransferHeldAtStart);
+        studentResolvedTransferHeldWeightAtStart.set(`${sid}_${cid}`, paidTransferHeldWeightAtStart);
 
         const consumingLessonsAtStart = classifiedAtStart
           .filter(
@@ -1260,18 +1286,18 @@ async function computeTeacherPayrollFromData(params: {
 
         consumingLessonsAtStart.forEach((item) => {
           consumedSlotAtStart += 1;
-          const isCoveredPrimary = consumedSlotAtStart <= allowedAtStart;
-          studentPaidSessionAtStart.set(`${sid}_${cid}_${item.lessonId}`, isCoveredPrimary);
-          studentPaidSessionAtStart.set(`${sid}_${item.lessonId}`, isCoveredPrimary);
+          const primaryWeight = resolveSlotWeight(consumedSlotAtStart, scheduleAtStart, item.startsAt);
+          studentSessionWeightAtStart.set(`${sid}_${cid}_${item.lessonId}`, primaryWeight);
+          studentSessionWeightAtStart.set(`${sid}_${item.lessonId}`, primaryWeight);
 
           if (item.bothPresentAndCaughtUp) {
             consumedSlotAtStart += 1;
-            const isCoveredExtraCatchUp = consumedSlotAtStart <= allowedAtStart;
-            studentPaidSessionAtStart.set(`${sid}_${cid}_${item.lessonId}_catchup`, isCoveredExtraCatchUp);
-            studentPaidSessionAtStart.set(`${sid}_${item.lessonId}_catchup`, isCoveredExtraCatchUp);
+            const extraCatchUpWeight = resolveSlotWeight(consumedSlotAtStart, scheduleAtStart, item.startsAt);
+            studentSessionWeightAtStart.set(`${sid}_${cid}_${item.lessonId}_catchup`, extraCatchUpWeight);
+            studentSessionWeightAtStart.set(`${sid}_${item.lessonId}_catchup`, extraCatchUpWeight);
           } else if (item.classification === "CAUGHT_UP_ABSENCE") {
-            studentPaidSessionAtStart.set(`${sid}_${cid}_${item.lessonId}_catchup`, isCoveredPrimary);
-            studentPaidSessionAtStart.set(`${sid}_${item.lessonId}_catchup`, isCoveredPrimary);
+            studentSessionWeightAtStart.set(`${sid}_${cid}_${item.lessonId}_catchup`, primaryWeight);
+            studentSessionWeightAtStart.set(`${sid}_${item.lessonId}_catchup`, primaryWeight);
           }
         });
       }
@@ -1469,66 +1495,35 @@ async function computeTeacherPayrollFromData(params: {
           }
         }
 
-        const payerStatus = enrollment?.payerStatus || "NORMAL";
-        if (payerStatus === "NON_PAYER" || payerStatus === "SCHOOL_FEES_ONLY") return;
-
         const classification =
           studentStatusAtEnd.get(`${att.studentId}_${enrolledClassId}_${lesson.id}`) ||
           studentStatusAtEnd.get(`${att.studentId}_${lesson.id}`);
 
         if (classification && classification.isTeacherPayable) {
-          // Rule: Teacher is paid ONLY if student session is covered by paid tuition vouchers
-          // Check class-specific paid coverage first, or general coverage if enrolled in merged groups
-          let isSessionPaid =
-            studentPaidSessionAtEnd.get(`${att.studentId}_${enrolledClassId}_${lesson.id}`) ??
-            studentPaidSessionAtEnd.get(`${att.studentId}_${lesson.id}`) ??
-            false;
+          // Rule: Teacher is paid ONLY if student session is covered by paid tuition vouchers,
+          // weighted by the exact snapshotted payer weight of the covering voucher slot (0..1).
+          let sessionWeight =
+            studentSessionWeightAtEnd.get(`${att.studentId}_${enrolledClassId}_${lesson.id}`) ??
+            studentSessionWeightAtEnd.get(`${att.studentId}_${lesson.id}`) ??
+            0;
 
-          // If the student is enrolled in a secondary merged group, also check if covered under that group
-          if (!isSessionPaid && (lesson as any).lessonGroups) {
+          if (sessionWeight <= 0 && (lesson as any).lessonGroups) {
             for (const lg of (lesson as any).lessonGroups) {
-              if (studentPaidSessionAtEnd.get(`${att.studentId}_${lg.classId}_${lesson.id}`)) {
-                isSessionPaid = true;
+              const lgWeight = studentSessionWeightAtEnd.get(`${att.studentId}_${lg.classId}_${lesson.id}`) ?? 0;
+              if (lgWeight > 0) {
+                sessionWeight = lgWeight;
                 break;
               }
             }
           }
 
-          if (!isSessionPaid) {
-            // Unpaid by student (debt): teacher receives 0 DZD for this session until settled
+          if (sessionWeight <= 0) {
+            // Unpaid / NON_PAYER / SCHOOL_FEES_ONLY / 100%-waived session: teacher receives 0 DZD
             return;
           }
 
           countedPayingStudentIds.add(att.studentId);
-          const fam = enrollment?.student?.family;
-          const payerId = fam?.payerStudentId;
-          const isPayerInClass = Boolean(
-            payerId &&
-            payerId !== att.studentId &&
-            (
-              lesson.class?.enrollments?.some(
-                (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
-              ) ||
-              (lesson as any).lessonGroups?.some((lg: any) =>
-                lg.class?.enrollments?.some(
-                  (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
-                )
-              )
-            )
-          );
-          const isSiblingDiscount = isPayerInClass;
-          const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
-
-          if (siblingDiscountPct >= 100) {
-            // 100% waived sibling -> teacher earns 0 DZD (Rule 2)
-            return;
-          }
-          if (siblingDiscountPct > 0) {
-            // Proportional split (Rule 1 / Option 2)
-            payingWeight += (1 - siblingDiscountPct / 100);
-          } else {
-            payingWeight += 1;
-          }
+          payingWeight += sessionWeight;
         }
       });
 
@@ -1537,51 +1532,23 @@ async function computeTeacherPayrollFromData(params: {
         if (countedPayingStudentIds.has(cv.studentId)) return;
 
         const missedClassId = cv.missedLesson?.classId || lesson.classId;
-        const homeClassHistory = classHistoryMap.get(missedClassId);
-        const homeEnrollment =
-          homeClassHistory?.classInfo?.enrollments?.find((e: any) => e.studentId === cv.studentId) ||
-          cv.student?.enrollments?.find((e: any) => e.classId === missedClassId) ||
-          cv.student?.enrollments?.[0];
-
-        const vPayerStatus = homeEnrollment?.payerStatus || "NORMAL";
-        if (vPayerStatus === "NON_PAYER" || vPayerStatus === "SCHOOL_FEES_ONLY") return;
-
         const isSameGroupCatchUp = missedClassId === lesson.classId;
-        const isCatchUpPaid = isSameGroupCatchUp
-          ? (studentPaidSessionAtEnd.get(`${cv.studentId}_${lesson.classId}_${lesson.id}`) ??
-             studentPaidSessionAtEnd.get(`${cv.studentId}_${lesson.id}`) ??
-             false)
-          : (studentPaidSessionAtEnd.get(`${cv.studentId}_${missedClassId}_${cv.missedLessonId}_catchup`) ??
-             studentPaidSessionAtEnd.get(`${cv.studentId}_${cv.missedLessonId}_catchup`) ??
-             studentPaidSessionAtEnd.get(`${cv.studentId}_${missedClassId}_${cv.missedLessonId}`) ??
-             false);
+        const catchUpWeight = isSameGroupCatchUp
+          ? (studentSessionWeightAtEnd.get(`${cv.studentId}_${lesson.classId}_${lesson.id}`) ??
+             studentSessionWeightAtEnd.get(`${cv.studentId}_${lesson.id}`) ??
+             0)
+          : (studentSessionWeightAtEnd.get(`${cv.studentId}_${missedClassId}_${cv.missedLessonId}_catchup`) ??
+             studentSessionWeightAtEnd.get(`${cv.studentId}_${cv.missedLessonId}_catchup`) ??
+             studentSessionWeightAtEnd.get(`${cv.studentId}_${missedClassId}_${cv.missedLessonId}`) ??
+             0);
 
-        if (!isCatchUpPaid) {
-          // Unpaid catch-up (debt in home group): held until student pays in home group
+        if (catchUpWeight <= 0) {
+          // Unpaid catch-up or zero-weight payer status: held until paid or 0 DZD
           return;
         }
 
         countedPayingStudentIds.add(cv.studentId);
-
-        const fam = cv.student?.family;
-        const payerId = fam?.payerStudentId;
-        const homeEnrollments = homeClassHistory?.classInfo?.enrollments || lesson.class?.enrollments || [];
-        const isPayerInClass = Boolean(
-          payerId &&
-          payerId !== cv.student.id &&
-          homeEnrollments.some(
-            (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
-          )
-        );
-        const isSiblingDiscount = isPayerInClass;
-        const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
-
-        if (siblingDiscountPct >= 100) return;
-        if (siblingDiscountPct > 0) {
-          payingWeight += (1 - siblingDiscountPct / 100);
-        } else {
-          payingWeight += 1;
-        }
+        payingWeight += catchUpWeight;
       });
     }
 
@@ -1764,14 +1731,17 @@ async function computeTeacherPayrollFromData(params: {
           studentStatusAtEnd.get(`${att.studentId}_${cid}_${pl.id}`) ||
           studentStatusAtEnd.get(`${att.studentId}_${pl.id}`);
 
-        const wasPaidAtStart =
-          studentPaidSessionAtStart.get(`${att.studentId}_${cid}_${pl.id}`) ??
-          studentPaidSessionAtStart.get(`${att.studentId}_${pl.id}`) ??
-          false;
-        const isPaidAtEnd =
-          studentPaidSessionAtEnd.get(`${att.studentId}_${cid}_${pl.id}`) ??
-          studentPaidSessionAtEnd.get(`${att.studentId}_${pl.id}`) ??
-          false;
+        const weightAtStart =
+          studentSessionWeightAtStart.get(`${att.studentId}_${cid}_${pl.id}`) ??
+          studentSessionWeightAtStart.get(`${att.studentId}_${pl.id}`) ??
+          0;
+        const weightAtEnd =
+          studentSessionWeightAtEnd.get(`${att.studentId}_${cid}_${pl.id}`) ??
+          studentSessionWeightAtEnd.get(`${att.studentId}_${pl.id}`) ??
+          0;
+
+        const wasPaidAtStart = weightAtStart > 0;
+        const isPaidAtEnd = weightAtEnd > 0;
 
         // Condition A: Trailing absence held at start that became interleaved at end (and student has paid)
         const isResolvedAbsence =
@@ -1801,30 +1771,10 @@ async function computeTeacherPayrollFromData(params: {
             });
           }
 
-          if (isEligible) {
-            const enrollment = historyData.classInfo?.enrollments?.find(
-              (e: any) => e.studentId === att.studentId
-            );
-            const pStatus = enrollment?.payerStatus || "NORMAL";
-            if (pStatus !== "NON_PAYER" && pStatus !== "SCHOOL_FEES_ONLY") {
-              const fam = enrollment?.student?.family;
-              const payerId = fam?.payerStudentId;
-              const isPayerInClass = Boolean(
-                payerId &&
-                payerId !== att.studentId &&
-                historyData.classInfo?.enrollments?.some(
-                  (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
-                )
-              );
-              const isSiblingDiscount = isPayerInClass;
-              const siblingDiscountPct = isSiblingDiscount ? Number(fam?.discountPercentage ?? 50) : 0;
-              if (siblingDiscountPct < 100) {
-                const weight = siblingDiscountPct > 0 ? (1 - siblingDiscountPct / 100) : 1;
-                eligiblePayingWeight += weight;
-                if (isLateTuitionSettlement) lateTuitionSettlementCount++;
-                if (isResolvedAbsence) resolvedAbsenceCount++;
-              }
-            }
+          if (isEligible && weightAtEnd > 0) {
+            eligiblePayingWeight += weightAtEnd;
+            if (isLateTuitionSettlement) lateTuitionSettlementCount++;
+            if (isResolvedAbsence) resolvedAbsenceCount++;
           }
         }
       }
@@ -1840,37 +1790,18 @@ async function computeTeacherPayrollFromData(params: {
           new Date(c.catchUpLesson.startsAt) < startDate
       );
       for (const cu of plCatchUps) {
-        const wasCatchUpPaidAtStart =
-          studentPaidSessionAtStart.get(`${cu.studentId}_${cid}_${pl.id}_catchup`) ??
-          studentPaidSessionAtStart.get(`${cu.studentId}_${pl.id}_catchup`) ??
-          false;
-        const isCatchUpPaidAtEnd =
-          studentPaidSessionAtEnd.get(`${cu.studentId}_${cid}_${pl.id}_catchup`) ??
-          studentPaidSessionAtEnd.get(`${cu.studentId}_${pl.id}_catchup`) ??
-          false;
+        const catchUpWeightAtStart =
+          studentSessionWeightAtStart.get(`${cu.studentId}_${cid}_${pl.id}_catchup`) ??
+          studentSessionWeightAtStart.get(`${cu.studentId}_${pl.id}_catchup`) ??
+          0;
+        const catchUpWeightAtEnd =
+          studentSessionWeightAtEnd.get(`${cu.studentId}_${cid}_${pl.id}_catchup`) ??
+          studentSessionWeightAtEnd.get(`${cu.studentId}_${pl.id}_catchup`) ??
+          0;
 
-        if (!wasCatchUpPaidAtStart && isCatchUpPaidAtEnd) {
-          const enrollment = historyData.classInfo?.enrollments?.find(
-            (e: any) => e.studentId === cu.studentId
-          );
-          const pStatus = enrollment?.payerStatus || "NORMAL";
-          if (pStatus !== "NON_PAYER" && pStatus !== "SCHOOL_FEES_ONLY") {
-            const fam = enrollment?.student?.family;
-            const payerId = fam?.payerStudentId;
-            const isPayerInClass = Boolean(
-              payerId &&
-              payerId !== cu.studentId &&
-              historyData.classInfo?.enrollments?.some(
-                (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
-              )
-            );
-            const siblingDiscountPct = isPayerInClass ? Number(fam?.discountPercentage ?? 50) : 0;
-            if (siblingDiscountPct < 100) {
-              const weight = siblingDiscountPct > 0 ? (1 - siblingDiscountPct / 100) : 1;
-              eligiblePayingWeight += weight;
-              lateTuitionSettlementCount++;
-            }
-          }
+        if (catchUpWeightAtStart <= 0 && catchUpWeightAtEnd > 0) {
+          eligiblePayingWeight += catchUpWeightAtEnd;
+          lateTuitionSettlementCount++;
         }
       }
 
@@ -1954,28 +1885,12 @@ async function computeTeacherPayrollFromData(params: {
     let newlyResolvedTransferWeight = 0;
     let newlyResolvedTransferCount = 0;
     for (const enr of historyData.classInfo?.enrollments || []) {
-      const paidHeldAtStart = studentResolvedTransferHeldAtStart.get(`${enr.studentId}_${cid}`) || 0;
-      const paidHeldAtEnd = studentResolvedTransferHeldAtEnd.get(`${enr.studentId}_${cid}`) || 0;
-      const newlyPaidCount = Math.max(0, paidHeldAtEnd - paidHeldAtStart);
-      if (newlyPaidCount > 0) {
-        const pStatus = enr.payerStatus || "NORMAL";
-        if (pStatus !== "NON_PAYER" && pStatus !== "SCHOOL_FEES_ONLY") {
-          const fam = enr.student?.family;
-          const payerId = fam?.payerStudentId;
-          const isPayerInClass = Boolean(
-            payerId &&
-            payerId !== enr.studentId &&
-            historyData.classInfo?.enrollments?.some(
-              (e: any) => (e.studentId === payerId || e.student?.id === payerId) && (e.status === "ACTIVE" || !e.status)
-            )
-          );
-          const siblingDiscountPct = isPayerInClass ? Number(fam?.discountPercentage ?? 50) : 0;
-          if (siblingDiscountPct < 100) {
-            const weight = siblingDiscountPct > 0 ? (1 - siblingDiscountPct / 100) : 1;
-            newlyResolvedTransferWeight += newlyPaidCount * weight;
-            newlyResolvedTransferCount += newlyPaidCount;
-          }
-        }
+      const paidHeldWeightAtStart = studentResolvedTransferHeldWeightAtStart.get(`${enr.studentId}_${cid}`) || 0;
+      const paidHeldWeightAtEnd = studentResolvedTransferHeldWeightAtEnd.get(`${enr.studentId}_${cid}`) || 0;
+      const deltaWeight = Math.max(0, Math.round((paidHeldWeightAtEnd - paidHeldWeightAtStart) * 10000) / 10000);
+      if (deltaWeight > 0) {
+        newlyResolvedTransferWeight += deltaWeight;
+        newlyResolvedTransferCount += 1;
       }
     }
 
@@ -2115,7 +2030,6 @@ async function computeTeacherPayrollFromData(params: {
       }
 
       const levelPrice = Number(fClass.FormationLevel?.lumpSumPrice ?? fClass.pricePerCycle ?? 4000);
-      const halfPriceCap = levelPrice > 0 ? levelPrice / 2 : 2000;
 
       // Group percentage override or teacher default percentage
       const appliedGroupPercentage = classRateMap.has(fClass.id)
@@ -2138,11 +2052,8 @@ async function computeTeacherPayrollFromData(params: {
 
       for (const enr of fClass.enrollments) {
         const pStatus = enr.payerStatus || "NORMAL";
-        if (pStatus === "NON_PAYER" || pStatus === "SCHOOL_FEES_ONLY") {
-          continue;
-        }
-
         const studentVouchers = classVouchers.filter((v) => v.studentId === enr.studentId);
+
         let totalPaidToEnd = 0;
         let totalPaidToStart = 0;
 
@@ -2159,19 +2070,54 @@ async function computeTeacherPayrollFromData(params: {
           }
         });
 
+        // Skip NON_PAYER and SCHOOL_FEES_ONLY enrollments unless they had an already-paid historical voucher before switching
+        const hasTeacherPayableSnapshot = studentVouchers.some(
+          (v) => v.appliedPayerStatus && v.appliedPayerStatus !== "NON_PAYER" && v.appliedPayerStatus !== "SCHOOL_FEES_ONLY"
+        );
+        if ((pStatus === "NON_PAYER" || pStatus === "SCHOOL_FEES_ONLY") && (!hasTeacherPayableSnapshot || totalPaidToEnd <= 0)) {
+          continue;
+        }
+
+        const currentDiscFee =
+          pStatus === "DISCOUNTED"
+            ? computeStudentSessionFee({
+                payerStatus: "DISCOUNTED",
+                discountType: (enr as any).discountType,
+                discountValue: (enr as any).discountValue,
+                pricePerCycle: levelPrice,
+                teacherPercentage: teacherRatePct,
+                isFormation: true,
+              }).studentCycleFee
+            : levelPrice;
+
+        const latestSnapVoucher = [...studentVouchers]
+          .reverse()
+          .find((v) => v.effectiveCyclePrice !== undefined && v.effectiveCyclePrice !== null);
+
+        const studentLevelPrice =
+          pStatus === "DISCOUNTED"
+            ? latestSnapVoucher && totalPaidToEnd > currentDiscFee
+              ? Math.max(currentDiscFee, Number(latestSnapVoucher.effectiveCyclePrice))
+              : currentDiscFee
+            : latestSnapVoucher && totalPaidToEnd > 0
+            ? Number(latestSnapVoucher.effectiveCyclePrice)
+            : levelPrice;
+
+        const studentHalfPriceCap = studentLevelPrice > 0 ? studentLevelPrice / 2 : 0;
+
         let cycleRecognizedBase = 0;
 
         if (monthDiff === 0) {
-          // Month 1 (First Cycle): Capped at 50% of the level fee (e.g. max 2000 DZD out of 4000 DZD)
-          cycleRecognizedBase = Math.min(totalPaidToEnd, halfPriceCap);
+          // Month 1 (First Cycle): Capped at 50% of the student's effective formation level fee
+          cycleRecognizedBase = Math.min(totalPaidToEnd, studentHalfPriceCap);
         } else if (monthDiff === 1) {
-          // Month 2 (Second Cycle): Recognized base is what remains of total payment up to levelPrice
-          const base1 = Math.min(totalPaidToStart, halfPriceCap);
-          cycleRecognizedBase = Math.max(0, Math.min(totalPaidToEnd - base1, levelPrice - base1));
+          // Month 2 (Second Cycle): Recognized base is what remains of total payment up to studentLevelPrice
+          const base1 = Math.min(totalPaidToStart, studentHalfPriceCap);
+          cycleRecognizedBase = Math.max(0, Math.min(totalPaidToEnd - base1, studentLevelPrice - base1));
         } else {
           // Month 3+ (Post-Cycle settlements): Any delayed payments above prior recognized base
-          const priorRecognized = Math.min(totalPaidToStart, levelPrice);
-          cycleRecognizedBase = Math.max(0, Math.min(totalPaidToEnd - priorRecognized, levelPrice - priorRecognized));
+          const priorRecognized = Math.min(totalPaidToStart, studentLevelPrice);
+          cycleRecognizedBase = Math.max(0, Math.min(totalPaidToEnd - priorRecognized, studentLevelPrice - priorRecognized));
         }
 
         const studentTeacherCut = Math.round(((cycleRecognizedBase * teacherRatePct) / 100) * 100) / 100;
@@ -2191,13 +2137,20 @@ async function computeTeacherPayrollFromData(params: {
           studentId: enr.student.id,
           studentName: enr.student.name,
           cycleNumber: monthDiff <= 0 ? 1 : 2,
-          totalLevelPrice: levelPrice,
+          totalLevelPrice: studentLevelPrice,
           totalPaidToDate: totalPaidToEnd,
           cycleRecognizedBase,
           teacherPercentage: teacherRatePct,
           teacherAmount: studentTeacherCut,
           schoolAmount: studentSchoolCut,
-          status: totalPaidToEnd >= levelPrice ? "FULL" : totalPaidToEnd > 0 ? "PARTIAL" : "UNPAID",
+          status:
+            studentLevelPrice <= 0
+              ? "FULL"
+              : totalPaidToEnd >= studentLevelPrice
+              ? "FULL"
+              : totalPaidToEnd > 0
+              ? "PARTIAL"
+              : "UNPAID",
         });
       }
 

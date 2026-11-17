@@ -2,12 +2,13 @@ import FormContainer from "@/components/FormContainer";
 import PageHeader from "@/components/PageHeader";
 import Pagination from "@/components/Pagination";
 import prisma from "@/lib/prisma";
-import { ITEM_PER_PAGE } from "@/lib/settings";
-import { getAuthRole } from "@/lib/auth";
+import { ITEM_PER_PAGE, canUserAccessBranch } from "@/lib/settings";
+import { getAuthSession } from "@/lib/auth";
 import Image from "next/image";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { FilterTabs } from "@/components/ui/FilterTabs";
 import { getTranslations, getLocale } from "next-intl/server";
 
 const WorkshopListPage = async (
@@ -16,58 +17,86 @@ const WorkshopListPage = async (
   }
 ) => {
   const searchParams = await props.searchParams;
-  const role = await getAuthRole();
+  const session = await getAuthSession();
   const t = await getTranslations("workshops");
   const locale = await getLocale();
-  const { page, search } = searchParams;
-  const p = page ? parseInt(page) : 1;
+  const { page, search, branchId: branchParam } = searchParams;
+  const parsedPage = page ? parseInt(page, 10) : 1;
+  const p = Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+
+  const selectedBranchId =
+    session.isOwner && branchParam && !isNaN(parseInt(branchParam, 10))
+      ? parseInt(branchParam, 10)
+      : null;
 
   let workshops: any[] = [];
+  let branches: Array<{ id: number; name: string }> = [];
   let count = 0;
 
   try {
-    let rawWorkshops: any[] = [];
-    if (search) {
-      const countRes = await prisma.$queryRaw<Array<{ count: string | number | bigint }>>`
-        SELECT count(*) FROM "Workshop" w
-        WHERE w.title ILIKE ${'%' + search + '%'} OR w."guestTeacher" ILIKE ${'%' + search + '%'}
-      `;
-      count = Number(countRes[0]?.count || 0);
+    const whereClause: any = {
+      ...(selectedBranchId ? { branchId: selectedBranchId } : {}),
+      ...(search?.trim()
+        ? {
+            OR: [
+              { title: { contains: search.trim(), mode: "insensitive" } },
+              { guestTeacher: { contains: search.trim(), mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
 
-      rawWorkshops = await prisma.$queryRaw<any[]>`
-        SELECT w.id, w.title, w.description, w."totalPrice", w."guestTeacher",
-          (SELECT count(*) FROM "WorkshopSession" ws WHERE ws."workshopId" = w.id) as "sessionCount",
-          (SELECT count(*) FROM "WorkshopParticipant" wp WHERE wp."workshopId" = w.id) as "participantCount"
-        FROM "Workshop" w
-        WHERE w.title ILIKE ${'%' + search + '%'} OR w."guestTeacher" ILIKE ${'%' + search + '%'}
-        ORDER BY w.id DESC
-        LIMIT ${ITEM_PER_PAGE} OFFSET ${ITEM_PER_PAGE * (p - 1)}
-      `;
-    } else {
-      const countRes = await prisma.$queryRaw<Array<{ count: string | number | bigint }>>`
-        SELECT count(*) FROM "Workshop"
-      `;
-      count = Number(countRes[0]?.count || 0);
+    const [rawWorkshops, totalCount, branchList] = await Promise.all([
+      prisma.workshop.findMany({
+        where: whereClause,
+        include: {
+          Branch: { select: { id: true, name: true } },
+          sessions: {
+            select: { id: true, startsAt: true, endsAt: true },
+            orderBy: { startsAt: "asc" },
+          },
+          _count: {
+            select: {
+              sessions: true,
+              participants: {
+                where: { status: { notIn: ["SUSPENDED", "REFUNDED", "INACTIVE"] } },
+              },
+            },
+          },
+        },
+        orderBy: { id: "desc" },
+        take: ITEM_PER_PAGE,
+        skip: ITEM_PER_PAGE * (p - 1),
+      }),
+      prisma.workshop.count({ where: whereClause }),
+      session.isOwner
+        ? prisma.branch.findMany({
+            select: { id: true, name: true },
+            orderBy: { id: "asc" },
+          })
+        : Promise.resolve([]),
+    ]);
 
-      rawWorkshops = await prisma.$queryRaw<any[]>`
-        SELECT w.id, w.title, w.description, w."totalPrice", w."guestTeacher",
-          (SELECT count(*) FROM "WorkshopSession" ws WHERE ws."workshopId" = w.id) as "sessionCount",
-          (SELECT count(*) FROM "WorkshopParticipant" wp WHERE wp."workshopId" = w.id) as "participantCount"
-        FROM "Workshop" w
-        ORDER BY w.id DESC
-        LIMIT ${ITEM_PER_PAGE} OFFSET ${ITEM_PER_PAGE * (p - 1)}
-      `;
-    }
+    count = totalCount;
+    branches = branchList;
 
     workshops = rawWorkshops.map((w) => ({
       id: w.id,
       title: w.title,
       description: w.description || "",
       price: Number(w.totalPrice || 0),
-      teacherName: w.guestTeacher || t("unspecified"),
+      teacherName: w.guestTeacher || "",
+      displayTeacherName: w.guestTeacher || t("unspecified"),
+      branchId: w.branchId,
+      branchName: w.Branch?.name || (locale === "ar" ? `الفرع ${w.branchId}` : `Siège ${w.branchId}`),
+      sessions: w.sessions.map((s) => ({
+        id: s.id,
+        startTime: s.startsAt,
+        endTime: s.endsAt,
+      })),
       _count: {
-        sessions: Number(w.sessionCount || 0),
-        participants: Number(w.participantCount || 0),
+        sessions: w._count.sessions,
+        participants: w._count.participants,
       },
     }));
   } catch (err) {
@@ -76,95 +105,135 @@ const WorkshopListPage = async (
     count = 0;
   }
 
+  const buildBranchHref = (bId: string | number) => {
+    const qs = new URLSearchParams();
+    if (bId !== "all") qs.set("branchId", String(bId));
+    if (search?.trim()) qs.set("search", search.trim());
+    const str = qs.toString();
+    return `/${locale}/list/workshops${str ? `?${str}` : ""}`;
+  };
+
   return (
     <div className="p-4 md:p-6 space-y-6">
       <PageHeader
         title={t("title")}
         searchPlaceholder={t("searchPlaceholder")}
         createAction={
-          role === "admin" ? { table: "workshop", type: "create" } : null
+          session.isOwnerOrAdmin ? { table: "workshop", type: "create" } : null
         }
       />
+
+      {session.isOwner && branches.length > 0 && (
+        <FilterTabs
+          activeTab={selectedBranchId ?? "all"}
+          tabs={[
+            {
+              id: "all",
+              label: locale === "ar" ? "جميع الفروع" : "Tous les sièges",
+              href: buildBranchHref("all"),
+            },
+            ...branches.map((b) => ({
+              id: b.id,
+              label: b.name,
+              href: buildBranchHref(b.id),
+            })),
+          ]}
+        />
+      )}
 
       {workshops.length > 0 ? (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
-            {workshops.map((workshop) => (
-              <Card
-                key={workshop.id}
-                className="flex flex-col hover:border-primary/40 transition-colors overflow-hidden"
-              >
-                <Link
-                  href={`/list/workshops/${workshop.id}`}
-                  className="block p-6 flex-grow hover:bg-surface-subtle transition-colors"
+            {workshops.map((workshop) => {
+              const canManageWorkshop =
+                session.isOwner ||
+                (session.isOwnerOrAdmin &&
+                  canUserAccessBranch(session.rawRole, session.branchIds, workshop.branchId));
+
+              return (
+                <Card
+                  key={workshop.id}
+                  className="flex flex-col hover:border-primary/40 transition-colors overflow-hidden"
                 >
-                  <div className="flex items-center justify-between gap-4 mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-primary/10 p-3 rounded-full">
-                        <Image
-                          src="/lesson.png"
-                          alt="workshop icon"
-                          width={24}
-                          height={24}
-                        />
+                  <Link
+                    href={`/list/workshops/${workshop.id}`}
+                    className="block p-6 flex-grow hover:bg-surface-subtle transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-4 mb-4">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="bg-primary/10 p-3 rounded-full shrink-0">
+                          <Image
+                            src="/lesson.png"
+                            alt="workshop icon"
+                            width={24}
+                            height={24}
+                          />
+                        </div>
+                        <h2 className="text-card-title font-bold text-gray-900 truncate">
+                          {workshop.title}
+                        </h2>
                       </div>
-                      <h2 className="text-card-title font-bold text-gray-900">
-                        {workshop.title}
-                      </h2>
-                    </div>
-                    <Badge variant="primary" size="sm">
-                      {workshop.price.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-gray-600 mb-4 h-10 overflow-hidden line-clamp-2">
-                    {workshop.description}
-                  </p>
-                  <div className="text-xs space-y-2 text-gray-600 border-t border-border pt-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-500">{t("teacher")}:</span>
-                      <span className="font-semibold text-gray-800">{workshop.teacherName}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-500">{t("scheduleTitle")}:</span>
-                      <Badge variant="neutral" size="sm">
-                        {t("sessionsCount", { count: workshop._count.sessions })}
+                      <Badge variant="primary" size="sm" className="shrink-0">
+                        {workshop.price.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
                       </Badge>
                     </div>
-                    {role === "admin" && (
+                    <p className="text-sm text-gray-600 mb-4 h-10 overflow-hidden line-clamp-2">
+                      {workshop.description}
+                    </p>
+                    <div className="text-xs space-y-2 text-gray-600 border-t border-border pt-4">
                       <div className="flex items-center justify-between">
-                        <span className="text-gray-500">{t("roster")}:</span>
+                        <span className="text-gray-500">{t("branch")}:</span>
                         <Badge variant="secondary" size="sm">
-                          {t("participantsCount", { count: workshop._count.participants })}
+                          {workshop.branchName}
                         </Badge>
                       </div>
-                    )}
-                  </div>
-                </Link>
-                <div className="border-t border-border p-3 bg-surface-subtle flex items-center justify-between gap-2">
-                  <Link
-                    href={`/list/attendance/workshop/${workshop.id}`}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-                  >
-                    <Image src="/attendance.png" alt="" width={14} height={14} />
-                    <span>{locale === "ar" ? "الحضور" : "Présences"}</span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">{t("teacher")}:</span>
+                        <span className="font-semibold text-gray-800">{workshop.displayTeacherName}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-500">{t("scheduleTitle")}:</span>
+                        <Badge variant="neutral" size="sm">
+                          {t("sessionsCount", { count: workshop._count.sessions })}
+                        </Badge>
+                      </div>
+                      {session.isOwnerOrAdmin && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">{t("roster")}:</span>
+                          <Badge variant="secondary" size="sm">
+                            {t("participantsCount", { count: workshop._count.participants })}
+                          </Badge>
+                        </div>
+                      )}
+                    </div>
                   </Link>
-                  {role === "admin" && (
-                    <div className="flex items-center gap-2">
-                      <FormContainer
-                        table="workshop"
-                        type="update"
-                        data={workshop}
-                      />
-                      <FormContainer
-                        table="workshop"
-                        type="delete"
-                        id={workshop.id}
-                      />
+                  {canManageWorkshop && (
+                    <div className="border-t border-border p-3 bg-surface-subtle flex items-center justify-between gap-2">
+                      <Link
+                        href={`/list/attendance/workshop/${workshop.id}`}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                      >
+                        <Image src="/attendance.png" alt="" width={14} height={14} />
+                        <span>{locale === "ar" ? "الحضور" : "Présences"}</span>
+                      </Link>
+                      <div className="flex items-center gap-2">
+                        <FormContainer
+                          table="workshop"
+                          type="update"
+                          id={workshop.id}
+                          data={workshop}
+                        />
+                        <FormContainer
+                          table="workshop"
+                          type="delete"
+                          id={workshop.id}
+                        />
+                      </div>
                     </div>
                   )}
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
           <Pagination count={count} />
         </>

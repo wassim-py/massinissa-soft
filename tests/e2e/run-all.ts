@@ -9,6 +9,7 @@ import { runTier2BoundaryTests } from "./tier2-boundaries/boundary-corner-cases.
 import { runTier3CombinationTests } from "./tier3-combinations/cross-feature-combinations.test";
 import { runTier4WorkflowTests } from "./tier4-scenarios/real-world-workflows.test";
 import { runTier5AdversarialTests } from "./tier5-adversarial/adversarial-stress.test";
+import { runDiscountedPaymentTypeTests } from "./discounted-payment-type.test";
 
 export async function runAllTiers() {
   console.log("\n======================================================================");
@@ -24,6 +25,7 @@ export async function runAllTiers() {
     await runTier3CombinationTests();
     await runTier4WorkflowTests();
     await runTier5AdversarialTests();
+    await runDiscountedPaymentTypeTests();
   } catch (err: any) {
     console.error("Critical error during test run:", err);
   }

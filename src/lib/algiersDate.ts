@@ -54,7 +54,7 @@ export interface AlgiersDayBounds {
  * Strings with explicit timezone offsets (e.g. trailing 'Z' or '+01:00') are parsed normally.
  * Returns null if input is null, undefined, empty, or unparseable.
  */
-function parseToAlgiersDate(dateInput?: Date | string | number | null): Date | null {
+export function parseToAlgiersDate(dateInput?: Date | string | number | null): Date | null {
   if (dateInput === null || dateInput === undefined || dateInput === "") {
     return null;
   }
@@ -256,6 +256,20 @@ export function formatAlgiersDateTime(
   const dateStr = formatAlgiersDate(d, locale);
   const timeStr = formatAlgiersTime(d, locale);
   return timeStr ? `${dateStr} ${timeStr}` : dateStr;
+}
+
+/**
+ * Formats any date/timestamp into a `datetime-local` input value ("YYYY-MM-DDTHH:mm")
+ * strictly anchored to Africa/Algiers timezone. Returns "" if invalid or missing.
+ */
+export function formatAlgiersDateTimeLocal(
+  dateInput?: Date | string | number | null
+): string {
+  const d = parseToAlgiersDate(dateInput);
+  if (!d) return "";
+
+  const info = getAlgiersDateInfo(d);
+  return `${info.dateStr}T${info.timeStr}`;
 }
 
 /**

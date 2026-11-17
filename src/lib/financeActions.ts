@@ -1795,6 +1795,7 @@ export async function getGlobalFinanceReportDataAction(options: {
     const formationVouchers = await prisma.voucher.findMany({
       where: {
         isVoided: false,
+        isRefund: false,
         issuedAt: { gte: startDate, lte: endDate },
         ...branchTargetFilter,
         OR: [
@@ -1805,6 +1806,7 @@ export async function getGlobalFinanceReportDataAction(options: {
       include: {
         class: { include: { branch: { select: { name: true } } } },
         workshop: { include: { Branch: { select: { name: true } } } },
+        refunds: { select: { amount: true } },
       },
     });
 
@@ -1812,7 +1814,9 @@ export async function getGlobalFinanceReportDataAction(options: {
     let totalFormationIncomes = 0;
 
     formationVouchers.forEach((v) => {
-      const amt = Number(v.amount);
+      const refundedAmt = v.refunds.reduce((s, r) => s + Number(r.amount), 0);
+      const amt = Math.max(0, Number(v.amount) - refundedAmt);
+      if (amt <= 0) return;
       totalFormationIncomes += amt;
       const isW = !!v.workshopId;
       const title = isW

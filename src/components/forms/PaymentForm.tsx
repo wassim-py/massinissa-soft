@@ -20,12 +20,18 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { formatDZD } from "@/lib/algiersDate";
-import { computeStudentSessionFee } from "@/lib/studentBilling";
-import { CheckCircle2, AlertCircle, Info, Printer } from "lucide-react";
+import { computeStudentSessionFee, formatDiscountBadgeLabel } from "@/lib/studentBilling";
+import { CheckCircle2, AlertCircle, Info, Printer, Tag } from "lucide-react";
 
 interface ExtendedStudent extends Student {
   family?: { payerStudentId: string | null; discountPercentage?: any } | null;
-  enrollments?: Array<{ classId: number; payerStatus?: string }>;
+  enrollments?: Array<{
+    classId: number;
+    payerStatus?: string;
+    discountType?: string | null;
+    discountValue?: any;
+    discountReason?: string | null;
+  }>;
 }
 
 const PaymentForm = ({
@@ -35,6 +41,8 @@ const PaymentForm = ({
   data,
   setOpen,
   sessionsForThisPayment,
+  remainingSessions,
+  cycleRemainingFee,
   amountOwedByStudent,
   defaultInscriptionFee,
   initialNotes,
@@ -48,6 +56,8 @@ const PaymentForm = ({
   data?: Voucher;
   setOpen: (isOpen: boolean) => void;
   sessionsForThisPayment?: number;
+  remainingSessions?: number;
+  cycleRemainingFee?: number;
   amountOwedByStudent?: number;
   defaultInscriptionFee?: number;
   initialNotes?: string;
@@ -102,6 +112,8 @@ const PaymentForm = ({
 
   const feeCalc = computeStudentSessionFee({
     payerStatus: currentPayerStatus,
+    discountType: enrollment?.discountType,
+    discountValue: enrollment?.discountValue,
     pricePerCycle: isFormation ? formationLevelPrice : Number(classData.pricePerCycle || (classData as any).price || 0),
     teacherPercentage,
     isSiblingWaived,
@@ -119,8 +131,8 @@ const PaymentForm = ({
     amountOwedByStudent !== undefined
       ? amountOwedByStudent > 0
         ? amountOwedByStudent
-        : isFormation ? formationLevelPrice : feeCalc.studentCycleFee
-      : isFormation ? formationLevelPrice : feeCalc.studentCycleFee;
+        : feeCalc.studentCycleFee
+      : feeCalc.studentCycleFee;
   const initialTuitionChecked =
     amountOwedByStudent !== undefined ? amountOwedByStudent > 0 : true;
 
@@ -167,7 +179,9 @@ const PaymentForm = ({
             const payerEnrolled = Boolean((res as any).isPayerInThisClass);
             setIsPayerInClass(payerEnrolled);
             if (payerEnrolled) {
-              setSiblingDiscountPct(Number((res as any).siblingDiscountPercentage ?? (student.family as any)?.discountPercentage ?? 50));
+              setSiblingDiscountPct((prevPct) =>
+                Number((res as any).siblingDiscountPercentage ?? (prevPct > 0 ? prevPct : 50))
+              );
             } else {
               setSiblingDiscountPct(0);
             }
@@ -419,11 +433,24 @@ const PaymentForm = ({
                 id: issuedBundle.voucherNumber,
                 number: issuedBundle.voucherNumber,
                 amount: issuedBundle.totalAmount,
-                paymentType: isFormation ? "FORMATION" : "MULTI_ITEM",
-                student,
-                class: classData,
-                series: { scope: issuedBundle.seriesScope, id: issuedBundle.seriesId },
+                paymentType:
+                  issuedBundle.paymentType ||
+                  (issuedBundle.items?.length === 1
+                    ? issuedBundle.items[0].type
+                    : isFormation
+                    ? "FORMATION"
+                    : "MULTI_ITEM"),
+                student: issuedBundle.student || student,
+                class: issuedBundle.class || classData,
+                series: issuedBundle.series || {
+                  scope: issuedBundle.seriesScope,
+                  id: issuedBundle.seriesId,
+                },
               }}
+              sessionsForThisPayment={issuedBundle.sessionsCount ?? sessionsForThisPayment}
+              remainingSessions={issuedBundle.remainingSessions ?? remainingSessions}
+              cycleRemainingFee={issuedBundle.cycleRemainingFee}
+              isPartial={issuedBundle.isPartial}
             />
           </div>
         </div>
@@ -452,7 +479,10 @@ const PaymentForm = ({
           <PrintTicketButton
             voucher={{ ...data, student, class: classData }}
             sessionsForThisPayment={sessionsForThisPayment}
+            remainingSessions={remainingSessions}
+            cycleRemainingFee={cycleRemainingFee}
             amountOwedByStudent={amountOwedByStudent}
+            isPartial={(data as any)?.isPartial}
           />
         </div>
 
@@ -501,8 +531,27 @@ const PaymentForm = ({
         </div>
       </div>
 
+      {/* Owner Discount Alert */}
+      {feeCalc.isDiscounted && (
+        <div className="p-3 bg-violet-50 border border-violet-200 rounded-xl text-xs text-violet-950 leading-relaxed">
+          <p className="font-bold flex items-center gap-1.5">
+            <Tag className="w-3.5 h-3.5 text-violet-700 shrink-0" />
+            <span>
+              {locale === "ar"
+                ? `تخفيض خاص مطبق (${formatDiscountBadgeLabel(enrollment?.discountType, enrollment?.discountValue, "ar")}):`
+                : `Remise propriétaire appliquée (${formatDiscountBadgeLabel(enrollment?.discountType, enrollment?.discountValue, "fr")}) :`}
+            </span>
+          </p>
+          <p className="mt-0.5">
+            {locale === "ar"
+              ? `المبلغ المخفض للدروس: ${formatDZD(feeCalc.studentCycleFee, "ar")} بدل ${formatDZD(feeCalc.baseCycleFee, "ar")}. حقوق التسجيل والكتب تبقى بالسعر الكامل.`
+              : `Tarif réduit des cours : ${formatDZD(feeCalc.studentCycleFee, "fr")} au lieu de ${formatDZD(feeCalc.baseCycleFee, "fr")}. Frais d'inscription et manuels plein tarif.`}
+          </p>
+        </div>
+      )}
+
       {/* Sibling Waiver / Discount Alert */}
-      {isSiblingDiscount && (
+      {!feeCalc.isDiscounted && isSiblingDiscount && (
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed">
           <p className="font-bold">
             {locale === "ar"
@@ -562,7 +611,7 @@ const PaymentForm = ({
                     ? "رسوم الدورة التكوينية (المستوى)"
                     : "Frais de formation (niveau)"
                   : locale === "ar"
-                  ? "اشتراك دراسي (4 حصص)"
+                  ? "اشتراك دراسي"
                   : "Cycle d'études (4 séances)"}
               </span>
             </label>

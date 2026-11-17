@@ -12,18 +12,20 @@ import { saveAttendance, removeCatchUpAttendanceAction, markSingleAttendanceActi
 import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import { executeWithRetry } from "@/lib/retryUtils";
 import { toast } from "react-toastify";
-import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions } from "@/lib/studentBilling";
+import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, computeStudentSessionFee, formatDiscountBadgeLabel } from "@/lib/studentBilling";
+import { buildVoucherBundleForPrint } from "@/lib/voucherUtils";
 import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
 import CatchUpVisitorModal from "./CatchUpVisitorModal";
 import RevisionVisitorModal from "./RevisionVisitorModal";
-import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, UserX, Send, Clock, CheckCircle2 } from "lucide-react";
+import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, Send, Clock, CheckCircle2 } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
 import BookStatusBadge, { computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
 import { FilterTabs } from "@/components/ui/FilterTabs";
 import EnrollExistingStudentTab from "./EnrollExistingStudentTab";
+import TeacherAbsenceToggle from "../TeacherAbsenceToggle";
 
 const StudentForm = dynamic(() => import("./StudentForm"), { ssr: false });
 
@@ -103,6 +105,10 @@ type FullStudent = Student & {
   attendances: Attendance[];
   catchUps?: any[];
   payerStatus?: string;
+  discountType?: string | null;
+  discountValue?: number | null;
+  discountReason?: string | null;
+  payerHistory?: any[];
   enrollmentStatus?: string;
   payerSessionsRemaining?: number;
   transfersFrom?: Array<{ id?: number; transferredSessions: number }>;
@@ -166,6 +172,7 @@ const AttendanceRoster = ({
   initialSearch = "",
   studentRelatedData = { grades: [], classes: [] },
   canCreateStudent = true,
+  canManageTeacherAbsence = false,
   allClasses = [],
 }: {
   lesson: FullLesson;
@@ -183,6 +190,7 @@ const AttendanceRoster = ({
     classes: Array<{ id: number; name: string; levelId?: number | null }>;
   };
   canCreateStudent?: boolean;
+  canManageTeacherAbsence?: boolean;
   allClasses?: Array<any>;
 }) => {
   const router = useRouter();
@@ -190,6 +198,16 @@ const AttendanceRoster = ({
   const tSearch = useTranslations("search");
   const tCommon = useTranslations("common");
   const locale = useLocale();
+
+  const [currentLessonId, setCurrentLessonId] = useState<number>(lesson.id);
+  const [isTeacherAbsent, setIsTeacherAbsent] = useState<boolean>(Boolean(lesson.isTeacherAbsent));
+  const isTogglingTeacherAbsenceRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (isTogglingTeacherAbsenceRef.current) return;
+    setCurrentLessonId(lesson.id);
+    setIsTeacherAbsent(Boolean(lesson.isTeacherAbsent));
+  }, [lesson.id, lesson.isTeacherAbsent]);
 
   const [searchTerm, setSearchTerm] = useState(initialSearch || "");
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch || "");
@@ -495,14 +513,19 @@ const AttendanceRoster = ({
     }
   }, [lesson]);
 
+  const lessonClassId = lesson.class?.id;
   const isSameSessionAttendance = useCallback(
     (a: any) => {
       if (!a) return false;
-      if (Number(a.lessonId) === Number(lesson.id)) return true;
+      if (
+        Number(a.lessonId) === Number(currentLessonId) ||
+        Number(a.lessonId) === Number(lesson.id)
+      ) {
+        return true;
+      }
       const aClassId =
         a.lesson?.classId || a.lesson?.class?.id || a.classId;
-      const thisClassId = lesson.class?.id;
-      if (!aClassId || !thisClassId || Number(aClassId) !== Number(thisClassId)) {
+      if (!aClassId || !lessonClassId || Number(aClassId) !== Number(lessonClassId)) {
         return false;
       }
       const aStartsAt =
@@ -522,7 +545,7 @@ const AttendanceRoster = ({
       }
       return false;
     },
-    [lesson.id, lesson.class?.id, lessonDateStr]
+    [currentLessonId, lesson.id, lessonClassId, lessonDateStr]
   );
 
   const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() => {
@@ -618,7 +641,9 @@ const AttendanceRoster = ({
         scan.studentId &&
         scan.status === "SUCCESS"
       ) {
-        const matchesLesson = Number(scan.lessonId) === Number(lesson.id);
+        const matchesLesson =
+          Number(scan.lessonId) === Number(currentLessonId) ||
+          Number(scan.lessonId) === Number(lesson.id);
         const matchesClass = Number(scan.classId) === Number(lesson.class?.id);
         const matchesStudent = activeStudents.some((s) => s.id === scan.studentId);
         if (matchesLesson || (matchesClass && matchesStudent)) {
@@ -651,7 +676,7 @@ const AttendanceRoster = ({
         handleBiometricScan
       );
     };
-  }, [lesson.id, lesson.class?.id, activeStudents, router]);
+  }, [currentLessonId, lesson.id, lesson.class?.id, activeStudents, router]);
 
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<FullStudent | null>(null);
@@ -662,10 +687,10 @@ const AttendanceRoster = ({
     if (!confirm(t("confirmCancelVisitor"))) return;
     setDeletingVisitorId(visitorId);
     try {
-      const res = await executeWithRetry(() => removeCatchUpAttendanceAction(visitorId, lesson.id));
+      const res = await executeWithRetry(() => removeCatchUpAttendanceAction(visitorId, currentLessonId));
       if (res.success) {
         toast.success(res.message);
-        notifyAttendanceChanged({ lessonId: lesson.id, source: "remove-catchup-visitor" });
+        notifyAttendanceChanged({ lessonId: currentLessonId, source: "remove-catchup-visitor" });
       } else {
         toast.error(res.message);
       }
@@ -685,14 +710,14 @@ const AttendanceRoster = ({
 
     try {
       setDeletingRevisionVisitorId(studentId);
-      const res = await removeRevisionVisitorAction({ lessonId: lesson.id, studentId });
+      const res = await removeRevisionVisitorAction({ lessonId: currentLessonId, studentId });
       if (res.success) {
         toast.success(
           locale === "ar"
             ? "تم إلغاء زائر المراجعة بنجاح"
             : "Visiteur révision retiré avec succès"
         );
-        notifyAttendanceChanged({ lessonId: lesson.id, source: "remove-revision-visitor" });
+        notifyAttendanceChanged({ lessonId: currentLessonId, source: "remove-revision-visitor" });
         router.refresh();
       } else {
         toast.error(res.message || "Erreur lors de l'annulation");
@@ -734,7 +759,7 @@ const AttendanceRoster = ({
   }, []);
 
   const triggerAutoSave = useCallback(() => {
-    if (isAutoSavingRef.current || lesson.isTeacherAbsent) return;
+    if (isAutoSavingRef.current || isTeacherAbsent) return;
     isAutoSavingRef.current = true;
 
     // Gracefully fallback any un-justified NOT_DEFINED to ABSENT so form submission is not blocked
@@ -762,7 +787,7 @@ const AttendanceRoster = ({
         );
       }
     }, 150);
-  }, [activeStudents, justifications, lesson.isTeacherAbsent, locale]);
+  }, [activeStudents, justifications, isTeacherAbsent, locale]);
 
   // Monitor lesson time and automatically trigger save when the lesson is up
   useEffect(() => {
@@ -772,7 +797,7 @@ const AttendanceRoster = ({
       const diffSec = Math.floor((lessonEndTime - Date.now()) / 1000);
       setTimeRemainingSec(diffSec);
 
-      if (diffSec <= 0 && !hasAutoSavedRef.current) {
+      if (diffSec <= 0 && !isTeacherAbsent && !hasAutoSavedRef.current) {
         hasAutoSavedRef.current = true;
         // Verify if any active student has not yet been recorded in existingRecords
         const hasUnrecorded = activeStudents.some(
@@ -787,7 +812,7 @@ const AttendanceRoster = ({
     checkTimer();
     const interval = setInterval(checkTimer, 1000);
     return () => clearInterval(interval);
-  }, [lessonEndTime, activeStudents, existingRecords, triggerAutoSave]);
+  }, [lessonEndTime, activeStudents, existingRecords, triggerAutoSave, isTeacherAbsent]);
 
   const handleStatusChange = (studentId: string, status: AttendanceStatus) => {
     if (status === "PRESENT" && caughtUpMap.has(studentId)) {
@@ -809,7 +834,7 @@ const AttendanceRoster = ({
     if (status === "PRESENT" || status === "ABSENT") {
       executeWithRetry(() =>
         markSingleAttendanceAction({
-          lessonId: lesson.id,
+          lessonId: currentLessonId,
           studentId,
           status,
         })
@@ -819,7 +844,7 @@ const AttendanceRoster = ({
             setAttendance((prev) => ({ ...prev, [studentId]: previousStatus }));
             toast.error(res.message);
           } else {
-            notifyAttendanceChanged({ lessonId: lesson.id, source: "single-attendance" });
+            notifyAttendanceChanged({ lessonId: currentLessonId, source: "single-attendance" });
           }
         })
         .catch((err) => {
@@ -871,7 +896,7 @@ const AttendanceRoster = ({
     formRef.current?.requestSubmit();
   };
 
-  const saveAttendanceWithId = saveAttendance.bind(null, lesson.id);
+  const saveAttendanceWithId = saveAttendance.bind(null, currentLessonId);
   const [state, formAction] = useActionState(saveAttendanceWithId, {
     success: false,
     error: false,
@@ -881,12 +906,54 @@ const AttendanceRoster = ({
   useEffect(() => {
     if (state?.success) {
       toast.success(state.message);
-      notifyAttendanceChanged({ lessonId: lesson.id, source: "save-attendance" });
+      notifyAttendanceChanged({ lessonId: currentLessonId, source: "save-attendance" });
     }
     if (state?.error) {
       toast.error(state.message);
     }
-  }, [state, lesson.id]);
+  }, [state, currentLessonId]);
+
+  const buildLiveStudentAttendances = useCallback(
+    (student: FullStudent, status?: AttendanceStatus) => {
+      const baseOtherAttendances = (student.attendances || []).filter(
+        (a: any) => !isSameSessionAttendance(a)
+      );
+      const existingCurrentAtt: any = (student.attendances || []).find(
+        (a: any) => isSameSessionAttendance(a)
+      );
+
+      if (
+        !lesson.isFree &&
+        (status === "PRESENT" ||
+          status === "NOT_DEFINED" ||
+          Boolean(existingCurrentAtt))
+      ) {
+        return [
+          ...baseOtherAttendances,
+          {
+            ...(existingCurrentAtt || {}),
+            lessonId: currentLessonId,
+            studentId: student.id,
+            status: status || "ABSENT",
+            lesson: {
+              ...(existingCurrentAtt?.lesson || {
+                id: currentLessonId,
+                startsAt:
+                  (lesson as any).startTime ||
+                  (lesson as any).startsAt ||
+                  new Date(),
+                isFree: Boolean(lesson.isFree),
+              }),
+              isTeacherAbsent,
+            },
+          },
+        ];
+      }
+
+      return baseOtherAttendances;
+    },
+    [currentLessonId, isSameSessionAttendance, isTeacherAbsent, lesson]
+  );
 
   // Dynamically resolve live remaining credit for all non-sibling/payer students present in this roster
   // so waived siblings strictly track their payer's live remaining credit in real time (Rule 3)
@@ -931,36 +998,7 @@ const AttendanceRoster = ({
           (v.classId === targetClassId || !v.classId)
       );
 
-      const baseOtherAttendances = (st.attendances || []).filter(
-        (a: any) => !isSameSessionAttendance(a)
-      );
-      const existingCurrentAtt: any = (st.attendances || []).find(
-        (a: any) => isSameSessionAttendance(a)
-      );
-      const liveStudentAttendances =
-        !lesson.isFree &&
-        (stStatus === "PRESENT" ||
-          stStatus === "NOT_DEFINED" ||
-          Boolean(existingCurrentAtt))
-          ? [
-              ...baseOtherAttendances,
-              {
-                ...(existingCurrentAtt || {}),
-                lessonId: lesson.id,
-                studentId: st.id,
-                status: stStatus || "ABSENT",
-                lesson: existingCurrentAtt?.lesson || {
-                  id: lesson.id,
-                  startsAt:
-                    (lesson as any).startTime ||
-                    (lesson as any).startsAt ||
-                    new Date(),
-                  isFree: Boolean(lesson.isFree),
-                  isTeacherAbsent: Boolean(lesson.isTeacherAbsent),
-                },
-              },
-            ]
-          : baseOtherAttendances;
+      const liveStudentAttendances = buildLiveStudentAttendances(st, stStatus);
 
       const teacherClassOverride = (lesson.class as any)?.teacherClassRates?.find(
         (tcr: any) =>
@@ -977,6 +1015,9 @@ const AttendanceRoster = ({
         pricePerCycle: effectiveClassPrice,
         isFormation,
         payerStatus: st.payerStatus || "NORMAL",
+        discountType: (st as any).discountType,
+        discountValue: (st as any).discountValue,
+        payerHistory: (st as any).payerHistory,
         tuitionVouchers,
         transfersIn: st.transfersTo || [],
         transfersOut: st.transfersFrom || [],
@@ -992,7 +1033,7 @@ const AttendanceRoster = ({
     });
 
     return map;
-  }, [activeStudents, attendance, lesson, allClasses]);
+  }, [activeStudents, attendance, lesson, allClasses, buildLiveStudentAttendances]);
 
   return (
     <>
@@ -1045,7 +1086,7 @@ const AttendanceRoster = ({
                 </span>
               ) : null}
             </Badge>
-            {!lesson.isTeacherAbsent && lessonEndTime > 0 && (
+            {!isTeacherAbsent && lessonEndTime > 0 && (
               timeRemainingSec !== null && timeRemainingSec > 0 ? (
                 <Badge variant="warning" size="md" className="font-semibold flex items-center gap-1.5 shadow-xs">
                   <Clock className="w-3.5 h-3.5 animate-pulse text-amber-600" />
@@ -1093,25 +1134,26 @@ const AttendanceRoster = ({
         </div>
       </div>
 
-      {/* Teacher Absent Info Banner */}
-      {lesson.isTeacherAbsent && (
-        <div className="p-3.5 mb-4 bg-rose-50 border-2 border-rose-300 rounded-xl flex items-center justify-between gap-3 text-rose-950 text-sm shadow-xs font-sans">
-          <div className="flex items-center gap-2.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-600 inline-block shrink-0"></span>
-            <div>
-              <strong className="font-bold">
-                {locale === "ar" ? "الأستاذ غائب في هذه الحصة :" : "Enseignant absent pour cette séance :"}
-              </strong>{" "}
-              {locale === "ar"
-                ? "تسجيل الحضور في هذه الحصة لن يخصم من رصيد حصص التلاميذ (0 حصة مستهلكة)، وسيتم احتساب غياب الأستاذ في جدول الأجور."
-                : "Faire l'appel pour cette séance ne débitera pas le crédit des élèves (0 séance décomptée). L'absence de l'enseignant est enregistrée dans sa paie."}
-            </div>
-          </div>
-          <span className="bg-rose-600 text-white text-xs font-bold px-2.5 py-1 rounded-full shadow-xs flex items-center gap-1 shrink-0">
-            <UserX className="w-3.5 h-3.5" />
-            <span>{locale === "ar" ? "أستاذ غائب" : "Prof absent"}</span>
-          </span>
-        </div>
+      {/* Teacher Absence Toggle & Status Banner */}
+      {currentLessonId > 0 && (
+        <TeacherAbsenceToggle
+          lessonId={currentLessonId}
+          isTeacherAbsent={isTeacherAbsent}
+          dateStr={lessonDateStr || undefined}
+          canManage={canManageTeacherAbsence}
+          variant="banner"
+          onUpdatingChange={(updating) => {
+            isTogglingTeacherAbsenceRef.current = updating;
+          }}
+          onOptimisticChange={setIsTeacherAbsent}
+          onSuccess={(resolvedId, nextVal) => {
+            setCurrentLessonId(resolvedId);
+            setIsTeacherAbsent(nextVal);
+            startTransition(() => {
+              router.refresh();
+            });
+          }}
+        />
       )}
 
       {/* Free Session Info Banner */}
@@ -1144,7 +1186,7 @@ const AttendanceRoster = ({
       )}
 
       {/* Automatic Attendance Save Banner */}
-      {!lesson.isTeacherAbsent && lessonEndTime > 0 && (
+      {!isTeacherAbsent && lessonEndTime > 0 && (
         <div
           className={`p-3.5 mb-4 rounded-xl flex items-center justify-between gap-3 text-xs sm:text-sm shadow-xs font-sans transition-colors ${
             timeRemainingSec !== null && timeRemainingSec <= 0
@@ -1222,6 +1264,10 @@ const AttendanceRoster = ({
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-100 text-sky-950 border border-sky-300 text-[11px] font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
               {locale === "ar" ? "حصة المدرسة فقط (أزرق)" : "Frais école seuls (Bleu)"}
+            </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-100 text-violet-950 border border-violet-300 text-[11px] font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-500"></span>
+              {locale === "ar" ? "مخفّض (بنفسجي)" : "Remise (Violet)"}
             </span>
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-950 border border-teal-300 text-[11px] font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
@@ -1316,6 +1362,18 @@ const AttendanceRoster = ({
             const payerStatus = student.payerStatus || "NORMAL";
             const isNonPayer = payerStatus === "NON_PAYER" || payerStatus === "FREE_ALL" || payerStatus === "FREE_TUITION";
             const isSchoolFeesOnly = payerStatus === "SCHOOL_FEES_ONLY";
+            const isDiscounted = payerStatus === "DISCOUNTED";
+            const discountBadgeLabel = isDiscounted
+              ? formatDiscountBadgeLabel(
+                  (student as any).discountType,
+                  (student as any).discountValue,
+                  locale === "ar" ? "ar" : "fr"
+                )
+              : null;
+
+            const isSiblingDiscountEffective = !isDiscounted && isSiblingDiscount;
+            const effectiveSiblingDiscountPct = isSiblingDiscountEffective ? siblingDiscountPct : 0;
+            const isSiblingWaivedEffective = !isDiscounted && isSiblingWaived100;
 
             let effectivePayerRemainingCredit: number | undefined = undefined;
             if (isSiblingDiscount && payerStudentId) {
@@ -1324,6 +1382,7 @@ const AttendanceRoster = ({
               } else if (student.payerSessionsRemaining !== undefined) {
                 const isCurrentLessonConsumed =
                   !lesson.isFree &&
+                  !isTeacherAbsent &&
                   (currentStatus === "PRESENT" || currentStatus === "NOT_DEFINED");
                 effectivePayerRemainingCredit = Math.max(
                   0,
@@ -1380,42 +1439,25 @@ const AttendanceRoster = ({
               const refunded = (v.refunds || []).reduce((rSum: number, r: any) => rSum + Number(r.amount || 0), 0);
               return sum + Math.max(0, paid - refunded);
             }, 0);
-            const formationPrice = effectiveClassPrice;
-            const isFormationPaidInFull = formationPrice > 0 && totalPaidFormation >= formationPrice;
+            const formationPrice = isFormation
+              ? computeStudentSessionFee({
+                  pricePerCycle: effectiveClassPrice,
+                  isFormation: true,
+                  payerStatus,
+                  discountType: (student as any).discountType,
+                  discountValue: (student as any).discountValue,
+                  siblingDiscountPercentage: effectiveSiblingDiscountPct,
+                  isSiblingWaived: isSiblingWaivedEffective,
+                }).studentCycleFee
+              : effectiveClassPrice;
+            const isFormationPaidInFull =
+              (formationPrice === 0 && (isNonPayer || isDiscounted)) ||
+              (formationPrice > 0 && totalPaidFormation >= formationPrice);
             const isFormationPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
 
             // Merge the live status for the current lesson into student.attendances so credits update instantaneously (0ms)
             // when a student scans their fingerprint or when the admin toggles Present/Absent manually
-            const baseOtherAttendances = (student.attendances || []).filter(
-              (a: any) => !isSameSessionAttendance(a)
-            );
-            const existingCurrentAtt: any = (student.attendances || []).find(
-              (a: any) => isSameSessionAttendance(a)
-            );
-            const liveStudentAttendances =
-              !lesson.isFree &&
-              (currentStatus === "PRESENT" ||
-                currentStatus === "NOT_DEFINED" ||
-                Boolean(existingCurrentAtt))
-                ? [
-                    ...baseOtherAttendances,
-                    {
-                      ...(existingCurrentAtt || {}),
-                      lessonId: lesson.id,
-                      studentId: student.id,
-                      status: currentStatus || "ABSENT",
-                      lesson: existingCurrentAtt?.lesson || {
-                        id: lesson.id,
-                        startsAt:
-                          (lesson as any).startTime ||
-                          (lesson as any).startsAt ||
-                          new Date(),
-                        isFree: Boolean(lesson.isFree),
-                        isTeacherAbsent: Boolean(lesson.isTeacherAbsent),
-                      },
-                    },
-                  ]
-                : baseOtherAttendances;
+            const liveStudentAttendances = buildLiveStudentAttendances(student, currentStatus);
 
             const teacherClassOverride = (lesson.class as any)?.teacherClassRates?.find(
               (tcr: any) =>
@@ -1432,10 +1474,13 @@ const AttendanceRoster = ({
               pricePerCycle: effectiveClassPrice,
               isFormation,
               payerStatus,
-              siblingDiscountPercentage: siblingDiscountPct,
-              isSiblingWaived: isSiblingWaived100,
+              discountType: (student as any).discountType,
+              discountValue: (student as any).discountValue,
+              payerHistory: (student as any).payerHistory,
+              siblingDiscountPercentage: effectiveSiblingDiscountPct,
+              isSiblingWaived: isSiblingWaivedEffective,
               isPayerSiblingPaid,
-              payerRemainingCredit: isSiblingDiscount && !isSiblingWaived100 ? effectivePayerRemainingCredit : undefined,
+              payerRemainingCredit: isSiblingDiscountEffective && !isSiblingWaivedEffective ? effectivePayerRemainingCredit : undefined,
               tuitionVouchers,
               transfersIn: student.transfersTo || [],
               transfersOut: student.transfersFrom || [],
@@ -1448,7 +1493,7 @@ const AttendanceRoster = ({
             });
 
             const sessionsRemaining =
-              isSiblingWaived100 && effectivePayerRemainingCredit !== undefined
+              isSiblingWaivedEffective && effectivePayerRemainingCredit !== undefined
                 ? effectivePayerRemainingCredit
                 : creditMetrics.netSessions;
             const sessionsConsumed = creditMetrics.attendedSessions;
@@ -1559,12 +1604,31 @@ const AttendanceRoster = ({
               }
             }
 
+            const classScopedVouchers = (student.vouchers || []).filter(
+              (v: any) =>
+                !v.isVoided &&
+                (!v.classId || Number(v.classId) === Number(targetClassId))
+            );
+            const activeClassVouchers = classScopedVouchers.filter(
+              (v: any) => !v.isRefund
+            );
+            const candidateVouchers =
+              activeClassVouchers.length > 0
+                ? activeClassVouchers
+                : classScopedVouchers.length > 0
+                ? classScopedVouchers
+                : student.vouchers || [];
             const mostRecentVoucher =
-              student.vouchers.length > 0
-                ? student.vouchers.reduce((latest: any, current: any) =>
-                    new Date(current.issuedAt) > new Date(latest.issuedAt) ? current : latest
+              candidateVouchers.length > 0
+                ? candidateVouchers.reduce((latest: any, current: any) =>
+                    new Date(current.issuedAt) > new Date(latest.issuedAt)
+                      ? current
+                      : latest
                   )
                 : null;
+            const attendanceCycleRemainingFee = isFormation
+              ? Math.max(0, formationPrice - totalPaidFormation)
+              : creditMetrics.cycleRemainingFee;
 
             const currentReceivedSet = new Set(studentReceivedBooks[student.id] || []);
             const allGroupBooks =
@@ -1652,6 +1716,14 @@ const AttendanceRoster = ({
                             <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
                             <span className="hover:underline">{student.name}</span>
                           </Link>
+                        ) : isDiscounted ? (
+                          <Link
+                            href={`/list/students/${student.id}`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-violet-100 text-violet-950 border border-violet-300/90 font-bold text-sm shadow-2xs ring-1 ring-violet-400/30 hover:border-violet-400 transition-colors"
+                          >
+                            <span className="w-2 h-2 rounded-full bg-violet-500 shrink-0"></span>
+                            <span className="hover:underline">{student.name}</span>
+                          </Link>
                         ) : (
                           <Link
                             href={`/list/students/${student.id}`}
@@ -1682,7 +1754,13 @@ const AttendanceRoster = ({
                         )}
 
                         {/* Status Badges for Not-Normal Students */}
-                        {isSiblingWaived100 ? (
+                        {isDiscounted ? (
+                          <Badge variant="secondary" size="sm" withDot className="bg-violet-100/90 text-violet-900 border-violet-300 font-semibold shadow-2xs">
+                            {locale === "ar"
+                              ? `مخفّض${discountBadgeLabel ? ` (${discountBadgeLabel})` : ""}`
+                              : `Remise${discountBadgeLabel ? ` (${discountBadgeLabel})` : ""}`}
+                          </Badge>
+                        ) : isSiblingWaived100 ? (
                           <Badge variant="warning" size="sm" withDot className="bg-amber-100/90 text-amber-900 border-amber-300 font-semibold shadow-2xs">
                             {locale === "ar" ? "معفى 100% (أخ دافع)" : "Exonéré 100% (Fratrie)"}
                           </Badge>
@@ -1735,7 +1813,18 @@ const AttendanceRoster = ({
                                 : `Visiteur révision (Frais : ${student.revisionAmount || 0} DA)`}
                             </Badge>
                             {student.revisionVoucher && (
-                              <PrintTicketButton voucher={student.revisionVoucher} />
+                              <PrintTicketButton
+                                voucher={{
+                                  ...student.revisionVoucher,
+                                  student: student.revisionVoucher.student || {
+                                    id: student.studentId || student.id,
+                                    name: student.studentName || student.name,
+                                    globalNumber: student.globalNumber,
+                                    phone: student.phone,
+                                  },
+                                  class: student.revisionVoucher.class || lesson.class,
+                                }}
+                              />
                             )}
                             <button
                               type="button"
@@ -2068,12 +2157,20 @@ const AttendanceRoster = ({
                           {mostRecentVoucher && (
                             <PrintTicketButton
                               voucher={{
-                                ...mostRecentVoucher,
+                                ...buildVoucherBundleForPrint(mostRecentVoucher, classScopedVouchers),
                                 student,
                                 class: (allClasses && student.enrolledClassId)
                                   ? allClasses.find((c: any) => c.id === student.enrolledClassId) || lesson.class
                                   : lesson.class,
                               }}
+                              remainingSessions={
+                                !isFormation && !isNonPayer ? sessionsRemaining : undefined
+                              }
+                              cycleRemainingFee={
+                                attendanceCycleRemainingFee > 0
+                                  ? attendanceCycleRemainingFee
+                                  : undefined
+                              }
                             />
                           )}
                         </>
@@ -2187,14 +2284,14 @@ const AttendanceRoster = ({
 
       {/* Catch-Up Visitor Modal (§2.12) */}
       <CatchUpVisitorModal
-        lessonId={lesson.id}
+        lessonId={currentLessonId}
         isOpen={isCatchUpModalOpen}
         onClose={() => setIsCatchUpModalOpen(false)}
       />
 
       {/* Revision Visitor Modal */}
       <RevisionVisitorModal
-        lessonId={lesson.id}
+        lessonId={currentLessonId}
         isOpen={isRevisionModalOpen}
         onClose={() => setIsRevisionModalOpen(false)}
         onSuccess={() => {

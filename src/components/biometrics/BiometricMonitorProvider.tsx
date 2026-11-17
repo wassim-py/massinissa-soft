@@ -62,6 +62,10 @@ export type BiometricScanDisplayItem = BiometricScanResult & {
   isFormationPaidInFull?: boolean;
   isFormationPartiallyPaid?: boolean;
   isSchoolFeesOnly?: boolean;
+  isDiscounted?: boolean;
+  discountType?: string | null;
+  discountValue?: number | null;
+  discountLabel?: string | null;
   hasSiblingDiscount?: boolean;
   siblingDiscountPct?: number;
   isPayerSiblingPaid?: boolean;
@@ -229,9 +233,13 @@ export function BiometricGroupAndPaymentBadges({
       scan.payerStatus === "FREE_ALL" ||
       scan.payerStatus === "FREE_TUITION"
   );
-  const isSiblingWaived = Boolean(scan.isSiblingWaived);
+  const isDiscounted = Boolean(
+    scan.isDiscounted || scan.payerStatus === "DISCOUNTED"
+  );
+  const isSiblingWaived = Boolean(!isDiscounted && scan.isSiblingWaived);
   const hasSiblingDiscount = Boolean(
-    !isSiblingWaived &&
+    !isDiscounted &&
+      !isSiblingWaived &&
       (scan.hasSiblingDiscount || scan.hasPayerSibling)
   );
   const discountPct = Number(scan.siblingDiscountPct || 50);
@@ -271,6 +279,8 @@ export function BiometricGroupAndPaymentBadges({
           className={`inline-flex items-center gap-1 rounded font-semibold border shrink-0 ${badgeSize} ${
             isNonPayer
               ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+              : isDiscounted
+              ? "bg-violet-50 text-violet-700 border-violet-200"
               : isSiblingWaived
               ? "bg-purple-50 text-purple-700 border-purple-200"
               : hasSiblingDiscount
@@ -284,6 +294,15 @@ export function BiometricGroupAndPaymentBadges({
             <>
               <Sparkles className="w-3 h-3 shrink-0" />
               <span>{isAr ? "غير دافع (معفى)" : "Non-payeur (Exonéré)"}</span>
+            </>
+          ) : isDiscounted ? (
+            <>
+              <Sparkles className="w-3 h-3 shrink-0" />
+              <span>
+                {isAr
+                  ? `تلميذ مخفّض${scan.discountLabel ? ` (${scan.discountLabel})` : ""}`
+                  : `Élève remisé${scan.discountLabel ? ` (${scan.discountLabel})` : ""}`}
+              </span>
             </>
           ) : isSiblingWaived ? (
             <>
@@ -344,9 +363,13 @@ export function BiometricRemainingLessonsBadge({
       scan.payerStatus === "FREE_ALL" ||
       scan.payerStatus === "FREE_TUITION"
   );
-  const isSiblingWaived = Boolean(scan.isSiblingWaived);
+  const isDiscounted = Boolean(
+    scan.isDiscounted || scan.payerStatus === "DISCOUNTED"
+  );
+  const isSiblingWaived = Boolean(!isDiscounted && scan.isSiblingWaived);
   const hasSiblingDiscount = Boolean(
-    !isSiblingWaived &&
+    !isDiscounted &&
+      !isSiblingWaived &&
       (scan.hasSiblingDiscount || scan.hasPayerSibling)
   );
   const discountPct = Number(scan.siblingDiscountPct || 50);
@@ -487,6 +510,42 @@ export function BiometricRemainingLessonsBadge({
       ? Number(scan.remainingCredits)
       : 0;
   const isPositive = exactRemaining > 0;
+
+  if (isDiscounted) {
+    const isZeroFee =
+      scan.discountType === "PERCENT" && Number(scan.discountValue) >= 100;
+    const isNullCredits = scan.remainingCredits === null || scan.remainingCredits === undefined;
+    if (isZeroFee || isNullCredits) {
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-md bg-violet-50 text-violet-800 border border-violet-200 font-semibold shrink-0 ${badgeSize}`}
+        >
+          <Sparkles className="w-3 h-3 shrink-0 text-violet-600" />
+          <span>
+            {isAr
+              ? `مخفّض${scan.discountLabel ? ` (${scan.discountLabel})` : ""}`
+              : `Remisé${scan.discountLabel ? ` (${scan.discountLabel})` : ""}`}
+          </span>
+        </span>
+      );
+    }
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-md font-semibold border shrink-0 ${badgeSize} ${
+          isPositive
+            ? "bg-violet-50 text-violet-800 border-violet-200"
+            : "bg-red-50 text-red-700 border-red-200"
+        }`}
+      >
+        <CreditCard className="w-3 h-3 shrink-0" />
+        <span>
+          {isAr
+            ? `الحصص المتبقية: ${exactRemaining} حصص (مخفّض${scan.discountLabel ? ` ${scan.discountLabel}` : ""})`
+            : `Séances restantes : ${exactRemaining} séance(s) (Remise${scan.discountLabel ? ` ${scan.discountLabel}` : ""})`}
+        </span>
+      </span>
+    );
+  }
 
   if (hasSiblingDiscount) {
     return (
@@ -919,6 +978,10 @@ export default function BiometricMonitorProvider({
         payerStatus: resolvedInfo.payerStatus,
         isNonPayer: resolvedInfo.isNonPayer,
         isSchoolFeesOnly: resolvedInfo.isSchoolFeesOnly,
+        isDiscounted: resolvedInfo.isDiscounted,
+        discountType: resolvedInfo.discountType,
+        discountValue: resolvedInfo.discountValue,
+        discountLabel: resolvedInfo.discountLabel,
         hasPayerSibling: resolvedInfo.hasPayerSibling,
         isSiblingWaived: resolvedInfo.isSiblingWaived,
         hasSiblingDiscount: resolvedInfo.hasSiblingDiscount,

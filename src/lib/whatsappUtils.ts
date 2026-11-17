@@ -257,17 +257,27 @@ export async function verifyCreditIsStillZeroJit(studentId: string, classId?: nu
       },
       include: {
         class: true,
+        payerHistory: { orderBy: { effectiveFrom: "asc" } },
       },
     });
 
-    if (!enrollment || enrollment.payerStatus !== "NORMAL") {
+    if (
+      !enrollment ||
+      (enrollment.payerStatus !== "NORMAL" && enrollment.payerStatus !== "DISCOUNTED")
+    ) {
       return false; // Exempt or inactive
     }
 
     // Live calculation of remaining credits
     const [tuitionVouchers, attendances, catchUps] = await Promise.all([
       prisma.voucher.findMany({
-        where: { studentId, classId, isVoided: false, isRefund: false, paymentType: "TUITION" },
+        where: {
+          studentId,
+          classId,
+          isVoided: false,
+          isRefund: false,
+          paymentType: { in: ["TUITION_4SESSION", "TUITION"] },
+        },
         include: { refunds: true },
       }),
       prisma.attendance.findMany({
@@ -284,6 +294,9 @@ export async function verifyCreditIsStillZeroJit(studentId: string, classId?: nu
       pricePerCycle: Number(enrollment.class.pricePerCycle || 0),
       isFormation: Boolean(enrollment.class.isFormation),
       payerStatus: enrollment.payerStatus,
+      discountType: enrollment.discountType,
+      discountValue: enrollment.discountValue,
+      payerHistory: enrollment.payerHistory,
       tuitionVouchers,
       attendances,
       catchUps,
@@ -291,6 +304,10 @@ export async function verifyCreditIsStillZeroJit(studentId: string, classId?: nu
       enrolledAt: enrollment.enrolledAt,
       enrollmentStatus: enrollment.status,
     });
+
+    if (creditResult.isZeroFeeDiscount) {
+      return false;
+    }
 
     return creditResult.netSessions <= 0;
   } catch (err) {

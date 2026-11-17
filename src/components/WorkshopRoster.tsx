@@ -10,7 +10,10 @@ import WorkshopPaymentForm from "./forms/WorkshopPaymentForm";
 import PrintWorkshopTicketButton from "./PrintWorkshopTicketButton";
 import RefundForm from "./forms/RefundForm";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
+import { formatAlgiersDate } from "@/lib/algiersDate";
 import { useTranslations, useLocale } from "next-intl";
+import { usePermission } from "@/hooks/usePermission";
+import { Badge } from "@/components/ui/Badge";
 
 type FullParticipant = WorkshopParticipant & {
   Student?: { name: string; phone: string | null } | null;
@@ -24,6 +27,12 @@ type FullParticipant = WorkshopParticipant & {
     amount: number;
     date: Date | string;
     isVoided?: boolean;
+    isPartial?: boolean;
+    isRefund?: boolean;
+    status?: string | null;
+    refundForVoucherId?: number | null;
+    remainingBalance?: number;
+    isFallback?: boolean;
     series?: any;
     issuingBranchId?: number | null;
     targetBranchId?: number | null;
@@ -42,12 +51,17 @@ type PaymentModalData = {
 const WorkshopRoster = ({
   workshop,
   participants,
+  canManageBranch = true,
 }: {
   workshop: Workshop;
   participants: FullParticipant[];
+  canManageBranch?: boolean;
 }) => {
   const t = useTranslations("workshops");
   const locale = useLocale();
+  const { can, isLoaded } = usePermission();
+  const canEditRoster = (!isLoaded || can("update", "workshops")) && canManageBranch;
+  const canAddOrPay = !isLoaded || can("create", "workshops");
 
   const [isParticipantModalOpen, setIsParticipantModalOpen] = useState(false);
   const [participantModalData, setParticipantModalData] = useState<{
@@ -79,9 +93,15 @@ const WorkshopRoster = ({
     setIsPaymentModalOpen(true);
   };
 
-  // Fallback calculation in case chairNumber was null on any legacy record (§7.14)
-  let boyCounter = 0;
-  let girlCounter = 0;
+  // Fallback calculation starting past highest assigned chairNumber per gender (§7.14)
+  let boyCounter = participants.reduce(
+    (max, p) => (p.gender !== "FEMALE" && p.chairNumber && p.chairNumber > max ? p.chairNumber : max),
+    0
+  );
+  let girlCounter = participants.reduce(
+    (max, p) => (p.gender === "FEMALE" && p.chairNumber && p.chairNumber > max ? p.chairNumber : max),
+    0
+  );
   const processedParticipants = [];
   for (const p of participants) {
     const isGirl = p.gender === "FEMALE";
@@ -120,13 +140,15 @@ const WorkshopRoster = ({
           <h2 className="text-xl font-bold text-gray-800">
             {t("participantsTitle", { count: sortedParticipants.length })}
           </h2>
-          <button
-            onClick={() => openParticipantModal("create")}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-wsmYellow hover:opacity-90 transition-opacity"
-            title="Add Participant"
-          >
-            <Image src="/create.png" alt="Add Participant" width={16} height={16} />
-          </button>
+          {canAddOrPay && (
+            <button
+              onClick={() => openParticipantModal("create")}
+              className="w-8 h-8 flex items-center justify-center rounded-full bg-wsmYellow hover:opacity-90 transition-opacity"
+              title={t("addParticipant")}
+            >
+              <Image src="/create.png" alt="Add Participant" width={16} height={16} />
+            </button>
+          )}
         </div>
 
         {/* WORKSHOP STUDENT LIST TABLE (§7.14) */}
@@ -140,6 +162,9 @@ const WorkshopRoster = ({
                 <th scope="col" className="p-3 text-start whitespace-nowrap">
                   {t("student")}
                 </th>
+                <th scope="col" className="p-3 text-start whitespace-nowrap">
+                  {t("paymentStatus")}
+                </th>
                 <th scope="col" className="p-3 text-end whitespace-nowrap">
                   {t("actions")}
                 </th>
@@ -147,10 +172,13 @@ const WorkshopRoster = ({
             </thead>
             <tbody className="divide-y divide-gray-200 bg-white text-sm">
               {sortedParticipants.map((participant) => {
-                const netPaid = Number(participant.totalPaid || 0) - Number(participant.totalRefunded || 0);
+                const netPaid = Math.max(0, Number(participant.totalPaid || 0) - Number(participant.totalRefunded || 0));
                 const workshopPrice = Number(workshop.totalPrice || 0);
-                const isPaidInFull = netPaid >= workshopPrice;
-                const amountOwed = isPaidInFull ? 0 : workshopPrice - netPaid;
+                const isRefundedStatus =
+                  participant.status === "REFUNDED" ||
+                  (Number(participant.totalRefunded || 0) > 0 && netPaid <= 0);
+                const isPaidInFull = !isRefundedStatus && netPaid >= workshopPrice;
+                const amountOwed = isPaidInFull ? 0 : Math.max(0, workshopPrice - netPaid);
                 const participantName = participant.Student?.name || participant.name || `${t("student")} #${participant.id}`;
                 const participantPhone = participant.Student?.phone || participant.phone || null;
                 const isGirl = participant.gender === "FEMALE";
@@ -193,11 +221,30 @@ const WorkshopRoster = ({
                             ) : (
                               <p className="font-semibold text-gray-900">{participantName}</p>
                             )}
-                            {participantPhone && (
+                            {participantPhone && participantPhone !== "-" && (
                               <p className="text-xs text-gray-500">{participantPhone}</p>
                             )}
                           </div>
                         </div>
+                      </td>
+
+                      {/* Payment Status Column */}
+                      <td className="p-3 whitespace-nowrap">
+                        {isRefundedStatus ? (
+                          <Badge variant="danger" size="sm">
+                            {locale === "ar" ? "مسترجع" : "Remboursé"}
+                          </Badge>
+                        ) : isPaidInFull ? (
+                          <Badge variant="success" size="sm">
+                            {t("paidInFull")}
+                          </Badge>
+                        ) : (
+                          <Badge variant="warning" size="sm">
+                            {t("remainingBalance", {
+                              amount: amountOwed.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
+                            })}
+                          </Badge>
+                        )}
                       </td>
 
                       {/* Actions Column */}
@@ -209,24 +256,30 @@ const WorkshopRoster = ({
                           >
                             {isHistoryVisible ? t("hideHistory") : t("showHistory")}
                           </button>
-                          <button
-                            onClick={() => openPaymentModal("create", participant)}
-                            className="px-3 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full hover:bg-blue-200"
-                          >
-                            {t("recordPayment")}
-                          </button>
-                          <button
-                            onClick={() => openParticipantModal("update", participant)}
-                            className="w-7 h-7 flex items-center justify-center rounded-full bg-wsmSky hover:opacity-80"
-                            title="Edit Participant"
-                          >
-                            <Image src="/update.png" alt="Update" width={14} height={14} />
-                          </button>
-                          <DeleteButton
-                            table="workshopParticipant"
-                            id={participant.id}
-                            data={{ workshopId: workshop.id }}
-                          />
+                          {canAddOrPay && !isPaidInFull && (
+                            <button
+                              onClick={() => openPaymentModal("create", participant)}
+                              className="px-3 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full hover:bg-blue-200"
+                            >
+                              {t("recordPayment")}
+                            </button>
+                          )}
+                          {canEditRoster && (
+                            <>
+                              <button
+                                onClick={() => openParticipantModal("update", participant)}
+                                className="w-7 h-7 flex items-center justify-center rounded-full bg-wsmSky hover:opacity-80"
+                                title={t("participantFormUpdate")}
+                              >
+                                <Image src="/update.png" alt="Update" width={14} height={14} />
+                              </button>
+                              <DeleteButton
+                                table="workshopParticipant"
+                                id={participant.id}
+                                data={{ workshopId: workshop.id }}
+                              />
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -234,13 +287,21 @@ const WorkshopRoster = ({
                     {/* Expandable History Row: Rendered directly under the corresponding student */}
                     {isHistoryVisible && (
                       <tr key={`history-${participant.id}`} className="bg-gray-50 border-t">
-                        <td colSpan={3} className="p-4">
+                        <td colSpan={4} className="p-4">
                           <div className="text-sm space-y-3 bg-white p-4 rounded-lg border">
-                            <div className="flex justify-between items-center py-1">
+                            <div className="flex justify-between items-center py-1 flex-wrap gap-2">
                               <span className="font-semibold text-gray-700">{t("totalPaid")}</span>
-                              <span className="font-bold text-green-700">
-                                {netPaid.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
-                              </span>
+                              <div className="flex items-center gap-3">
+                                <span className="font-bold text-green-700">
+                                  {netPaid.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
+                                </span>
+                                {Number(participant.totalRefunded || 0) > 0 && (
+                                  <span className="text-xs font-semibold text-red-600">
+                                    ({locale === "ar" ? "مسترجع:" : "Remboursé :"}{" "}
+                                    {Number(participant.totalRefunded).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD)
+                                  </span>
+                                )}
+                              </div>
                             </div>
 
                             {participant.payments && participant.payments.length > 0 ? (
@@ -261,7 +322,9 @@ const WorkshopRoster = ({
                                         {
                                           number: p.number || p.id,
                                           issuedAt: p.date,
-                                          paymentType: "WORKSHOP",
+                                          paymentType: p.paymentType || "WORKSHOP",
+                                          isRefund: p.isRefund,
+                                          refundForVoucherId: p.refundForVoucherId,
                                           issuingBranchId: p.issuingBranchId,
                                           targetBranchId: p.targetBranchId,
                                           series: p.series,
@@ -271,19 +334,49 @@ const WorkshopRoster = ({
                                           isWorkshop: true,
                                         }
                                       );
+                                      const isRefundVoucher = Boolean(p.isRefund || p.status === "REFUND");
+                                      const isVoidedOnly = Boolean(p.isVoided && p.status !== "REFUNDED");
+                                      const isFullyRefundedVoucher = Boolean(p.status === "REFUNDED");
+                                      const isPartiallyRefundedVoucher = Boolean(p.status === "PARTIALLY_REFUNDED");
 
                                       return (
-                                        <tr key={p.id || idx} className="hover:bg-gray-50">
+                                        <tr
+                                          key={`${p.isFallback ? "fb" : "v"}-${p.id}-${idx}`}
+                                          className={`hover:bg-gray-50 ${isVoidedOnly || isFullyRefundedVoucher ? "opacity-60" : ""}`}
+                                        >
                                           <td className="p-2 font-mono font-bold text-blue-600">
-                                            {voucherDisplay}
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className={isVoidedOnly || isFullyRefundedVoucher ? "line-through" : ""}>
+                                                {voucherDisplay}
+                                              </span>
+                                              {isVoidedOnly && (
+                                                <Badge variant="danger" size="sm">
+                                                  VOIDED
+                                                </Badge>
+                                              )}
+                                              {isRefundVoucher && (
+                                                <Badge variant="danger" size="sm">
+                                                  REFUND
+                                                </Badge>
+                                              )}
+                                              {isFullyRefundedVoucher && (
+                                                <Badge variant="danger" size="sm">
+                                                  REFUNDED
+                                                </Badge>
+                                              )}
+                                              {isPartiallyRefundedVoucher && (
+                                                <Badge variant="warning" size="sm">
+                                                  PARTIAL REFUND
+                                                </Badge>
+                                              )}
+                                            </div>
                                           </td>
-                                          <td className="p-2 font-medium">
+                                          <td className={`p-2 font-medium ${isRefundVoucher ? "text-red-600 font-bold" : ""} ${isVoidedOnly || isFullyRefundedVoucher ? "line-through" : ""}`}>
+                                            {isRefundVoucher ? "-" : ""}
                                             {Number(p.amount).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
                                           </td>
                                           <td className="p-2 text-gray-500">
-                                            {new Date(p.date).toLocaleDateString(
-                                              locale === "ar" ? "ar-DZ" : "fr-DZ"
-                                            )}
+                                            {formatAlgiersDate(p.date, locale) || "—"}
                                           </td>
                                           <td className="p-2 text-center">
                                             <PrintWorkshopTicketButton
@@ -293,6 +386,14 @@ const WorkshopRoster = ({
                                                 voucherDisplay,
                                                 amount: p.amount,
                                                 date: p.date,
+                                                isVoided: p.isVoided,
+                                                isPartial: p.isPartial,
+                                                isRefund: p.isRefund,
+                                                status: p.status,
+                                                refundForVoucherId: p.refundForVoucherId,
+                                                remainingBalance: p.remainingBalance,
+                                                refunds: p.refunds,
+                                                paymentType: p.paymentType || "WORKSHOP",
                                                 participant: {
                                                   name: participantName,
                                                   phone: participantPhone,
@@ -308,21 +409,25 @@ const WorkshopRoster = ({
                                               amountOwedByParticipant={amountOwed}
                                             />
                                           </td>
-                                        <td className="p-2 text-center">
-                                          <RefundForm
-                                            payment={{
-                                              id: p.id,
-                                              voucherId: p.id,
-                                              amount: p.amount,
-                                              refunds: p.refunds || [],
-                                              paymentType: "WORKSHOP",
-                                            }}
-                                          />
-                                        </td>
-                                          </tr>
-                                        );
-                                      })}
-                                    </tbody>
+                                          <td className="p-2 text-center">
+                                            {canManageBranch && !p.isFallback && !isRefundVoucher && !isVoidedOnly && !isFullyRefundedVoucher ? (
+                                              <RefundForm
+                                                payment={{
+                                                  id: p.id,
+                                                  voucherId: p.id,
+                                                  amount: p.amount,
+                                                  refunds: p.refunds || [],
+                                                  paymentType: "WORKSHOP",
+                                                }}
+                                              />
+                                            ) : (
+                                              <span className="text-gray-400">—</span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
                                 </table>
                               </div>
                             ) : (
@@ -338,7 +443,7 @@ const WorkshopRoster = ({
 
               {sortedParticipants.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="text-sm text-gray-500 text-center py-6">
+                  <td colSpan={4} className="text-sm text-gray-500 text-center py-6">
                     {t("noParticipantsAdded")}
                   </td>
                 </tr>
@@ -351,10 +456,10 @@ const WorkshopRoster = ({
       {/* Add/Update Participant Modal */}
       {isParticipantModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl relative w-full max-w-md">
+          <div className="bg-white rounded-lg shadow-xl relative w-full max-w-md max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setIsParticipantModalOpen(false)}
-              className="absolute top-4 left-4 text-gray-400 hover:text-gray-600"
+              className="absolute top-4 end-4 text-gray-400 hover:text-gray-600"
             >
               <Image src="/close.png" alt="close" width={16} height={16} />
             </button>
@@ -374,7 +479,7 @@ const WorkshopRoster = ({
           <div className="bg-white rounded-lg shadow-xl relative w-full max-w-sm">
             <button
               onClick={() => setIsPaymentModalOpen(false)}
-              className="absolute top-4 left-4 text-gray-400 hover:text-gray-600"
+              className="absolute top-4 end-4 text-gray-400 hover:text-gray-600"
             >
               <Image src="/close.png" alt="close" width={16} height={16} />
             </button>

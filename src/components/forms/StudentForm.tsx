@@ -723,18 +723,25 @@ const StudentForm = ({
   }, []);
 
   const { grades = [], classes = [], families = [] } = relatedData || {};
+  const watchedClassIds = watch("classes");
 
   const filteredClasses = useMemo(() => {
-    let list = classes;
+    const selectedIds = Array.isArray(watchedClassIds) ? watchedClassIds : [];
+    let list = classes.filter(
+      (c: any) => !c.isInactive || selectedIds.includes(c.id)
+    );
     if (watchedGradeId) {
       list = list.filter(
-        (c: any) => !c.levelId || Number(c.levelId) === Number(watchedGradeId)
+        (c: any) =>
+          selectedIds.includes(c.id) ||
+          !c.levelId ||
+          Number(c.levelId) === Number(watchedGradeId)
       );
     }
     if (!classSearchTerm.trim()) return list;
     const term = classSearchTerm.toLowerCase().trim();
     return list.filter((c: any) => c.name.toLowerCase().includes(term));
-  }, [classes, watchedGradeId, classSearchTerm]);
+  }, [classes, watchedGradeId, classSearchTerm, watchedClassIds]);
 
   const renderMatchBadge = (cand: DuplicateStudentCandidate) => {
     const reasonText = locale === "ar" ? cand.matchReasonAr : cand.matchReasonFr;
@@ -933,7 +940,12 @@ const StudentForm = ({
                   const currentClasses = watch("classes") || [];
                   const validClasses = currentClasses.filter((cid: number) => {
                     const cls = classes.find((c: any) => c.id === cid);
-                    return !cls || !cls.levelId || Number(cls.levelId) === Number(newGradeId);
+                    return (
+                      !cls ||
+                      cls.isInactive ||
+                      !cls.levelId ||
+                      Number(cls.levelId) === Number(newGradeId)
+                    );
                   });
                   if (validClasses.length !== currentClasses.length) {
                     setValue("classes", validClasses);
@@ -1060,32 +1072,45 @@ const StudentForm = ({
 
                       <div className="overflow-y-auto max-h-48 divide-y divide-gray-100">
                         {filteredClasses.length > 0 ? (
-                          filteredClasses.map((classItem: { id: number; name: string; levelId?: number }) => (
+                          filteredClasses.map((classItem: { id: number; name: string; levelId?: number; isInactive?: boolean }) => (
                             <label
                               key={classItem.id}
-                              className="flex items-center gap-2 p-2 hover:bg-gray-100 cursor-pointer text-xs"
+                              className={`flex items-center justify-between gap-2 p-2 text-xs ${
+                                classItem.isInactive
+                                  ? "bg-amber-50/60 cursor-not-allowed opacity-80"
+                                  : "hover:bg-gray-100 cursor-pointer"
+                              }`}
                             >
-                              <input
-                                type="checkbox"
-                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                checked={safeFieldValue.includes(classItem.id)}
-                                onChange={(e) => {
-                                  const selectedId = classItem.id;
-                                  if (e.target.checked) {
-                                    field.onChange([...safeFieldValue, selectedId]);
-                                    if (classItem.levelId) {
-                                      setValue("gradeId", Number(classItem.levelId), { shouldValidate: true });
+                              <div className="flex items-center gap-2 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  disabled={Boolean(classItem.isInactive)}
+                                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer disabled:cursor-not-allowed"
+                                  checked={safeFieldValue.includes(classItem.id)}
+                                  onChange={(e) => {
+                                    if (classItem.isInactive) return;
+                                    const selectedId = classItem.id;
+                                    if (e.target.checked) {
+                                      field.onChange([...safeFieldValue, selectedId]);
+                                      if (classItem.levelId) {
+                                        setValue("gradeId", Number(classItem.levelId), { shouldValidate: true });
+                                      }
+                                    } else {
+                                      field.onChange(
+                                        safeFieldValue.filter((id: number) => id !== selectedId)
+                                      );
                                     }
-                                  } else {
-                                    field.onChange(
-                                      safeFieldValue.filter((id: number) => id !== selectedId)
-                                    );
-                                  }
-                                }}
-                              />
-                              <span className="text-gray-700 font-medium">
-                                {classItem.name}
-                              </span>
+                                  }}
+                                />
+                                <span className="text-gray-700 font-medium truncate">
+                                  {classItem.name}
+                                </span>
+                              </div>
+                              {classItem.isInactive && (
+                                <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 border border-amber-200">
+                                  {locale === "ar" ? "مغلق / متوقف" : "Fermé / En pause"}
+                                </span>
+                              )}
                             </label>
                           ))
                         ) : (

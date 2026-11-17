@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
 import { getAlgiersDateInfo, resolveRecurringLessonsForDate } from "@/lib/utils";
+import { ACTIVE_CLASS_WHERE, isClassInactive, isLessonVisibleForClassStatus } from "@/lib/classStatus";
 
 const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
   const { userId } = await auth();
@@ -56,9 +57,7 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
           isExtra: false,
           isCatchUp: false,
           isFree: false,
-          class: {
-            isCompleted: false,
-          },
+          class: ACTIVE_CLASS_WHERE,
         },
       ],
     },
@@ -73,9 +72,9 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
   });
 
   const todaysLessons = resolveRecurringLessonsForDate(
-    candidateLessons.filter((l) => !l.class?.isCompleted),
+    candidateLessons.filter((l) => !isClassInactive(l.class)),
     now
-  );
+  ).filter((l) => isLessonVisibleForClassStatus(l.endsAt, l.class));
 
   return (
     <Card className="p-6 h-full font-sans">

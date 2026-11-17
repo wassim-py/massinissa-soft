@@ -10,10 +10,20 @@ import Image from 'next/image';
 type PrintButtonProps = {
   voucher: any;
   sessionsForThisPayment?: number;
+  remainingSessions?: number;
+  cycleRemainingFee?: number;
   amountOwedByStudent?: number;
+  isPartial?: boolean;
 };
 
-const PrintTicketButton = ({ voucher, sessionsForThisPayment, amountOwedByStudent }: PrintButtonProps) => {
+const PrintTicketButton = ({
+  voucher,
+  sessionsForThisPayment,
+  remainingSessions,
+  cycleRemainingFee,
+  amountOwedByStudent,
+  isPartial,
+}: PrintButtonProps) => {
   const locale = useLocale();
   const isAr = locale === "ar";
 
@@ -22,7 +32,10 @@ const PrintTicketButton = ({ voucher, sessionsForThisPayment, amountOwedByStuden
       <PaymentTicket 
         voucher={voucher} 
         sessionsCount={sessionsForThisPayment}
+        remainingSessions={remainingSessions ?? voucher?.remainingSessions}
+        cycleRemainingFee={cycleRemainingFee ?? voucher?.cycleRemainingFee}
         remainingBalance={amountOwedByStudent}
+        isPartial={isPartial ?? (voucher?.isPartial ?? undefined)}
         locale={locale}
       />
     );
@@ -64,6 +77,7 @@ const PrintTicketButton = ({ voucher, sessionsForThisPayment, amountOwedByStuden
               img {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
+                image-rendering: crisp-edges !important;
                 display: inline-block !important;
               }
             </style>
@@ -72,11 +86,24 @@ const PrintTicketButton = ({ voucher, sessionsForThisPayment, amountOwedByStuden
             ${printContent}
             <script>
               function triggerPrint() {
-                setTimeout(function() {
-                  window.focus();
-                  window.print();
-                  setTimeout(function() { window.close(); }, 500);
-                }, 300);
+                var imgs = Array.prototype.slice.call(document.images || []);
+                var imgPromises = imgs.map(function(img) {
+                  if (img.complete && img.naturalWidth > 0) {
+                    return typeof img.decode === 'function' ? img.decode().catch(function(){}) : Promise.resolve();
+                  }
+                  return new Promise(function(resolve) {
+                    img.addEventListener('load', resolve, { once: true });
+                    img.addEventListener('error', resolve, { once: true });
+                  });
+                });
+                var fontReady = (document.fonts && document.fonts.ready) ? document.fonts.ready.catch(function(){}) : Promise.resolve();
+                Promise.all(imgPromises.concat([fontReady])).then(function() {
+                  setTimeout(function() {
+                    window.focus();
+                    window.print();
+                    setTimeout(function() { window.close(); }, 500);
+                  }, 150);
+                });
               }
               if (document.readyState === 'complete') {
                 triggerPrint();

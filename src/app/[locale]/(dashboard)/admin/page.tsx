@@ -14,12 +14,13 @@ import {
 } from "@/lib/dashboardAttendance";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
 import { canUserAccessBranch } from "@/lib/settings";
-import { computeStudentCreditAndSessions, resolvePayerCredit } from "@/lib/studentBilling";
+import { computeStudentCreditAndSessions, formatDiscountBadgeLabel, resolvePayerCredit } from "@/lib/studentBilling";
 import {
   serializeForClient,
   getAlgiersDateInfo,
   resolveRecurringLessonsForDate,
 } from "@/lib/utils";
+import { ACTIVE_CLASS_WHERE, isLessonVisibleForClassStatus } from "@/lib/classStatus";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -60,9 +61,7 @@ const AdminPage = async () => {
           isExtra: false,
           isCatchUp: false,
           isFree: false,
-          class: {
-            isCompleted: false,
-          },
+          class: ACTIVE_CLASS_WHERE,
         },
       ],
     },
@@ -88,6 +87,7 @@ const AdminPage = async () => {
                               class: { select: { id: true, pricePerCycle: true, isFormation: true } },
                               transfersFrom: true,
                               transfersTo: true,
+                              payerHistory: { orderBy: { effectiveFrom: "asc" } },
                             },
                           },
                           vouchers: {
@@ -118,6 +118,7 @@ const AdminPage = async () => {
               },
               transfersFrom: true,
               transfersTo: true,
+              payerHistory: { orderBy: { effectiveFrom: "asc" } },
             },
           },
           vouchers: {
@@ -167,7 +168,9 @@ const AdminPage = async () => {
   });
 
   const taggedCandidateLessons = tagLessonSourceDates(candidateLessons);
-  const allTodaysLessons = resolveRecurringLessonsForDate(taggedCandidateLessons, now);
+  const allTodaysLessons = resolveRecurringLessonsForDate(taggedCandidateLessons, now).filter((l) =>
+    isLessonVisibleForClassStatus(l.endsAt, l.class)
+  );
 
   // Today's lessons strictly for THIS branch (hosted in this branch or group belonging to this branch)
   const thisBranchTodaysLessons = allTodaysLessons.filter(
@@ -303,10 +306,16 @@ const AdminPage = async () => {
         : 0;
       const isSiblingWaived100 = isPayerInThisClass && siblingDiscountPct >= 100;
 
+      const enrDiscountType = (enr as any).discountType || null;
+      const enrDiscountValue = (enr as any).discountValue != null ? Number((enr as any).discountValue) : null;
+
       const creditMetrics = computeStudentCreditAndSessions({
         pricePerCycle: Number(cls.pricePerCycle || 0),
         isFormation,
         payerStatus: enrPayerStatus,
+        discountType: enrDiscountType,
+        discountValue: enrDiscountValue,
+        payerHistory: (enr as any).payerHistory || [],
         siblingDiscountPercentage: siblingDiscountPct,
         isSiblingWaived: isSiblingWaived100,
         payerRemainingCredit: isSiblingDiscount ? payerCredit?.netSessions : undefined,
@@ -321,11 +330,18 @@ const AdminPage = async () => {
         enrollmentStatus: enr.status,
       });
 
-      if (creditMetrics.isNonPayer || (creditMetrics.status as string) === "SIBLING_WAIVED") {
+      if (
+        creditMetrics.isNonPayer ||
+        (creditMetrics.isDiscounted && creditMetrics.effectiveCycleFee === 0) ||
+        (creditMetrics.status as string) === "SIBLING_WAIVED"
+      ) {
         continue;
       }
 
-      const remainingSessions = isSiblingDiscount && payerCredit ? payerCredit.netSessions : creditMetrics.netSessions;
+      const remainingSessions =
+        !creditMetrics.isDiscounted && isSiblingDiscount && payerCredit
+          ? payerCredit.netSessions
+          : creditMetrics.netSessions;
       const status: "PAID" | "EXPIRING" | "UNPAID" =
         creditMetrics.status === "UNPAID"
           ? "UNPAID"
@@ -344,12 +360,26 @@ const AdminPage = async () => {
         remainingSessions,
         status,
         isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
+        isDiscounted: creditMetrics.isDiscounted,
+        discountLabel: creditMetrics.isDiscounted
+          ? formatDiscountBadgeLabel(enrDiscountType, enrDiscountValue, "fr")
+          : null,
         payerStatus: enrPayerStatus,
         studentData: {
           id: student.id,
           name: student.name,
           phone: student.phone,
           registeredBranchId: student.registeredBranchId,
+          enrollments: [
+            {
+              id: enr.id,
+              classId: cls.id,
+              payerStatus: enrPayerStatus,
+              discountType: enrDiscountType,
+              discountValue: enrDiscountValue,
+              discountReason: (enr as any).discountReason || null,
+            },
+          ],
           family: student.family
             ? {
                 payerStudentId: student.family.payerStudentId,

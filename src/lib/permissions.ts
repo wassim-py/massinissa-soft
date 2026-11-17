@@ -71,6 +71,7 @@ export type Resource =
   | "daily_ledger"
   | "dailyLedger"
   | "voucher_series"
+  | "student_discounts"
   | "configuration"
   | (string & {});
 
@@ -199,6 +200,7 @@ const BRANCH_ADMIN_ALLOWED_PERMISSIONS: Record<string, ReadonlySet<string>> = {
   daily_ledger: new Set(["view", "create"]), // Read-only today's money + declare missing cash
   finance: new Set([]), // Explicitly OWNER-ONLY (reports, payroll, revenue)
   voucher_series: new Set([]), // Explicitly OWNER-ONLY
+  student_discounts: new Set([]), // Explicitly OWNER-ONLY (add, edit, delete student discounts)
 };
 
 /**

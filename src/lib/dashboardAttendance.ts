@@ -1,5 +1,6 @@
 import prisma from "@/lib/prisma";
 import { getAlgiersDateInfo, resolveRecurringLessonsForDate } from "@/lib/utils";
+import { ACTIVE_CLASS_WHERE, isLessonVisibleForClassStatus } from "@/lib/classStatus";
 
 export interface TodayLessonAttendanceData {
   lessonId: number;
@@ -203,9 +204,7 @@ export async function getTodayAttendanceSummary(
           isExtra: false,
           isCatchUp: false,
           isFree: false,
-          class: {
-            isCompleted: false,
-          },
+          class: ACTIVE_CLASS_WHERE,
         },
       ],
     },
@@ -225,6 +224,10 @@ export async function getTodayAttendanceSummary(
       class: {
         select: {
           name: true,
+          isCompleted: true,
+          completedAt: true,
+          isPaused: true,
+          pausedAt: true,
           enrollments: {
             select: { status: true },
           },
@@ -248,7 +251,9 @@ export async function getTodayAttendanceSummary(
   });
 
   const taggedLessons = tagLessonSourceDates(candidateLessons);
-  const allTodaysLessons = resolveRecurringLessonsForDate(taggedLessons, now);
+  const allTodaysLessons = resolveRecurringLessonsForDate(taggedLessons, now).filter((l) =>
+    isLessonVisibleForClassStatus(l.endsAt, l.class)
+  );
   const thisBranchTodaysLessons = allTodaysLessons.filter(
     (l) => l.branchId === activeBranchId || l.classroom?.branchId === activeBranchId
   );

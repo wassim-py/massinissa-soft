@@ -30,6 +30,8 @@ export interface StudentToWatchItem {
   remainingSessions: number;
   status: "EXPIRING" | "UNPAID" | "PAID";
   isSchoolFeesOnly?: boolean;
+  isDiscounted?: boolean;
+  discountLabel?: string | null;
   payerStatus?: string;
   studentData: any;
   classData: any;
@@ -217,6 +219,13 @@ export default function StudentsToWatch({ students }: StudentsToWatchProps) {
                         {(item.isSchoolFeesOnly || item.payerStatus === "SCHOOL_FEES_ONLY") && (
                           <Badge variant="primary" size="sm" className="bg-sky-100 text-sky-900 border border-sky-300 font-semibold text-[10px] py-0 px-1.5 h-4.5">
                             {locale === "ar" ? "حصة المدرسة" : "Part école"}
+                          </Badge>
+                        )}
+                        {(item.isDiscounted || item.payerStatus === "DISCOUNTED") && (
+                          <Badge variant="secondary" size="sm" className="bg-violet-100 text-violet-900 border border-violet-300 font-semibold text-[10px] py-0 px-1.5 h-4.5">
+                            {locale === "ar"
+                              ? `مخفّض${item.discountLabel ? ` (${item.discountLabel})` : ""}`
+                              : `Remise${item.discountLabel ? ` (${item.discountLabel})` : ""}`}
                           </Badge>
                         )}
                         <span>•</span>

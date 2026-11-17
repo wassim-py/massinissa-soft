@@ -21,6 +21,7 @@ const BigCalendarContainer = async ({
         LEFT JOIN "Class" c ON c.id = l."classId"
         WHERE l."teacherId" = ${String(id)}
           AND (c."isCompleted" = false OR c."isCompleted" IS NULL)
+          AND (c."isPaused" = false OR c."isPaused" IS NULL)
       `;
     } else {
       rawLessons = await prisma.$queryRaw<any[]>`

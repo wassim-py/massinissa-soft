@@ -26,6 +26,7 @@ import {
 } from "@/lib/utils";
 import { formatDZD } from "@/lib/algiersDate";
 import { getTranslations, getLocale } from "next-intl/server";
+import { ACTIVE_CLASS_WHERE, isClassInactive } from "@/lib/classStatus";
 import {
   GraduationCap,
   Calendar,
@@ -133,7 +134,7 @@ const SingleTeacherPage = async (
     }),
     // 2. Upcoming lessons in the schedule (startsAt >= now)
     prisma.lesson.findMany({
-      where: { teacherId: id, startsAt: { gte: now } },
+      where: { teacherId: id, startsAt: { gte: now }, class: ACTIVE_CLASS_WHERE },
       include: { class: true, classroom: true, branch: true },
       orderBy: { startsAt: "asc" },
       take: 15,
@@ -175,7 +176,7 @@ const SingleTeacherPage = async (
     prisma.level.findMany({ select: { id: true, name: true }, orderBy: { id: "asc" } }),
     prisma.classroom.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
     prisma.lesson.findMany({
-      where: { teacherId: id },
+      where: { teacherId: id, class: ACTIVE_CLASS_WHERE },
       include: { class: true, classroom: true, teacher: true },
       orderBy: { startsAt: "asc" },
     }),
@@ -197,6 +198,7 @@ const SingleTeacherPage = async (
       levelName: string;
       studentsCount: number;
       pricePerCycle: number;
+      isInactive: boolean;
     }
   >();
 
@@ -208,6 +210,7 @@ const SingleTeacherPage = async (
       levelName: (c as any).FormationLevel?.name || c.level?.name || (locale === "ar" ? "عام" : "Général"),
       studentsCount: c.enrollments.length,
       pricePerCycle: c.pricePerCycle ? Number(c.pricePerCycle) : 0,
+      isInactive: isClassInactive(c),
     });
   });
 
@@ -220,6 +223,7 @@ const SingleTeacherPage = async (
         levelName: locale === "ar" ? "عام" : "Général",
         studentsCount: 0,
         pricePerCycle: l.class.pricePerCycle ? Number(l.class.pricePerCycle) : 0,
+        isInactive: isClassInactive(l.class),
       });
     }
   });
@@ -286,10 +290,11 @@ const SingleTeacherPage = async (
     subject: { name: r.class?.name || (locale === "ar" ? "مادة" : "Matière") },
   }));
 
+  const activeTeacherClasses = allClasses.filter((c) => !isClassInactive(c));
   const relatedDataForForms = {
     teachers: [{ id: t.id, name: t.name, surname: "" }],
-    classes: allClasses.map((c) => ({ id: c.id, name: c.name })),
-    subjects: allClasses.map((c) => ({ id: c.id, name: c.name })),
+    classes: activeTeacherClasses.map((c) => ({ id: c.id, name: c.name })),
+    subjects: activeTeacherClasses.map((c) => ({ id: c.id, name: c.name })),
     classrooms: rawClassrooms,
   };
 
@@ -465,7 +470,14 @@ const SingleTeacherPage = async (
                       className="border-b border-border/60 hover:bg-surface-subtle/80 transition-colors text-table-body"
                     >
                       <td className="p-3.5 font-semibold text-gray-900">
-                        {g.name}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span>{g.name}</span>
+                          {g.isInactive && (
+                            <Badge variant="warning" size="sm" withDot>
+                              {locale === "ar" ? "مغلق / متوقف" : "Fermé / En pause"}
+                            </Badge>
+                          )}
+                        </div>
                       </td>
                       <td className="p-3.5">
                         <Badge variant="neutral" size="sm">{g.levelName}</Badge>

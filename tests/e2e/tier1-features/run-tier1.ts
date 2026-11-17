@@ -13,9 +13,10 @@ import { runF11Tests } from "./f11-schedules-attendance-timezone.test";
 import { runF12Tests } from "./f12-e2e-adversarial-hardening.test";
 import { runF13Tests } from "./f13-auto-save-ended-lesson-attendance.test";
 import { runF14Tests } from "./f14-daily-ledger-cross-payments.test";
+import { runF15Tests } from "./f15-group-pause-close-status.test";
 
 export async function runTier1() {
-  console.log("\n>>> STARTING TIER 1: FEATURE COVERAGE (F1 - F14) <<<\n");
+  console.log("\n>>> STARTING TIER 1: FEATURE COVERAGE (F1 - F15) <<<\n");
   await runF01Tests();
   await runF02Tests();
   await runF03Tests();
@@ -30,6 +31,7 @@ export async function runTier1() {
   await runF12Tests();
   await runF13Tests();
   await runF14Tests();
+  await runF15Tests();
   await runner.runQueuedTests();
   return runner.getSummary();
 }

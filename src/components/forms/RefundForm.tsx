@@ -2,12 +2,13 @@
 
 import { useFormStatus } from "react-dom";
 import { useTranslations, useLocale } from "next-intl";
-import { useActionState } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState, startTransition } from "react";
 import { RefundSchema, refundSchema } from "@/lib/formValidationSchemas";
 import { createRefund } from "@/lib/actions";
 import Image from "next/image";
 import { Button } from "@/components/ui/Button";
+import { toast } from "react-toastify";
+import { useRouter } from "@/i18n/navigation";
 
 // Helper component for the form submission button
 const SubmitButton = () => {
@@ -38,6 +39,7 @@ export type PaymentData = {
 const RefundForm = ({ payment }: { payment: PaymentData }) => {
   const t = useTranslations("payments");
   const locale = useLocale();
+  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const modalRef = useRef<HTMLDialogElement>(null);
 
@@ -70,9 +72,15 @@ const RefundForm = ({ payment }: { payment: PaymentData }) => {
 
   useEffect(() => {
     if (state.success) {
+      if (state.message) toast.success(state.message);
       setIsOpen(false);
+      startTransition(() => {
+        router.refresh();
+      });
+    } else if (state.error && state.message) {
+      toast.error(state.message);
     }
-  }, [state]);
+  }, [state, router]);
 
   useEffect(() => {
     if (isOpen) {
@@ -82,6 +90,9 @@ const RefundForm = ({ payment }: { payment: PaymentData }) => {
       modalRef.current?.close();
       document.body.style.overflow = "auto";
     }
+    return () => {
+      document.body.style.overflow = "auto";
+    };
   }, [isOpen]);
 
   if (payment.paymentType === "INSCRIPTION" && payment.hasNeverAttended === false) {

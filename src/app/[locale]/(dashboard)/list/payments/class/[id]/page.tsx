@@ -6,10 +6,12 @@ import PaymentGrid from "@/components/PaymentGrid";
 import BackButton from "@/components/BackButton";
 import ExportButton from "@/components/ExportButton";
 import GroupTabs from "@/components/groups/GroupTabs";
+import ClassStatusToggleButton from "@/components/groups/ClassStatusToggleButton";
+import { ACTIVE_CLASS_WHERE, isClassInactive } from "@/lib/classStatus";
 import { serializeForClient } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { getTranslations } from "next-intl/server";
+import { getTranslations, getLocale } from "next-intl/server";
 import { getActiveTrimester, getFixedInscriptionFeeAction, getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 
 const ClassPaymentHistoryPage = async (
@@ -20,6 +22,7 @@ const ClassPaymentHistoryPage = async (
 ) => {
   const params = await props.params;
   const t = await getTranslations("payments");
+  const locale = await getLocale();
   const session = await getAuthSession();
 
   if (!session.isOwnerOrAdmin && !session.isBranchAdmin) {
@@ -76,6 +79,7 @@ const ClassPaymentHistoryPage = async (
                         include: {
                           transfersFrom: true,
                           transfersTo: true,
+                          payerHistory: { orderBy: { effectiveFrom: "asc" } },
                           class: true,
                         },
                       },
@@ -161,6 +165,9 @@ const ClassPaymentHistoryPage = async (
                 },
               },
             },
+          },
+          payerHistory: {
+            orderBy: { effectiveFrom: "asc" },
           },
         },
         orderBy: { enrolledAt: "asc" },
@@ -255,9 +262,10 @@ const ClassPaymentHistoryPage = async (
   }
   classData.enrollments = Array.from(enrollmentMap.values());
 
-  // Fetch classes across all branches for group credit transfers
+  // Fetch active classes across all branches for group credit transfers
   const [availableClasses, activeTrimester, fixedFee, formationFee] = await Promise.all([
     prisma.class.findMany({
+      where: ACTIVE_CLASS_WHERE,
       select: {
         id: true,
         name: true,
@@ -324,7 +332,17 @@ const ClassPaymentHistoryPage = async (
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <ClassStatusToggleButton
+              classId={classData.id}
+              groupName={classData.name}
+              isPaused={classData.isPaused}
+              isCompleted={classData.isCompleted}
+              pausedAt={classData.pausedAt}
+              completedAt={classData.completedAt}
+              isOwner={session.isOwner}
+              showBadge
+            />
             {session.isOwner && (
               <ExportButton
                 type="payments"
@@ -334,6 +352,14 @@ const ClassPaymentHistoryPage = async (
             <BackButton />
           </div>
         </div>
+
+        {isClassInactive(classData) && (
+          <div className="mb-4 p-3 rounded-xl bg-amber-50/80 border border-amber-200 text-amber-900 text-xs font-medium">
+            {locale === "ar"
+              ? "هذا الفوج مغلق / متوقف مؤقتاً — تم تحرير توقيته في الجدول. جميع الوصولات، تسوية الديون، الاسترجاعات وتحويل الرصيد نحو أفواج نشطة تبقى متاحة بالكامل."
+              : "Ce groupe est actuellement fermé / en pause — son créneau dans l'emploi du temps est libéré. Tous les reçus, règlements de dettes, remboursements et transferts de solde vers des groupes actifs restent entièrement accessibles."}
+          </div>
+        )}
 
         {/* Group Navigation Tabs (§7.20) */}
         <GroupTabs

@@ -6,7 +6,9 @@ import { canUserAccessBranch } from "@/lib/settings";
 import BackButton from "@/components/BackButton";
 import GroupTabs from "@/components/groups/GroupTabs";
 import GroupBooksTab from "@/components/groups/GroupBooksTab";
+import ClassStatusToggleButton from "@/components/groups/ClassStatusToggleButton";
 import { getGroupBooksData } from "@/lib/bookActions";
+import { isClassInactive } from "@/lib/classStatus";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getTranslations, getLocale } from "next-intl/server";
@@ -96,9 +98,27 @@ export default async function ClassGroupDetailPage(props: PageProps) {
           </div>
 
           <div className="flex items-center gap-2">
+            <ClassStatusToggleButton
+              classId={classData.id}
+              groupName={classData.name}
+              isPaused={(classData as any).isPaused}
+              isCompleted={(classData as any).isCompleted}
+              pausedAt={(classData as any).pausedAt}
+              completedAt={(classData as any).completedAt}
+              isOwner={session.isOwner}
+              showBadge
+            />
             <BackButton />
           </div>
         </div>
+
+        {isClassInactive(classData as any) && (
+          <div className="mb-4 p-3 rounded-xl bg-amber-50/80 border border-amber-200 text-amber-900 text-xs font-medium">
+            {locale === "ar"
+              ? "هذا الفوج مغلق / متوقف مؤقتاً — تم تحرير توقيته في الجدول مع الحفاظ على جميع السجلات والبيانات متاحة."
+              : "Ce groupe est actuellement fermé / en pause — son créneau dans l'emploi du temps est libéré et toutes ses données restent accessibles."}
+          </div>
+        )}
 
         {/* Group Navigation Tabs */}
         <GroupTabs

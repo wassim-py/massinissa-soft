@@ -7,11 +7,13 @@ import AttendanceGridFilters from "@/components/AttendanceGridFilters";
 import BackButton from "@/components/BackButton";
 import ExportButton from "@/components/ExportButton";
 import GroupTabs from "@/components/groups/GroupTabs";
+import ClassStatusToggleButton from "@/components/groups/ClassStatusToggleButton";
+import { isClassInactive } from "@/lib/classStatus";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { getTranslations, getLocale } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, resolvePayerCredit, isLessonApplicableToEnrollment } from "@/lib/studentBilling";
+import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, computeStudentSessionFee, formatDiscountBadgeLabel, resolvePayerCredit, isLessonApplicableToEnrollment } from "@/lib/studentBilling";
 import { getAlgiersDateInfo } from "@/lib/utils";
 import { StudentBalanceInfo } from "@/components/AttendanceGrid";
 import { autoSaveLessonAttendanceAction } from "@/lib/actions";
@@ -405,6 +407,7 @@ const ClassAttendancePage = async (
                                                 include: {
                                                     transfersFrom: true,
                                                     transfersTo: true,
+                                                    payerHistory: { orderBy: { effectiveFrom: "asc" } },
                                                     class: { select: { id: true, pricePerCycle: true, isFormation: true } },
                                                 },
                                             },
@@ -453,6 +456,7 @@ const ClassAttendancePage = async (
                                             },
                                         },
                                     },
+                                    payerHistory: { orderBy: { effectiveFrom: "asc" } },
                                 },
                             },
                             attendances: {
@@ -537,9 +541,24 @@ const ClassAttendancePage = async (
 
             for (const [studentId, s] of studentMap.entries()) {
                 const details = billingMap.get(studentId);
+                const enrollment = details?.enrollments?.[0];
+                const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
+                const enrDiscountType = enrollment?.discountType || null;
+                const enrDiscountValue = enrollment?.discountValue != null ? Number(enrollment.discountValue) : null;
+                const isDiscounted = effectivePayerStatus === "DISCOUNTED";
+                const discountLabel = isDiscounted
+                    ? formatDiscountBadgeLabel(enrDiscountType, enrDiscountValue, locale === "ar" ? "ar" : "fr")
+                    : null;
                 let balance: StudentBalanceInfo;
 
                 if (isFormation) {
+                    const studentFormationPrice = computeStudentSessionFee({
+                        pricePerCycle: formationPrice,
+                        isFormation: true,
+                        payerStatus: effectivePayerStatus,
+                        discountType: enrDiscountType,
+                        discountValue: enrDiscountValue,
+                    }).studentCycleFee;
                     const formationVouchers = (details?.vouchers || []).filter(
                         (v: any) =>
                             (v.paymentType === "FORMATION" || v.paymentType === "TUITION_4SESSION") &&
@@ -556,21 +575,24 @@ const ClassAttendancePage = async (
                         );
                         totalPaidFormation += Math.max(0, vAmount - vRefunded);
                     });
-                    const isLevelPaid = formationPrice > 0 && totalPaidFormation >= formationPrice;
-                    const isLevelPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
-                    const levelRemainingBalance = Math.max(0, formationPrice - totalPaidFormation);
+                    const isLevelPaid =
+                        (studentFormationPrice === 0 && (effectivePayerStatus === "NON_PAYER" || isDiscounted)) ||
+                        (studentFormationPrice > 0 && totalPaidFormation >= studentFormationPrice);
+                    const isLevelPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < studentFormationPrice;
+                    const levelRemainingBalance = Math.max(0, studentFormationPrice - totalPaidFormation);
 
                     balance = {
                         isFormation: true,
-                        levelPrice: formationPrice,
+                        levelPrice: studentFormationPrice,
                         totalPaidFormation,
                         levelRemainingBalance,
                         isLevelPaid,
                         isLevelPartiallyPaid,
+                        isDiscounted,
+                        discountLabel,
+                        payerStatus: effectivePayerStatus,
                     };
                 } else {
-                    const enrollment = details?.enrollments?.[0];
-                    const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
 
                     const payerId = details?.family?.payerStudentId;
                     const hasPayerSibling = Boolean(payerId && payerId !== studentId);
@@ -648,6 +670,9 @@ const ClassAttendancePage = async (
                         pricePerCycle: classPricePerCycle,
                         isFormation: false,
                         payerStatus: effectivePayerStatus,
+                        discountType: enrDiscountType,
+                        discountValue: enrDiscountValue,
+                        payerHistory: enrollment?.payerHistory || [],
                         siblingDiscountPercentage: siblingDiscountPct,
                         isSiblingWaived: isSiblingWaived100,
                         isPayerSiblingPaid,
@@ -666,7 +691,7 @@ const ClassAttendancePage = async (
                     let net = creditMetrics.netSessions;
                     let computedStatus = creditMetrics.status;
 
-                    if (isSiblingWaived100) {
+                    if (!isDiscounted && isSiblingWaived100) {
                         net = 0;
                         computedStatus = isPayerSiblingPaid ? "SIBLING_WAIVED" : "UNPAID";
                     }
@@ -675,8 +700,10 @@ const ClassAttendancePage = async (
                         isFormation: false,
                         netSessions: net,
                         status: computedStatus,
-                        hasPayerSibling: Boolean(isPayerInClass && isSiblingDiscount),
+                        hasPayerSibling: Boolean(!isDiscounted && isPayerInClass && isSiblingDiscount),
                         isSchoolFeesOnly: creditMetrics.isSchoolFeesOnly,
+                        isDiscounted,
+                        discountLabel,
                         payerStatus: effectivePayerStatus,
                     };
                 }
@@ -1004,7 +1031,17 @@ const ClassAttendancePage = async (
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap shrink-0">
-                        {todayMatchingLesson && (
+                        <ClassStatusToggleButton
+                            classId={classData.id}
+                            groupName={classData.name}
+                            isPaused={Boolean(classHeader.isPaused)}
+                            isCompleted={Boolean(classHeader.isCompleted)}
+                            pausedAt={classHeader.pausedAt}
+                            completedAt={classHeader.completedAt}
+                            isOwner={session.isOwner}
+                            showBadge
+                        />
+                        {todayMatchingLesson && !isClassInactive(classHeader) && (
                             <Link
                                 href={`/list/attendance/take/${todayMatchingLesson.id}?date=${encodeURIComponent(takeAttendanceDateStr)}`}
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors shrink-0 shadow-xs"
@@ -1022,6 +1059,14 @@ const ClassAttendancePage = async (
                         )}
                     </div>
                 </div>
+
+                {isClassInactive(classHeader) && (
+                    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs font-medium text-amber-900">
+                        {locale === "ar"
+                            ? "هذا الفوج مغلق / متوقف حالياً. يتم الاحتفاظ بكامل سجل الحضور والغيابات السابقة للاطلاع والتصدير."
+                            : "Ce groupe est actuellement fermé / en pause. L'historique complet des présences et absences reste consultable et exportable."}
+                    </div>
+                )}
 
                 {/* Group Navigation Tabs (§7.20) */}
                 <GroupTabs
