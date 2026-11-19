@@ -8,11 +8,13 @@ import { useRouter } from "next/navigation";
 import { LessonInstance, AttendanceCellDetail } from "@/app/[locale]/(dashboard)/list/attendance/class/[id]/page";
 import { useTranslations, useLocale } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { Search, X, Check, FileText, RotateCcw, Loader2 } from "lucide-react";
+import { Search, X, Check, FileText, RotateCcw, Loader2, Users, UserCheck } from "lucide-react";
 import { markSingleAttendanceAction, deleteSingleAttendanceAction } from "@/lib/actions";
 import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import { toast } from "react-toastify";
 import { Badge } from "@/components/ui/Badge";
+import { FilterTabs } from "@/components/ui/FilterTabs";
+import { formatDZD } from "@/lib/algiersDate";
 
 export type StudentBalanceInfo = {
     isFormation: boolean;
@@ -204,6 +206,7 @@ type AttendanceGridProps = {
         balance?: StudentBalanceInfo;
         isTransferred?: boolean;
         isRevisionVisitorOnly?: boolean;
+        revisionPaidTotal?: number;
         status?: string;
         transferredAt?: string | null;
         enrolledAt?: string | null;
@@ -220,7 +223,9 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
 
     const searchParams = useSearchParams();
     const initialSearch = searchParams?.get("search") || "";
+    const initialTab = searchParams?.get("tab") === "revision" ? "revision" : "group";
     const [searchQuery, setSearchQuery] = useState(initialSearch);
+    const [activeTab, setActiveTab] = useState<"group" | "revision">(initialTab);
 
     // Optimistic attendance map
     const [localAttendanceMap, setLocalAttendanceMap] = useState<Map<string, Map<string, AttendanceCellDetail | boolean>>>(attendanceMap);
@@ -478,28 +483,70 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
         justification: string;
     } | null>(null);
 
-    const filteredStudents = useMemo(() => {
-        const hasSearch = Boolean(searchQuery.trim());
-        if (!hasSearch) {
-            // Transferred students, suspended students, and temporary revision visitors do not show in group unless searched up
-            return students.filter(
+    const activeGroupStudents = useMemo(
+        () =>
+            students.filter(
                 (student) =>
                     !student.isTransferred &&
                     !student.isRevisionVisitorOnly &&
                     student.status !== "SUSPENDED"
-            );
-        }
-        const q = searchQuery.toLowerCase().trim();
-        return students.filter((student) => {
-            const nameMatch = student.name?.toLowerCase().includes(q);
-            const numMatch = student.globalNumber !== undefined && student.globalNumber !== null
+            ),
+        [students]
+    );
+
+    const enrolledStudents = useMemo(
+        () => students.filter((student) => !student.isRevisionVisitorOnly),
+        [students]
+    );
+
+    const revisionVisitorStudents = useMemo(
+        () =>
+            students.filter((student) => {
+                if (student.isRevisionVisitorOnly) return true;
+                const recs = localAttendanceMap.get(student.id);
+                if (!recs) return false;
+                for (const rec of recs.values()) {
+                    if (typeof rec !== "boolean" && rec.isRevisionVisitor) return true;
+                }
+                return false;
+            }),
+        [students, localAttendanceMap]
+    );
+
+    const matchesStudentSearch = (
+        student: AttendanceGridProps["students"][number],
+        q: string
+    ): boolean => {
+        const nameMatch = student.name?.toLowerCase().includes(q);
+        const numMatch =
+            student.globalNumber !== undefined && student.globalNumber !== null
                 ? String(student.globalNumber).includes(q)
                 : false;
-            const phoneMatch = student.phone ? student.phone.includes(q) : false;
-            const idMatch = student.id ? student.id.toLowerCase().includes(q) : false;
-            return Boolean(nameMatch || numMatch || phoneMatch || idMatch);
-        });
-    }, [students, searchQuery]);
+        const phoneMatch = student.phone ? student.phone.includes(q) : false;
+        const idMatch = student.id ? student.id.toLowerCase().includes(q) : false;
+        return Boolean(nameMatch || numMatch || phoneMatch || idMatch);
+    };
+
+    const filteredStudents = useMemo(() => {
+        const q = searchQuery.toLowerCase().trim();
+        const hasSearch = Boolean(q);
+        if (activeTab === "revision") {
+            return hasSearch
+                ? revisionVisitorStudents.filter((s) => matchesStudentSearch(s, q))
+                : revisionVisitorStudents;
+        }
+        if (!hasSearch) {
+            return activeGroupStudents;
+        }
+        return enrolledStudents.filter((s) => matchesStudentSearch(s, q));
+    }, [activeTab, searchQuery, activeGroupStudents, enrolledStudents, revisionVisitorStudents]);
+
+    const matchingOtherTabCount = useMemo(() => {
+        const q = searchQuery.toLowerCase().trim();
+        if (!q) return 0;
+        const otherPool = activeTab === "group" ? revisionVisitorStudents : enrolledStudents;
+        return otherPool.filter((s) => matchesStudentSearch(s, q)).length;
+    }, [activeTab, searchQuery, enrolledStudents, revisionVisitorStudents]);
 
     const formatDayName = (dateString: string) => {
         const date = new Date(`${dateString}T12:00:00Z`);
@@ -531,15 +578,24 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
     const presentStatsByLessonKey = useMemo(() => {
         const stats = new Map<
             string,
-            { total: number; active: number; revisionVisitors: number; otherEnrolled: number }
+            {
+                total: number;
+                groupTotal: number;
+                active: number;
+                revisionVisitors: number;
+                otherEnrolled: number;
+                hasRevisionRecord: boolean;
+            }
         >();
 
         for (const instance of lessonInstances) {
             stats.set(instance.key, {
                 total: 0,
+                groupTotal: 0,
                 active: 0,
                 revisionVisitors: 0,
                 otherEnrolled: 0,
+                hasRevisionRecord: false,
             });
         }
 
@@ -560,6 +616,14 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                 const rawRecord = studentRecords.get(instance.key);
                 if (!rawRecord) continue;
 
+                const entry = stats.get(instance.key);
+                if (!entry) continue;
+
+                const isRevisionRec = typeof rawRecord !== "boolean" && Boolean(rawRecord.isRevisionVisitor);
+                if (isRevisionRec) {
+                    entry.hasRevisionRecord = true;
+                }
+
                 const isPresent =
                     typeof rawRecord === "boolean"
                         ? rawRecord
@@ -567,16 +631,15 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
 
                 if (!isPresent) continue;
 
-                const entry = stats.get(instance.key);
-                if (!entry) continue;
-
                 entry.total += 1;
-                if (typeof rawRecord !== "boolean" && rawRecord.isRevisionVisitor) {
+                if (isRevisionRec) {
                     entry.revisionVisitors += 1;
                 } else if (isActiveGroupStudent) {
                     entry.active += 1;
+                    entry.groupTotal += 1;
                 } else {
                     entry.otherEnrolled += 1;
+                    entry.groupTotal += 1;
                 }
             }
         }
@@ -584,31 +647,34 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
         return stats;
     }, [lessonInstances, students, localAttendanceMap]);
 
-    const formatPresentBadgeTitle = (stats: {
-        total: number;
+    const displayedLessonInstances = useMemo(() => {
+        const reversed = [...lessonInstances].reverse();
+        if (activeTab !== "revision") {
+            return reversed;
+        }
+        return reversed.filter((inst) => {
+            const st = presentStatsByLessonKey.get(inst.key);
+            return Boolean(st && (st.hasRevisionRecord || st.revisionVisitors > 0));
+        });
+    }, [lessonInstances, activeTab, presentStatsByLessonKey]);
+
+    const formatGroupPresentBadgeTitle = (stats: {
+        groupTotal: number;
         active: number;
-        revisionVisitors: number;
         otherEnrolled: number;
     }) => {
         const base =
             locale === "ar"
-                ? `${stats.total} تلميذ حاضر`
-                : `${stats.total} élève(s) présent(s)`;
+                ? `${stats.groupTotal} تلميذ حاضر من الفوج`
+                : `${stats.groupTotal} élève(s) du groupe présent(s)`;
 
-        if (stats.revisionVisitors === 0 && stats.otherEnrolled === 0) {
+        if (stats.otherEnrolled === 0) {
             return base;
         }
 
         const parts: string[] = [];
         if (stats.active > 0) {
-            parts.push(locale === "ar" ? `${stats.active} من الفوج` : `${stats.active} du groupe`);
-        }
-        if (stats.revisionVisitors > 0) {
-            parts.push(
-                locale === "ar"
-                    ? `${stats.revisionVisitors} زائر مراجعة`
-                    : `${stats.revisionVisitors} visiteur(s) révision`
-            );
+            parts.push(locale === "ar" ? `${stats.active} نشط` : `${stats.active} actif(s)`);
         }
         if (stats.otherEnrolled > 0) {
             parts.push(
@@ -621,45 +687,84 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
         return `${base} (${parts.join(" + ")})`;
     };
 
+    const formatRevisionPresentBadgeTitle = (count: number) =>
+        locale === "ar"
+            ? `${count} زائر مراجعة حاضر`
+            : `${count} visiteur(s) révision présent(s)`;
+
     return (
         <div className="w-full bg-surface rounded-xl border border-border shadow-xs font-sans">
-            {/* Top Toolbar: Search Bar, Counter, and Legend */}
+            {/* Top Toolbar: Filter Tabs, Search Bar, Counter, and Legend */}
             <div className="p-3 sm:p-4 bg-surface-muted/90 border-b border-border">
-                {/* Search Bar & Counter */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
-                    <div className="relative w-full sm:w-80 max-w-md">
-                        <Search className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
-                        <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder={t.has("searchStudentPlaceholder") ? t("searchStudentPlaceholder") : (locale === "ar" ? "البحث باسم التلميذ أو رقمه..." : "Rechercher par nom ou identifiant...")}
-                            className="w-full ps-9 pe-8 py-2 text-xs sm:text-sm bg-surface border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-gray-900 placeholder:text-muted transition-all shadow-2xs"
+                {/* Filter Tabs, Search Bar & Counter */}
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 flex-wrap">
+                        <FilterTabs
+                            tabs={[
+                                {
+                                    id: "group",
+                                    label: t("tabGroupStudents"),
+                                    icon: <Users className="w-3.5 h-3.5" />,
+                                    count: activeGroupStudents.length,
+                                },
+                                {
+                                    id: "revision",
+                                    label: t("tabRevisionVisitors"),
+                                    icon: <UserCheck className="w-3.5 h-3.5" />,
+                                    count: revisionVisitorStudents.length,
+                                },
+                            ]}
+                            activeTab={activeTab}
+                            onTabChange={(tabId) => setActiveTab(tabId as "group" | "revision")}
+                            size="sm"
                         />
-                        {searchQuery && (
-                            <button
-                                type="button"
-                                onClick={() => setSearchQuery("")}
-                                className="absolute end-2.5 top-1/2 -translate-y-1/2 text-muted hover:text-gray-700 p-0.5 rounded-md hover:bg-surface-subtle transition-colors cursor-pointer"
-                                title={locale === "ar" ? "مسح" : "Effacer"}
-                            >
-                                <X className="w-3.5 h-3.5" />
-                            </button>
-                        )}
+
+                        <div className="relative w-full sm:w-72 md:w-80 max-w-md">
+                            <Search className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder={t.has("searchStudentPlaceholder") ? t("searchStudentPlaceholder") : (locale === "ar" ? "البحث باسم التلميذ أو رقمه..." : "Rechercher par nom ou identifiant...")}
+                                className="w-full ps-9 pe-8 py-1.5 text-xs sm:text-sm bg-surface border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-gray-900 placeholder:text-muted transition-all shadow-2xs"
+                            />
+                            {searchQuery && (
+                                <button
+                                    type="button"
+                                    onClick={() => setSearchQuery("")}
+                                    className="absolute end-2.5 top-1/2 -translate-y-1/2 text-muted hover:text-gray-700 p-0.5 rounded-md hover:bg-surface-subtle transition-colors cursor-pointer"
+                                    title={locale === "ar" ? "مسح" : "Effacer"}
+                                >
+                                    <X className="w-3.5 h-3.5" />
+                                </button>
+                            )}
+                        </div>
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs font-medium text-muted shrink-0">
+                    <div className="flex items-center gap-2 text-xs font-medium text-muted shrink-0 flex-wrap">
+                        {searchQuery.trim() && matchingOtherTabCount > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => setActiveTab(activeTab === "group" ? "revision" : "group")}
+                                className="px-2.5 py-1 rounded-md border border-teal-300 bg-teal-50 text-teal-900 hover:bg-teal-100 font-semibold transition-colors cursor-pointer shadow-2xs"
+                            >
+                                {activeTab === "group"
+                                    ? locale === "ar"
+                                        ? `عرض ${matchingOtherTabCount} في زوار المراجعة ←`
+                                        : `Voir ${matchingOtherTabCount} dans Visiteurs révision →`
+                                    : locale === "ar"
+                                    ? `عرض ${matchingOtherTabCount} في تلاميذ الفوج ←`
+                                    : `Voir ${matchingOtherTabCount} dans Élèves du groupe →`}
+                            </button>
+                        )}
                         <span className="px-2.5 py-1 bg-surface rounded-md border border-border text-gray-700 font-semibold shadow-2xs">
-                            {searchQuery.trim()
+                            {activeTab === "revision"
+                                ? searchQuery.trim()
+                                    ? t("revisionVisitorsFoundCount", { count: filteredStudents.length })
+                                    : t("totalRevisionVisitors", { count: revisionVisitorStudents.length })
+                                : searchQuery.trim()
                                 ? t("studentsFoundCount", { count: filteredStudents.length })
-                                : t("totalGroupStudents", {
-                                      count: students.filter(
-                                          (s) =>
-                                              !s.isTransferred &&
-                                              !s.isRevisionVisitorOnly &&
-                                              s.status !== "SUSPENDED"
-                                      ).length,
-                                  })}
+                                : t("totalGroupStudents", { count: activeGroupStudents.length })}
                         </span>
                     </div>
                 </div>
@@ -733,17 +838,25 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                             </th>
 
                             {/* Lesson Instances Headers: Sticky top */}
-                            {[...lessonInstances].reverse().map((instance) => {
+                            {displayedLessonInstances.map((instance) => {
                                 const isFree = Boolean(instance.isFree);
                                 const isExtra = Boolean(instance.isExtra);
                                 const isCatchUp = Boolean(instance.isCatchUp);
                                 const presentStats = presentStatsByLessonKey.get(instance.key) || {
                                     total: 0,
+                                    groupTotal: 0,
                                     active: 0,
                                     revisionVisitors: 0,
                                     otherEnrolled: 0,
+                                    hasRevisionRecord: false,
                                 };
-                                const presentBadgeTitle = formatPresentBadgeTitle(presentStats);
+                                const isRevisionTab = activeTab === "revision";
+                                const displayedPresentCount = isRevisionTab
+                                    ? presentStats.revisionVisitors
+                                    : presentStats.groupTotal;
+                                const presentBadgeTitle = isRevisionTab
+                                    ? formatRevisionPresentBadgeTitle(presentStats.revisionVisitors)
+                                    : formatGroupPresentBadgeTitle(presentStats);
 
                                 return (
                                     <th
@@ -765,15 +878,27 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                         >
                                             {/* Present Students Badge above the lesson */}
                                             <Badge
-                                                variant={presentStats.total > 0 ? "success" : "neutral"}
+                                                variant={displayedPresentCount > 0 ? "success" : "neutral"}
                                                 size="sm"
                                                 withDot
-                                                className="text-[10px] px-1.5 py-0.5 font-bold leading-none gap-1 shadow-sm"
+                                                className={`text-[10px] px-1.5 py-0.5 font-bold leading-none gap-1 shadow-sm ${
+                                                    isRevisionTab && displayedPresentCount > 0
+                                                        ? "bg-teal-100 text-teal-900 border-teal-300"
+                                                        : ""
+                                                }`}
                                                 title={presentBadgeTitle}
                                                 aria-label={presentBadgeTitle}
                                             >
-                                                <span className="tabular-nums">{presentStats.total}</span>
-                                                <span>{locale === "ar" ? "حاضر" : "prés."}</span>
+                                                <span className="tabular-nums">{displayedPresentCount}</span>
+                                                <span>
+                                                    {isRevisionTab
+                                                        ? locale === "ar"
+                                                            ? "زائر"
+                                                            : "vis."
+                                                        : locale === "ar"
+                                                        ? "حاضر"
+                                                        : "prés."}
+                                                </span>
                                             </Badge>
 
                                             <span className={`font-bold group-hover/col:text-primary group-hover/col:underline ${isFree ? "text-amber-950" : "text-gray-800"}`}>
@@ -816,7 +941,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         {filteredStudents.length === 0 ? (
                             <tr>
                                 <td
-                                    colSpan={lessonInstances.length + 1}
+                                    colSpan={Math.max(1, displayedLessonInstances.length + 1)}
                                     className="p-10 text-center text-muted text-sm border-b border-border bg-surface"
                                 >
                                     <div className="flex flex-col items-center justify-center gap-2">
@@ -826,16 +951,35 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 ? (locale === "ar"
                                                     ? "لم يتم العثور على أي تلميذ يطابق هذا البحث"
                                                     : "Aucun élève ne correspond à votre recherche")
+                                                : activeTab === "revision"
+                                                ? t("noRevisionVisitors")
                                                 : t("noStudents")}
                                         </p>
                                         {searchQuery.trim() && (
-                                            <button
-                                                type="button"
-                                                onClick={() => setSearchQuery("")}
-                                                className="text-xs text-primary hover:underline font-semibold cursor-pointer"
-                                            >
-                                                {locale === "ar" ? "مسح البحث" : "Effacer la recherche"}
-                                            </button>
+                                            <div className="flex items-center gap-3 flex-wrap justify-center">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSearchQuery("")}
+                                                    className="text-xs text-primary hover:underline font-semibold cursor-pointer"
+                                                >
+                                                    {locale === "ar" ? "مسح البحث" : "Effacer la recherche"}
+                                                </button>
+                                                {matchingOtherTabCount > 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setActiveTab(activeTab === "group" ? "revision" : "group")}
+                                                        className="text-xs text-teal-700 hover:underline font-semibold cursor-pointer"
+                                                    >
+                                                        {activeTab === "group"
+                                                            ? locale === "ar"
+                                                                ? `عرض ${matchingOtherTabCount} في زوار المراجعة`
+                                                                : `Voir ${matchingOtherTabCount} dans Visiteurs révision`
+                                                            : locale === "ar"
+                                                            ? `عرض ${matchingOtherTabCount} في تلاميذ الفوج`
+                                                            : `Voir ${matchingOtherTabCount} dans Élèves du groupe`}
+                                                    </button>
+                                                )}
+                                            </div>
                                         )}
                                     </div>
                                 </td>
@@ -844,10 +988,15 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                             filteredStudents.map((student, studentIndex) => {
                                 const isTransferred = Boolean(student.isTransferred);
                                 const isSuspended = student.status === "SUSPENDED";
+                                const isRevisionRow = activeTab === "revision" || Boolean(student.isRevisionVisitorOnly);
                                 const rowBg = isSuspended
                                     ? "bg-rose-50/80 dark:bg-rose-950/20"
                                     : isTransferred
                                     ? "bg-pink-50/80 dark:bg-pink-950/20"
+                                    : isRevisionRow
+                                    ? studentIndex % 2 === 0
+                                        ? "bg-surface"
+                                        : "bg-teal-50/35"
                                     : studentIndex % 2 === 0
                                     ? "bg-surface"
                                     : "bg-surface-muted";
@@ -855,6 +1004,8 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                     ? "hover:bg-rose-100/70 dark:hover:bg-rose-950/40"
                                     : isTransferred
                                     ? "hover:bg-pink-100/70 dark:hover:bg-pink-950/40"
+                                    : isRevisionRow
+                                    ? "hover:bg-teal-50/70"
                                     : "hover:bg-surface-subtle";
                                 return (
                                     <tr
@@ -882,17 +1033,17 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                         <span className="truncate max-w-[110px] sm:max-w-[160px] group-hover:underline group-hover:text-primary transition-colors">
                                                             {student.name}
                                                         </span>
-                                                        {student.status === "SUSPENDED" && (
+                                                        {!isRevisionRow && student.status === "SUSPENDED" && (
                                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 shadow-2xs">
                                                                 {locale === "ar" ? "معلّق" : "Suspendu"}
                                                             </span>
                                                         )}
-                                                        {isTransferred && (
+                                                        {!isRevisionRow && isTransferred && (
                                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-pink-100 text-pink-700 border border-pink-300 dark:bg-pink-950/60 dark:text-pink-300 dark:border-pink-800 shadow-2xs">
                                                                 {locale === "ar" ? "محول" : "Transféré"}
                                                             </span>
                                                         )}
-                                                        {student.isRevisionVisitorOnly && (
+                                                        {isRevisionRow && (
                                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-900 border border-teal-300 dark:bg-teal-950/60 dark:text-teal-300 dark:border-teal-800 shadow-2xs">
                                                                 {locale === "ar" ? "زائر مراجعة" : "Visiteur révision"}
                                                             </span>
@@ -904,15 +1055,20 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                                 #{student.globalNumber}
                                                             </span>
                                                         ) : null}
-                                                        {student.balance && (
+                                                        {isRevisionRow && (student.revisionPaidTotal || 0) > 0 && (
+                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold font-mono bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs leading-none">
+                                                                {formatDZD(student.revisionPaidTotal!, locale)}
+                                                            </span>
+                                                        )}
+                                                        {!isRevisionRow && student.balance && (
                                                             <BalanceBadge balance={student.balance} locale={locale} />
                                                         )}
-                                                        {(student.balance?.isSchoolFeesOnly || (student as any).payerStatus === "SCHOOL_FEES_ONLY") && (
+                                                        {!isRevisionRow && (student.balance?.isSchoolFeesOnly || (student as any).payerStatus === "SCHOOL_FEES_ONLY") && (
                                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-100 text-sky-900 border border-sky-300 shadow-2xs leading-none">
                                                                 {locale === "ar" ? "حصة المدرسة" : "Part école"}
                                                             </span>
                                                         )}
-                                                        {(student.balance?.isDiscounted || (student as any).payerStatus === "DISCOUNTED") && (
+                                                        {!isRevisionRow && (student.balance?.isDiscounted || (student as any).payerStatus === "DISCOUNTED") && (
                                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-900 border border-violet-300 shadow-2xs leading-none">
                                                                 {locale === "ar"
                                                                     ? `مخفّض${student.balance?.discountLabel ? ` (${student.balance.discountLabel})` : ""}`
@@ -925,7 +1081,7 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                         </td>
 
                                         {/* Lesson Attendance Cells */}
-                                        {[...lessonInstances].reverse().map((instance) => {
+                                        {displayedLessonInstances.map((instance) => {
                                             const isFree = Boolean(instance.isFree);
                                             const cellBg = isFree ? "bg-amber-50/70" : isTransferred ? "bg-pink-50/30" : "";
                                             const studentRecords = localAttendanceMap.get(student.id);
@@ -990,7 +1146,11 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                 );
                                             }
 
-                                            if (student.isRevisionVisitorOnly && !rawRecord) {
+                                            if (
+                                                (student.isRevisionVisitorOnly && !rawRecord) ||
+                                                (activeTab === "revision" &&
+                                                    (!rawRecord || typeof rawRecord === "boolean" || !rawRecord.isRevisionVisitor))
+                                            ) {
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}
@@ -1137,9 +1297,15 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
 
                                             if (record.isRevisionVisitor) {
                                                 // Blue-green (teal) circle: Present as revision visitor (one-time guest)
-                                                const revTooltip = locale === "ar"
-                                                    ? "حاضر كزائر مراجعة (ضيف حصة واحدة)"
-                                                    : "Présent en tant que visiteur révision (invité 1 séance)";
+                                                const paidSuffix =
+                                                    record.revisionAmountPaid && record.revisionAmountPaid > 0
+                                                        ? ` — ${formatDZD(record.revisionAmountPaid, locale)}`
+                                                        : "";
+                                                const revTooltip =
+                                                    (locale === "ar"
+                                                        ? "حاضر كزائر مراجعة (ضيف حصة واحدة)"
+                                                        : "Présent en tant que visiteur révision (invité 1 séance)") +
+                                                    paidSuffix;
                                                 return (
                                                     <td
                                                         key={`${student.id}-${instance.key}-${studentIndex}`}

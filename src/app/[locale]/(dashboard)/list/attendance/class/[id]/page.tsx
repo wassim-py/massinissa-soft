@@ -36,6 +36,7 @@ export type AttendanceCellDetail = {
     isPreStart?: boolean;
     isTeacherAbsent?: boolean;
     isRevisionVisitor?: boolean;
+    revisionAmountPaid?: number | null;
     catchUp?: {
         catchUpDate: string;
         catchUpGroupName: string;
@@ -245,6 +246,7 @@ const ClassAttendancePage = async (
                             WHERE lg."lessonId" = l.id AND lg."classId" = ${classId}
                         )
                     )
+                    AND a."isRevisionVisitor" = false
                     AND a."studentId" IN (
                         SELECT e."studentId" FROM "Enrollment" e
                         WHERE e."classId" = ${classId}
@@ -541,6 +543,38 @@ const ClassAttendancePage = async (
 
             for (const [studentId, s] of studentMap.entries()) {
                 const details = billingMap.get(studentId);
+                const revisionVouchers = (details?.vouchers || []).filter(
+                    (v: any) =>
+                        v.paymentType === "REVISION_SESSION" &&
+                        !v.isVoided &&
+                        !v.isRefund &&
+                        (v.classId === classId || !v.classId)
+                );
+                let revisionPaidTotal = 0;
+                const revisionPaymentsByLesson: Record<number, number> = {};
+                revisionVouchers.forEach((v: any) => {
+                    const vAmount = Number(v.amount || 0);
+                    const vRefunded = (v.refunds || []).reduce(
+                        (sum: number, r: any) => sum + Number(r.amount || 0),
+                        0
+                    );
+                    const netPaid = Math.max(0, vAmount - vRefunded);
+                    revisionPaidTotal += netPaid;
+                    if (v.lessonId) {
+                        revisionPaymentsByLesson[Number(v.lessonId)] =
+                            (revisionPaymentsByLesson[Number(v.lessonId)] || 0) + netPaid;
+                    }
+                });
+                s.revisionPaidTotal = revisionPaidTotal;
+                s.revisionPaymentsByLesson = revisionPaymentsByLesson;
+
+                if (s.isRevisionVisitorOnly) {
+                    s.payerStatus = "NORMAL";
+                    s.balance = undefined;
+                    s.billingDetails = details;
+                    continue;
+                }
+
                 const enrollment = details?.enrollments?.[0];
                 const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
                 const enrDiscountType = enrollment?.discountType || null;
@@ -647,6 +681,7 @@ const ClassAttendancePage = async (
 
                     const sAttendances = (details?.attendances || []).filter(
                         (att: any) =>
+                            !att.isRevisionVisitor &&
                             att.lesson &&
                             (att.lesson.classId === classId ||
                                 att.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)) &&
@@ -889,6 +924,7 @@ const ClassAttendancePage = async (
                 : null;
 
         const applicableAttendances = (student.attendances || []).filter((a: any) => {
+            if (a.isRevisionVisitor) return false;
             if (visitorCatchUpsByLessonId.has(a.lessonId)) return false;
             return isLessonApplicableToEnrollment(
                 { id: a.lessonId, classId, startsAt: a.date, hasExplicitAttendance: a.status === "PRESENT", status: a.status },
@@ -943,6 +979,9 @@ const ClassAttendancePage = async (
                 isPreStart: record.status === "PRESENT" ? false : Boolean(isPreStart),
                 isTeacherAbsent,
                 isRevisionVisitor: Boolean(record.isRevisionVisitor),
+                revisionAmountPaid: record.isRevisionVisitor
+                    ? (student.revisionPaymentsByLesson?.[record.lessonId] ?? null)
+                    : null,
                 catchUp: catchUpInfo ? {
                     catchUpDate: catchUpInfo.catchUpDate,
                     catchUpGroupName: catchUpInfo.catchUpGroupName,
