@@ -142,16 +142,16 @@ export default function DeleteFormationSessionModal({
           </p>
 
           {attendancesCount > 0 && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-xs flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />
               <div>
                 <p className="font-semibold mb-0.5">
-                  {locale === "ar" ? "سجلات الحضور المسجلة" : "Enregistrements de présence"}
+                  {locale === "ar" ? "الحفاظ على سجلات الحضور السابقة" : "Historique de présence conservé"}
                 </p>
                 <p>
                   {locale === "ar"
-                    ? `تحتوي هذه الحصة على (${attendancesCount}) سجلات حضور. سيتم حذفها نهائياً.`
-                    : `Cette séance contient ${attendancesCount} enregistrement(s) de présence qui seront supprimés.`}
+                    ? `تحتوي هذه الحصة على (${attendancesCount}) سجلات حضور. سيتم إيقاف الحصص القادمة فقط مع الحفاظ على جميع التواريخ وسجلات الحضور السابقة.`
+                    : `Cette séance dispose de ${attendancesCount} enregistrement(s) de présence. Seules les séances futures seront arrêtées ; toutes les dates et présences passées seront conservées.`}
                 </p>
               </div>
             </div>

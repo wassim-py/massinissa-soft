@@ -30,11 +30,15 @@ export async function run24hPreLessonWorker() {
   const windowStart = new Date(now.getTime() + 23 * 60 * 60 * 1000);
   const windowEnd = new Date(now.getTime() + 25 * 60 * 60 * 1000);
 
-  // Fetch upcoming lessons in the 23-25h window (only active regular groups)
+  // Fetch upcoming lessons in the 23-25h window (only active regular groups and non-retired slots)
   const upcomingLessons = await prisma.lesson.findMany({
     where: {
       startsAt: { gte: windowStart, lte: windowEnd },
       isFree: false,
+      OR: [
+        { recurrenceEndAt: null },
+        { recurrenceEndAt: { gte: windowEnd } },
+      ],
       class: { isFormation: false, isCompleted: false, isPaused: false },
     },
     include: {

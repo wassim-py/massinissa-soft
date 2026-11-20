@@ -15,8 +15,7 @@ import Image from "next/image";
 import Link from "next/link";
 import {
   serializeForClient,
-  getAlgiersWeekBounds,
-  resolveRecurringLessonsForWeek,
+  resolveActiveFormationSchedule,
 } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
 import { GraduationCap, ArrowLeft, ArrowRight, Layers, Users, Calendar } from "lucide-react";
@@ -863,10 +862,7 @@ export default async function FormationDetailsPage(props: {
             <FormationSchedule
               formationClass={serializeForClient(formationGroup)}
               sessions={serializeForClient(
-                resolveRecurringLessonsForWeek(
-                  formationGroup.lessons,
-                  getAlgiersWeekBounds(0)
-                )
+                resolveActiveFormationSchedule(formationGroup.lessons)
               )}
               enrolledStudents={serializeForClient(enrolledStudentsList)}
               classrooms={serializeForClient(classrooms)}

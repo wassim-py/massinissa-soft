@@ -22,6 +22,8 @@ type TimetableLesson = {
   startsAt: Date | string;
   endsAt: Date | string;
   instanceDate?: string;
+  editScope?: "future" | "single";
+  isSingleOccurrence?: boolean;
   classId?: number;
   teacherId?: string;
   classroomId?: number | null;
@@ -171,13 +173,18 @@ const LessonListPage = async (props: {
 
   try {
     const currentWeekStart = getAlgiersWeekBounds(0).startOfWeek;
+    const weekStartDateStr = weekBounds.dayDates.SATURDAY;
+    const weekEndDateStr = weekBounds.dayDates.FRIDAY;
     const whereConditions: Prisma.Sql[] = [
-      // Fetch normal recurring lessons (regular and formation) for active classes,
-      // or recurring lessons of closed/paused classes when viewing historical weeks prior to their pause/completion date,
-      // or dated lessons occurring in the requested week.
+      // Fetch normal recurring lessons (regular and formation) active during the requested week
+      // (respecting [recurrenceStartAt, recurrenceEndAt] and class pause/completion history),
+      // plus dated lessons and single-occurrence overrides affecting this week.
       Prisma.sql`(
         (
           l."isExtra" = false AND l."isCatchUp" = false AND l."isFree" = false
+          AND l."isSingleOccurrence" = false
+          AND (l."recurrenceStartAt" IS NULL OR l."recurrenceStartAt" <= ${endOfWeek})
+          AND (l."recurrenceEndAt" IS NULL OR l."recurrenceEndAt" >= ${startOfWeek})
           AND (
             ((c."isCompleted" = false OR c."isCompleted" IS NULL) AND (c."isPaused" = false OR c."isPaused" IS NULL))
             OR LEAST(COALESCE(c."pausedAt", 'infinity'::timestamp), COALESCE(c."completedAt", 'infinity'::timestamp)) >= ${startOfWeek}
@@ -185,6 +192,12 @@ const LessonListPage = async (props: {
           )
         )
         OR (l."startsAt" >= ${startOfWeek} AND l."startsAt" <= ${endOfWeek})
+        OR (
+          l."isSingleOccurrence" = true
+          AND l."overridesDate" IS NOT NULL
+          AND l."overridesDate" >= ${weekStartDateStr}
+          AND l."overridesDate" <= ${weekEndDateStr}
+        )
       )`,
     ];
 
@@ -248,6 +261,7 @@ const LessonListPage = async (props: {
     const rawLessons = await prisma.$queryRaw<any[]>`
       SELECT l.id, l."startsAt", l."endsAt", l."classId", l."teacherId", l."classroomId", l."branchId",
              l."isExtra", l."isCatchUp", l."isFree", l."extraFee", l."isTeacherAbsent",
+             l."recurrenceStartAt", l."recurrenceEndAt", l."isSingleOccurrence", l."overridesDate", l."overridesSlotKey",
              c.name as "className", c."branchId" as "classBranchId", c."isFormation", c."isCompleted", c."completedAt", c."isPaused", c."pausedAt", c."levelId", lvl.name as "levelName",
              t.name as "teacherName", cr.name as "classroomName", cr."branchId" as "classroomBranchId", b.name as "branchName",
              fl."languageId" as "formationLanguageId", flLang.name as "formationLanguageName",
@@ -317,6 +331,8 @@ const LessonListPage = async (props: {
         startsAt: r.startsAt,
         endsAt: r.endsAt,
         instanceDate: r.instanceDate,
+        editScope: validOffset < 0 || Boolean(r.isSingleOccurrence) ? ("single" as const) : ("future" as const),
+        isSingleOccurrence: Boolean(r.isSingleOccurrence),
         classId: r.classId,
         teacherId: r.teacherId,
         classroomId: r.classroomId,

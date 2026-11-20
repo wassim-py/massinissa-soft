@@ -147,6 +147,11 @@ model Lesson {
   isFree                Boolean                @default(false)
   isTeacherAbsent       Boolean                @default(false)
   startsAt              DateTime
+  recurrenceStartAt     DateTime?
+  recurrenceEndAt       DateTime?
+  isSingleOccurrence    Boolean                @default(false)
+  overridesDate         String?
+  overridesSlotKey      String?
   attendances           Attendance[]
   lessonGroups          LessonGroup[]
   missedByCatchUps      CatchUpAttendance[]    @relation("MissedLesson")
@@ -165,6 +170,8 @@ model Lesson {
   @@index([startsAt, endsAt])
   @@index([isExtra, isCatchUp, isFree])
   @@index([isTeacherAbsent])
+  @@index([recurrenceEndAt])
+  @@index([isSingleOccurrence])
 }
 
 model Attendance {

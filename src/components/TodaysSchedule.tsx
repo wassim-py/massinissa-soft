@@ -57,7 +57,12 @@ const TodaysSchedule = async ({ studentId }: { studentId?: string }) => {
           isExtra: false,
           isCatchUp: false,
           isFree: false,
+          isSingleOccurrence: false,
           class: ACTIVE_CLASS_WHERE,
+        },
+        {
+          isSingleOccurrence: true,
+          overridesDate: todayInfo.dateStr,
         },
       ],
     },

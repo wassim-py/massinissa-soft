@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma";
 import BigCalendar from "./BigCalender";
-import { adjustScheduleToCurrentWeek } from "@/lib/utils";
+import { adjustScheduleToCurrentWeek, getAlgiersWeekBounds, resolveRecurringLessonsForWeek } from "@/lib/utils";
 import { getTranslations } from "next-intl/server";
 
 const BigCalendarContainer = async ({
@@ -32,7 +32,12 @@ const BigCalendarContainer = async ({
       `;
     }
 
-    const data = rawLessons.map((lesson) => {
+    const resolvedLessons = resolveRecurringLessonsForWeek(
+      rawLessons,
+      getAlgiersWeekBounds(0)
+    );
+
+    const data = resolvedLessons.map((lesson) => {
       let tag = "";
       if (lesson.isFree) tag = ` [${tLessons("freeBadge")}]`;
       else if (lesson.isExtra) tag = ` [${tLessons("extraBadge")}]`;

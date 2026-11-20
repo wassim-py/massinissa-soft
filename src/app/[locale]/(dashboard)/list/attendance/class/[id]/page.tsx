@@ -76,8 +76,8 @@ const ClassAttendancePage = async (
                 },
             },
         }),
-        prisma.$queryRaw<Array<{ id: number; classId: number; startsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean; isTeacherAbsent: boolean; branchId: number }>>`
-            SELECT l.id, l."classId", l."startsAt", l."isExtra", l."isCatchUp", l."isFree", l."isTeacherAbsent", l."branchId"
+        prisma.$queryRaw<Array<{ id: number; classId: number; startsAt: Date; endsAt: Date; isExtra: boolean; isCatchUp: boolean; isFree: boolean; isTeacherAbsent: boolean; branchId: number; recurrenceStartAt: Date | null; recurrenceEndAt: Date | null; isSingleOccurrence: boolean }>>`
+            SELECT l.id, l."classId", l."startsAt", l."endsAt", l."isExtra", l."isCatchUp", l."isFree", l."isTeacherAbsent", l."branchId", l."recurrenceStartAt", l."recurrenceEndAt", l."isSingleOccurrence"
             FROM "Lesson" l
             WHERE l."classId" = ${classId}
                OR EXISTS (
@@ -103,16 +103,22 @@ const ClassAttendancePage = async (
         }
     }
 
-    const todayInfo = getAlgiersDateInfo(new Date());
+    const now = new Date();
+    const todayInfo = getAlgiersDateInfo(now);
+    const activeRecurringLessons = allClassLessons.filter(
+        (l) =>
+            !l.isExtra &&
+            !l.isCatchUp &&
+            !l.isFree &&
+            !l.isSingleOccurrence &&
+            (!l.recurrenceEndAt || new Date(l.recurrenceEndAt).getTime() > now.getTime())
+    );
     const todayMatchingLesson =
         allClassLessons.find((l) => getAlgiersDateInfo(l.startsAt).dateStr === todayInfo.dateStr) ||
-        allClassLessons.find(
-            (l) =>
-                !l.isExtra &&
-                !l.isCatchUp &&
-                !l.isFree &&
-                getAlgiersDateInfo(l.startsAt).weekday === todayInfo.weekday
+        activeRecurringLessons.find(
+            (l) => getAlgiersDateInfo(l.startsAt).weekday === todayInfo.weekday
         ) ||
+        activeRecurringLessons[0] ||
         latestLesson;
     const takeAttendanceDateStr = todayMatchingLesson
         ? (!todayMatchingLesson.isExtra && !todayMatchingLesson.isCatchUp && !todayMatchingLesson.isFree)

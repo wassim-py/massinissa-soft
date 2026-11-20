@@ -135,6 +135,8 @@ export const lessonSchema = z
     isFree: z.boolean().optional(),
     date: z.string().optional().nullable(),
     additionalClassIds: z.array(z.coerce.number()).optional(),
+    editScope: z.enum(["future", "single"]).optional(),
+    instanceDate: z.string().optional().nullable(),
   })
   .refine((data) => data.endTime > data.startTime, {
     message: "وقت الانتهاء يجب أن يكون بعد وقت البدء",

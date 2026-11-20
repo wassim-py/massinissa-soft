@@ -61,7 +61,12 @@ const AdminPage = async () => {
           isExtra: false,
           isCatchUp: false,
           isFree: false,
+          isSingleOccurrence: false,
           class: ACTIVE_CLASS_WHERE,
+        },
+        {
+          isSingleOccurrence: true,
+          overridesDate: todayInfo.dateStr,
         },
       ],
     },

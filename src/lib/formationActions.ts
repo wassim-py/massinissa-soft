@@ -12,6 +12,12 @@ import { getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 import { revalidateFinancialRoutes } from "@/lib/revalidation";
 import { buildVoucherBillingSnapshot } from "@/lib/studentBilling";
 import { ACTIVE_CLASS_WHERE, isClassInactive } from "@/lib/classStatus";
+import {
+  applyNormalLessonFutureUpdate,
+  findSeriesLessonsWithUsage,
+  retireOrDeleteNormalLesson,
+} from "@/lib/lessonInstances";
+import { getNextUpcomingOccurrence } from "@/lib/lessonRecurrence";
 
 function safeRevalidatePath(path: string) {
   try {
@@ -2158,8 +2164,21 @@ export async function updateFormationSession(data: {
       return { success: false, error: true, message: "Veuillez spécifier la salle / يرجى تحديد القاعة" };
     }
 
-    const startsAt = getLessonDateTime(data.day, data.startTime);
-    const endsAt = getLessonDateTime(data.day, data.endTime);
+    if (data.startTime >= data.endTime) {
+      return { success: false, error: true, message: "L'heure de fin doit être postérieure à l'heure de début / وقت النهاية يجب أن يكون بعد وقت البداية" };
+    }
+
+    const now = new Date();
+    const seriesData = await findSeriesLessonsWithUsage(data.sessionId, now);
+    const nextOcc = getNextUpcomingOccurrence({
+      day: data.day,
+      startTime: data.startTime,
+      endTime: data.endTime,
+      now,
+      skipDates: seriesData.frozenDates,
+    });
+    const startsAt = nextOcc.startsAt;
+    const endsAt = nextOcc.endsAt;
 
     if (startsAt >= endsAt) {
       return { success: false, error: true, message: "L'heure de fin doit être postérieure à l'heure de début / وقت النهاية يجب أن يكون بعد وقت البداية" };
@@ -2181,6 +2200,7 @@ export async function updateFormationSession(data: {
       startTime: startTimeStr,
       endTime: endTimeStr,
       excludeId: data.sessionId,
+      excludeIds: seriesData.allSeriesIds,
       startsAt,
       endsAt,
     });
@@ -2189,31 +2209,42 @@ export async function updateFormationSession(data: {
       return { success: false, error: true, message: conflict };
     }
 
-    const updated = await prisma.lesson.update({
-      where: { id: data.sessionId },
-      data: {
-        teacherId,
-        classroomId,
-        startsAt,
-        endsAt,
-      },
-      include: {
-        classroom: true,
-        teacher: true,
-      },
+    const classroomRecordForBranch = await prisma.classroom.findUnique({
+      where: { id: classroomId },
+      select: { branchId: true, name: true },
     });
+    const effectiveBranchId =
+      classroomRecordForBranch?.branchId || existingLesson.branchId || targetClass.branchId;
+
+    const updateResult = await applyNormalLessonFutureUpdate({
+      lessonId: data.sessionId,
+      classId: data.classId,
+      teacherId,
+      classroomId,
+      branchId: effectiveBranchId,
+      allAssociatedClassIds: [data.classId],
+      newStartsAt: startsAt,
+      newEndsAt: endsAt,
+      isExtra: false,
+      isCatchUp: false,
+      isFree: false,
+      frozenRows: seriesData.frozenRows,
+      mutableFutureRows: seriesData.mutableFutureRows,
+      now,
+    });
+    const updated = updateResult.lesson;
 
     try {
-      const branchRecord = await prisma.branch.findUnique({ where: { id: targetClass.branchId } });
-      const classroomRecord = await prisma.classroom.findUnique({ where: { id: classroomId } });
+      const branchRecord = await prisma.branch.findUnique({ where: { id: effectiveBranchId } });
       const dayNameAr = startsAt.toLocaleDateString("ar-DZ", {
         weekday: "long",
+        timeZone: "Africa/Algiers",
       });
 
-      const desc = `حصة تكوينية أسبوعية لفوج ${targetClass.name} في ${branchRecord?.name || ""} ${classroomRecord ? `- قاعة ${classroomRecord.name}` : ""} كل يوم ${dayNameAr} من ${startTimeStr} إلى ${endTimeStr}`;
+      const desc = `حصة تكوينية أسبوعية لفوج ${targetClass.name} في ${branchRecord?.name || ""} ${classroomRecordForBranch ? `- قاعة ${classroomRecordForBranch.name}` : ""} كل يوم ${dayNameAr} من ${startTimeStr} إلى ${endTimeStr}`;
 
       const existingAnn = await prisma.announcement.findFirst({
-        where: { lessonId: data.sessionId },
+        where: { lessonId: updated.id },
       });
       if (existingAnn) {
         await prisma.announcement.update({
@@ -2221,6 +2252,20 @@ export async function updateFormationSession(data: {
           data: {
             title: "حصة تكوينية أسبوعية",
             description: desc,
+            expiresAt: endsAt,
+          },
+        });
+      } else {
+        await prisma.announcement.create({
+          data: {
+            title: "حصة تكوينية أسبوعية",
+            description: desc,
+            classId: data.classId,
+            branchId: null,
+            authorBranchId: effectiveBranchId,
+            lessonId: updated.id,
+            createdBy: session.userId || "admin",
+            pinned: true,
             expiresAt: endsAt,
           },
         });
@@ -2233,11 +2278,12 @@ export async function updateFormationSession(data: {
     safeRevalidatePath("/list/lessons");
     safeRevalidatePath(`/list/formations/${data.classId}`);
     safeRevalidatePath("/list/formations");
+    safeRevalidatePath(`/list/attendance/class/${data.classId}`);
 
     return {
       success: true,
       error: false,
-      message: "Séance mise à jour avec succès / تم تحديث الحصة بنجاح",
+      message: "Séance mise à jour pour les prochaines dates (historique conservé) / تم تحديث الحصة للمواعيد القادمة فقط مع الحفاظ على التواريخ السابقة",
       data: serializeForClient(updated),
     };
   } catch (err: any) {
@@ -2268,24 +2314,21 @@ export async function deleteFormationSession(data: {
       return { success: false, error: true, message: "Non autorisé dans cette succursale / غير مصرح لك في هذا الفرع" };
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.announcement.deleteMany({ where: { lessonId: data.sessionId } });
-      await tx.catchUpAttendance.deleteMany({
-        where: { OR: [{ missedLessonId: data.sessionId }, { catchUpLessonId: data.sessionId }] },
-      });
-      await tx.attendance.deleteMany({ where: { lessonId: data.sessionId } });
-      await tx.lesson.delete({ where: { id: data.sessionId } });
-    });
+    const res = await retireOrDeleteNormalLesson(data.sessionId, new Date());
 
     safeRevalidatePath("/list/announcements");
     safeRevalidatePath("/list/lessons");
     safeRevalidatePath(`/list/formations/${data.classId}`);
     safeRevalidatePath("/list/formations");
+    safeRevalidatePath(`/list/attendance/class/${data.classId}`);
 
     return {
       success: true,
       error: false,
-      message: "Séance supprimée avec succès / تم حذف الحصة بنجاح",
+      message:
+        res.mode === "retired"
+          ? "Séances futures supprimées ; l'historique et les présences passées ont été conservés / تم إيقاف الحصص القادمة مع الحفاظ على التواريخ وسجلات الحضور السابقة"
+          : "Séance supprimée avec succès / تم حذف الحصة بنجاح",
     };
   } catch (err: any) {
     console.error("Error deleting formation session:", err);

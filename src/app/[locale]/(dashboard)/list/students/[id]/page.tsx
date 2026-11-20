@@ -13,7 +13,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { StudentAvatar } from "@/components/ui/UserAvatar";
-import { serializeForClient } from "@/lib/utils";
+import { serializeForClient, getAlgiersWeekBounds, resolveRecurringLessonsForWeek } from "@/lib/utils";
 import { getTranslations, getLocale } from "next-intl/server";
 import {
   computeStudentSessionFee,
@@ -601,11 +601,12 @@ const SingleStudentPage = async (
       `;
     }
 
-    const dayNames = [
-      "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"
-    ];
+    const resolvedStudentLessons = resolveRecurringLessonsForWeek(
+      rawLessons,
+      getAlgiersWeekBounds(0)
+    );
 
-    const lessons = rawLessons.map((r) => {
+    const lessons = resolvedStudentLessons.map((r) => {
       const info = getAlgiersDateInfo(r.startsAt);
       return {
         id: r.id,
@@ -615,6 +616,7 @@ const SingleStudentPage = async (
         endTime: r.endsAt,
         startsAt: r.startsAt,
         endsAt: r.endsAt,
+        instanceDate: r.instanceDate,
         classId: r.classId,
         teacherId: r.teacherId,
         classroomId: r.classroomId,

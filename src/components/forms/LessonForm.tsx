@@ -119,6 +119,15 @@ const LessonForm = ({
     : "normal";
 
   const [lessonType, setLessonType] = useState<LessonType>(initialLessonType);
+  const isSinglePastEdit =
+    type === "update" &&
+    initialLessonType === "normal" &&
+    (data?.editScope === "single" || Boolean(data?.isSingleOccurrence));
+  const resolvedEditScope: "future" | "single" = isSinglePastEdit ? "single" : "future";
+  const resolvedInstanceDate: string | undefined =
+    typeof data?.instanceDate === "string" && data.instanceDate.trim().length > 0
+      ? data.instanceDate.trim()
+      : undefined;
 
   const {
     register,
@@ -139,12 +148,15 @@ const LessonForm = ({
           extraFee: data.extraFee ? Number(data.extraFee) : undefined,
           isCatchUp: Boolean(data.isCatchUp),
           isFree: Boolean(data.isFree),
+          editScope: resolvedEditScope,
+          instanceDate: resolvedInstanceDate,
         }
       : {
           branchId: userBranchId || (branches[0]?.id ?? 1),
           isExtra: false,
           isCatchUp: false,
           isFree: false,
+          editScope: "future",
         },
   });
 
@@ -265,6 +277,9 @@ const LessonForm = ({
 
   // Single lesson type change handler
   const handleTypeSelect = (typeVal: LessonType) => {
+    if (isSinglePastEdit && typeVal !== "normal") {
+      return;
+    }
     setLessonType(typeVal);
     setValue("isExtra", typeVal === "extra");
     setValue("isCatchUp", typeVal === "catchUp");
@@ -301,6 +316,8 @@ const LessonForm = ({
         teacherId: selectedClass?.teacherId || formData.teacherId || "",
         branchId: effectiveBranchId,
         additionalClassIds: lessonType !== "normal" ? additionalClassIds : [],
+        editScope: type === "update" ? resolvedEditScope : undefined,
+        instanceDate: type === "update" ? resolvedInstanceDate : undefined,
       });
     });
   });
@@ -356,6 +373,38 @@ const LessonForm = ({
       <h1 className="text-section-title font-bold text-gray-900">
         {type === "create" ? t("createTitle") : t("updateTitle")}
       </h1>
+
+      {/* Scope notice when updating a normal lesson */}
+      {type === "update" && lessonType === "normal" && (
+        <div
+          className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 shadow-2xs ${
+            isSinglePastEdit
+              ? "bg-amber-50/90 border-amber-200 text-amber-900"
+              : "bg-blue-50/80 border-blue-200 text-blue-900"
+          }`}
+        >
+          <Calendar
+            className={`w-4 h-4 shrink-0 mt-0.5 ${
+              isSinglePastEdit ? "text-amber-600" : "text-blue-600"
+            }`}
+          />
+          <div>
+            {isSinglePastEdit ? (
+              <p className="font-medium leading-relaxed">
+                {locale === "ar"
+                  ? `تعديل حصة سابقة (${resolvedInstanceDate || ""}): سيؤثر هذا التعديل على هذه الحصة فقط دون تغيير الحصص الأخرى أو الجدول الأسبوعي.`
+                  : `Séance passée (${resolvedInstanceDate || ""}) : cette modification s'appliquera uniquement à cette séance sans modifier les autres semaines ni l'emploi du temps récurrent.`}
+              </p>
+            ) : (
+              <p className="font-medium leading-relaxed">
+                {locale === "ar"
+                  ? "الحفاظ على التاريخ السابق: سيُطبق هذا التعديل على الحصص القادمة فقط، وستبقى التواريخ وسجلات الحضور السابقة كما هي دون تغيير."
+                  : "Historique conservé : cette modification s'appliquera uniquement aux séances à venir ; les anciennes dates et présences resteront inchangées."}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Auto-derived Lesson Name banner when class is selected */}
       {selectedClass && (
@@ -689,10 +738,12 @@ const LessonForm = ({
           {/* Extra Option */}
           <div
             onClick={() => handleTypeSelect("extra")}
-            className={`cursor-pointer p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
-              lessonType === "extra"
-                ? "bg-secondary-light/70 border-secondary ring-1 ring-secondary/30 shadow-xs"
-                : "bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
+            className={`p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
+              isSinglePastEdit
+                ? "opacity-50 cursor-not-allowed bg-surface-subtle border-border"
+                : lessonType === "extra"
+                ? "cursor-pointer bg-secondary-light/70 border-secondary ring-1 ring-secondary/30 shadow-xs"
+                : "cursor-pointer bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
             }`}
           >
             <div className="flex items-center justify-between">
@@ -707,8 +758,9 @@ const LessonForm = ({
                 type="radio"
                 name="lessonTypeRadio"
                 checked={lessonType === "extra"}
+                disabled={isSinglePastEdit}
                 onChange={() => handleTypeSelect("extra")}
-                className="w-4 h-4 text-secondary focus:ring-secondary cursor-pointer accent-secondary"
+                className="w-4 h-4 text-secondary focus:ring-secondary cursor-pointer accent-secondary disabled:cursor-not-allowed"
               />
             </div>
             <p
@@ -723,10 +775,12 @@ const LessonForm = ({
           {/* Catch-up Option */}
           <div
             onClick={() => handleTypeSelect("catchUp")}
-            className={`cursor-pointer p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
-              lessonType === "catchUp"
-                ? "bg-accent-light/70 border-accent ring-1 ring-accent/30 shadow-xs"
-                : "bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
+            className={`p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
+              isSinglePastEdit
+                ? "opacity-50 cursor-not-allowed bg-surface-subtle border-border"
+                : lessonType === "catchUp"
+                ? "cursor-pointer bg-accent-light/70 border-accent ring-1 ring-accent/30 shadow-xs"
+                : "cursor-pointer bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
             }`}
           >
             <div className="flex items-center justify-between">
@@ -741,8 +795,9 @@ const LessonForm = ({
                 type="radio"
                 name="lessonTypeRadio"
                 checked={lessonType === "catchUp"}
+                disabled={isSinglePastEdit}
                 onChange={() => handleTypeSelect("catchUp")}
-                className="w-4 h-4 text-accent focus:ring-accent cursor-pointer accent-accent"
+                className="w-4 h-4 text-accent focus:ring-accent cursor-pointer accent-accent disabled:cursor-not-allowed"
               />
             </div>
             <p
@@ -757,10 +812,12 @@ const LessonForm = ({
           {/* Free Option */}
           <div
             onClick={() => handleTypeSelect("free")}
-            className={`cursor-pointer p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
-              lessonType === "free"
-                ? "bg-success-light/70 border-success ring-1 ring-success/30 shadow-xs"
-                : "bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
+            className={`p-3.5 rounded-xl border transition-all flex flex-col gap-1.5 select-none ${
+              isSinglePastEdit
+                ? "opacity-50 cursor-not-allowed bg-surface-subtle border-border"
+                : lessonType === "free"
+                ? "cursor-pointer bg-success-light/70 border-success ring-1 ring-success/30 shadow-xs"
+                : "cursor-pointer bg-surface border-border hover:border-gray-300 hover:bg-surface-subtle/50"
             }`}
           >
             <div className="flex items-center justify-between">
@@ -775,8 +832,9 @@ const LessonForm = ({
                 type="radio"
                 name="lessonTypeRadio"
                 checked={lessonType === "free"}
+                disabled={isSinglePastEdit}
                 onChange={() => handleTypeSelect("free")}
-                className="w-4 h-4 text-success focus:ring-success cursor-pointer accent-success"
+                className="w-4 h-4 text-success focus:ring-success cursor-pointer accent-success disabled:cursor-not-allowed"
               />
             </div>
             <p

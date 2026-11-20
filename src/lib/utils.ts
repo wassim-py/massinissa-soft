@@ -170,6 +170,13 @@ import {
   getAlgiersDateInfo,
   type AlgiersDateInfo,
 } from "./algiersDate";
+import {
+  getLessonSlotKey,
+  getRecurringSeriesKey,
+  hasLessonRecordedActivity,
+  isActiveRecurringRow,
+  isRecurringOccurrenceActive,
+} from "./lessonRecurrence";
 
 export {
   getAlgiersDateInfo,
@@ -245,10 +252,14 @@ export function projectLessonTimeToDateStr(
 }
 
 /**
- * Deduplicates recurring lessons by (classId, weekday, startTime, endTime) and projects them
- * onto the exact calendar dates of the requested week.
- * If a Lesson row already exists in the DB for that exact date in the week, it is selected directly
- * so its date-specific id, attendances, and isTeacherAbsent are preserved.
+ * Deduplicates recurring lessons by series (classId, weekday, startTime, endTime, lifecycle bounds)
+ * and projects them onto the exact calendar dates of the requested week.
+ * - Respects [recurrenceStartAt, recurrenceEndAt] so retired slots stay in past weeks and never repeat
+ *   in future weeks, while newly updated slots never project backwards into past weeks.
+ * - Treats single-occurrence past edits (isSingleOccurrence) as one-offs for their exact date and
+ *   suppresses the original recurring slot on overridesDate.
+ * - If a Lesson row already exists in the DB for that exact date in the week, it is selected directly
+ *   so its date-specific id, attendances, and isTeacherAbsent are preserved.
  */
 export function resolveRecurringLessonsForWeek<T extends Record<string, any>>(
   rawLessons: T[],
@@ -256,9 +267,16 @@ export function resolveRecurringLessonsForWeek<T extends Record<string, any>>(
 ): Array<T & { instanceDate: string }> {
   const oneOffs: Array<T & { instanceDate: string }> = [];
   const recurringGroups = new Map<string, T[]>();
+  const suppressedSlotDates = new Set<string>();
 
   for (const r of rawLessons) {
-    const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFree || r.isWorkshop);
+    if (r.isSingleOccurrence && r.overridesDate && r.overridesSlotKey) {
+      suppressedSlotDates.add(`${r.overridesSlotKey}|${r.overridesDate}`);
+    }
+
+    const isOneOff = Boolean(
+      r.isExtra || r.isCatchUp || r.isFree || r.isWorkshop || r.isSingleOccurrence
+    );
     const sInfo = getAlgiersDateInfo(r.startsAt);
     if (isOneOff) {
       const d = new Date(r.startsAt);
@@ -268,19 +286,24 @@ export function resolveRecurringLessonsForWeek<T extends Record<string, any>>(
       continue;
     }
 
-    const eInfo = getAlgiersDateInfo(r.endsAt);
-    const slotKey = `${r.classId ?? 0}-${sInfo.weekday}-${sInfo.timeStr}-${eInfo.timeStr}`;
-    const group = recurringGroups.get(slotKey) || [];
+    const seriesKey = getRecurringSeriesKey(r as any);
+    const group = recurringGroups.get(seriesKey) || [];
     group.push(r);
-    recurringGroups.set(slotKey, group);
+    recurringGroups.set(seriesKey, group);
   }
 
   const resolvedRecurring: Array<T & { instanceDate: string }> = [];
 
   for (const [, group] of recurringGroups.entries()) {
     if (group.length === 0) continue;
-    const sampleInfo = getAlgiersDateInfo(group[0].startsAt);
+    const sample = group[0];
+    const sampleInfo = getAlgiersDateInfo(sample.startsAt);
+    const slotKey = getLessonSlotKey(sample as any);
     const targetDateStr = weekBounds.dayDates[sampleInfo.weekday] || sampleInfo.dateStr;
+
+    if (suppressedSlotDates.has(`${slotKey}|${targetDateStr}`)) {
+      continue;
+    }
 
     const matchingOnTargetDate = group.filter(
       (item) => getAlgiersDateInfo(item.startsAt).dateStr === targetDateStr
@@ -297,10 +320,13 @@ export function resolveRecurringLessonsForWeek<T extends Record<string, any>>(
         return (Number(b.id) || 0) - (Number(a.id) || 0);
       });
       const chosen = matchingOnTargetDate[0];
-      resolvedRecurring.push({
-        ...chosen,
-        instanceDate: targetDateStr,
-      });
+      const hasActivity = hasLessonRecordedActivity(chosen as any);
+      if (hasActivity || isRecurringOccurrenceActive(chosen.startsAt, chosen.endsAt, chosen)) {
+        resolvedRecurring.push({
+          ...chosen,
+          instanceDate: targetDateStr,
+        });
+      }
     } else {
       const sorted = [...group].sort((a, b) => {
         const tDiff = new Date(b.startsAt).getTime() - new Date(a.startsAt).getTime();
@@ -313,6 +339,11 @@ export function resolveRecurringLessonsForWeek<T extends Record<string, any>>(
         template.endsAt,
         targetDateStr
       );
+
+      if (!isRecurringOccurrenceActive(projected.startsAt, projected.endsAt, template)) {
+        continue;
+      }
+
       const cloned: any = {
         ...template,
         startsAt: projected.startsAt,
@@ -343,5 +374,44 @@ export function resolveRecurringLessonsForDate<T extends Record<string, any>>(
   const weekBounds = getAlgiersWeekBounds(0, targetDate);
   const weekLessons = resolveRecurringLessonsForWeek(rawLessons, weekBounds);
   return weekLessons.filter((l) => l.instanceDate === targetInfo.dateStr);
+}
+
+/**
+ * Resolves the active ongoing weekly schedule for a formation group.
+ * - Excludes retired slots whose recurrence ended at or before `now`.
+ * - Includes active slots occurring in the current week, plus any newly updated active slot
+ *   whose first occurrence begins next week (e.g. mid-week day move) so the schedule panel
+ *   immediately displays the upcoming weekly session.
+ */
+export function resolveActiveFormationSchedule<T extends Record<string, any>>(
+  rawLessons: T[],
+  now: Date = new Date()
+): Array<T & { instanceDate: string }> {
+  const activeOnly = rawLessons.filter((r) => {
+    const isOneOff = Boolean(r.isExtra || r.isCatchUp || r.isFree || r.isWorkshop);
+    if (isOneOff) return true;
+    return isActiveRecurringRow(r, now);
+  });
+
+  const currentWeekBounds = getAlgiersWeekBounds(0, now);
+  const nextWeekBounds = getAlgiersWeekBounds(1, now);
+
+  const currentWeekResolved = resolveRecurringLessonsForWeek(activeOnly, currentWeekBounds);
+  const seenSeriesKeys = new Set<string>(
+    currentWeekResolved
+      .filter((l) => !l.isExtra && !l.isCatchUp && !l.isFree && !l.isSingleOccurrence)
+      .map((l) => getRecurringSeriesKey(l as any))
+  );
+
+  const nextWeekResolved = resolveRecurringLessonsForWeek(activeOnly, nextWeekBounds);
+  const upcomingFromNextWeek = nextWeekResolved.filter((l) => {
+    if (l.isExtra || l.isCatchUp || l.isFree || l.isSingleOccurrence) return false;
+    const key = getRecurringSeriesKey(l as any);
+    return !seenSeriesKeys.has(key);
+  });
+
+  return [...currentWeekResolved, ...upcomingFromNextWeek].sort(
+    (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+  );
 }
 
