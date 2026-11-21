@@ -104,7 +104,24 @@ const PaymentForm = ({
       : null;
 
   const enrollment = (student.enrollments as any[])?.find((e) => e.classId === classData.id);
-  const currentPayerStatus = enrollment?.payerStatus || (student as any).payerStatus || "NORMAL";
+  const [liveEnrBilling, setLiveEnrBilling] = useState<{
+    payerStatus?: string | null;
+    discountType?: string | null;
+    discountValue?: number | null;
+  } | null>(null);
+  const currentPayerStatus =
+    liveEnrBilling?.payerStatus ||
+    enrollment?.payerStatus ||
+    (student as any).payerStatus ||
+    "NORMAL";
+  const currentDiscountType =
+    liveEnrBilling?.discountType !== undefined
+      ? liveEnrBilling.discountType
+      : enrollment?.discountType;
+  const currentDiscountValue =
+    liveEnrBilling?.discountValue !== undefined
+      ? liveEnrBilling.discountValue
+      : enrollment?.discountValue;
 
   const formationLevelPrice = Number(
     (classData as any)?.FormationLevel?.lumpSumPrice ?? classData.pricePerCycle ?? (classData as any)?.price ?? 0
@@ -112,8 +129,8 @@ const PaymentForm = ({
 
   const feeCalc = computeStudentSessionFee({
     payerStatus: currentPayerStatus,
-    discountType: enrollment?.discountType,
-    discountValue: enrollment?.discountValue,
+    discountType: currentDiscountType,
+    discountValue: currentDiscountValue,
     pricePerCycle: isFormation ? formationLevelPrice : Number(classData.pricePerCycle || (classData as any).price || 0),
     teacherPercentage,
     isSiblingWaived,
@@ -175,6 +192,13 @@ const PaymentForm = ({
     })
       .then((res) => {
         if (isMounted) {
+          if ((res as any).payerStatus !== undefined) {
+            setLiveEnrBilling({
+              payerStatus: (res as any).payerStatus || "NORMAL",
+              discountType: (res as any).discountType ?? null,
+              discountValue: (res as any).discountValue ?? null,
+            });
+          }
           if ((res as any).isPayerInThisClass !== undefined) {
             const payerEnrolled = Boolean((res as any).isPayerInThisClass);
             setIsPayerInClass(payerEnrolled);

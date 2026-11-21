@@ -392,11 +392,13 @@ const SingleStudentPage = async (
         groupPayerRemainingCredit = payerRes.netSessions;
       }
 
-      const groupSiblingDiscount = Boolean(isPayerInThisGroup && groupPayerActiveAndPaid);
       const groupSiblingDiscountPct = isPayerInThisGroup
         ? Number((studentPaymentData?.family as any)?.discountPercentage ?? 50)
         : 0;
       const groupIsSiblingWaived100 = isPayerInThisGroup && groupSiblingDiscountPct >= 100;
+      const groupSiblingDiscount = Boolean(
+        isPayerInThisGroup && (!groupIsSiblingWaived100 || groupPayerActiveAndPaid)
+      );
 
       const enrStatus = enr.payerStatus || "NORMAL";
       const enrDiscountType: string | null = (enr as any).discountType ?? null;
@@ -574,6 +576,7 @@ const SingleStudentPage = async (
         where: {
           classId: { in: classIds },
           startsAt: { gte: now },
+          OR: [{ recurrenceEndAt: null }, { recurrenceEndAt: { gt: now } }, { isSingleOccurrence: true }],
         },
         include: {
           class: true,
@@ -1018,7 +1021,9 @@ const SingleStudentPage = async (
                             ) : null}
                             {g.hasPayerSibling && !g.isSiblingWaived && (
                               <Badge variant="neutral" size="sm">
-                                {t("statusSiblingWaived")}
+                                {locale === "ar"
+                                  ? `خصم إخوة (${g.siblingDiscountPercentage}%)`
+                                  : `Fratrie (-${g.siblingDiscountPercentage}%)`}
                               </Badge>
                             )}
                           </div>

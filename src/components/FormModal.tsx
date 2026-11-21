@@ -24,7 +24,7 @@ import {
 } from "react";
 import { toast } from "react-toastify";
 import { FormContainerProps } from "./FormContainer";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { usePermission } from "@/hooks/usePermission";
 import { useRouter } from "@/i18n/navigation";
@@ -80,7 +80,15 @@ const DeleteConfirmation = ({
   const tModals = useTranslations("modals");
   const tTables = useTranslations("tables");
   const tCommon = useTranslations("common");
+  const locale = useLocale();
   const router = useRouter();
+  const isNormalRecurringLessonDelete =
+    table === "lesson" &&
+    (!data ||
+      (!data.isExtra &&
+        !data.isCatchUp &&
+        !data.isFree &&
+        !data.isSingleOccurrence));
 
   const deleteActionMap: Partial<
     Record<TableName, (currentState: any, data: FormData) => Promise<any>>
@@ -109,7 +117,7 @@ const DeleteConfirmation = ({
   useEffect(() => {
     if (state.success) {
       toast.success(
-        tModals("deleteSuccess", { name: tableName })
+        state.message || tModals("deleteSuccess", { name: tableName })
       );
       setOpen(false);
       startTransition(() => {
@@ -159,7 +167,11 @@ const DeleteConfirmation = ({
         {tModals("deleteConfirmTitle")}
       </h2>
       <p className="text-table-body text-muted">
-        {tModals("deleteConfirmMessage", { name: tableName })}
+        {isNormalRecurringLessonDelete
+          ? locale === "ar"
+            ? "سيتم حذف الحصص القادمة فقط لهذا الموعد. ستبقى جميع الحصص السابقة وتواريخها وسجلات حضورها محفوظة كما هي."
+            : "Seules les séances futures de ce créneau seront supprimées. Toutes les anciennes séances, dates et présences enregistrées seront conservées."
+          : tModals("deleteConfirmMessage", { name: tableName })}
       </p>
       <div className="flex items-center gap-3 mt-4 w-full">
         <Button

@@ -272,6 +272,39 @@ export function resolvePayerPeriodAtDate(
 /**
  * Computes the financial breakdown for a student's session and cycle tuition.
  */
+/**
+ * Resolves the effective sibling discount percentage after applying formation/owner-discount
+ * precedence and payer-activity gating. Full 100% waivers require `isPayerActiveAndPaid`;
+ * partial discounts (< 100%, e.g. 50%) stay active whenever the payer sibling is actively
+ * enrolled in the class so cycle-renewal boundaries never revoke the sibling rate.
+ */
+function resolveEffectiveSiblingDiscountPct({
+  isFormation,
+  isDiscounted = false,
+  siblingDiscountPercentage,
+  isSiblingWaived = false,
+  waivedDefaultPct = 100,
+  isPayerActiveAndPaid = true,
+}: {
+  isFormation: boolean;
+  isDiscounted?: boolean;
+  siblingDiscountPercentage?: number | null;
+  isSiblingWaived?: boolean;
+  waivedDefaultPct?: number;
+  isPayerActiveAndPaid?: boolean | null;
+}): number {
+  if (isFormation || isDiscounted) return 0;
+  const rawPct =
+    siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
+      ? Number(siblingDiscountPercentage)
+      : isSiblingWaived
+      ? waivedDefaultPct
+      : 0;
+  if (rawPct <= 0) return 0;
+  if (rawPct >= 100 && !(isPayerActiveAndPaid ?? true)) return 0;
+  return rawPct;
+}
+
 export function computeStudentSessionFee({
   payerStatus,
   discountType,
@@ -363,15 +396,14 @@ export function computeStudentSessionFee({
   }
 
   // 3. Sibling discount (percentage discount, default 50% / half-price)
-  // Formations are excluded from sibling discounts, and payer must be active & paid
-  const isEligibleForSiblingDiscount = !isFormation && (isPayerActiveAndPaid ?? true);
-  const effectiveDiscount = isEligibleForSiblingDiscount
-    ? (siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
-        ? Number(siblingDiscountPercentage)
-        : isSiblingWaived
-        ? 50
-        : 0)
-    : 0;
+  const effectiveDiscount = resolveEffectiveSiblingDiscountPct({
+    isFormation: Boolean(isFormation),
+    isDiscounted: false,
+    siblingDiscountPercentage,
+    isSiblingWaived,
+    waivedDefaultPct: 50,
+    isPayerActiveAndPaid,
+  });
 
   if (effectiveDiscount >= 100) {
     return {
@@ -1935,14 +1967,14 @@ export function buildPaidSessionSlotSchedule({
   const isDiscounted = normStatus === "DISCOUNTED";
 
   // Owner-configured DISCOUNTED takes precedence over automatic Sibling Discount.
-  const isEligibleForSiblingDiscount = !isForm && !isDiscounted && (isPayerActiveAndPaid ?? true);
-  const siblingDiscountPct = isEligibleForSiblingDiscount
-    ? (siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
-        ? Number(siblingDiscountPercentage)
-        : isSiblingWaived
-        ? 100
-        : 0)
-    : 0;
+  const siblingDiscountPct = resolveEffectiveSiblingDiscountPct({
+    isFormation: isForm,
+    isDiscounted,
+    siblingDiscountPercentage,
+    isSiblingWaived,
+    waivedDefaultPct: 100,
+    isPayerActiveAndPaid,
+  });
   const isSiblingWaived100 = siblingDiscountPct >= 100;
 
   const cyclePrice = Math.max(0, Number(pricePerCycle || 0));
@@ -2306,14 +2338,14 @@ export function computeStudentCreditAndSessions({
   const isSchoolFeesOnly = normStatus === "SCHOOL_FEES_ONLY";
   const isDiscounted = normStatus === "DISCOUNTED";
 
-  const isEligibleForSiblingDiscount = !isForm && !isDiscounted && (isPayerActiveAndPaid ?? true);
-  const siblingDiscountPct = isEligibleForSiblingDiscount
-    ? (siblingDiscountPercentage !== undefined && siblingDiscountPercentage !== null
-        ? Number(siblingDiscountPercentage)
-        : isSiblingWaived
-        ? 100
-        : 0)
-    : 0;
+  const siblingDiscountPct = resolveEffectiveSiblingDiscountPct({
+    isFormation: isForm,
+    isDiscounted,
+    siblingDiscountPercentage,
+    isSiblingWaived,
+    waivedDefaultPct: 100,
+    isPayerActiveAndPaid,
+  });
   const isSiblingWaived100 = siblingDiscountPct >= 100;
 
   const cyclePrice = Math.max(0, Number(pricePerCycle || 0));

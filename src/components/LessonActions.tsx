@@ -11,7 +11,7 @@ type TimetableLesson = Lesson & {
 const LessonActions = ({ lesson }: { lesson: TimetableLesson }) => {
   return (
     <div className="flex justify-end gap-3">
-      <FormContainer table="lesson" type="delete" id={lesson.id} />
+      <FormContainer table="lesson" type="delete" id={lesson.id} data={lesson} />
       <FormContainer
         table="lesson"
         type="update"

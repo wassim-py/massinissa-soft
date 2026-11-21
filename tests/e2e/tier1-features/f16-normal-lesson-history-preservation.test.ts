@@ -9,6 +9,7 @@ import {
   getNextUpcomingOccurrence,
   isLessonRowFrozen,
   isRecurringOccurrenceActive,
+  partitionFrozenRowsForRetirement,
 } from "../../../src/lib/lessonRecurrence";
 import {
   getAlgiersDateInfo,
@@ -499,6 +500,127 @@ export async function runF16Tests() {
           }
         )
       ).toBe(true);
+    });
+
+    test("F16-09 (Delete Hardening): partitionFrozenRowsForRetirement prevents resurrection of retired weeks and detaches future-week frozen rows", () => {
+      // 1. Re-deleting an already-retired past series on Nov 21 must NEVER extend its Nov 18 cutoff to Nov 21
+      const nov18 = buildAlgiersTimestamp("2026-11-18", "12:00");
+      const nov21 = buildAlgiersTimestamp("2026-11-21", "22:00");
+      const alreadyRetired = [
+        {
+          id: 1,
+          startsAt: buildAlgiersTimestamp("2026-11-14", "10:00"),
+          endsAt: buildAlgiersTimestamp("2026-11-14", "12:00"),
+          recurrenceEndAt: nov18,
+        },
+      ];
+      const resAlready = partitionFrozenRowsForRetirement(alreadyRetired, nov21);
+      expect(resAlready.retirementCutoff.getTime()).toBe(nov18.getTime());
+      expect(resAlready.detachedFutureFrozenRows.length).toBe(0);
+
+      // 2. Deleting on Fri Nov 20 when past rows (Nov 7, Nov 14) exist AND a future Dec 5 row has an anticipatory catch-up:
+      //    - Past rows retire immediately at Fri Nov 20 (deleting unrecorded Nov 21 & Nov 28!)
+      //    - Dec 5 row is detached into detachedFutureFrozenRows so its catch-up record is preserved on Dec 5 only
+      const friNov20 = buildAlgiersTimestamp("2026-11-20", "15:00");
+      const mixedFrozen = [
+        {
+          id: 10,
+          startsAt: buildAlgiersTimestamp("2026-11-07", "10:00"),
+          endsAt: buildAlgiersTimestamp("2026-11-07", "12:00"),
+          recurrenceEndAt: null,
+        },
+        {
+          id: 11,
+          startsAt: buildAlgiersTimestamp("2026-11-14", "10:00"),
+          endsAt: buildAlgiersTimestamp("2026-11-14", "12:00"),
+          recurrenceEndAt: null,
+        },
+        {
+          id: 12,
+          startsAt: buildAlgiersTimestamp("2026-12-05", "10:00"),
+          endsAt: buildAlgiersTimestamp("2026-12-05", "12:00"),
+          recurrenceEndAt: null,
+        },
+      ];
+      const resMixed = partitionFrozenRowsForRetirement(mixedFrozen, friNov20);
+      expect(resMixed.seriesFrozenRows.length).toBe(2);
+      expect(resMixed.detachedFutureFrozenRows.length).toBe(1);
+      expect(resMixed.detachedFutureFrozenRows[0].id).toBe(12);
+      expect(resMixed.retirementCutoff.getTime()).toBe(friNov20.getTime());
+
+      // Verify timetable after detaching Dec 5 and retiring Nov 7/14 at Fri Nov 20:
+      const postDeleteLessons = [
+        {
+          id: 10,
+          classId: 3,
+          startsAt: buildAlgiersTimestamp("2026-11-07", "10:00"),
+          endsAt: buildAlgiersTimestamp("2026-11-07", "12:00"),
+          isExtra: false,
+          isCatchUp: false,
+          isFree: false,
+          isSingleOccurrence: false,
+          recurrenceStartAt: null,
+          recurrenceEndAt: resMixed.retirementCutoff,
+        },
+        {
+          id: 11,
+          classId: 3,
+          startsAt: buildAlgiersTimestamp("2026-11-14", "10:00"),
+          endsAt: buildAlgiersTimestamp("2026-11-14", "12:00"),
+          isExtra: false,
+          isCatchUp: false,
+          isFree: false,
+          isSingleOccurrence: false,
+          recurrenceStartAt: null,
+          recurrenceEndAt: resMixed.retirementCutoff,
+        },
+        {
+          id: 12,
+          classId: 3,
+          startsAt: buildAlgiersTimestamp("2026-12-05", "10:00"),
+          endsAt: buildAlgiersTimestamp("2026-12-05", "12:00"),
+          isExtra: false,
+          isCatchUp: false,
+          isFree: false,
+          isSingleOccurrence: true,
+          recurrenceStartAt: null,
+          recurrenceEndAt: null,
+        },
+      ];
+      // Past Nov 14 preserved
+      expect(
+        resolveRecurringLessonsForWeek(postDeleteLessons, getAlgiersWeekBounds(0, friNov20)).length
+      ).toBe(1);
+      // Unrecorded future Nov 21 & Nov 28 are DELETED
+      expect(
+        resolveRecurringLessonsForWeek(postDeleteLessons, getAlgiersWeekBounds(1, friNov20)).length
+      ).toBe(0);
+      expect(
+        resolveRecurringLessonsForWeek(postDeleteLessons, getAlgiersWeekBounds(2, friNov20)).length
+      ).toBe(0);
+      // Dec 5 recorded catch-up preserved on Dec 5 ONLY, and Dec 12 is DELETED
+      const weekDec5 = resolveRecurringLessonsForWeek(
+        postDeleteLessons,
+        getAlgiersWeekBounds(3, friNov20)
+      );
+      expect(weekDec5.length).toBe(1);
+      expect(weekDec5[0].id).toBe(12);
+      expect(
+        resolveRecurringLessonsForWeek(postDeleteLessons, getAlgiersWeekBounds(4, friNov20)).length
+      ).toBe(0);
+    });
+
+    test("F16-10 (Delete UI & Dashboard Parity): FormModal, UserCard, and Timetable pages reflect non-destructive delete behavior", () => {
+      const formModal = readSourceFile("src/components/FormModal.tsx");
+      const userCard = readSourceFile("src/components/UserCard.tsx");
+      const lessonsPage = readSourceFile("src/app/[locale]/(dashboard)/list/lessons/page.tsx");
+      const teacherPage = readSourceFile("src/app/[locale]/(dashboard)/list/teachers/[id]/page.tsx");
+
+      expect(formModal.includes("isNormalRecurringLessonDelete")).toBe(true);
+      expect(formModal.includes("state.message ||")).toBe(true);
+      expect(userCard.includes("resolveRecurringLessonsForDate")).toBe(true);
+      expect(lessonsPage.includes("lesson.isRetired")).toBe(true);
+      expect(teacherPage.includes("isRetired")).toBe(true);
     });
   });
 }

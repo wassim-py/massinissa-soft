@@ -667,11 +667,13 @@ const ClassAttendancePage = async (
                         }
                     }
 
-                    const isSiblingDiscount = Boolean(isPayerInClass && isPayerActiveAndPaid);
                     const siblingDiscountPct = isPayerInClass
                         ? Number((details?.family as any)?.discountPercentage ?? 50)
                         : 0;
                     const isSiblingWaived100 = isPayerInClass && siblingDiscountPct >= 100;
+                    const isSiblingDiscount = Boolean(
+                        isPayerInClass && (!isSiblingWaived100 || isPayerActiveAndPaid)
+                    );
 
                     const isPayerSiblingPaid = isSiblingWaived100
                         ? isPayerActiveAndPaid
@@ -717,7 +719,8 @@ const ClassAttendancePage = async (
                         siblingDiscountPercentage: siblingDiscountPct,
                         isSiblingWaived: isSiblingWaived100,
                         isPayerSiblingPaid,
-                        payerRemainingCredit: isSiblingWaived100 ? undefined : payerRemainingCredit,
+                        isPayerActiveAndPaid,
+                        payerRemainingCredit: isSiblingWaived100 ? payerRemainingCredit : undefined,
                         tuitionVouchers,
                         transfersIn: enrollment?.transfersTo || [],
                         transfersOut: enrollment?.transfersFrom || [],

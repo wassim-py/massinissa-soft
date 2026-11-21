@@ -5,11 +5,11 @@ import {
 } from "@/lib/utils";
 import {
   addDaysToDateStr,
-  computeRetirementCutoff,
   doesSameRecurrenceSeriesMatch,
   getLessonSlotKey,
   isLessonRowFrozen,
   isRecurringOccurrenceActive,
+  partitionFrozenRowsForRetirement,
 } from "@/lib/lessonRecurrence";
 
 /**
@@ -521,7 +521,7 @@ export async function applyNormalLessonFutureUpdate(params: {
   isExtra: boolean;
   isCatchUp: boolean;
   isFree: boolean;
-  frozenRows: Array<{ id: number; endsAt: Date }>;
+  frozenRows: Array<{ id: number; startsAt: Date; endsAt: Date; recurrenceEndAt?: Date | null }>;
   mutableFutureRows: Array<{ id: number }>;
   now?: Date;
 }) {
@@ -531,14 +531,31 @@ export async function applyNormalLessonFutureUpdate(params: {
 
   return prisma.$transaction(async (tx) => {
     if (params.frozenRows.length > 0) {
-      const retirementCutoff = computeRetirementCutoff(params.frozenRows, now);
-      const frozenIds = params.frozenRows.map((r) => r.id);
+      const { seriesFrozenRows, detachedFutureFrozenRows, retirementCutoff } =
+        partitionFrozenRowsForRetirement(params.frozenRows, now);
+      const seriesFrozenIds = seriesFrozenRows.map((r) => r.id);
+      const detachedFutureIds = detachedFutureFrozenRows.map((r) => r.id);
 
-      // 1. Conserve all frozen historical rows untouched — only seal their recurrenceEndAt
-      await tx.lesson.updateMany({
-        where: { id: { in: frozenIds } },
-        data: { recurrenceEndAt: retirementCutoff },
-      });
+      // 1. Conserve all past/same-day frozen historical rows untouched — only seal their recurrenceEndAt
+      if (seriesFrozenIds.length > 0) {
+        await tx.lesson.updateMany({
+          where: { id: { in: seriesFrozenIds } },
+          data: { recurrenceEndAt: retirementCutoff },
+        });
+      }
+
+      // Detach any strictly future-date frozen rows (e.g. anticipatory catch-ups) as standalone occurrences
+      // so their records stay intact without keeping unrecorded intermediate weeks alive.
+      if (detachedFutureIds.length > 0) {
+        await tx.lesson.updateMany({
+          where: { id: { in: detachedFutureIds } },
+          data: {
+            isSingleOccurrence: true,
+            recurrenceStartAt: null,
+            recurrenceEndAt: null,
+          },
+        });
+      }
 
       // 2. Delete upcoming unused rows of the superseded slot
       const mutableIds = params.mutableFutureRows.map((r) => r.id);
@@ -581,7 +598,7 @@ export async function applyNormalLessonFutureUpdate(params: {
 
       return {
         lesson: created,
-        preservedHistoryCount: frozenIds.length,
+        preservedHistoryCount: seriesFrozenIds.length + detachedFutureIds.length,
         createdNewRow: true,
       };
     }
@@ -911,32 +928,55 @@ export async function retireOrDeleteNormalLesson(
   lessonId: number,
   now: Date = new Date()
 ): Promise<{
-  mode: "retired" | "deleted";
+  mode: "retired" | "deleted" | "already_retired";
   preservedHistoryCount: number;
   deletedFutureCount: number;
 }> {
-  const { frozenRows, mutableFutureRows } = await findSeriesLessonsWithUsage(
+  const { base, frozenRows, mutableFutureRows } = await findSeriesLessonsWithUsage(
     lessonId,
     now
   );
 
+  const wasAlreadyRetired = Boolean(
+    base?.recurrenceEndAt && new Date(base.recurrenceEndAt).getTime() <= now.getTime()
+  );
+
   return prisma.$transaction(async (tx) => {
     if (frozenRows.length > 0) {
-      const retirementCutoff = computeRetirementCutoff(frozenRows, now);
-      const frozenIds = frozenRows.map((r) => r.id);
+      const { seriesFrozenRows, detachedFutureFrozenRows, retirementCutoff } =
+        partitionFrozenRowsForRetirement(frozenRows, now);
+      const seriesFrozenIds = seriesFrozenRows.map((r) => r.id);
+      const detachedFutureIds = detachedFutureFrozenRows.map((r) => r.id);
 
-      await tx.lesson.updateMany({
-        where: { id: { in: frozenIds } },
-        data: { recurrenceEndAt: retirementCutoff },
-      });
+      // Only seal recurrenceEndAt if not already retired earlier (never extend an earlier cutoff forward)
+      if (!wasAlreadyRetired && seriesFrozenIds.length > 0) {
+        await tx.lesson.updateMany({
+          where: { id: { in: seriesFrozenIds } },
+          data: { recurrenceEndAt: retirementCutoff },
+        });
+      }
+
+      if (detachedFutureIds.length > 0) {
+        await tx.lesson.updateMany({
+          where: { id: { in: detachedFutureIds } },
+          data: {
+            isSingleOccurrence: true,
+            recurrenceStartAt: null,
+            recurrenceEndAt: null,
+          },
+        });
+      }
 
       // Remove announcements for retired future projections (only upcoming non-expired ones)
-      await tx.announcement.deleteMany({
-        where: {
-          lessonId: { in: frozenIds },
-          expiresAt: { gt: now },
-        },
-      });
+      const allFrozenIds = [...seriesFrozenIds, ...detachedFutureIds];
+      if (allFrozenIds.length > 0) {
+        await tx.announcement.deleteMany({
+          where: {
+            lessonId: { in: allFrozenIds },
+            expiresAt: { gt: now },
+          },
+        });
+      }
 
       const mutableIds = mutableFutureRows.map((r) => r.id);
       if (mutableIds.length > 0) {
@@ -949,8 +989,8 @@ export async function retireOrDeleteNormalLesson(
       }
 
       return {
-        mode: "retired",
-        preservedHistoryCount: frozenIds.length,
+        mode: wasAlreadyRetired && mutableIds.length === 0 ? "already_retired" : "retired",
+        preservedHistoryCount: allFrozenIds.length,
         deletedFutureCount: mutableIds.length,
       };
     }

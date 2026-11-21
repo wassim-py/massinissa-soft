@@ -657,11 +657,13 @@ export default function StudentPaymentDetails({
       enrPayerRemainingCredit = payerRes.netSessions;
     }
 
-    const enrSiblingDiscount = Boolean(isPayerInThisClass && enrPayerActiveAndPaid);
     const enrSiblingDiscountPct = isPayerInThisClass
       ? Number((student.family as any)?.discountPercentage ?? 50)
       : 0;
     const enrIsSiblingWaived100 = isPayerInThisClass && enrSiblingDiscountPct >= 100;
+    const enrSiblingDiscount = Boolean(
+      isPayerInThisClass && (!enrIsSiblingWaived100 || enrPayerActiveAndPaid)
+    );
 
     const feeCalc = computeStudentSessionFee({
       payerStatus: enrPayerStatus,
@@ -697,7 +699,7 @@ export default function StudentPaymentDetails({
       siblingDiscountPercentage: enrSiblingDiscountPct,
       isSiblingWaived: enrIsSiblingWaived100,
       isPayerActiveAndPaid: enrPayerActiveAndPaid,
-      payerRemainingCredit: enrSiblingDiscount ? enrPayerRemainingCredit : undefined,
+      payerRemainingCredit: enrIsSiblingWaived100 ? enrPayerRemainingCredit : undefined,
       teacherPercentage,
       tuitionVouchers,
       transfersIn: enr.transfersTo,
@@ -1595,7 +1597,7 @@ export default function StudentPaymentDetails({
                             <Badge variant="secondary" size="sm" withDot className="font-bold">
                               {locale === "ar" ? "معفى (خصم إخوة 100%)" : "Exonéré (Fratrie 100%)"}
                             </Badge>
-                          ) : cm.hasPayerSibling && cm.status === "UNPAID" ? (
+                          ) : cm.hasPayerSibling && cm.siblingDiscountPct >= 100 && cm.status === "UNPAID" ? (
                             <Badge variant="danger" size="sm" withDot className="font-bold">
                               {locale === "ar" ? "غير مدفوع (تابع للأخ)" : "Non payé (Fratrie)"}
                             </Badge>

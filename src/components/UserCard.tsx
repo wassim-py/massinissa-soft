@@ -4,6 +4,7 @@ import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getActiveBranchId } from "@/lib/auth";
+import { resolveRecurringLessonsForDate } from "@/lib/utils";
 import BranchTeacherModal, { BranchTeacherData } from "./dashboard/BranchTeacherModal";
 
 interface UserCardProps {
@@ -33,10 +34,11 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
     branchName = branchRecord?.name || `Siège #${activeBranchId}`;
     academicYearLabel = activeYearRecord?.label || "";
 
-    const startOfToday = new Date();
+    const now = new Date();
+    const startOfToday = new Date(now);
     startOfToday.setHours(0, 0, 0, 0);
 
-    const endOfToday = new Date();
+    const endOfToday = new Date(now);
     endOfToday.setHours(23, 59, 59, 999);
 
     switch (type) {
@@ -78,11 +80,19 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
             },
             lessons: {
               select: {
+                id: true,
+                classId: true,
                 branchId: true,
                 startsAt: true,
+                endsAt: true,
                 isExtra: true,
                 isCatchUp: true,
                 isFree: true,
+                isSingleOccurrence: true,
+                recurrenceStartAt: true,
+                recurrenceEndAt: true,
+                overridesDate: true,
+                overridesSlotKey: true,
                 class: { select: { isFormation: true, isCompleted: true, isPaused: true } },
                 branch: { select: { id: true, name: true } },
               },
@@ -115,22 +125,11 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
             }
           });
 
-          // Count lessons today across the school
-          const todayDow = startOfToday.getDay();
-          const todayLessons = t.lessons.filter((l) => {
-            if (l.class?.isCompleted || l.class?.isPaused) return false;
-            const isOneOff = Boolean(
-              l.isExtra || l.isCatchUp
-            );
-            if (isOneOff) {
-              const lessonDate = new Date(l.startsAt);
-              return (
-                lessonDate >= startOfToday &&
-                lessonDate <= endOfToday
-              );
-            }
-            return new Date(l.startsAt).getDay() === todayDow;
-          });
+          // Count active lessons today across the school (respecting recurrence lifecycle & retired slots)
+          const activeClassLessons = t.lessons.filter(
+            (l) => !l.class?.isCompleted && !l.class?.isPaused
+          );
+          const todayLessons = resolveRecurringLessonsForDate(activeClassLessons, now);
 
           if (todayLessons.length > 0) {
             teachersWithLessonsTodayCount++;

@@ -305,11 +305,13 @@ const AdminPage = async () => {
           })
         : null;
 
-      const isSiblingDiscount = Boolean(isPayerInThisClass && payerCredit?.isPayerActiveAndPaid);
       const siblingDiscountPct = isPayerInThisClass
         ? Number((student.family as any)?.discountPercentage ?? 50)
         : 0;
       const isSiblingWaived100 = isPayerInThisClass && siblingDiscountPct >= 100;
+      const isSiblingDiscount = Boolean(
+        isPayerInThisClass && (!isSiblingWaived100 || payerCredit?.isPayerActiveAndPaid)
+      );
 
       const enrDiscountType = (enr as any).discountType || null;
       const enrDiscountValue = (enr as any).discountValue != null ? Number((enr as any).discountValue) : null;
@@ -323,7 +325,8 @@ const AdminPage = async () => {
         payerHistory: (enr as any).payerHistory || [],
         siblingDiscountPercentage: siblingDiscountPct,
         isSiblingWaived: isSiblingWaived100,
-        payerRemainingCredit: isSiblingDiscount ? payerCredit?.netSessions : undefined,
+        isPayerActiveAndPaid: Boolean(payerCredit?.isPayerActiveAndPaid),
+        payerRemainingCredit: isSiblingWaived100 ? payerCredit?.netSessions : undefined,
         tuitionVouchers,
         transfersIn: enr.transfersTo,
         transfersOut: enr.transfersFrom,
@@ -344,7 +347,7 @@ const AdminPage = async () => {
       }
 
       const remainingSessions =
-        !creditMetrics.isDiscounted && isSiblingDiscount && payerCredit
+        !creditMetrics.isDiscounted && creditMetrics.isSiblingWaived && payerCredit
           ? payerCredit.netSessions
           : creditMetrics.netSessions;
       const status: "PAID" | "EXPIRING" | "UNPAID" =

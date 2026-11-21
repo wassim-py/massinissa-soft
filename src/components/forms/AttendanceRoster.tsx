@@ -1480,7 +1480,7 @@ const AttendanceRoster = ({
               siblingDiscountPercentage: effectiveSiblingDiscountPct,
               isSiblingWaived: isSiblingWaivedEffective,
               isPayerSiblingPaid,
-              payerRemainingCredit: isSiblingDiscountEffective && !isSiblingWaivedEffective ? effectivePayerRemainingCredit : undefined,
+              payerRemainingCredit: isSiblingWaivedEffective ? effectivePayerRemainingCredit : undefined,
               tuitionVouchers,
               transfersIn: student.transfersTo || [],
               transfersOut: student.transfersFrom || [],

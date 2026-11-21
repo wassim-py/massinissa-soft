@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import { describe, test, expect, runner } from "./helpers/runner";
 import { can } from "@/lib/permissions";
 import { enrollmentDiscountSchema } from "@/lib/formValidationSchemas";
@@ -1037,6 +1039,227 @@ export async function runDiscountedPaymentTypeTests() {
       expect(calc!.sessionDetails![0].lessonAmount).toBe(0);
       expect(calc!.sessionDetails![1].lessonAmount).toBeCloseTo(175, 0.01);
       expect(calc!.grossAmount).toBeCloseTo(175, 0.01);
+    });
+  });
+
+  await describe("Regression: Remise Remaining Sessions & Partial (<100%) Sibling Calculations", async () => {
+    test("DP-20: Partial sibling (<100%) preserves discounted rate when payer hits 0/-1 credit & calculates own sessions across multi-cycle vouchers", () => {
+      // Base cycle 5000 (1250/ses), 50% sibling => 2500/cycle (625/ses)
+      const baseCycle = 5000;
+      const lessons = Array.from({ length: 25 }, (_, i) => ({
+        id: 7000 + i,
+        startsAt: new Date(Date.UTC(2026, 8, i + 1, 10, 0, 0)),
+      }));
+      const attendances = lessons.map((l) => ({ lessonId: l.id, status: "PRESENT" }));
+      const multiCycleVouchers = [
+        {
+          id: 1,
+          amount: 5000,
+          paymentType: "TUITION_4SESSION",
+          issuedAt: new Date("2026-08-04T12:00:00Z"),
+          isVoided: false,
+          isRefund: false,
+          appliedPayerStatus: "SIBLING",
+          effectiveSessionPrice: 625,
+        },
+        {
+          id: 2,
+          amount: 5000,
+          paymentType: "TUITION_4SESSION",
+          issuedAt: new Date("2026-09-04T12:00:00Z"),
+          isVoided: false,
+          isRefund: false,
+          appliedPayerStatus: "SIBLING",
+          effectiveSessionPrice: 625,
+        },
+        {
+          id: 3,
+          amount: 5000,
+          paymentType: "TUITION_4SESSION",
+          issuedAt: new Date("2026-10-04T12:00:00Z"),
+          isVoided: false,
+          isRefund: false,
+          appliedPayerStatus: "SIBLING",
+          effectiveSessionPrice: 625,
+        },
+      ];
+
+      // Payer sibling just finished cycle & hit -1 (isPayerActiveAndPaid = false),
+      // yet partial 50% sibling keeps 625/ses (2500/cycle) & own 24 purchased sessions => -1 remaining
+      const partialRes = computeStudentCreditAndSessions({
+        pricePerCycle: baseCycle,
+        payerStatus: "NORMAL",
+        siblingDiscountPercentage: 50,
+        isSiblingWaived: false,
+        isPayerSiblingPaid: false,
+        isPayerActiveAndPaid: false,
+        tuitionVouchers: multiCycleVouchers,
+        attendances,
+        lessons,
+      });
+
+      expect(partialRes.purchasedSessions).toBe(24);
+      expect(partialRes.attendedSessions).toBe(25);
+      expect(partialRes.netSessions).toBe(-1);
+      expect(partialRes.effectiveLessonPrice).toBe(625);
+      expect(partialRes.effectiveCycleFee).toBe(2500);
+      expect(partialRes.isSiblingWaived).toBe(false);
+
+      // Renewal snapshot for 50% sibling while payer is at 0 credit must still stamp 625/ses (4 sessions for 2500)
+      const renewalSnap = buildVoucherBillingSnapshot({
+        payerStatus: "NORMAL",
+        pricePerCycle: baseCycle,
+        teacherPercentage: 70,
+        isFormation: false,
+        isSiblingWaived: false,
+        siblingDiscountPercentage: 50,
+        isPayerActiveAndPaid: false,
+      });
+      expect(renewalSnap.appliedPayerStatus).toBe("NORMAL");
+      expect(renewalSnap.discountType).toBe("SIBLING");
+      expect(renewalSnap.discountValue).toBe(50);
+      expect(renewalSnap.effectiveCyclePrice).toBe(2500);
+      expect(renewalSnap.effectiveSessionPrice).toBe(625);
+
+      // Conversely, 100% waived sibling still gates on isPayerActiveAndPaid
+      const waivedUnpaidFee = computeStudentSessionFee({
+        payerStatus: "NORMAL",
+        pricePerCycle: baseCycle,
+        siblingDiscountPercentage: 100,
+        isSiblingWaived: true,
+        isPayerActiveAndPaid: false,
+      });
+      expect(waivedUnpaidFee.isSiblingWaived).toBe(false);
+      expect(waivedUnpaidFee.studentCycleFee).toBe(5000);
+    });
+
+    test("DP-21: DISCOUNTED students compute remaining sessions at personalized tariff rather than group cycle price", () => {
+      // Scenario A: 2500/cycle group with FIXED_AMOUNT 1500 remise => 1000/cycle (250/ses), 1000 paid, 3 attended => +1 session remaining
+      const resA = computeStudentCreditAndSessions({
+        pricePerCycle: 2500,
+        payerStatus: "DISCOUNTED",
+        discountType: "FIXED_AMOUNT",
+        discountValue: 1500,
+        tuitionVouchers: [
+          {
+            id: 7903,
+            amount: 1000,
+            paymentType: "TUITION_4SESSION",
+            issuedAt: new Date("2026-11-14T12:00:00Z"),
+            isVoided: false,
+            isRefund: false,
+            appliedPayerStatus: "DISCOUNTED",
+            effectiveSessionPrice: 250,
+          },
+        ],
+        lessons: [
+          { id: 1, startsAt: new Date("2026-11-14T13:00:00Z") },
+          { id: 2, startsAt: new Date("2026-11-21T13:00:00Z") },
+          { id: 3, startsAt: new Date("2026-11-28T13:00:00Z") },
+        ],
+        attendances: [
+          { lessonId: 1, status: "PRESENT" },
+          { lessonId: 2, status: "PRESENT" },
+          { lessonId: 3, status: "PRESENT" },
+        ],
+      });
+      expect(resA.effectiveCycleFee).toBe(1000);
+      expect(resA.effectiveLessonPrice).toBe(250);
+      expect(resA.purchasedSessions).toBe(4);
+      expect(resA.netSessions).toBe(1);
+      expect(resA.slotSchedule.unconvertedPartialCashDzd).toBe(0);
+      expect(resA.status).toBe("EXPIRING");
+
+      // Scenario B: Historical full-price cycles (3 x 3000 @ 750/ses = 12 ses) + trailing discounted cycle (2000 @ 500/ses = 4 ses)
+      const resB = computeStudentCreditAndSessions({
+        pricePerCycle: 3000,
+        payerStatus: "DISCOUNTED",
+        discountType: "CUSTOM_PRICE",
+        discountValue: 2000,
+        tuitionVouchers: [
+          {
+            id: 1,
+            amount: 3000,
+            paymentType: "TUITION_4SESSION",
+            issuedAt: new Date("2026-08-22T12:00:00Z"),
+            isVoided: false,
+            isRefund: false,
+            appliedPayerStatus: "NORMAL",
+            effectiveSessionPrice: 750,
+          },
+          {
+            id: 2,
+            amount: 3000,
+            paymentType: "TUITION_4SESSION",
+            issuedAt: new Date("2026-09-23T12:00:00Z"),
+            isVoided: false,
+            isRefund: false,
+            appliedPayerStatus: "NORMAL",
+            effectiveSessionPrice: 750,
+          },
+          {
+            id: 3,
+            amount: 3000,
+            paymentType: "TUITION_4SESSION",
+            issuedAt: new Date("2026-10-17T12:00:00Z"),
+            isVoided: false,
+            isRefund: false,
+            appliedPayerStatus: "NORMAL",
+            effectiveSessionPrice: 750,
+          },
+          {
+            id: 4,
+            amount: 2000,
+            paymentType: "TUITION_4SESSION",
+            issuedAt: new Date("2026-11-07T12:00:00Z"),
+            isVoided: false,
+            isRefund: false,
+            appliedPayerStatus: "DISCOUNTED",
+            effectiveSessionPrice: 500,
+          },
+        ],
+        lessons: Array.from({ length: 8 }, (_, i) => ({
+          id: 9000 + i,
+          startsAt: new Date(Date.UTC(2026, 9, i + 1, 10, 0, 0)),
+        })),
+        attendances: Array.from({ length: 8 }, (_, i) => ({
+          lessonId: 9000 + i,
+          status: "PRESENT",
+        })),
+      });
+      expect(resB.purchasedSessions).toBe(16);
+      expect(resB.netSessions).toBe(8);
+      expect(resB.slotSchedule.unconvertedPartialCashDzd).toBe(0);
+      expect(resB.status).toBe("PAID");
+    });
+
+    test("DP-22: Biometrics, dashboard, exports, and actions keep partial sibling credits distinct and reconcile DISCOUNTED trailing vouchers", () => {
+      const readRepo = (rel: string) => fs.readFileSync(path.resolve(process.cwd(), rel), "utf8");
+      const bio = readRepo("src/lib/biometricActions.ts");
+      const adminPage = readRepo("src/app/[locale]/(dashboard)/admin/page.tsx");
+      const actions = readRepo("src/lib/actions.ts");
+      const paymentGrid = readRepo("src/components/PaymentGrid.tsx");
+      const studentDetails = readRepo("src/components/StudentPaymentDetails.tsx");
+
+      // Biometrics only exempts/gates 100%-waived siblings on payer credit, not partial (<100%) siblings
+      expect(bio.includes("isSiblingWaived100Student")).toBe(true);
+      expect(bio.includes("else if (isSiblingWaived100Student)")).toBe(true);
+      expect(bio.includes("!isSiblingWaived100Student")).toBe(true);
+
+      // Admin dashboard only mirrors payerCredit.netSessions when creditMetrics.isSiblingWaived (100%)
+      expect(adminPage.includes("!creditMetrics.isDiscounted && creditMetrics.isSiblingWaived && payerCredit")).toBe(true);
+
+      // Actions reconcile trailing discounted vouchers & refresh voucher edit snapshots & preserve <100% sibling on renewal/export
+      expect(actions.includes("async function reconcileTrailingDiscountVouchersTx")).toBe(true);
+      expect(actions.includes("reconcileTrailingDiscountVouchersTx(tx,")).toBe(true);
+      expect(actions.includes("shouldRefreshTuitionSnapshot")).toBe(true);
+      expect(actions.includes("rawFamPctSnap < 100 || isPayerActiveAndPaidForSnap")).toBe(true);
+      expect(actions.includes("!creditMetrics.isDiscounted && isSiblingWaived100 && payerCredit")).toBe(true);
+
+      // UI cards keep partial siblings active without hiding UNPAID counts
+      expect(paymentGrid.includes("!isSiblingWaived100 || isPayerActiveAndPaid")).toBe(true);
+      expect(studentDetails.includes("!enrIsSiblingWaived100 || enrPayerActiveAndPaid")).toBe(true);
+      expect(studentDetails.includes('cm.hasPayerSibling && cm.siblingDiscountPct >= 100 && cm.status === "UNPAID"')).toBe(true);
     });
   });
 

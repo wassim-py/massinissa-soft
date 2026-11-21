@@ -427,11 +427,13 @@ export default function PaymentGrid({
       payerNetSessions = payerRes.netSessions;
     }
 
-    const isSiblingDiscount = Boolean(isPayerInThisClass && isPayerActiveAndPaid);
     const siblingDiscountPct = isPayerInThisClass
       ? Number((student.family as any)?.discountPercentage ?? 50)
       : 0;
     const isSiblingWaived100 = isPayerInThisClass && siblingDiscountPct >= 100;
+    const isSiblingDiscount = Boolean(
+      isPayerInThisClass && (!isSiblingWaived100 || isPayerActiveAndPaid)
+    );
 
     // Tuition cycles & sessions
     const tuitionVouchers = activeVouchers.filter((v) => v.paymentType === "TUITION_4SESSION");
@@ -461,6 +463,7 @@ export default function PaymentGrid({
           discountValue: enrDiscountValue,
           siblingDiscountPercentage: siblingDiscountPct,
           isSiblingWaived: isSiblingWaived100,
+          isPayerActiveAndPaid,
           teacherPercentage,
         })
       : null;

@@ -91,6 +91,7 @@ import {
 import {
   buildSingleOccurrenceTargetInWeek,
   getNextUpcomingOccurrence,
+  isLessonRowFrozen,
   isRecurringOccurrenceActive,
 } from "./lessonRecurrence";
 import {
@@ -2417,9 +2418,13 @@ export const deleteLesson = async (
       select: {
         branchId: true,
         classId: true,
+        teacherId: true,
+        startsAt: true,
+        endsAt: true,
         isExtra: true,
         isCatchUp: true,
         isFree: true,
+        isTeacherAbsent: true,
         isSingleOccurrence: true,
         class: { select: { branchId: true } },
         _count: {
@@ -2444,6 +2449,7 @@ export const deleteLesson = async (
       return { success: false, error: true, message: "Non autorisé pour cette branche / غير مصرح لك بحذف حصة في هذا الفرع." };
     }
 
+    const now = new Date();
     const isSpecial = Boolean(existing.isExtra || existing.isCatchUp || existing.isFree);
     let deleteMessage = "Leçon supprimée avec succès / تم حذف الحصة بنجاح.";
 
@@ -2463,27 +2469,25 @@ export const deleteLesson = async (
       await prisma.attendance.deleteMany({ where: { lessonId: id } });
       await prisma.lesson.delete({ where: { id } });
     } else if (existing.isSingleOccurrence) {
-      const hasLinkedHistory =
-        (existing._count?.attendances ?? 0) > 0 ||
-        (existing._count?.missedByCatchUps ?? 0) > 0 ||
-        (existing._count?.catchUpVisitsHosted ?? 0) > 0 ||
-        (existing._count?.vouchers ?? 0) > 0;
-      if (hasLinkedHistory) {
+      if (isLessonRowFrozen(existing, now)) {
         return {
           success: false,
           error: true,
           message:
-            "Impossible de supprimer cette séance historique car elle contient des présences ou paiements enregistrés / لا يمكن حذف هذه الحصة السابقة لاحتوائها على سجلات حضور أو مدفوعات.",
+            "Impossible de supprimer cette séance historique afin de conserver ses dates et enregistrements / لا يمكن حذف هذه الحصة السابقة للحفاظ على تاريخها وسجلاتها.",
         };
       }
       await prisma.announcement.deleteMany({ where: { lessonId: id } });
       await prisma.lesson.delete({ where: { id } });
     } else {
-      // Normal recurring lesson: stop future occurrences while preserving all past dates & attendance history
-      const result = await retireOrDeleteNormalLesson(id, new Date());
-      if (result.mode === "retired") {
+      // Normal recurring lesson: delete future occurrences while preserving all old lessons & their records
+      const result = await retireOrDeleteNormalLesson(id, now);
+      if (result.mode === "already_retired") {
         deleteMessage =
-          "Séances futures supprimées ; l'historique et les présences passées ont été conservés / تم إيقاف الحصص القادمة مع الحفاظ على التواريخ وسجلات الحضور السابقة.";
+          "Les séances futures sont déjà supprimées ; les anciennes séances et leurs enregistrements restent conservés / الحصص القادمة محذوفة بالفعل؛ الحصص السابقة وسجلاتها محفوظة.";
+      } else if (result.mode === "retired") {
+        deleteMessage =
+          "Séances futures supprimées ; les anciennes séances et leurs enregistrements ont été conservés / تم حذف الحصص القادمة فقط مع الحفاظ على الحصص السابقة وسجلاتها.";
       }
     }
 
@@ -2493,6 +2497,9 @@ export const deleteLesson = async (
     safeRevalidatePath("/student");
     safeRevalidatePath("/parent");
     safeRevalidatePath("/list/lessons");
+    if (existing.teacherId) {
+      safeRevalidatePath(`/list/teachers/${existing.teacherId}`);
+    }
     if (existing.classId) {
       safeRevalidatePath("/list/formations");
       safeRevalidatePath(`/list/formations/${existing.classId}`);
@@ -6091,6 +6098,9 @@ export async function checkStudentInscriptionExemptionAction({
   configuredInscriptionFee: number;
   isPayerInThisClass?: boolean;
   siblingDiscountPercentage?: number;
+  payerStatus?: string;
+  discountType?: string | null;
+  discountValue?: number | null;
 }> {
   try {
     const targetClass = await prisma.class.findUnique({
@@ -6123,6 +6133,8 @@ export async function checkStudentInscriptionExemptionAction({
         inscriptionFeeCharged: true,
         feeOverriddenByOwner: true,
         payerStatus: true,
+        discountType: true,
+        discountValue: true,
         transfersTo: {
           select: {
             fromEnrollment: {
@@ -6196,6 +6208,12 @@ export async function checkStudentInscriptionExemptionAction({
       configuredInscriptionFee: requiredFee,
       isPayerInThisClass,
       siblingDiscountPercentage,
+      payerStatus: enrollment?.payerStatus || "NORMAL",
+      discountType: (enrollment as any)?.discountType ?? null,
+      discountValue:
+        (enrollment as any)?.discountValue != null
+          ? Number((enrollment as any).discountValue)
+          : null,
     };
   } catch (err) {
     console.error("checkStudentInscriptionExemptionAction error:", err);
@@ -6372,8 +6390,9 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
           isFormation: false,
         });
         isPayerActiveAndPaidForSnap = payerResSnap.isPayerActiveAndPaid;
-        if (isPayerActiveAndPaidForSnap) {
-          siblingDiscountPctForSnap = Number((student.family as any)?.discountPercentage ?? 50);
+        const rawFamPctSnap = Number((student.family as any)?.discountPercentage ?? 50);
+        if (rawFamPctSnap < 100 || isPayerActiveAndPaidForSnap) {
+          siblingDiscountPctForSnap = rawFamPctSnap;
         }
       }
     }
@@ -6954,7 +6973,7 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
           attendances: studentAttendances,
           lessons: classLessons,
           catchUps: relevantCatchUps,
-          payerRemainingCredit,
+          payerRemainingCredit: isSiblingWaived100 ? payerRemainingCredit : undefined,
           enrolledAt: freshEnrollment?.enrolledAt,
           enrollmentStatus: freshEnrollment?.status,
         });
@@ -7412,23 +7431,23 @@ export const issueVoucher = async (
               isFormation: false,
             });
             isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
-          }
-        }
-
-        isPayerActiveAndPaidForVoucher = isPayerActiveAndPaid;
-        if (isPayerActiveAndPaid) {
-          const discountPct = Number(family.discountPercentage ?? 50);
-          siblingDiscountPctApplied = discountPct;
-          if (discountPct >= 100) {
-            finalAmount = 0;
-            isWaivedSibling = true;
-            noteAppend = "[إعفاء إخوة: معفى 100% من معاليم الحصص]";
-          } else {
-            if (isNaN(finalAmount) || finalAmount <= 0) {
-              const basePrice = Number(targetClass.pricePerCycle || 0);
-              finalAmount = Math.max(0, basePrice * (1 - discountPct / 100));
+            isPayerActiveAndPaidForVoucher = isPayerActiveAndPaid;
+            const discountPct = Number(family.discountPercentage ?? 50);
+            if (discountPct >= 100) {
+              if (isPayerActiveAndPaid) {
+                siblingDiscountPctApplied = discountPct;
+                finalAmount = 0;
+                isWaivedSibling = true;
+                noteAppend = "[إعفاء إخوة: معفى 100% من معاليم الحصص]";
+              }
+            } else if (discountPct > 0) {
+              siblingDiscountPctApplied = discountPct;
+              if (isNaN(finalAmount) || finalAmount <= 0) {
+                const basePrice = Number(targetClass.pricePerCycle || 0);
+                finalAmount = Math.max(0, basePrice * (1 - discountPct / 100));
+              }
+              noteAppend = `[خصم إخوة: تخفيض ${discountPct}%]`;
             }
-            noteAppend = `[خصم إخوة: تخفيض ${discountPct}%]`;
           }
         }
       }
@@ -7777,11 +7796,120 @@ async function executeVoucherEditTx(
     updates.status = voucher.isRefund ? "REFUND" : "ACTIVE";
   }
 
+  const finalPaymentType = updates.paymentType || voucher.paymentType;
+  const finalAmount =
+    updates.amount !== undefined ? Number(updates.amount) : Number(voucher.amount || 0);
+  const shouldRefreshTuitionSnapshot =
+    !voucher.isRefund &&
+    (finalPaymentType === "TUITION_4SESSION" || finalPaymentType === "FORMATION") &&
+    voucher.classId != null &&
+    finalAmount > 0 &&
+    (updates.amount !== undefined ||
+      updates.paymentType !== undefined ||
+      voucher.appliedPayerStatus == null);
+
+  let snapshotUpdates: Record<string, any> = {};
+  if (shouldRefreshTuitionSnapshot) {
+    const [enrSnap, studentSnap, clsSnap] = await Promise.all([
+      tx.enrollment.findFirst({
+        where: { studentId: voucher.studentId, classId: voucher.classId },
+        orderBy: { id: "desc" },
+        include: { transfersFrom: true, transfersTo: true },
+      }),
+      tx.student.findUnique({
+        where: { id: voucher.studentId },
+        include: {
+          family: {
+            include: {
+              payerStudent: {
+                include: {
+                  enrollments: { include: { class: true } },
+                },
+              },
+            },
+          },
+        },
+      }),
+      tx.class.findUnique({
+        where: { id: voucher.classId },
+        include: {
+          FormationLevel: true,
+          teacherClassRates: true,
+          teacher: {
+            include: {
+              TeacherPayRate: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+            },
+          },
+        },
+      }),
+    ]);
+
+    if (clsSnap) {
+      const enrStatus = enrSnap?.payerStatus || studentSnap?.payerStatus || "NORMAL";
+      const isForm = Boolean(
+        clsSnap.isFormation || clsSnap.formationLevelId != null || clsSnap.FormationLevel != null
+      );
+      const tOverride = clsSnap.teacherClassRates?.find(
+        (tcr) => tcr.teacherId === clsSnap.teacherId
+      )?.percentage;
+      const tPct =
+        tOverride != null
+          ? Number(tOverride)
+          : clsSnap.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+          ? Number(clsSnap.teacher.TeacherPayRate[0].percentageOfSessionFee)
+          : null;
+
+      let siblingPct = 0;
+      if (
+        !isForm &&
+        enrStatus === "NORMAL" &&
+        studentSnap?.family?.payerStudentId &&
+        studentSnap.family.payerStudentId !== voucher.studentId &&
+        (studentSnap.family as any)?.payerStudent
+      ) {
+        const payerStu = (studentSnap.family as any).payerStudent;
+        const isPayerInClass = (payerStu.enrollments || []).some(
+          (pe: any) => pe.classId === clsSnap.id && (pe.status === "ACTIVE" || !pe.status)
+        );
+        if (isPayerInClass) {
+          siblingPct = Number((studentSnap.family as any).discountPercentage ?? 50);
+        }
+      }
+
+      const basePrice = isForm
+        ? Number(clsSnap.FormationLevel?.lumpSumPrice ?? clsSnap.pricePerCycle ?? 0)
+        : Number(clsSnap.pricePerCycle ?? 0);
+
+      const snap = buildVoucherBillingSnapshot({
+        payerStatus: enrStatus,
+        discountType: (enrSnap as any)?.discountType,
+        discountValue: (enrSnap as any)?.discountValue,
+        pricePerCycle: basePrice,
+        teacherPercentage: tPct,
+        isFormation: isForm,
+        isSiblingWaived: siblingPct >= 100,
+        siblingDiscountPercentage: siblingPct,
+        isPayerActiveAndPaid: true,
+      });
+
+      snapshotUpdates = {
+        appliedPayerStatus: snap.appliedPayerStatus,
+        baseCyclePrice: new Prisma.Decimal(snap.baseCyclePrice),
+        effectiveCyclePrice: new Prisma.Decimal(snap.effectiveCyclePrice),
+        effectiveSessionPrice: new Prisma.Decimal(snap.effectiveSessionPrice),
+        discountType: snap.discountType,
+        discountValue: snap.discountValue !== null ? new Prisma.Decimal(snap.discountValue) : null,
+        teacherPayWeight: new Prisma.Decimal(snap.teacherPayWeight),
+      };
+    }
+  }
+
   // 2. Update voucher with lastEdited stamp
   await tx.voucher.update({
     where: { id: voucher.id },
     data: {
       ...updates,
+      ...snapshotUpdates,
       lastEditedAt: new Date(),
       lastEditedBy: editedBy,
     },
@@ -11105,10 +11233,14 @@ export const exportToExcel = async (
             );
 
             const isSiblingWaived100 = isWaivedSibling && siblingDiscountPct >= 100;
+            const isDiscounted = enrPayerStatus === "DISCOUNTED";
 
             const payerCredit = isWaivedSibling && family?.payerStudent
               ? resolvePayerCredit({
                   payerStudent: family.payerStudent,
+                  classId: classTarget.id,
+                  classPricePerCycle: Number(classTarget.pricePerCycle || 0),
+                  isFormation,
                 })
               : null;
             const isPayerActiveAndPaid = isWaivedSibling
@@ -11134,7 +11266,8 @@ export const exportToExcel = async (
               siblingDiscountPercentage: siblingDiscountPct,
               isSiblingWaived: isSiblingWaived100,
               isPayerSiblingPaid: isPayerActiveAndPaid,
-              payerRemainingCredit: isWaivedSibling && !isSiblingWaived100 ? payerCredit?.netSessions : undefined,
+              isPayerActiveAndPaid,
+              payerRemainingCredit: !isDiscounted && isSiblingWaived100 ? payerCredit?.netSessions : undefined,
               tuitionVouchers,
               transfersIn: enrollment.transfersTo,
               transfersOut: enrollment.transfersFrom,
@@ -11150,7 +11283,7 @@ export const exportToExcel = async (
             const consumed = creditMetrics.attendedSessions;
             const remaining = creditMetrics.isSiblingWaived
               ? 0
-              : !creditMetrics.isDiscounted && isWaivedSibling && payerCredit
+              : !creditMetrics.isDiscounted && isSiblingWaived100 && payerCredit
               ? payerCredit.netSessions
               : creditMetrics.netSessions;
 
@@ -11205,7 +11338,7 @@ export const exportToExcel = async (
             ).join(", ") || "لا يوجد";
 
             // Cycles representation
-            const purchasedSessions = isWaivedSibling && payerCredit
+            const purchasedSessions = !creditMetrics.isDiscounted && isSiblingWaived100 && payerCredit
               ? Math.max(0, payerCredit.netSessions + consumed)
               : creditMetrics.purchasedSessions;
             const isExempt = creditMetrics.isNonPayer;
@@ -11600,7 +11733,8 @@ export const exportToExcel = async (
                 siblingDiscountPercentage: siblingDiscountPct,
                 isSiblingWaived: isSiblingWaived100,
                 isPayerSiblingPaid: isPayerActiveAndPaid,
-                payerRemainingCredit: !isDiscounted && isWaivedSibling && !isSiblingWaived100 ? payerCredit?.netSessions : undefined,
+                isPayerActiveAndPaid,
+                payerRemainingCredit: !isDiscounted && isSiblingWaived100 ? payerCredit?.netSessions : undefined,
                 tuitionVouchers,
                 transfersIn: enrollment.transfersTo,
                 transfersOut: enrollment.transfersFrom,
@@ -11615,7 +11749,7 @@ export const exportToExcel = async (
 
             const paidSessionsCount = isNonPayer || creditMetrics.isSiblingWaived || creditMetrics.isZeroFeeDiscount
                 ? 9999
-                : !isDiscounted && isWaivedSibling && payerCredit
+                : !isDiscounted && isSiblingWaived100 && payerCredit
                 ? Math.max(0, payerCredit.netSessions + creditMetrics.attendedSessions)
                 : Math.max(0, creditMetrics.purchasedSessions + creditMetrics.transferredIn - creditMetrics.transferredOut);
 
@@ -14547,6 +14681,123 @@ export async function updateStudentPayerStatusAction(
  * Supports PERCENT (% off), FIXED_AMOUNT (-DZD off), and CUSTOM_PRICE (custom DZD price).
  * Records an immutable EnrollmentPayerHistory period + AuditLog so past vouchers & sessions stay untouched.
  */
+/**
+ * Re-snapshots trailing active non-refund tuition vouchers whose paid amount already reflects
+ * the Owner-configured discounted rate (e.g. sub-base amount <= effectiveCyclePrice or exact
+ * discounted multi-cycle amount), while keeping earlier full-price cycles untouched.
+ */
+async function reconcileTrailingDiscountVouchersTx(
+  tx: Prisma.TransactionClient,
+  params: {
+    studentId: string;
+    classId: number;
+    isFormation: boolean;
+    basePrice: number;
+    discountType: string;
+    discountValue: number;
+    teacherPercentage: number | null;
+    activePeriodEffectiveFrom?: Date | null;
+  }
+): Promise<{ reconciledCount: number; earliestReconciledAt: Date | null }> {
+  const newSnap = buildVoucherBillingSnapshot({
+    payerStatus: "DISCOUNTED",
+    discountType: params.discountType,
+    discountValue: params.discountValue,
+    pricePerCycle: params.basePrice,
+    teacherPercentage: params.teacherPercentage,
+    isFormation: params.isFormation,
+  });
+
+  if (params.basePrice > 0 && newSnap.effectiveCyclePrice >= params.basePrice) {
+    return { reconciledCount: 0, earliestReconciledAt: null };
+  }
+
+  const targetPaymentType = params.isFormation ? "FORMATION" : "TUITION_4SESSION";
+  const tuitionVouchers = await tx.voucher.findMany({
+    where: {
+      studentId: params.studentId,
+      classId: params.classId,
+      paymentType: targetPaymentType,
+      isVoided: false,
+      isRefund: false,
+      status: { not: "REFUNDED" },
+    },
+    include: { refunds: true },
+    orderBy: [{ issuedAt: "asc" }, { id: "asc" }],
+  });
+
+  const toUpdate: typeof tuitionVouchers = [];
+  for (let i = tuitionVouchers.length - 1; i >= 0; i--) {
+    const v = tuitionVouchers[i];
+    const refundedSum = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    const netPaid = Math.max(0, Number(v.amount || 0) - refundedSum);
+    if (netPaid <= 0) continue;
+
+    const isFullBaseCycle =
+      params.basePrice > 0 &&
+      netPaid >= params.basePrice - 0.01 &&
+      Math.abs(netPaid % params.basePrice) < 0.01;
+    const isSubBaseAmount = params.basePrice > 0 && netPaid < params.basePrice - 0.01;
+    const matchesDiscountedMultiCycle =
+      !isFullBaseCycle &&
+      newSnap.effectiveCyclePrice > 0 &&
+      netPaid >= newSnap.effectiveCyclePrice - 0.01 &&
+      Math.abs(netPaid % newSnap.effectiveCyclePrice) < 0.01;
+    const fitsDiscountedCycle =
+      isSubBaseAmount &&
+      (newSnap.effectiveCyclePrice === 0 || netPaid <= newSnap.effectiveCyclePrice + 0.01);
+
+    if (
+      v.appliedPayerStatus === "NORMAL" ||
+      v.appliedPayerStatus === "SIBLING" ||
+      v.appliedPayerStatus == null
+    ) {
+      if (fitsDiscountedCycle || matchesDiscountedMultiCycle) {
+        toUpdate.push(v);
+      } else {
+        break;
+      }
+    } else if (v.appliedPayerStatus === "DISCOUNTED") {
+      if (
+        (!params.activePeriodEffectiveFrom || v.issuedAt >= params.activePeriodEffectiveFrom) &&
+        (fitsDiscountedCycle || matchesDiscountedMultiCycle)
+      ) {
+        toUpdate.push(v);
+      } else {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  if (toUpdate.length === 0) {
+    return { reconciledCount: 0, earliestReconciledAt: null };
+  }
+
+  const ordered = [...toUpdate].reverse();
+  for (const v of ordered) {
+    await tx.voucher.update({
+      where: { id: v.id },
+      data: {
+        appliedPayerStatus: "DISCOUNTED",
+        baseCyclePrice: new Prisma.Decimal(newSnap.baseCyclePrice),
+        effectiveCyclePrice: new Prisma.Decimal(newSnap.effectiveCyclePrice),
+        effectiveSessionPrice: new Prisma.Decimal(newSnap.effectiveSessionPrice),
+        discountType: newSnap.discountType,
+        discountValue:
+          newSnap.discountValue !== null ? new Prisma.Decimal(newSnap.discountValue) : null,
+        teacherPayWeight: new Prisma.Decimal(newSnap.teacherPayWeight),
+      },
+    });
+  }
+
+  return {
+    reconciledCount: ordered.length,
+    earliestReconciledAt: ordered[0].issuedAt,
+  };
+}
+
 export async function setEnrollmentDiscountAction(
   input: EnrollmentDiscountSchema
 ): Promise<{
@@ -14589,6 +14840,15 @@ export async function setEnrollmentDiscountAction(
           include: {
             branch: true,
             FormationLevel: true,
+            teacherClassRates: true,
+            teacher: {
+              include: {
+                TeacherPayRate: {
+                  orderBy: { effectiveFrom: "desc" },
+                  take: 1,
+                },
+              },
+            },
           },
         },
         student: { select: { id: true, name: true, registeredBranchId: true } },
@@ -14655,26 +14915,64 @@ export async function setEnrollmentDiscountAction(
     const actor = session.userId || "owner";
     const now = new Date();
 
+    const teacherClassOverrideForDisc = (enrollment.class.teacherClassRates as any[])?.find(
+      (tcr: any) => tcr.teacherId === enrollment.class.teacherId
+    )?.percentage;
+    const teacherPercentageForDisc =
+      teacherClassOverrideForDisc != null
+        ? Number(teacherClassOverrideForDisc)
+        : (enrollment.class as any).teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee != null
+        ? Number((enrollment.class as any).teacher.TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+
     await prisma.$transaction(async (tx) => {
+      const activeOpenPeriod = (enrollment.payerHistory || []).find(
+        (h) => h.effectiveTo === null || h.effectiveTo === undefined
+      );
+      const { reconciledCount, earliestReconciledAt } =
+        await reconcileTrailingDiscountVouchersTx(tx, {
+          studentId,
+          classId: enrollment.classId,
+          isFormation,
+          basePrice: baseCyclePrice,
+          discountType,
+          discountValue,
+          teacherPercentage: teacherPercentageForDisc,
+          activePeriodEffectiveFrom: activeOpenPeriod?.effectiveFrom ?? null,
+        });
+
+      const effectiveStart =
+        reconciledCount > 0 && earliestReconciledAt
+          ? new Date(Math.min(now.getTime(), earliestReconciledAt.getTime()))
+          : now;
+
       if (!enrollment.payerHistory || enrollment.payerHistory.length === 0) {
-        await tx.enrollmentPayerHistory.create({
-          data: {
-            enrollmentId,
-            payerStatus: oldStatus,
-            discountType: oldDiscountType,
-            discountValue:
-              oldDiscountValue !== null ? new Prisma.Decimal(oldDiscountValue) : null,
-            reason: "Baseline initiale",
-            changedBy: "SYSTEM",
-            effectiveFrom: enrollment.enrolledAt,
-            effectiveTo: now,
-          },
-        });
+        if (effectiveStart > enrollment.enrolledAt) {
+          await tx.enrollmentPayerHistory.create({
+            data: {
+              enrollmentId,
+              payerStatus: oldStatus,
+              discountType: oldDiscountType,
+              discountValue:
+                oldDiscountValue !== null ? new Prisma.Decimal(oldDiscountValue) : null,
+              reason: "Baseline initiale",
+              changedBy: "SYSTEM",
+              effectiveFrom: enrollment.enrolledAt,
+              effectiveTo: effectiveStart,
+            },
+          });
+        }
       } else {
-        await tx.enrollmentPayerHistory.updateMany({
-          where: { enrollmentId, effectiveTo: null },
-          data: { effectiveTo: now },
-        });
+        for (const openHist of enrollment.payerHistory.filter(
+          (h) => h.effectiveTo === null || h.effectiveTo === undefined
+        )) {
+          const clampedEnd =
+            effectiveStart >= openHist.effectiveFrom ? effectiveStart : openHist.effectiveFrom;
+          await tx.enrollmentPayerHistory.update({
+            where: { id: openHist.id },
+            data: { effectiveTo: clampedEnd },
+          });
+        }
       }
 
       await tx.enrollmentPayerHistory.create({
@@ -14685,7 +14983,7 @@ export async function setEnrollmentDiscountAction(
           discountValue: new Prisma.Decimal(discountValue),
           reason: cleanReason,
           changedBy: actor,
-          effectiveFrom: now,
+          effectiveFrom: effectiveStart,
         },
       });
 
@@ -16113,7 +16411,7 @@ export async function getBiometricScansLiveBillingAction(
           isPayerSiblingPaid: isPayerActiveAndPaid,
           isPayerActiveAndPaid,
           payerRemainingCredit:
-            hasSiblingDiscount ? payerRemainingCredit : undefined,
+            isSiblingWaived && !isDiscounted ? payerRemainingCredit : undefined,
           teacherPercentage,
           tuitionVouchers,
           transfersIn: targetEnrollment?.transfersTo || [],

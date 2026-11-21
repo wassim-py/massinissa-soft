@@ -90,7 +90,9 @@ const DeleteConfirmation = ({
         </svg>
         <h2 className="text-xl font-bold text-gray-800">Are you sure?</h2>
         <p className="text-gray-600">
-            This action cannot be undone. All related data for this {table.replace('Participant', ' Participant')} will be permanently deleted.
+            {table === "lesson"
+              ? "Only upcoming future lessons of this slot will be deleted. All past lessons, dates, and attendance records will be preserved."
+              : `This action cannot be undone. All related data for this ${table.replace('Participant', ' Participant')} will be permanently deleted.`}
         </p>
         <div className="flex items-center gap-4 mt-4 w-full">
             <button type="button" onClick={() => setOpen(false)} className="flex-1 px-6 py-2 bg-gray-200 text-gray-800 font-semibold rounded-md hover:bg-gray-300">

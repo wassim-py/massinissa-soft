@@ -8,7 +8,7 @@ import { Day } from "@/components/Timetable";
 import { getAuthRole, getAuthSession, getActiveBranchId } from "@/lib/auth";
 import BackButton from "@/components/BackButton";
 import { Card, CardContent } from "@/components/ui/Card";
-import { getTranslations } from "next-intl/server";
+import { getTranslations, getLocale } from "next-intl/server";
 import Link from "next/link";
 import { getAlgiersWeekBounds, resolveRecurringLessonsForWeek, getAlgiersDateInfo } from "@/lib/utils";
 import { ACTIVE_CLASS_WHERE, isLessonVisibleForClassStatus } from "@/lib/classStatus";
@@ -24,6 +24,7 @@ type TimetableLesson = {
   instanceDate?: string;
   editScope?: "future" | "single";
   isSingleOccurrence?: boolean;
+  isRetired?: boolean;
   classId?: number;
   teacherId?: string;
   classroomId?: number | null;
@@ -65,6 +66,7 @@ const LessonListPage = async (props: {
   const activeBranchId = await getActiveBranchId();
   const canManage = session.isOwnerOrAdmin;
   const t = await getTranslations("lessons");
+  const locale = await getLocale();
 
   const { search, levelId, subjectId, teacherId, classId, branchId, weekOffset } = searchParams;
 
@@ -306,6 +308,7 @@ const LessonListPage = async (props: {
       isLessonVisibleForClassStatus(r.endsAt, r, currentWeekStart)
     );
 
+    const nowForStatus = new Date();
     lessons = resolvedWeekLessons.map((r) => {
       const d = new Date(r.startsAt);
       const day = new Intl.DateTimeFormat("en-US", {
@@ -321,6 +324,14 @@ const LessonListPage = async (props: {
         : { id: r.classId || 1, name: r.className || t("subject") };
 
       const groupDisplayName = r.allClassNames || r.className || t("group");
+      const isRetired = Boolean(
+        !r.isExtra &&
+          !r.isCatchUp &&
+          !r.isFree &&
+          !r.isSingleOccurrence &&
+          r.recurrenceEndAt &&
+          new Date(r.recurrenceEndAt).getTime() <= nowForStatus.getTime()
+      );
 
       return {
         id: r.id,
@@ -333,6 +344,7 @@ const LessonListPage = async (props: {
         instanceDate: r.instanceDate,
         editScope: validOffset < 0 || Boolean(r.isSingleOccurrence) ? ("single" as const) : ("future" as const),
         isSingleOccurrence: Boolean(r.isSingleOccurrence),
+        isRetired,
         classId: r.classId,
         teacherId: r.teacherId,
         classroomId: r.classroomId,
@@ -511,7 +523,13 @@ const LessonListPage = async (props: {
             </Link>
             {canEditLesson && (
               <>
-                <FormContainer table="lesson" type="delete" id={lesson.id} />
+                {lesson.isRetired ? (
+                  <span className="inline-flex items-center px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-gray-100 text-gray-600 border border-gray-200">
+                    {locale === "ar" ? "متوقفة (السجل محفوظ)" : "Arrêtée (historique conservé)"}
+                  </span>
+                ) : (
+                  <FormContainer table="lesson" type="delete" id={lesson.id} data={lesson} />
+                )}
                 <FormContainer
                   table="lesson"
                   type="update"
@@ -524,8 +542,14 @@ const LessonListPage = async (props: {
         );
       } else if (canEditLesson) {
         acc[lesson.id] = (
-          <div className="flex justify-end gap-3">
-            <FormContainer table="lesson" type="delete" id={lesson.id} />
+          <div className="flex justify-end items-center gap-3">
+            {lesson.isRetired ? (
+              <span className="inline-flex items-center px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-gray-100 text-gray-600 border border-gray-200">
+                {locale === "ar" ? "متوقفة (السجل محفوظ)" : "Arrêtée (historique conservé)"}
+              </span>
+            ) : (
+              <FormContainer table="lesson" type="delete" id={lesson.id} data={lesson} />
+            )}
             <FormContainer
               table="lesson"
               type="update"

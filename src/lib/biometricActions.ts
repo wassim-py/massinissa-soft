@@ -965,11 +965,15 @@ export async function processBiometricScan(input: {
     effectivePayerStatus === "NON_PAYER"
   );
   const isZeroFeeDiscountStudent = Boolean(creditMetricsBefore.isZeroFeeDiscount);
+  const isSiblingWaived100Student = Boolean(
+    !creditMetricsBefore.isDiscounted &&
+      isPayerInThisClass &&
+      (isSiblingWaived || creditMetricsBefore.isSiblingWaived)
+  );
   const isSiblingStudent = Boolean(
     !creditMetricsBefore.isDiscounted &&
       isPayerInThisClass &&
-      (isSiblingWaived ||
-        creditMetricsBefore.isSiblingWaived ||
+      (isSiblingWaived100Student ||
         needsPayerSiblingCheck ||
         (student.family?.payerStudentId && student.family.payerStudentId !== student.id))
   );
@@ -979,7 +983,7 @@ export async function processBiometricScan(input: {
   let hasAvailableCredit = false;
   if (matchedLesson.isFree || matchedLesson.isTeacherAbsent || isNonPayerStudent || isZeroFeeDiscountStudent) {
     hasAvailableCredit = true;
-  } else if (isSiblingStudent) {
+  } else if (isSiblingWaived100Student) {
     hasAvailableCredit = isPayerSiblingPaid;
   } else if (matchedLesson.class.isFormation) {
     const totalPaidFormation = tuitionVouchers.reduce((sum, v) => {
@@ -1060,13 +1064,13 @@ export async function processBiometricScan(input: {
     !matchedLesson.isTeacherAbsent &&
     !isNonPayerStudent &&
     !isZeroFeeDiscountStudent &&
-    !isSiblingStudent &&
+    !isSiblingWaived100Student &&
     !matchedLesson.class.isFormation;
 
   // Exact remaining credits after this lesson's presence:
   // Since priorAttendances excludes this lesson, netSessions - 1 is ALWAYS the exact remaining credit
   // whether scanned for the 1st, 2nd, or nth time!
-  const remainingCreditsAfter = (isNonPayerStudent || isZeroFeeDiscountStudent || isSiblingStudent)
+  const remainingCreditsAfter = (isNonPayerStudent || isZeroFeeDiscountStudent || isSiblingWaived100Student)
     ? null
     : consumesOneCredit
     ? Math.max(0, creditMetricsBefore.netSessions - 1)
@@ -1078,7 +1082,7 @@ export async function processBiometricScan(input: {
   } else if (effectivePayerStatus === "DISCOUNTED") {
     scanMetadataTag = "DISCOUNTED";
   } else if (isSiblingStudent) {
-    scanMetadataTag = isSiblingWaived ? "SIBLING_WAIVED" : "PAYER_SIBLING";
+    scanMetadataTag = isSiblingWaived100Student ? "SIBLING_WAIVED" : "PAYER_SIBLING";
   } else if (effectivePayerStatus === "SCHOOL_FEES_ONLY") {
     scanMetadataTag = "SCHOOL_FEES_ONLY";
   }
@@ -1999,7 +2003,11 @@ export async function getBiometricPaymentDataAction(
         parentPhoneNumbers: true,
         family: {
           include: {
-            payerStudent: true,
+            payerStudent: {
+              include: {
+                enrollments: { select: { classId: true, status: true } },
+              },
+            },
           },
         },
         enrollments: {

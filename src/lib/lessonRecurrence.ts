@@ -215,6 +215,57 @@ export function computeRetirementCutoff(
 }
 
 /**
+ * Partitions frozen rows when retiring a recurring normal lesson series:
+ * - Past and same-day frozen rows remain in the retired series with `recurrenceEndAt` capped
+ *   so an already-earlier `recurrenceEndAt` is never extended forward (preventing resurrection).
+ * - Strictly future-date frozen rows (e.g. anticipatory catch-ups or pre-marked absence on a
+ *   later week) are detached into standalone `isSingleOccurrence` rows so their records stay
+ *   intact without keeping unrecorded intermediate weeks alive.
+ */
+export function partitionFrozenRowsForRetirement<
+  T extends {
+    startsAt: Date | string;
+    endsAt: Date | string;
+    recurrenceEndAt?: Date | string | null;
+  }
+>(
+  frozenRows: T[],
+  now: Date = new Date()
+): {
+  seriesFrozenRows: T[];
+  detachedFutureFrozenRows: T[];
+  retirementCutoff: Date;
+} {
+  const todayDateStr = getAlgiersDateInfo(now).dateStr;
+  const seriesFrozenRows: T[] = [];
+  const detachedFutureFrozenRows: T[] = [];
+
+  for (const row of frozenRows) {
+    const endMs = new Date(row.endsAt).getTime();
+    const rowDateStr = getAlgiersDateInfo(row.startsAt).dateStr;
+    if ((!isNaN(endMs) && endMs <= now.getTime()) || rowDateStr <= todayDateStr) {
+      seriesFrozenRows.push(row);
+    } else {
+      detachedFutureFrozenRows.push(row);
+    }
+  }
+
+  let cutoffMs = computeRetirementCutoff(seriesFrozenRows, now).getTime();
+  const existingCutoffs = seriesFrozenRows
+    .map((r) => (r.recurrenceEndAt ? new Date(r.recurrenceEndAt).getTime() : NaN))
+    .filter((ms) => !isNaN(ms));
+  if (existingCutoffs.length > 0) {
+    cutoffMs = Math.min(cutoffMs, ...existingCutoffs);
+  }
+
+  return {
+    seriesFrozenRows,
+    detachedFutureFrozenRows,
+    retirementCutoff: new Date(cutoffMs),
+  };
+}
+
+/**
  * Checks whether a recurring slot with optional `[recurrenceStartAt, recurrenceEndAt]` bounds
  * is active for an occurrence spanning `[occurrenceStartsAt, occurrenceEndsAt]`.
  */

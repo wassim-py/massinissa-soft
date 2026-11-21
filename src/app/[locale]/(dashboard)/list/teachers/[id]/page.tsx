@@ -132,9 +132,14 @@ const SingleTeacherPage = async (
         },
       },
     }),
-    // 2. Upcoming lessons in the schedule (startsAt >= now)
+    // 2. Upcoming lessons in the schedule (startsAt >= now, excluding retired slots)
     prisma.lesson.findMany({
-      where: { teacherId: id, startsAt: { gte: now }, class: ACTIVE_CLASS_WHERE },
+      where: {
+        teacherId: id,
+        startsAt: { gte: now },
+        OR: [{ recurrenceEndAt: null }, { recurrenceEndAt: { gt: now } }, { isSingleOccurrence: true }],
+        class: ACTIVE_CLASS_WHERE,
+      },
       include: { class: true, classroom: true, branch: true },
       orderBy: { startsAt: "asc" },
       take: 15,
@@ -299,9 +304,28 @@ const SingleTeacherPage = async (
   };
 
   const lessonActions = lessonsForTimetable.reduce((acc, lesson) => {
+    const isRetired = Boolean(
+      !lesson.isExtra &&
+        !lesson.isCatchUp &&
+        !lesson.isFree &&
+        !lesson.isSingleOccurrence &&
+        lesson.recurrenceEndAt &&
+        new Date(lesson.recurrenceEndAt).getTime() <= now.getTime()
+    );
     acc[lesson.id] = (
-      <div className="flex justify-end gap-2">
-        <FormContainer table="lesson" type="delete" id={lesson.id} />
+      <div className="flex justify-end items-center gap-2">
+        {isRetired ? (
+          <span className="inline-flex items-center px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-gray-100 text-gray-600 border border-gray-200">
+            {locale === "ar" ? "متوقفة (السجل محفوظ)" : "Arrêtée (historique conservé)"}
+          </span>
+        ) : (
+          <FormContainer
+            table="lesson"
+            type="delete"
+            id={lesson.id}
+            data={serializeForClient(lesson)}
+          />
+        )}
         <FormContainer
           table="lesson"
           type="update"

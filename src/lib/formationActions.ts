@@ -2326,8 +2326,10 @@ export async function deleteFormationSession(data: {
       success: true,
       error: false,
       message:
-        res.mode === "retired"
-          ? "Séances futures supprimées ; l'historique et les présences passées ont été conservés / تم إيقاف الحصص القادمة مع الحفاظ على التواريخ وسجلات الحضور السابقة"
+        res.mode === "already_retired"
+          ? "Les séances futures sont déjà supprimées ; les anciennes séances et leurs enregistrements restent conservés / الحصص القادمة محذوفة بالفعل؛ الحصص السابقة وسجلاتها محفوظة"
+          : res.mode === "retired"
+          ? "Séances futures supprimées ; les anciennes séances et leurs enregistrements ont été conservés / تم حذف الحصص القادمة فقط مع الحفاظ على الحصص السابقة وسجلاتها"
           : "Séance supprimée avec succès / تم حذف الحصة بنجاح",
     };
   } catch (err: any) {

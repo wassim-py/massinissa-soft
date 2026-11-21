@@ -141,21 +141,23 @@ export default function DeleteFormationSessionModal({
             {t("deleteSessionConfirmDesc")}
           </p>
 
-          {attendancesCount > 0 && (
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-xs flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />
-              <div>
-                <p className="font-semibold mb-0.5">
-                  {locale === "ar" ? "الحفاظ على سجلات الحضور السابقة" : "Historique de présence conservé"}
-                </p>
-                <p>
-                  {locale === "ar"
-                    ? `تحتوي هذه الحصة على (${attendancesCount}) سجلات حضور. سيتم إيقاف الحصص القادمة فقط مع الحفاظ على جميع التواريخ وسجلات الحضور السابقة.`
-                    : `Cette séance dispose de ${attendancesCount} enregistrement(s) de présence. Seules les séances futures seront arrêtées ; toutes les dates et présences passées seront conservées.`}
-                </p>
-              </div>
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-xs flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />
+            <div>
+              <p className="font-semibold mb-0.5">
+                {locale === "ar" ? "الحفاظ على الحصص والسجلات السابقة" : "Historique et présences conservés"}
+              </p>
+              <p>
+                {locale === "ar"
+                  ? attendancesCount > 0
+                    ? `سيتم حذف الحصص القادمة فقط لهذا الموعد، وستبقى جميع التواريخ السابقة وسجلات الحضور (${attendancesCount}) محفوظة كما هي.`
+                    : "سيتم حذف الحصص القادمة فقط لهذا الموعد، وستبقى جميع الحصص والتواريخ السابقة وسجلات حضورها محفوظة كما هي."
+                  : attendancesCount > 0
+                  ? `Seules les séances futures de ce créneau seront supprimées ; toutes les anciennes dates et leurs présences (${attendancesCount}) seront conservées.`
+                  : "Seules les séances futures de ce créneau seront supprimées ; toutes les anciennes dates et leurs enregistrements seront conservés."}
+              </p>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Modal Footer */}
