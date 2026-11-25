@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/Badge";
 import {
   getFormationClosurePreview,
   closeFormationLevelsWithCascade,
+  LevelClosureDecisionInput,
 } from "@/lib/formationActions";
 import { toast } from "react-toastify";
 import { useTranslations, useLocale } from "next-intl";
@@ -13,11 +14,12 @@ import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
   AlertTriangle,
-  ChevronRight,
   Users,
   GraduationCap,
   X,
   Check,
+  Plus,
+  Building2,
 } from "lucide-react";
 
 interface CloseLevelProgressionModalProps {
@@ -42,13 +44,21 @@ export default function CloseLevelProgressionModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [previewData, setPreviewData] = useState<any>(null);
 
-  // Question step tracking
-  // questionIndex: 0 means asking about subsequentLevels[0] (e.g. Level 2)
   const [questionIndex, setQuestionIndex] = useState<number>(0);
   const [closureDecisions, setClosureDecisions] = useState<
-    Array<{ levelNumber: number; isClosed: boolean }>
+    Array<LevelClosureDecisionInput>
   >([]);
   const [isReviewStep, setIsReviewStep] = useState(false);
+
+  // Per-question selection state
+  const [selectedMode, setSelectedMode] = useState<
+    "ENROLL_EXISTING" | "CREATE_NEW_KEEP_OPEN" | "CLOSE_GROUP_AND_CREATE_NEW"
+  >("ENROLL_EXISTING");
+  const [selectedExistingClassId, setSelectedExistingClassId] = useState<number | null>(null);
+  const [selectedClosedClassId, setSelectedClosedClassId] = useState<number | null>(null);
+  const [newGroupName, setNewGroupName] = useState<string>("");
+  const [newGroupBranchId, setNewGroupBranchId] = useState<number>(1);
+  const [newGroupTeacherId, setNewGroupTeacherId] = useState<string>("");
 
   useEffect(() => {
     if (!isOpen) {
@@ -67,8 +77,12 @@ export default function CloseLevelProgressionModal({
         if (!isMounted) return;
         if (res.success && res.data) {
           setPreviewData(res.data);
-          // If no subsequent levels (final level), go straight to review
-          if (!res.data.subsequentLevels || res.data.subsequentLevels.length === 0) {
+          const hasNext =
+            res.data.subsequentLevels && res.data.subsequentLevels.length > 0;
+          const hasPassed =
+            res.data.succeededStudents && res.data.succeededStudents.length > 0;
+          // If final level or 0 students passed in this group, go straight to confirmation
+          if (!hasNext || !hasPassed) {
             setIsReviewStep(true);
           }
         } else {
@@ -90,34 +104,76 @@ export default function CloseLevelProgressionModal({
     };
   }, [isOpen, classId, onClose]);
 
+  const subsequentLevels = previewData?.subsequentLevels || [];
+  const currentQuestionLevel = subsequentLevels[questionIndex];
+
+  useEffect(() => {
+    if (!currentQuestionLevel || !previewData) return;
+    const activeGroups = currentQuestionLevel.activeGroups || [];
+    if (activeGroups.length > 0) {
+      setSelectedMode("ENROLL_EXISTING");
+      setSelectedExistingClassId(activeGroups[0].id);
+      setSelectedClosedClassId(activeGroups[0].id);
+    } else {
+      setSelectedMode("CREATE_NEW_KEEP_OPEN");
+      setSelectedExistingClassId(null);
+      setSelectedClosedClassId(null);
+    }
+    setNewGroupName(currentQuestionLevel.suggestedNewGroupName || "");
+    setNewGroupBranchId(previewData.currentClass?.branchId || 1);
+    setNewGroupTeacherId(previewData.currentClass?.teacherId || "");
+  }, [questionIndex, currentQuestionLevel, previewData]);
+
   if (!isOpen) return null;
 
   const currentLevel = previewData?.currentLevel;
   const currentClass = previewData?.currentClass;
   const succeededStudents = previewData?.succeededStudents || [];
   const otherStudents = previewData?.otherStudents || [];
-  const subsequentLevels = previewData?.subsequentLevels || [];
+  const branches: Array<{ id: number; name: string }> = previewData?.branches || [];
+  const teachers: Array<{ id: string; name: string }> = previewData?.teachers || [];
 
-  const handleDecision = (isClosed: boolean) => {
-    const currentTargetLevel = subsequentLevels[questionIndex];
-    if (!currentTargetLevel) return;
+  const handleConfirmStepDecision = () => {
+    if (!currentQuestionLevel) return;
 
-    const newDecisions = [
-      ...closureDecisions,
-      { levelNumber: currentTargetLevel.levelNumber, isClosed },
-    ];
-    setClosureDecisions(newDecisions);
+    const decision: LevelClosureDecisionInput = {
+      levelNumber: currentQuestionLevel.levelNumber,
+      mode: selectedMode,
+      isClosed: selectedMode === "CLOSE_GROUP_AND_CREATE_NEW",
+      targetClassId:
+        selectedMode === "ENROLL_EXISTING" && selectedExistingClassId
+          ? selectedExistingClassId
+          : undefined,
+      closedClassId:
+        selectedMode === "CLOSE_GROUP_AND_CREATE_NEW" && selectedClosedClassId
+          ? selectedClosedClassId
+          : undefined,
+      newGroupName:
+        selectedMode !== "ENROLL_EXISTING" ? newGroupName.trim() || undefined : undefined,
+      newGroupBranchId:
+        selectedMode !== "ENROLL_EXISTING" ? Number(newGroupBranchId) : undefined,
+      newGroupTeacherId:
+        selectedMode !== "ENROLL_EXISTING" ? newGroupTeacherId || null : undefined,
+    };
 
-    if (!isClosed) {
-      // User said NO -> chain stops! Go straight to confirmation review
+    const nextDecisions = [...closureDecisions, decision];
+    setClosureDecisions(nextDecisions);
+
+    if (selectedMode !== "CLOSE_GROUP_AND_CREATE_NEW") {
+      // No group closed in nextLevel -> chain stops
       setIsReviewStep(true);
     } else {
-      // User said YES -> check if there is another subsequent level to ask about
-      const nextIndex = questionIndex + 1;
-      if (nextIndex < subsequentLevels.length) {
-        setQuestionIndex(nextIndex);
+      // Check if the group being closed in nextLevel has passed students AND another level follows
+      const closedGrp = (currentQuestionLevel.activeGroups || []).find(
+        (g: any) => g.id === selectedClosedClassId
+      );
+      const nextIdx = questionIndex + 1;
+      if (
+        nextIdx < subsequentLevels.length &&
+        (closedGrp?.passedStudentsCount || 0) > 0
+      ) {
+        setQuestionIndex(nextIdx);
       } else {
-        // Reached end of levels
         setIsReviewStep(true);
       }
     }
@@ -146,7 +202,8 @@ export default function CloseLevelProgressionModal({
     }
   };
 
-  const currentQuestionLevel = subsequentLevels[questionIndex];
+  const activeGroupsInQuestion: Array<any> =
+    currentQuestionLevel?.activeGroups || [];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -158,17 +215,16 @@ export default function CloseLevelProgressionModal({
               <GraduationCap className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h2 className="text-base font-bold">
-                {t("closeLevelTitle")}
-              </h2>
+              <h2 className="text-base font-bold">{t("closeLevelTitle")}</h2>
               <p className="text-xs text-blue-100">
-                {currentClass?.name || previewData?.language?.name} • {currentLevel?.name}
+                {currentClass?.name || previewData?.language?.name} •{" "}
+                {currentLevel?.name}
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
+            className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -179,23 +235,34 @@ export default function CloseLevelProgressionModal({
           {isLoadingPreview ? (
             <div className="py-12 flex flex-col items-center justify-center space-y-3">
               <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-              <p className="text-xs text-gray-500">Chargement des données du niveau...</p>
+              <p className="text-xs text-gray-500">
+                {locale === "ar"
+                  ? "جاري تحميل بيانات الفوج..."
+                  : "Chargement des données du groupe..."}
+              </p>
             </div>
           ) : (
             <>
-              {/* Level 1 / Current Level Summary */}
+              {/* Current Group Summary */}
               <div className="bg-surface-subtle border border-border rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <div>
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                      {t("currentLevel")}
+                      {t("currentGroup")}
                     </span>
                     <h3 className="text-base font-bold text-gray-900">
-                      {currentLevel?.name} ({currentClass?.name})
+                      {currentClass?.name}
                     </h3>
+                    <p className="text-xs text-gray-500">
+                      {currentLevel?.name}
+                      {currentClass?.branchName
+                        ? ` • ${currentClass.branchName}`
+                        : ""}
+                    </p>
                   </div>
                   <Badge variant="primary" size="md">
-                    {currentClass?.totalEnrolled} {locale === "ar" ? "تلميذ" : "stagiaire(s)"}
+                    {currentClass?.totalEnrolled}{" "}
+                    {locale === "ar" ? "تلميذ" : "stagiaire(s)"}
                   </Badge>
                 </div>
 
@@ -206,7 +273,9 @@ export default function CloseLevelProgressionModal({
                       <span className="font-bold text-emerald-900 text-sm">
                         {succeededStudents.length}
                       </span>{" "}
-                      {locale === "ar" ? "ناجح مؤهل للترقية" : "admis qualifié(s)"}
+                      {locale === "ar"
+                        ? "ناجح مؤهل للترقية"
+                        : "admis qualifié(s)"}
                     </div>
                   </div>
 
@@ -216,7 +285,9 @@ export default function CloseLevelProgressionModal({
                       <span className="font-bold text-gray-900 text-sm">
                         {otherStudents.length}
                       </span>{" "}
-                      {locale === "ar" ? "غير مسجل نجاحهم" : "non admis / sans test"}
+                      {locale === "ar"
+                        ? "غير مسجل نجاحهم"
+                        : "non admis / sans test"}
                     </div>
                   </div>
                 </div>
@@ -224,7 +295,9 @@ export default function CloseLevelProgressionModal({
                 {succeededStudents.length > 0 && (
                   <div className="pt-2 text-xs text-gray-600">
                     <p className="font-semibold mb-1">
-                      {locale === "ar" ? "قائمة التلاميذ المؤهلين للترقية التلقائية :" : "Élèves qui seront automatiquement inscrits :"}
+                      {locale === "ar"
+                        ? "قائمة التلاميذ المؤهلين للترقية :"
+                        : "Élèves admis à promouvoir :"}
                     </p>
                     <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
                       {succeededStudents.map((s: any) => (
@@ -242,70 +315,277 @@ export default function CloseLevelProgressionModal({
                 )}
               </div>
 
-              {/* Sequential Level-by-Level Question */}
+              {/* Next-Level Group Placement Question */}
               {!isReviewStep && currentQuestionLevel && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-900">
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3.5 text-blue-950">
                     <div className="flex items-start gap-2.5">
-                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      <AlertTriangle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
                       <div>
-                        <span className="text-xs font-bold text-amber-700 uppercase tracking-wide">
+                        <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">
                           {locale === "ar"
-                            ? `سؤال المستوى ${currentQuestionLevel.levelNumber} (خطوة ${questionIndex + 1}/${subsequentLevels.length})`
-                            : `Question Niveau ${currentQuestionLevel.levelNumber} (Étape ${questionIndex + 1}/${subsequentLevels.length})`}
+                            ? `المستوى التالي : ${currentQuestionLevel.levelName}`
+                            : `Destination : ${currentQuestionLevel.levelName}`}
                         </span>
-                        <h4 className="text-base font-bold text-gray-900 mt-1">
-                          {t("closeLevelPrompt", { nextLevel: currentQuestionLevel.levelName })}
+                        <h4 className="text-sm font-bold text-gray-900 mt-0.5">
+                          {t("selectTargetGroupInNextLevel", {
+                            nextLevel: currentQuestionLevel.levelName,
+                          })}
                         </h4>
-                        <p className="text-xs text-gray-600 mt-1.5 leading-relaxed">
-                          {locale === "ar"
-                            ? `المستوى المستهدف هو (${currentQuestionLevel.levelName}). هل انتهت دورته الحالية وتريد إغلاقه لتبدأ قائمة التلاميذ جديدة، أم هو مستمر ليدمج التلاميذ الناجحون مع المسجلين حالياً؟`
-                            : `Le niveau cible est (${currentQuestionLevel.levelName}). Si vous le clôturez, ses anciens élèves valident leur cycle et une liste vierge est ouverte pour les admis du niveau précédent.`}
-                        </p>
                       </div>
                     </div>
                   </div>
 
-                  {/* Decision Options */}
-                  <div className="space-y-3">
-                    <button
-                      type="button"
-                      onClick={() => handleDecision(false)}
-                      className="w-full text-start p-4 rounded-xl border-2 border-border hover:border-primary hover:bg-primary/5 transition-all flex items-start gap-3 group"
+                  {/* Option 1: Enroll in an existing active group of nextLevel */}
+                  {activeGroupsInQuestion.length > 0 && (
+                    <div
+                      onClick={() => setSelectedMode("ENROLL_EXISTING")}
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all space-y-3 ${
+                        selectedMode === "ENROLL_EXISTING"
+                          ? "border-primary bg-primary/[0.03]"
+                          : "border-border hover:border-gray-300"
+                      }`}
                     >
-                      <div className="w-8 h-8 rounded-full bg-gray-100 text-gray-700 flex items-center justify-center font-bold shrink-0 group-hover:bg-primary/10 group-hover:text-primary">
-                        1
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="radio"
+                          checked={selectedMode === "ENROLL_EXISTING"}
+                          onChange={() => setSelectedMode("ENROLL_EXISTING")}
+                          className="mt-1 text-primary focus:ring-primary h-4 w-4"
+                        />
+                        <div className="flex-1">
+                          <h5 className="font-bold text-gray-900">
+                            {t("closeLevelOptionNo")}
+                          </h5>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {t("closeLevelOptionNoDesc", {
+                              nextLevel: currentQuestionLevel.levelName,
+                            })}
+                          </p>
+                        </div>
                       </div>
-                      <div className="flex-1">
-                        <h5 className="font-bold text-gray-900 group-hover:text-primary">
-                          {t("closeLevelOptionNo")}
-                        </h5>
-                        <p className="text-xs text-gray-500 mt-0.5">
-                          {t("closeLevelOptionNoDesc", { nextLevel: currentQuestionLevel.levelName })}
-                        </p>
-                      </div>
-                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-primary self-center" />
-                    </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleDecision(true)}
-                      className="w-full text-start p-4 rounded-xl border-2 border-border hover:border-amber-500 hover:bg-amber-50/50 transition-all flex items-start gap-3 group"
-                    >
-                      <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold shrink-0 group-hover:bg-amber-200">
-                        2
-                      </div>
+                      {selectedMode === "ENROLL_EXISTING" && (
+                        <div className="ps-7 space-y-2">
+                          {activeGroupsInQuestion.map((grp: any) => {
+                            const isPicked = selectedExistingClassId === grp.id;
+                            return (
+                              <div
+                                key={grp.id}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedExistingClassId(grp.id);
+                                }}
+                                className={`p-2.5 rounded-lg border text-xs flex items-center justify-between gap-2 transition-colors ${
+                                  isPicked
+                                    ? "border-primary bg-white font-semibold text-gray-900 shadow-2xs"
+                                    : "border-gray-200 bg-gray-50/70 text-gray-700 hover:bg-white"
+                                }`}
+                              >
+                                <div>
+                                  <div className="font-bold">{grp.name}</div>
+                                  <div className="text-[11px] text-gray-500 flex items-center gap-1.5 mt-0.5">
+                                    {grp.branchName && (
+                                      <span className="inline-flex items-center gap-1">
+                                        <Building2 className="w-3 h-3" />
+                                        {grp.branchName}
+                                      </span>
+                                    )}
+                                    {grp.teacherName && (
+                                      <span>• {grp.teacherName}</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <Badge
+                                  variant={isPicked ? "primary" : "neutral"}
+                                  size="sm"
+                                >
+                                  {grp.enrolledCount} {t("enrolled")}
+                                </Badge>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Option 2: Create a brand-new group in nextLevel while keeping existing groups open */}
+                  <div
+                    onClick={() => setSelectedMode("CREATE_NEW_KEEP_OPEN")}
+                    className={`p-4 rounded-xl border-2 cursor-pointer transition-all space-y-3 ${
+                      selectedMode === "CREATE_NEW_KEEP_OPEN"
+                        ? "border-emerald-500 bg-emerald-50/30"
+                        : "border-border hover:border-gray-300"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="radio"
+                        checked={selectedMode === "CREATE_NEW_KEEP_OPEN"}
+                        onChange={() => setSelectedMode("CREATE_NEW_KEEP_OPEN")}
+                        className="mt-1 text-emerald-600 focus:ring-emerald-500 h-4 w-4"
+                      />
                       <div className="flex-1">
-                        <h5 className="font-bold text-gray-900 group-hover:text-amber-900">
-                          {t("closeLevelOptionYes", { nextLevel: currentQuestionLevel.levelName })}
+                        <h5 className="font-bold text-gray-900 flex items-center gap-1.5">
+                          <Plus className="w-4 h-4 text-emerald-600" />
+                          <span>
+                            {t("createNewGroupKeepOpen", {
+                              nextLevel: currentQuestionLevel.levelName,
+                            })}
+                          </span>
                         </h5>
                         <p className="text-xs text-gray-500 mt-0.5">
-                          {t("closeLevelOptionYesDesc", { nextLevel: currentQuestionLevel.levelName })}
+                          {locale === "ar"
+                            ? "إنشاء فوج جديد مخصص لهؤلاء الناجحين مع إبقاء الأفواج الأخرى في هذا المستوى مفتوحة."
+                            : "Ouvre un nouveau groupe dédié à ces admis tout en gardant les autres groupes de ce niveau actifs."}
                         </p>
                       </div>
-                      <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-amber-600 self-center" />
-                    </button>
+                    </div>
+
+                    {selectedMode === "CREATE_NEW_KEEP_OPEN" && (
+                      <div
+                        className="ps-7 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="sm:col-span-2">
+                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                            {t("groupNameLabel")}
+                          </label>
+                          <input
+                            type="text"
+                            value={newGroupName}
+                            onChange={(e) => setNewGroupName(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg border border-gray-300 bg-white outline-none focus:ring-1 focus:ring-emerald-500"
+                          />
+                        </div>
+                        {branches.length > 0 && (
+                          <div>
+                            <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                              {t("branch")}
+                            </label>
+                            <select
+                              value={newGroupBranchId}
+                              onChange={(e) =>
+                                setNewGroupBranchId(Number(e.target.value))
+                              }
+                              className="w-full px-2.5 py-2 rounded-lg border border-gray-300 bg-white outline-none"
+                            >
+                              {branches.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                            {t("teacher")}
+                          </label>
+                          <select
+                            value={newGroupTeacherId}
+                            onChange={(e) =>
+                              setNewGroupTeacherId(e.target.value)
+                            }
+                            className="w-full px-2.5 py-2 rounded-lg border border-gray-300 bg-white outline-none"
+                          >
+                            <option value="">{t("unassignedTeacher")}</option>
+                            {teachers.map((tc) => (
+                              <option key={tc.id} value={tc.id}>
+                                {tc.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
                   </div>
+
+                  {/* Option 3: Cascade-close an existing group in nextLevel and open a fresh group */}
+                  {activeGroupsInQuestion.length > 0 && (
+                    <div
+                      onClick={() =>
+                        setSelectedMode("CLOSE_GROUP_AND_CREATE_NEW")
+                      }
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all space-y-3 ${
+                        selectedMode === "CLOSE_GROUP_AND_CREATE_NEW"
+                          ? "border-amber-500 bg-amber-50/40"
+                          : "border-border hover:border-gray-300"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="radio"
+                          checked={
+                            selectedMode === "CLOSE_GROUP_AND_CREATE_NEW"
+                          }
+                          onChange={() =>
+                            setSelectedMode("CLOSE_GROUP_AND_CREATE_NEW")
+                          }
+                          className="mt-1 text-amber-600 focus:ring-amber-500 h-4 w-4"
+                        />
+                        <div className="flex-1">
+                          <h5 className="font-bold text-gray-900">
+                            {t("closeLevelOptionYes", {
+                              nextLevel: currentQuestionLevel.levelName,
+                            })}
+                          </h5>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {t("closeLevelOptionYesDesc", {
+                              nextLevel: currentQuestionLevel.levelName,
+                            })}
+                          </p>
+                        </div>
+                      </div>
+
+                      {selectedMode === "CLOSE_GROUP_AND_CREATE_NEW" && (
+                        <div
+                          className="ps-7 space-y-2.5 text-xs"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {activeGroupsInQuestion.length > 1 && (
+                            <div>
+                              <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                                {locale === "ar"
+                                  ? "اختر الفوج المنتهي في هذا المستوى :"
+                                  : "Groupe à clôturer dans ce niveau :"}
+                              </label>
+                              <select
+                                value={selectedClosedClassId || ""}
+                                onChange={(e) =>
+                                  setSelectedClosedClassId(
+                                    Number(e.target.value)
+                                  )
+                                }
+                                className="w-full px-3 py-2 rounded-lg border border-gray-300 bg-white outline-none"
+                              >
+                                {activeGroupsInQuestion.map((grp: any) => (
+                                  <option key={grp.id} value={grp.id}>
+                                    {grp.name} ({grp.enrolledCount}{" "}
+                                    {t("enrolled")})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          <div>
+                            <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                              {locale === "ar"
+                                ? "اسم الفوج الجديد للقادمين :"
+                                : "Nom du nouveau groupe vierge :"}
+                            </label>
+                            <input
+                              type="text"
+                              value={newGroupName}
+                              onChange={(e) => setNewGroupName(e.target.value)}
+                              className="w-full px-3 py-2 rounded-lg border border-gray-300 bg-white outline-none"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -318,63 +598,79 @@ export default function CloseLevelProgressionModal({
                       {t("summaryClosing")}
                     </h4>
                     <div className="mt-3 space-y-2 text-xs">
-                      {/* Starting Level */}
                       <div className="bg-white p-3 rounded-lg border border-emerald-100 space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-gray-900">
-                            • {currentLevel?.name}
+                            • {currentClass?.name} ({currentLevel?.name})
                           </span>
                           <Badge variant="success" size="sm">
-                            {locale === "ar" ? "سيتم إغلاقه" : "Sera clôturé"}
+                            {locale === "ar"
+                              ? "سيتم إنهاء دورته"
+                              : "Cycle clôturé"}
                           </Badge>
                         </div>
                         <p className="text-gray-600">
-                          {succeededStudents.length > 0
+                          {succeededStudents.length > 0 &&
+                          subsequentLevels.length > 0
                             ? locale === "ar"
-                              ? `سيتم تسجيل ${succeededStudents.length} تلميذ ناجح في المستوى التالي (${subsequentLevels[0]?.levelName || "المستوى 2"}).`
-                              : `${succeededStudents.length} élève(s) admis seront inscrits dans le niveau suivant.`
+                              ? `سيتم ترقية ${succeededStudents.length} تلميذ ناجح إلى المستوى التالي (${subsequentLevels[0]?.levelName}).`
+                              : `${succeededStudents.length} élève(s) admis seront promus vers ${subsequentLevels[0]?.levelName}.`
                             : locale === "ar"
-                            ? "لا يوجد تلاميذ ناجحون لتسجيلهم تلقائياً."
-                            : "Aucun élève admis à promouvoir."}
+                            ? "تبقى باقي أفواج هذا المستوى نشطة دون تغيير."
+                            : "Les autres groupes de ce niveau restent actifs sans modification."}
                         </p>
                       </div>
 
-                      {/* Subsequent decisions */}
                       {closureDecisions.map((dec) => {
                         const targetLvl = subsequentLevels.find(
                           (l: any) => l.levelNumber === dec.levelNumber
                         );
                         if (!targetLvl) return null;
+                        const targetExistingGrp = (
+                          targetLvl.activeGroups || []
+                        ).find((g: any) => g.id === dec.targetClassId);
+
                         return (
                           <div
                             key={dec.levelNumber}
                             className="bg-white p-3 rounded-lg border border-emerald-100 space-y-1"
                           >
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between gap-2">
                               <span className="font-bold text-gray-900">
                                 • {targetLvl.levelName}
                               </span>
                               <Badge
-                                variant={dec.isClosed ? "warning" : "neutral"}
+                                variant={
+                                  dec.mode === "CLOSE_GROUP_AND_CREATE_NEW"
+                                    ? "warning"
+                                    : dec.mode === "CREATE_NEW_KEEP_OPEN"
+                                    ? "primary"
+                                    : "neutral"
+                                }
                                 size="sm"
                               >
-                                {dec.isClosed
+                                {dec.mode === "CLOSE_GROUP_AND_CREATE_NEW"
                                   ? locale === "ar"
-                                    ? "سيتم إغلاقه (قائمة جديدة)"
-                                    : "Sera clôturé (Liste vierge)"
-                                  : locale === "ar"
-                                  ? "يبقى مفتوحاً (دمج مع القدامى)"
-                                  : "Reste ouvert (Fusion)"}
+                                    ? "إغلاق فوج + فوج جديد"
+                                    : "Clôture + Nouveau groupe"
+                                  : dec.mode === "CREATE_NEW_KEEP_OPEN"
+                                  ? locale === "ar"
+                                    ? "فوج جديد إضافي"
+                                    : "Nouveau groupe créé"
+                                  : targetExistingGrp?.name ||
+                                    (locale === "ar"
+                                      ? "فوج حالي"
+                                      : "Groupe existant")}
                               </Badge>
                             </div>
                             <p className="text-gray-600">
-                              {dec.isClosed
+                              {dec.mode === "ENROLL_EXISTING"
                                 ? locale === "ar"
-                                  ? "سيتم إنهاء دورة هذا المستوى وترقية ناجحيه، وفتح فوج جديد للتلاميذ القادمين."
-                                  : "Cycle clôturé. Ses admis avanceront et un groupe vierge recevra les nouveaux inscrits."
+                                  ? `يسجل الناجحون في الفوج الحالي: ${targetExistingGrp?.name || ""}.`
+                                  : `Les admis seront inscrits dans le groupe : ${targetExistingGrp?.name || ""}.`
                                 : locale === "ar"
-                                ? "يبقى الفوج مفتوحاً وسيتم إضافة التلاميذ الجدد مع التلاميذ المسجلين حالياً."
-                                : "Le groupe reste ouvert avec les stagiaires actuels."}
+                                ? `سيتم إنشاء الفوج الجديد: ${dec.newGroupName || targetLvl.suggestedNewGroupName}.`
+                                : `Nouveau groupe créé : ${dec.newGroupName || targetLvl.suggestedNewGroupName}.`}
                             </p>
                           </div>
                         );
@@ -416,9 +712,16 @@ export default function CloseLevelProgressionModal({
               {t("confirmAndExecuteClosure")}
             </Button>
           ) : (
-            <div className="text-xs text-gray-500 italic">
-              {locale === "ar" ? "يرجى اختيار أحد الخيارين للمتابعة" : "Veuillez choisir une option ci-dessus"}
-            </div>
+            <Button
+              type="button"
+              variant="primary"
+              onClick={handleConfirmStepDecision}
+              disabled={
+                selectedMode === "ENROLL_EXISTING" && !selectedExistingClassId
+              }
+            >
+              {tCommon("confirm")}
+            </Button>
           )}
         </div>
       </div>

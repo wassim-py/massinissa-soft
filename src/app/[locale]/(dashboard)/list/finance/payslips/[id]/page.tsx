@@ -8,7 +8,7 @@ import PrintSchoolShareButton from "@/components/PrintSchoolShareButton";
 import PrintOwnerConsolidationButton from "@/components/PrintOwnerConsolidationButton";
 import ConfirmPayslipButton from "@/components/ConfirmPayslipButton";
 import Link from "next/link";
-import { calculateTeacherPayroll } from "@/lib/payroll";
+import { calculateTeacherPayroll, getTeacherThreeMonthSalaryGrowth } from "@/lib/payroll";
 
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -65,42 +65,50 @@ export default async function PayslipDetailPage(props: PageProps) {
   const isSchoolSharePayslip = payslip.personType === "SCHOOL_SHARE";
   const activeView = searchParams?.view === "school" || isSchoolSharePayslip ? "school" : "teacher";
 
-  // Fetch teacher
-  const teacher = await prisma.teacher.findUnique({
-    where: { id: payslip.personId },
-  });
-
-  // Fetch photocopy details in this period
-  const photocopyCharges = await prisma.photocopyCharge.findMany({
-    where: {
+  const [teacher, photocopyCharges, salaryAdvances, payrollCalc, salaryHistory] = await Promise.all([
+    prisma.teacher.findUnique({
+      where: { id: payslip.personId },
+    }),
+    prisma.photocopyCharge.findMany({
+      where: {
+        teacherId: payslip.personId,
+        date: {
+          gte: payslip.PayrollRun.periodStart,
+          lte: payslip.PayrollRun.periodEnd,
+        },
+      },
+      include: { Branch: true },
+      orderBy: { date: "asc" },
+    }),
+    prisma.salaryAdvance.findMany({
+      where: {
+        personId: payslip.personId,
+        date: {
+          gte: payslip.PayrollRun.periodStart,
+          lte: payslip.PayrollRun.periodEnd,
+        },
+      },
+      orderBy: { date: "asc" },
+    }),
+    calculateTeacherPayroll(
+      payslip.personId,
+      payslip.PayrollRun.periodStart,
+      payslip.PayrollRun.periodEnd
+    ),
+    getTeacherThreeMonthSalaryGrowth({
       teacherId: payslip.personId,
-      date: {
-        gte: payslip.PayrollRun.periodStart,
-        lte: payslip.PayrollRun.periodEnd,
-      },
-    },
-    include: { Branch: true },
-    orderBy: { date: "asc" },
-  });
-
-  // Fetch salary advances in this period
-  const salaryAdvances = await prisma.salaryAdvance.findMany({
-    where: {
-      personId: payslip.personId,
-      date: {
-        gte: payslip.PayrollRun.periodStart,
-        lte: payslip.PayrollRun.periodEnd,
-      },
-    },
-    orderBy: { date: "asc" },
-  });
-
-  // Fetch detailed sessions via calculateTeacherPayroll or database fallback
-  const payrollCalc = await calculateTeacherPayroll(
-    payslip.personId,
-    payslip.PayrollRun.periodStart,
-    payslip.PayrollRun.periodEnd
-  );
+      referenceDate: payslip.PayrollRun.periodEnd,
+      currentPeriodOverride: isSchoolSharePayslip
+        ? undefined
+        : {
+            periodStart: payslip.PayrollRun.periodStart,
+            periodEnd: payslip.PayrollRun.periodEnd,
+            grossAmount: Number(payslip.grossAmount) + Number((payslip as any).bonus || 0),
+            netAmount: Number(payslip.netAmount),
+            sessionsCount: payslip.sessionsCount ?? undefined,
+          },
+    }),
+  ]);
 
   let sessionItems: Array<NonNullable<PayslipPrintData["sessions"]>[number] & { schoolCut?: number; lessonTuition?: number }> = [];
   if (payrollCalc?.sessionDetails && payrollCalc.sessionDetails.length > 0) {
@@ -209,6 +217,7 @@ export default async function PayslipDetailPage(props: PageProps) {
       costAmount: Number(pc.costAmount),
       date: pc.date,
     })),
+    salaryHistory,
   };
 
   const schoolSharePrintData: SchoolSharePrintData = {

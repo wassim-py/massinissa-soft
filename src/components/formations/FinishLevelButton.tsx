@@ -91,7 +91,7 @@ export default function FinishLevelButton({
               size="sm"
               onClick={() => setShowReopenModal(true)}
               disabled={isLoading}
-              title={t("reopenLevel")}
+              title={t("reopenGroupCycle")}
               className="text-muted hover:text-gray-800"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -107,7 +107,7 @@ export default function FinishLevelButton({
             leftIcon={<CheckCircle2 className="w-4 h-4" />}
             className="font-semibold shadow-sm"
           >
-            {t("finishLevel")}
+            {t("finishGroupCycle")}
           </Button>
         )}
       </div>
@@ -131,7 +131,7 @@ export default function FinishLevelButton({
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-gray-900">
-                    {t("reopenLevel")}
+                    {t("reopenGroupCycle")}
                   </h3>
                   <p className="text-xs text-muted mt-0.5">
                     {t("reopenLevelConfirm")}

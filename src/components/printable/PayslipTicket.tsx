@@ -1,6 +1,20 @@
 import React from 'react';
 import { MASSINISSA_LOGO_BASE64 } from "@/lib/receiptAssets";
-import { formatAlgiersDate, formatUtcPeriodDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
+import { formatAlgiersDate, formatUtcPeriodDate, formatDZD as formatDZDLib, formatNumber, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
+
+export interface PayslipSalaryGrowthPoint {
+  year: number;
+  month: number;
+  monthKey: string;
+  label: string;
+  shortLabel: string;
+  sessionsCount: number;
+  grossAmount: number;
+  netAmount: number;
+  growthRate: number | null;
+  growthDelta: number | null;
+  isCurrentPeriod?: boolean;
+}
 
 export interface PayslipSessionItem {
   lessonId: number;
@@ -82,6 +96,50 @@ export interface PayslipPrintData {
     costAmount: number;
     date: string | Date;
   }>;
+  salaryHistory?: PayslipSalaryGrowthPoint[];
+}
+
+function computeNiceAxisMax(maxVal: number): number {
+  if (maxVal <= 0) return 10000;
+  const target = maxVal * 1.25;
+  const mag = Math.pow(10, Math.floor(Math.log10(target)));
+  const norm = target / mag;
+  const candidates = [1.2, 1.6, 2, 2.4, 3.2, 4, 4.8, 6, 8, 10, 12];
+  const chosen = candidates.find((c) => c >= norm) ?? 12;
+  return Math.round(chosen * mag);
+}
+
+function formatAxisTick(value: number): string {
+  if (value <= 0) return '0';
+  if (value >= 1000) {
+    const k = value / 1000;
+    if (Math.abs(k - Math.round(k)) < 0.001) {
+      return `${formatNumber(Math.round(k))}k`;
+    }
+    return `${k.toFixed(1).replace('.', ',')}k`;
+  }
+  return formatNumber(Math.round(value));
+}
+
+function formatGrowthPct(rate: number): string {
+  const absVal = Math.abs(rate);
+  const str = absVal % 1 === 0 ? absVal.toFixed(0) : absVal.toFixed(1).replace('.', ',');
+  const sign = rate > 0 ? '+' : rate < 0 ? '-' : '';
+  return `${sign}${str}%`;
+}
+
+function buildRoundedTopBarPath(x: number, y: number, w: number, h: number, r: number): string {
+  if (h <= 0) return '';
+  const radius = Math.min(r, w / 2, h);
+  return [
+    `M ${x},${y + h}`,
+    `L ${x},${y + radius}`,
+    `Q ${x},${y} ${x + radius},${y}`,
+    `L ${x + w - radius},${y}`,
+    `Q ${x + w},${y} ${x + w},${y + radius}`,
+    `L ${x + w},${y + h}`,
+    'Z',
+  ].join(' ');
 }
 
 interface PayslipTicketProps {
@@ -332,6 +390,398 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           </span>
         </div>
       </div>
+
+      {/* Three-Month Salary Growth Column Graph */}
+      {data.salaryHistory && data.salaryHistory.length > 0 && (() => {
+        const history = data.salaryHistory.slice(-3);
+        const maxGross = Math.max(...history.map((m) => Number(m.grossAmount || 0)), 0);
+        const niceMax = computeNiceAxisMax(maxGross);
+
+        const firstPt = history[0];
+        const secondPt = history.length > 1 ? history[1] : null;
+        const lastPt = history[history.length - 1];
+
+        let overallBadgeText = '0 DZD sur 3 mois';
+        let overallBadgeStyle: React.CSSProperties = {
+          backgroundColor: '#f1f5f9',
+          color: '#475569',
+          border: '1px solid #cbd5e1',
+        };
+
+        if (history.length >= 2) {
+          const basePt = firstPt.grossAmount > 0 ? firstPt : secondPt && secondPt.grossAmount > 0 ? secondPt : null;
+          const periodTag = basePt === firstPt && history.length === 3 ? 'sur 3 mois' : 'vs mois préc.';
+          if (basePt && basePt !== lastPt && basePt.grossAmount > 0) {
+            const diff = Math.round((lastPt.grossAmount - basePt.grossAmount) * 100) / 100;
+            const pct = Math.round(((lastPt.grossAmount - basePt.grossAmount) / basePt.grossAmount) * 1000) / 10;
+            if (diff > 0) {
+              overallBadgeText = `▲ ${formatGrowthPct(pct)} (${diff > 0 ? '+' : ''}${formatDZD(diff)} ${periodTag})`;
+              overallBadgeStyle = {
+                backgroundColor: '#ecfdf5',
+                color: '#065f46',
+                border: '1px solid #6ee7b7',
+              };
+            } else if (diff < 0) {
+              overallBadgeText = `▼ ${formatGrowthPct(pct)} (${formatDZD(diff)} ${periodTag})`;
+              overallBadgeStyle = {
+                backgroundColor: '#fff1f2',
+                color: '#9f1239',
+                border: '1px solid #fda4af',
+              };
+            } else {
+              overallBadgeText = `= Stable 0% (${periodTag})`;
+            }
+          } else if (lastPt.grossAmount > 0) {
+            overallBadgeText = '1er mois rémunéré';
+            overallBadgeStyle = {
+              backgroundColor: '#eff6ff',
+              color: '#1e40af',
+              border: '1px solid #93c5fd',
+            };
+          }
+        }
+
+        const svgWidth = 680;
+        const svgHeight = 182;
+        const plotLeft = 76;
+        const plotRight = 656;
+        const plotWidth = plotRight - plotLeft;
+        const plotTop = 28;
+        const plotBottom = 150;
+        const plotHeight = plotBottom - plotTop;
+        const slotWidth = plotWidth / Math.max(1, history.length);
+        const barWidth = 76;
+        const tickRatios = [0, 0.25, 0.5, 0.75, 1];
+
+        const barPalette = [
+          { fill: '#94a3b8', stroke: '#64748b', text: '#334155' },
+          { fill: '#3b82f6', stroke: '#2563eb', text: '#1d4ed8' },
+          { fill: '#1e3a8a', stroke: '#172554', text: '#1e3a8a' },
+        ];
+
+        return (
+          <div
+            className="avoid-break mb-6 rounded-lg border border-gray-300 bg-white overflow-hidden"
+            style={{
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              backgroundColor: '#ffffff',
+              marginBottom: '24px',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Graph Header */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '8px',
+                flexWrap: 'wrap',
+                padding: '10px 14px',
+                backgroundColor: '#f8fafc',
+                borderBottom: '1px solid #e5e7eb',
+              }}
+            >
+              <div>
+                <h2
+                  style={{
+                    margin: 0,
+                    fontSize: '12.5px',
+                    fontWeight: 800,
+                    color: '#111827',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  Évolution Salariale sur les 3 Derniers Mois
+                </h2>
+                <p
+                  style={{
+                    margin: '2px 0 0 0',
+                    fontSize: '10.5px',
+                    color: '#6b7280',
+                  }}
+                >
+                  Comparaison mensuelle de la rémunération brute et taux de croissance
+                </p>
+              </div>
+              <span
+                className="font-mono"
+                style={{
+                  ...overallBadgeStyle,
+                  fontSize: '10.5px',
+                  fontWeight: 800,
+                  padding: '3px 9px',
+                  borderRadius: '9999px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {overallBadgeText}
+              </span>
+            </div>
+
+            {/* Crisp Vector SVG Column Chart */}
+            <div style={{ padding: '8px 12px 4px 12px', backgroundColor: '#ffffff' }}>
+              <svg
+                viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+                width="100%"
+                height={svgHeight}
+                role="img"
+                aria-label="Graphique en colonnes de la croissance salariale sur les trois derniers mois"
+                style={{ display: 'block', width: '100%', height: 'auto', maxHeight: '188px' }}
+              >
+                {/* Y-axis unit caption */}
+                <text
+                  x={plotLeft - 8}
+                  y={14}
+                  textAnchor="end"
+                  fontSize="9"
+                  fontWeight="700"
+                  fill="#64748b"
+                >
+                  DZD
+                </text>
+
+                {/* Horizontal Gridlines & Y-Axis Ticks */}
+                {tickRatios.map((ratio, tIdx) => {
+                  const y = plotBottom - ratio * plotHeight;
+                  const val = niceMax * ratio;
+                  const isZero = ratio === 0;
+                  return (
+                    <g key={tIdx}>
+                      <line
+                        x1={plotLeft}
+                        y1={y}
+                        x2={plotRight}
+                        y2={y}
+                        stroke={isZero ? '#9ca3af' : '#e5e7eb'}
+                        strokeWidth={isZero ? '1.25' : '1'}
+                        strokeDasharray={isZero ? undefined : '4 3'}
+                      />
+                      <text
+                        x={plotLeft - 8}
+                        y={y + 3.5}
+                        textAnchor="end"
+                        fontSize="9.5"
+                        fontWeight="600"
+                        fill="#6b7280"
+                        style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+                      >
+                        {formatAxisTick(val)}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Columns, Value Labels & Growth Pills */}
+                {history.map((pt, idx) => {
+                  const paletteIdx = history.length === 3 ? idx : Math.min(2, idx + (3 - history.length));
+                  const colors = barPalette[paletteIdx];
+                  const cx = plotLeft + slotWidth * idx + slotWidth / 2;
+                  const barX = cx - barWidth / 2;
+                  const gross = Math.max(0, Number(pt.grossAmount || 0));
+                  const rawH = niceMax > 0 ? (gross / niceMax) * plotHeight : 0;
+                  const barH = gross > 0 ? Math.max(4, rawH) : 0;
+                  const barY = plotBottom - barH;
+                  const anchorTopY = gross > 0 ? barY : plotBottom - 3;
+                  const valY = anchorTopY - 7;
+
+                  // Determine MoM growth pill for columns after the first
+                  let pillLabel: string | null = null;
+                  let pillBg = '#f1f5f9';
+                  let pillBorder = '#cbd5e1';
+                  let pillText = '#475569';
+
+                  if (idx > 0) {
+                    if (pt.growthRate !== null) {
+                      if (pt.growthRate > 0) {
+                        pillLabel = `▲ ${formatGrowthPct(pt.growthRate)}`;
+                        pillBg = '#ecfdf5';
+                        pillBorder = '#6ee7b7';
+                        pillText = '#065f46';
+                      } else if (pt.growthRate < 0) {
+                        pillLabel = `▼ ${formatGrowthPct(pt.growthRate)}`;
+                        pillBg = '#fff1f2';
+                        pillBorder = '#fda4af';
+                        pillText = '#9f1239';
+                      } else {
+                        pillLabel = '= 0%';
+                      }
+                    } else if (gross > 0) {
+                      pillLabel = 'Nouveau';
+                      pillBg = '#eff6ff';
+                      pillBorder = '#93c5fd';
+                      pillText = '#1e40af';
+                    }
+                  }
+
+                  const pillWidth = 68;
+                  const pillHeight = 15;
+                  const pillY = valY - 26;
+
+                  return (
+                    <g key={pt.monthKey || idx}>
+                      {gross > 0 ? (
+                        <path
+                          d={buildRoundedTopBarPath(barX, barY, barWidth, barH, 5)}
+                          fill={colors.fill}
+                          stroke={colors.stroke}
+                          strokeWidth="1"
+                        />
+                      ) : (
+                        <rect
+                          x={barX}
+                          y={plotBottom - 3}
+                          width={barWidth}
+                          height={3}
+                          rx={1.5}
+                          fill="#cbd5e1"
+                        />
+                      )}
+
+                      {/* Growth badge above bar */}
+                      {pillLabel && (
+                        <g>
+                          <rect
+                            x={cx - pillWidth / 2}
+                            y={pillY}
+                            width={pillWidth}
+                            height={pillHeight}
+                            rx={7.5}
+                            fill={pillBg}
+                            stroke={pillBorder}
+                            strokeWidth="1"
+                          />
+                          <text
+                            x={cx}
+                            y={pillY + 10.5}
+                            textAnchor="middle"
+                            fontSize="9"
+                            fontWeight="800"
+                            fill={pillText}
+                            style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+                          >
+                            {pillLabel}
+                          </text>
+                        </g>
+                      )}
+
+                      {/* Exact Gross Amount above column */}
+                      <text
+                        x={cx}
+                        y={valY}
+                        textAnchor="middle"
+                        fontSize="10.5"
+                        fontWeight="800"
+                        fill={colors.text}
+                        stroke="#ffffff"
+                        strokeWidth="3"
+                        paintOrder="stroke"
+                        style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+                      >
+                        {formatDZD(gross)}
+                      </text>
+
+                      {/* Month X-Axis Label */}
+                      <text
+                        x={cx}
+                        y={plotBottom + 18}
+                        textAnchor="middle"
+                        fontSize="10.5"
+                        fontWeight={pt.isCurrentPeriod ? '800' : '600'}
+                        fill={pt.isCurrentPeriod ? '#1e3a8a' : '#374151'}
+                      >
+                        {pt.label}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+
+            {/* 3-Column Monthly Breakdown Footer Strip */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(${history.length}, minmax(0, 1fr))`,
+                borderTop: '1px solid #e5e7eb',
+                backgroundColor: '#f8fafc',
+                fontSize: '10.5px',
+              }}
+            >
+              {history.map((pt, idx) => {
+                const prevPt = idx > 0 ? history[idx - 1] : null;
+                const delta = pt.growthDelta ?? (prevPt ? pt.grossAmount - prevPt.grossAmount : null);
+                return (
+                  <div
+                    key={`summary_${pt.monthKey || idx}`}
+                    style={{
+                      padding: '7px 10px',
+                      borderLeft: idx > 0 ? '1px solid #e5e7eb' : undefined,
+                      backgroundColor: pt.isCurrentPeriod ? '#eff6ff' : 'transparent',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: '4px',
+                        marginBottom: '2px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          color: pt.isCurrentPeriod ? '#1e3a8a' : '#1f2937',
+                        }}
+                      >
+                        {pt.shortLabel}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '9.5px',
+                          fontWeight: 600,
+                          color: pt.isCurrentPeriod ? '#1d4ed8' : '#6b7280',
+                        }}
+                      >
+                        {pt.sessionsCount} séance{pt.sessionsCount > 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div
+                      className="font-mono"
+                      style={{
+                        fontSize: '10px',
+                        color: '#4b5563',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: '4px',
+                      }}
+                    >
+                      <span>Net : {formatDZD(Number(pt.netAmount || 0))}</span>
+                      {idx === 0 ? (
+                        <span style={{ color: '#6b7280', fontFamily: 'system-ui, sans-serif' }}>Base</span>
+                      ) : delta !== null && delta !== 0 ? (
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            color: delta > 0 ? '#047857' : '#be123c',
+                          }}
+                        >
+                          {delta > 0 ? '+' : ''}
+                          {formatDZD(delta)}
+                        </span>
+                      ) : (
+                        <span style={{ color: '#6b7280' }}>0 DZD</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Section 1a: Per-Group Breakdown (Classes / Groupes) */}
       {groupLines.length > 0 && (

@@ -30,7 +30,7 @@ import {
   deleteSalaryAdvanceAction,
 } from "@/lib/actions";
 import { PrintPayslipButton } from "@/components/PrintPayslipButton";
-import { PayslipPrintData } from "@/components/printable/PayslipTicket";
+import { PayslipPrintData, PayslipSalaryGrowthPoint } from "@/components/printable/PayslipTicket";
 import { PrintOwnerConsolidationButton } from "@/components/PrintOwnerConsolidationButton";
 import { OwnerTeacherConsolidationPrintData } from "@/components/printable/OwnerTeacherConsolidationReport";
 import { OutcomeFundingSourceSelect } from "@/components/finance/OutcomeFundingSourceSelect";
@@ -41,6 +41,7 @@ interface TeacherPayrollSectionProps {
   teacherName: string;
   teacherPhone?: string | null;
   payroll: TeacherPayrollCalculation | null;
+  initialSalaryHistory?: PayslipSalaryGrowthPoint[];
   periodLabel: string;
   isOwner?: boolean;
   hasFormationGroups?: boolean;
@@ -52,6 +53,7 @@ export default function TeacherPayrollSection({
   teacherName,
   teacherPhone,
   payroll,
+  initialSalaryHistory,
   periodLabel,
   isOwner = false,
   hasFormationGroups = false,
@@ -72,6 +74,7 @@ export default function TeacherPayrollSection({
 
   const initialDates = getInitialDates();
   const [currentPayroll, setCurrentPayroll] = useState<TeacherPayrollCalculation | null>(payroll);
+  const [salaryHistory, setSalaryHistory] = useState<PayslipSalaryGrowthPoint[] | undefined>(initialSalaryHistory);
   const [currentPeriodLabel, setCurrentPeriodLabel] = useState<string>(periodLabel);
   const [startDate, setStartDate] = useState<string>(initialDates.start);
   const [endDate, setEndDate] = useState<string>(initialDates.end);
@@ -134,6 +137,9 @@ export default function TeacherPayrollSection({
       setIsCalculating(false);
       if (res.success && res.payroll) {
         setCurrentPayroll(res.payroll);
+        if (res.salaryHistory) {
+          setSalaryHistory(res.salaryHistory);
+        }
         const dStart = new Date(startDate);
         const dEnd = new Date(endDate);
         const df = new Intl.DateTimeFormat(locale === "ar" ? "ar-DZ" : "fr-DZ", {
@@ -326,6 +332,42 @@ export default function TeacherPayrollSection({
 
   const formatDZD = (num: number) => `${Number(num || 0).toLocaleString(locale)} DZD`;
 
+  const effectiveSalaryHistory: PayslipSalaryGrowthPoint[] | undefined =
+    currentPayroll && salaryHistory && salaryHistory.length > 0
+      ? (() => {
+          const targetMonthKey = endDate ? endDate.slice(0, 7) : "";
+          const lastMonthKey = salaryHistory[salaryHistory.length - 1]?.monthKey;
+          if (targetMonthKey && lastMonthKey && targetMonthKey !== lastMonthKey) {
+            return undefined;
+          }
+          const sMs = new Date(`${startDate}T00:00:00Z`).getTime();
+          const eMs = new Date(`${endDate}T23:59:59Z`).getTime();
+          const isFullMonth = !isNaN(sMs) && !isNaN(eMs) && (eMs - sMs) / 86_400_000 >= 20;
+          if (!isFullMonth) return salaryHistory;
+
+          const updated = salaryHistory.map((pt, idx) => {
+            if (idx !== salaryHistory.length - 1) return pt;
+            const gross = Math.max(0, Math.round((currentPayroll.grossAmount + savedBonus) * 100) / 100);
+            const net = Math.max(0, Math.round((currentPayroll.netAmount + savedBonus) * 100) / 100);
+            const prevGross = idx > 0 ? salaryHistory[idx - 1].grossAmount : null;
+            const delta = prevGross !== null ? Math.round((gross - prevGross) * 100) / 100 : null;
+            const rate =
+              prevGross !== null && prevGross > 0
+                ? Math.round(((gross - prevGross) / prevGross) * 1000) / 10
+                : null;
+            return {
+              ...pt,
+              sessionsCount: currentPayroll.totalSessions,
+              grossAmount: gross,
+              netAmount: net,
+              growthDelta: delta,
+              growthRate: rate,
+            };
+          });
+          return updated;
+        })()
+      : salaryHistory;
+
   // Printable data preparation
   const printData: PayslipPrintData | null = currentPayroll
     ? {
@@ -396,6 +438,7 @@ export default function TeacherPayrollSection({
           costAmount: p.costAmount,
           date: p.date,
         })),
+        salaryHistory: effectiveSalaryHistory,
       }
     : null;
 

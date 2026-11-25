@@ -27,6 +27,30 @@ function safeRevalidatePath(path: string) {
   }
 }
 
+function revalidateFormationPaths(opts?: {
+  languageId?: number | null;
+  classIds?: Array<number | null | undefined>;
+}) {
+  safeRevalidatePath("/list/formations");
+  safeRevalidatePath("/fr/list/formations");
+  safeRevalidatePath("/ar/list/formations");
+  safeRevalidatePath("/list/classes");
+  safeRevalidatePath("/fr/list/classes");
+  safeRevalidatePath("/ar/list/classes");
+  if (opts?.languageId) {
+    safeRevalidatePath(`/list/formations/${opts.languageId}`);
+    safeRevalidatePath(`/fr/list/formations/${opts.languageId}`);
+    safeRevalidatePath(`/ar/list/formations/${opts.languageId}`);
+  }
+  for (const cid of opts?.classIds || []) {
+    if (cid) {
+      safeRevalidatePath(`/list/formations/${cid}`);
+      safeRevalidatePath(`/fr/list/formations/${cid}`);
+      safeRevalidatePath(`/ar/list/formations/${cid}`);
+    }
+  }
+}
+
 export type ActionResponse<T = any> = {
   success: boolean;
   error: boolean;
@@ -388,54 +412,118 @@ export async function deleteFormationLevel(id: number): Promise<ActionResponse> 
 // =================================================================
 
 export async function createFormationGroup(data: {
-  name: string;
+  name?: string;
   branchId?: number;
   formationLevelId: number;
-  ageGroup: string;
-  pricePerCycle: number;
+  teacherId?: string | null;
+  ageGroup?: string;
+  pricePerCycle?: number;
   inscriptionFee?: number;
   hasBooks?: boolean;
-  bookFee?: number;
+  bookFee?: number | null;
 }): Promise<ActionResponse> {
   try {
     const session = await getAuthSession();
-    const activeBranchId = await getActiveBranchId();
-    const targetBranchId = data.branchId || activeBranchId || 1;
-
-    if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, targetBranchId)) {
-      return { success: false, error: true, message: "Non autorisé à créer un groupe dans cette succursale / غير مصرح لك بإنشاء فوج تكويني في هذا الفرع" };
+    if (!session.isOwnerOrAdmin && !session.isBranchAdmin && session.role !== "admin") {
+      return { success: false, error: true, message: "Permissions insuffisantes / صلاحية غير كافية" };
     }
+
+    const activeBranchId = await getActiveBranchId();
 
     const level = await prisma.formationLevel.findUnique({
       where: { id: data.formationLevelId },
+      include: {
+        Language: true,
+        _count: { select: { Class: true } },
+      },
     });
     if (!level) {
       return { success: false, error: true, message: "Niveau de formation introuvable / المستوى التكويني المحدد غير موجود" };
+    }
+
+    const referenceFormationClass = await prisma.class.findFirst({
+      where: {
+        isFormation: true,
+        FormationLevel: { languageId: level.languageId },
+      },
+      orderBy: { id: "asc" },
+    });
+
+    const targetBranchId =
+      data.branchId || activeBranchId || referenceFormationClass?.branchId || 1;
+
+    if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, targetBranchId)) {
+      return { success: false, error: true, message: "Non autorisé à créer un groupe dans cette succursale / غير مصرح لك بإنشاء فوج تكويني في هذا الفرع" };
     }
 
     const defaultFormationFee = await getFormationInscriptionFeeAction();
     const effectiveInscFee =
       data.inscriptionFee && data.inscriptionFee > 0
         ? data.inscriptionFee
+        : referenceFormationClass?.inscriptionFee && Number(referenceFormationClass.inscriptionFee) > 0
+        ? Number(referenceFormationClass.inscriptionFee)
         : defaultFormationFee;
+
+    const effectiveHasBooks =
+      data.hasBooks !== undefined
+        ? Boolean(data.hasBooks)
+        : Boolean(referenceFormationClass?.hasBooks);
+
+    const effectiveBookFee =
+      effectiveHasBooks
+        ? data.bookFee !== undefined && data.bookFee !== null
+          ? new Prisma.Decimal(data.bookFee)
+          : referenceFormationClass?.bookFee ?? null
+        : null;
+
+    const effectivePrice =
+      data.pricePerCycle !== undefined && data.pricePerCycle >= 0
+        ? new Prisma.Decimal(data.pricePerCycle)
+        : level.lumpSumPrice;
+
+    const nextGroupNumber = (level._count?.Class || 0) + 1;
+    const resolvedName = data.name?.trim()
+      ? data.name.trim()
+      : nextGroupNumber === 1
+      ? `${level.Language.name} - ${level.name}`
+      : `${level.Language.name} - ${level.name} - Groupe ${nextGroupNumber}`;
+
+    const resolvedTeacherId = data.teacherId?.trim() ? data.teacherId.trim() : null;
+    const resolvedAgeGroup =
+      data.ageGroup?.trim() ||
+      referenceFormationClass?.ageGroup ||
+      "Adultes (15+ ans)";
 
     const formationClass = await prisma.class.create({
       data: {
-        name: data.name.trim(),
+        name: resolvedName,
         branchId: targetBranchId,
+        teacherId: resolvedTeacherId,
         isFormation: true,
         formationLevelId: data.formationLevelId,
-        ageGroup: (data.ageGroup || "Adultes").trim(),
-        pricePerCycle: new Prisma.Decimal(data.pricePerCycle || 0),
+        ageGroup: resolvedAgeGroup,
+        pricePerCycle: effectivePrice,
         inscriptionFee: new Prisma.Decimal(effectiveInscFee),
-        hasBooks: !!data.hasBooks,
-        bookFee: data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null,
+        hasBooks: effectiveHasBooks,
+        bookFee: effectiveBookFee,
+      },
+      include: {
+        branch: true,
+        teacher: true,
+        FormationLevel: { include: { Language: true } },
       },
     });
 
-    safeRevalidatePath("/list/formations");
-    safeRevalidatePath("/list/classes");
-    return { success: true, error: false, message: "Groupe de formation créé avec succès / تم إنشاء الفوج التكويني بنجاح", data: serializeForClient(formationClass) };
+    revalidateFormationPaths({
+      languageId: level.languageId,
+      classIds: [formationClass.id],
+    });
+    return {
+      success: true,
+      error: false,
+      message: "Groupe de formation créé avec succès / تم إنشاء الفوج التكويني بنجاح",
+      data: serializeForClient(formationClass),
+    };
   } catch (err: any) {
     console.error("Error creating formation group:", err);
     return { success: false, error: true, message: err?.message || "Échec de la création du groupe / فشل في إنشاء الفوج التكويني" };
@@ -927,6 +1015,12 @@ export async function createFormationWithLevels(data: {
     name: string;
     lumpSumPrice: number;
     teacherId?: string | null;
+    groups?: Array<{
+      name?: string;
+      teacherId?: string | null;
+      branchId?: number;
+      ageGroup?: string;
+    }>;
   }>;
   branchId: number;
   teacherId?: string | null;
@@ -954,6 +1048,12 @@ export async function createFormationWithLevels(data: {
     if (!data.levels || data.levels.length === 0) {
       return { success: false, error: true, message: "Au moins un niveau est requis / يجب تحديد مستوى تكويني واحد على الأقل" };
     }
+
+    const defaultFormationFee = await getFormationInscriptionFeeAction();
+    const effectiveInscFee =
+      data.inscriptionFee && data.inscriptionFee > 0
+        ? data.inscriptionFee
+        : defaultFormationFee;
 
     const result = await prisma.$transaction(async (tx) => {
       // 1. Find or create Language
@@ -993,52 +1093,73 @@ export async function createFormationWithLevels(data: {
         createdLevels.push(lvl);
       }
 
-      // 4. Create initial groups (Class) for ALL newly created levels so students can start from any level
+      // 4. Create initial groups (Class) for ALL newly created levels (supporting 1 or multiple groups per level)
       let initialFormationGroup: any = null;
+      const createdGroups: any[] = [];
+
       for (let i = 0; i < createdLevels.length; i++) {
         const lvl = createdLevels[i];
         const lvlInput = data.levels[i];
-        const levelTeacherId = lvlInput?.teacherId?.trim() ? lvlInput.teacherId.trim() : null;
+        const groupInputs =
+          lvlInput?.groups && lvlInput.groups.length > 0
+            ? lvlInput.groups
+            : [
+                {
+                  name: i === 0 && data.initialGroupName?.trim() ? data.initialGroupName.trim() : "",
+                  teacherId: lvlInput?.teacherId,
+                  branchId: data.branchId,
+                  ageGroup: data.ageGroup,
+                },
+              ];
 
-        const groupName =
-          i === 0 && data.initialGroupName?.trim()
-            ? data.initialGroupName.trim()
-            : `${language.name} - ${lvl.name}`;
+        for (let gIdx = 0; gIdx < groupInputs.length; gIdx++) {
+          const grpInput = groupInputs[gIdx];
+          const grpTeacherId = grpInput?.teacherId?.trim() ? grpInput.teacherId.trim() : null;
+          const grpBranchId = grpInput?.branchId ? Number(grpInput.branchId) : data.branchId;
+          const grpAgeGroup = grpInput?.ageGroup?.trim() || data.ageGroup?.trim() || "Adultes (15+ ans)";
 
-        const defaultFormationFee = await getFormationInscriptionFeeAction();
-        const effectiveInscFee =
-          data.inscriptionFee && data.inscriptionFee > 0
-            ? data.inscriptionFee
-            : defaultFormationFee;
+          const fallbackName =
+            groupInputs.length === 1
+              ? i === 0 && data.initialGroupName?.trim()
+                ? data.initialGroupName.trim()
+                : `${language.name} - ${lvl.name}`
+              : `${language.name} - ${lvl.name} - Groupe ${gIdx + 1}`;
 
-        const cls = await tx.class.create({
-          data: {
-            name: groupName,
-            branchId: data.branchId,
-            teacherId: levelTeacherId,
-            isFormation: true,
-            formationLevelId: lvl.id,
-            ageGroup: data.ageGroup?.trim() || "Adultes (15+ ans)",
-            pricePerCycle: lvl.lumpSumPrice, // lump-sum price stored as pricePerCycle
-            hasBooks: !!data.hasBooks,
-            bookFee: data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null,
-            inscriptionFee: new Prisma.Decimal(effectiveInscFee),
-          },
-        });
-        if (i === 0) {
-          initialFormationGroup = cls;
+          const groupName = grpInput?.name?.trim() ? grpInput.name.trim() : fallbackName;
+
+          const cls = await tx.class.create({
+            data: {
+              name: groupName,
+              branchId: grpBranchId,
+              teacherId: grpTeacherId,
+              isFormation: true,
+              formationLevelId: lvl.id,
+              ageGroup: grpAgeGroup,
+              pricePerCycle: lvl.lumpSumPrice,
+              hasBooks: !!data.hasBooks,
+              bookFee: data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null,
+              inscriptionFee: new Prisma.Decimal(effectiveInscFee),
+            },
+          });
+
+          createdGroups.push(cls);
+          if (!initialFormationGroup) {
+            initialFormationGroup = cls;
+          }
         }
       }
 
-      return { language, levels: createdLevels, group: initialFormationGroup };
+      return { language, levels: createdLevels, group: initialFormationGroup, groups: createdGroups };
     }, { timeout: 30000, maxWait: 10000 });
 
-    safeRevalidatePath("/list/formations");
-    safeRevalidatePath("/list/classes");
+    revalidateFormationPaths({
+      languageId: result.language.id,
+      classIds: result.groups.map((g: any) => g.id),
+    });
     return {
       success: true,
       error: false,
-      message: "Formation et groupe créés avec succès ! / تم إنشاء التكوين والمستويات والفوج بنجاح!",
+      message: "Formation et groupes créés avec succès ! / تم إنشاء التكوين والمستويات والأفواج بنجاح!",
       data: serializeForClient(result),
     };
   } catch (err: any) {
@@ -1425,6 +1546,17 @@ export async function reopenFormationLevel(classId: number): Promise<ActionRespo
 // 9c. CASCADING LEVEL CLOSURE & PROGRESSION ACTIONS
 // =================================================================
 
+export type LevelClosureDecisionInput = {
+  levelNumber: number;
+  isClosed?: boolean;
+  mode?: "ENROLL_EXISTING" | "CREATE_NEW_KEEP_OPEN" | "CLOSE_GROUP_AND_CREATE_NEW";
+  targetClassId?: number;
+  closedClassId?: number;
+  newGroupName?: string;
+  newGroupTeacherId?: string | null;
+  newGroupBranchId?: number;
+};
+
 export async function getFormationClosurePreview(classId: number): Promise<ActionResponse> {
   try {
     const session = await getAuthSession();
@@ -1435,12 +1567,17 @@ export async function getFormationClosurePreview(classId: number): Promise<Actio
     const currentClass = await prisma.class.findUnique({
       where: { id: classId },
       include: {
+        branch: { select: { id: true, name: true } },
+        teacher: { select: { id: true, name: true } },
         FormationLevel: {
           include: {
             Language: true,
           },
         },
         enrollments: {
+          where: {
+            status: { notIn: ["TRANSFERRED", "UNENROLLED"] },
+          },
           include: {
             student: {
               select: { id: true, name: true, phone: true, globalNumber: true },
@@ -1494,68 +1631,87 @@ export async function getFormationClosurePreview(classId: number): Promise<Actio
       }
     }
 
-    // Find subsequent levels in this formation
-    const nextLevels = await prisma.formationLevel.findMany({
-      where: {
-        languageId: language.id,
-        levelNumber: { gt: currentLevel.levelNumber },
-      },
-      include: {
-        Class: {
-          include: {
-            _count: {
-              select: {
-                enrollments: {
-                  where: {
-                    status: "ACTIVE",
-                    transfersFrom: { none: {} },
+    // Find subsequent levels in this formation along with ALL their groups
+    const [nextLevels, branches, teachers] = await Promise.all([
+      prisma.formationLevel.findMany({
+        where: {
+          languageId: language.id,
+          levelNumber: { gt: currentLevel.levelNumber },
+        },
+        include: {
+          Class: {
+            where: { isFormation: true },
+            include: {
+              branch: { select: { id: true, name: true } },
+              teacher: { select: { id: true, name: true } },
+              _count: {
+                select: {
+                  enrollments: {
+                    where: {
+                      status: "ACTIVE",
+                      transfersFrom: { none: {} },
+                    },
                   },
                 },
               },
             },
-            teacher: { select: { id: true, name: true } },
+            orderBy: { id: "asc" },
           },
-          orderBy: { id: "desc" },
+          LevelTest: {
+            orderBy: { testDate: "desc" },
+          },
         },
-        LevelTest: {
-          orderBy: { testDate: "desc" },
-        },
-      },
-      orderBy: { levelNumber: "asc" },
-    });
+        orderBy: { levelNumber: "asc" },
+      }),
+      prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+      prisma.teacher.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    ]);
 
     const subsequentLevelsData = nextLevels.map((lvl) => {
-      const activeClass = lvl.Class.find((c) => !isClassInactive(c)) || lvl.Class[0] || null;
-      // Also get passed students for this level's active class (in case it gets closed too)
-      let activeClassPassedCount = 0;
-      if (activeClass) {
-        const testsForActive = lvl.LevelTest.filter((t) => t.classId === activeClass.id);
+      const computePassedForGroup = (grpId: number) => {
+        const testsForGroup = lvl.LevelTest.filter((t) => t.classId === grpId);
         const map = new Map<string, boolean>();
-        for (const t of testsForActive) {
+        for (const t of testsForGroup) {
           if (!map.has(t.studentId)) {
             map.set(t.studentId, t.passed);
           }
         }
+        let passedCount = 0;
         for (const passed of map.values()) {
-          if (passed) activeClassPassedCount++;
+          if (passed) passedCount++;
         }
-      }
+        return passedCount;
+      };
+
+      const mappedGroups = lvl.Class.map((c) => ({
+        id: c.id,
+        name: c.name,
+        isCompleted: c.isCompleted,
+        isPaused: Boolean(c.isPaused),
+        isInactive: isClassInactive(c),
+        branchId: c.branchId,
+        branchName: c.branch?.name || null,
+        teacherId: c.teacherId || null,
+        teacherName: c.teacher?.name || null,
+        ageGroup: c.ageGroup || null,
+        enrolledCount: c._count.enrollments,
+        passedStudentsCount: computePassedForGroup(c.id),
+      }));
+
+      const activeGroups = mappedGroups.filter((g) => !g.isInactive);
+      const activeClass = activeGroups[0] || mappedGroups[0] || null;
+      const suggestedNewGroupName = `${language.name} - ${lvl.name} - Groupe ${mappedGroups.length + 1}`;
 
       return {
         levelId: lvl.id,
         levelNumber: lvl.levelNumber,
         levelName: lvl.name,
         lumpSumPrice: Number(lvl.lumpSumPrice || 0),
-        activeClass: activeClass
-          ? {
-              id: activeClass.id,
-              name: activeClass.name,
-              isCompleted: activeClass.isCompleted,
-              enrolledCount: activeClass._count.enrollments,
-              passedStudentsCount: activeClassPassedCount,
-              teacherName: activeClass.teacher?.name || null,
-            }
-          : null,
+        totalGroupsCount: mappedGroups.length,
+        activeGroups,
+        allGroups: mappedGroups,
+        activeClass,
+        suggestedNewGroupName,
       };
     });
 
@@ -1576,12 +1732,18 @@ export async function getFormationClosurePreview(classId: number): Promise<Actio
         currentClass: {
           id: currentClass.id,
           name: currentClass.name,
+          branchId: currentClass.branchId,
+          branchName: currentClass.branch?.name || null,
+          teacherId: currentClass.teacherId || null,
+          teacherName: currentClass.teacher?.name || null,
           isCompleted: currentClass.isCompleted,
           totalEnrolled: currentClass.enrollments.length,
         },
         succeededStudents,
         otherStudents,
         subsequentLevels: subsequentLevelsData,
+        branches,
+        teachers,
       }),
     };
   } catch (err: any) {
@@ -1592,7 +1754,7 @@ export async function getFormationClosurePreview(classId: number): Promise<Actio
 
 export async function closeFormationLevelsWithCascade(data: {
   startingClassId: number;
-  closureDecisions: Array<{ levelNumber: number; isClosed: boolean }>;
+  closureDecisions: Array<LevelClosureDecisionInput>;
 }): Promise<ActionResponse> {
   try {
     const session = await getAuthSession();
@@ -1621,88 +1783,111 @@ export async function closeFormationLevelsWithCascade(data: {
     const languageName = startingClass.FormationLevel.Language.name;
     const startLevelNum = startingClass.FormationLevel.levelNumber;
 
-    // Fetch all levels of this language
+    // Fetch all levels of this language with all their formation groups
     const allLevels = await prisma.formationLevel.findMany({
       where: { languageId },
       include: {
         Class: {
+          where: { isFormation: true },
           include: {
-            enrollments: { select: { studentId: true } },
+            enrollments: {
+              where: { status: { notIn: ["TRANSFERRED", "UNENROLLED"] } },
+              select: { studentId: true },
+            },
             LevelTest: { orderBy: { testDate: "desc" } },
           },
-          orderBy: { id: "desc" },
+          orderBy: { id: "asc" },
         },
       },
       orderBy: { levelNumber: "asc" },
     });
 
-    // Resolve current academic year
     const academicYear = await prisma.academicYear.findFirst({
       orderBy: { startDate: "desc" },
     });
     const yearId = academicYear ? academicYear.id : 1;
+    const defaultFormationFee = await getFormationInscriptionFeeAction();
 
-    // Map decisions: levelNumber -> isClosed
-    const decisionsMap = new Map<number, boolean>();
-    for (const d of data.closureDecisions) {
-      decisionsMap.set(d.levelNumber, d.isClosed);
+    // Normalize decisions by levelNumber
+    const decisionsMap = new Map<
+      number,
+      LevelClosureDecisionInput & {
+        effectiveMode: "ENROLL_EXISTING" | "CREATE_NEW_KEEP_OPEN" | "CLOSE_GROUP_AND_CREATE_NEW";
+      }
+    >();
+    for (const d of data.closureDecisions || []) {
+      const effectiveMode =
+        d.mode ||
+        (d.isClosed === true ? "CLOSE_GROUP_AND_CREATE_NEW" : "ENROLL_EXISTING");
+      decisionsMap.set(d.levelNumber, { ...d, effectiveMode });
     }
 
-    // Determine which levels are being closed:
-    // Starting level is always closed.
-    // Subsequent levels are closed if decision says true.
+    // Determine which levels have a group being closed:
+    // Starting group is always closed; subsequent levels only close a group when mode === "CLOSE_GROUP_AND_CREATE_NEW".
     const levelsToClose: number[] = [startLevelNum];
     for (let lNum = startLevelNum + 1; ; lNum++) {
-      const isLvlClosed = decisionsMap.get(lNum);
-      if (isLvlClosed === true) {
+      const dec = decisionsMap.get(lNum);
+      if (dec?.effectiveMode === "CLOSE_GROUP_AND_CREATE_NEW") {
         levelsToClose.push(lNum);
       } else {
-        break; // chain stops as soon as a level is NOT closed
+        break;
       }
     }
 
     const resultSummary: {
       closedLevels: number[];
-      promotions: Array<{ fromLevel: number; toLevel: number; studentCount: number; isFresh: boolean }>;
+      closedClassIds: number[];
+      promotions: Array<{
+        fromLevel: number;
+        toLevel: number;
+        targetClassId: number;
+        targetClassName: string;
+        studentCount: number;
+        isFresh: boolean;
+      }>;
     } = {
       closedLevels: [],
+      closedClassIds: [],
       promotions: [],
     };
 
-    await prisma.$transaction(async (tx) => {
-      // We process from highest closed level down to starting level
-      // That way, when Level 2 is closed, its students move to Level 3 first,
-      // and then Level 2 has its fresh class ready for Level 1 students!
-      const sortedLevelsToClose = [...levelsToClose].sort((a, b) => b - a);
+    const touchedClassIds = new Set<number>([startingClass.id]);
 
-      // Cache of fresh classes created per levelNumber:
+    await prisma.$transaction(async (tx) => {
+      const sortedLevelsToClose = [...levelsToClose].sort((a, b) => b - a);
       const freshClassesCreated = new Map<number, any>();
 
       for (const lNum of sortedLevelsToClose) {
         const lvlDef = allLevels.find((l) => l.levelNumber === lNum);
         if (!lvlDef) continue;
 
-        // Find the active class for this level
-        let activeClass =
+        const ownDec = decisionsMap.get(lNum);
+        const classToClose =
           lNum === startLevelNum
             ? startingClass
-            : lvlDef.Class.find((c) => !isClassInactive(c)) || lvlDef.Class[0];
+            : (ownDec?.closedClassId
+                ? lvlDef.Class.find((c) => c.id === ownDec.closedClassId)
+                : undefined) ||
+              lvlDef.Class.find((c) => !isClassInactive(c)) ||
+              lvlDef.Class[0];
 
-        if (!activeClass) continue;
+        if (!classToClose) continue;
 
-        // 1. Mark this active class as completed
+        // 1. Mark ONLY this specific group as completed
         await tx.class.update({
-          where: { id: activeClass.id },
+          where: { id: classToClose.id },
           data: {
             isCompleted: true,
             completedAt: new Date(),
           },
         });
         resultSummary.closedLevels.push(lNum);
+        resultSummary.closedClassIds.push(classToClose.id);
+        touchedClassIds.add(classToClose.id);
 
-        // 2. Find students who succeeded in this class
+        // 2. Find active students who passed their test in this specific group
         const tests = await tx.levelTest.findMany({
-          where: { classId: activeClass.id },
+          where: { classId: classToClose.id },
           orderBy: { testDate: "desc" },
         });
 
@@ -1714,66 +1899,91 @@ export async function closeFormationLevelsWithCascade(data: {
         }
 
         const enrollments = await tx.enrollment.findMany({
-          where: { classId: activeClass.id },
+          where: {
+            classId: classToClose.id,
+            status: { notIn: ["TRANSFERRED", "UNENROLLED"] },
+          },
         });
 
         const succeededStudentIds = enrollments
           .filter((enr) => testStatusMap.get(enr.studentId) === true)
           .map((enr) => enr.studentId);
 
-        // 3. If there is a next level, promote succeeded students
+        // 3. Promote succeeded students to the chosen/created group in the next level
         const nextLevelDef = allLevels.find((l) => l.levelNumber === lNum + 1);
         if (nextLevelDef && succeededStudentIds.length > 0) {
-          const nextLevelIsClosed = decisionsMap.get(lNum + 1) === true;
+          const nextDec = decisionsMap.get(lNum + 1);
+          const nextMode = nextDec?.effectiveMode || "ENROLL_EXISTING";
 
           let targetClass: any = null;
+          let isFreshGroup = false;
 
-          if (nextLevelIsClosed) {
-            // Next level was closed, so its list should be fresh!
-            // Check if fresh class already created, otherwise create it
+          const buildFreshGroupInNextLevel = async () => {
+            const currentCount = await tx.class.count({
+              where: { isFormation: true, formationLevelId: nextLevelDef.id },
+            });
+            const fallbackName =
+              currentCount === 0
+                ? `${languageName} - ${nextLevelDef.name}`
+                : `${languageName} - ${nextLevelDef.name} - Groupe ${currentCount + 1}`;
+            const resolvedName = nextDec?.newGroupName?.trim() || fallbackName;
+            const resolvedBranchId = nextDec?.newGroupBranchId
+              ? Number(nextDec.newGroupBranchId)
+              : classToClose.branchId;
+            const resolvedTeacherId =
+              nextDec?.newGroupTeacherId !== undefined
+                ? nextDec.newGroupTeacherId?.trim() || null
+                : classToClose.teacherId;
+
+            return tx.class.create({
+              data: {
+                name: resolvedName,
+                branchId: resolvedBranchId,
+                teacherId: resolvedTeacherId,
+                isFormation: true,
+                formationLevelId: nextLevelDef.id,
+                ageGroup: classToClose.ageGroup || "Adultes (15+ ans)",
+                pricePerCycle: nextLevelDef.lumpSumPrice,
+                hasBooks: classToClose.hasBooks,
+                bookFee: classToClose.bookFee,
+                inscriptionFee: classToClose.inscriptionFee,
+                isCompleted: false,
+              },
+            });
+          };
+
+          if (nextMode === "CLOSE_GROUP_AND_CREATE_NEW") {
+            isFreshGroup = true;
             if (freshClassesCreated.has(nextLevelDef.levelNumber)) {
               targetClass = freshClassesCreated.get(nextLevelDef.levelNumber);
             } else {
-              targetClass = await tx.class.create({
-                data: {
-                  name: `${languageName} - ${nextLevelDef.name}`,
-                  branchId: activeClass.branchId,
-                  teacherId: activeClass.teacherId,
-                  isFormation: true,
-                  formationLevelId: nextLevelDef.id,
-                  ageGroup: activeClass.ageGroup || "Adultes",
-                  pricePerCycle: nextLevelDef.lumpSumPrice,
-                  hasBooks: activeClass.hasBooks,
-                  bookFee: activeClass.bookFee,
-                  inscriptionFee: activeClass.inscriptionFee,
-                  isCompleted: false,
-                },
-              });
+              targetClass = await buildFreshGroupInNextLevel();
               freshClassesCreated.set(nextLevelDef.levelNumber, targetClass);
             }
+          } else if (nextMode === "CREATE_NEW_KEEP_OPEN") {
+            isFreshGroup = true;
+            targetClass = await buildFreshGroupInNextLevel();
           } else {
-            // Next level is NOT closed: enroll with old registered students in existing active class
-            targetClass = nextLevelDef.Class.find((c) => !isClassInactive(c));
+            // ENROLL_EXISTING: prefer explicit targetClassId if active
+            if (nextDec?.targetClassId) {
+              const explicitTarget = nextLevelDef.Class.find(
+                (c) => c.id === nextDec.targetClassId && !isClassInactive(c)
+              );
+              if (explicitTarget) {
+                targetClass = explicitTarget;
+              }
+            }
             if (!targetClass) {
-              targetClass = await tx.class.create({
-                data: {
-                  name: `${languageName} - ${nextLevelDef.name}`,
-                  branchId: activeClass.branchId,
-                  teacherId: activeClass.teacherId,
-                  isFormation: true,
-                  formationLevelId: nextLevelDef.id,
-                  ageGroup: activeClass.ageGroup || "Adultes",
-                  pricePerCycle: nextLevelDef.lumpSumPrice,
-                  hasBooks: activeClass.hasBooks,
-                  bookFee: activeClass.bookFee,
-                  inscriptionFee: activeClass.inscriptionFee,
-                  isCompleted: false,
-                },
-              });
+              targetClass = nextLevelDef.Class.find((c) => !isClassInactive(c));
+            }
+            if (!targetClass) {
+              isFreshGroup = true;
+              targetClass = await buildFreshGroupInNextLevel();
             }
           }
 
-          // Enroll each succeeded student into targetClass
+          touchedClassIds.add(targetClass.id);
+
           let enrolledCount = 0;
           for (const sId of succeededStudentIds) {
             const existingEnr = await tx.enrollment.findFirst({
@@ -1785,7 +1995,6 @@ export async function closeFormationLevelsWithCascade(data: {
             });
 
             if (!existingEnr) {
-              const defaultFormationFee = await getFormationInscriptionFeeAction();
               const feeAmount =
                 Number(targetClass.inscriptionFee || 0) > 0
                   ? targetClass.inscriptionFee
@@ -1801,26 +2010,36 @@ export async function closeFormationLevelsWithCascade(data: {
                 },
               });
               enrolledCount++;
+            } else if (existingEnr.status !== "ACTIVE") {
+              await tx.enrollment.update({
+                where: { id: existingEnr.id },
+                data: { status: "ACTIVE" },
+              });
+              enrolledCount++;
             }
           }
 
           resultSummary.promotions.push({
             fromLevel: lNum,
             toLevel: lNum + 1,
+            targetClassId: targetClass.id,
+            targetClassName: targetClass.name,
             studentCount: enrolledCount,
-            isFresh: nextLevelIsClosed,
+            isFresh: isFreshGroup,
           });
         }
       }
     });
 
-    safeRevalidatePath("/list/formations");
-    safeRevalidatePath(`/list/formations/${data.startingClassId}`);
+    revalidateFormationPaths({
+      languageId,
+      classIds: Array.from(touchedClassIds),
+    });
 
     return {
       success: true,
       error: false,
-      message: `Clôture effectuée avec succès (${resultSummary.closedLevels.length} niveau(x) clôturé(s)).`,
+      message: `Clôture du cycle effectuée avec succès (${resultSummary.closedClassIds.length} groupe(s) clôturé(s)) / تم إنهاء دورة الفوج بنجاح.`,
       data: serializeForClient(resultSummary),
     };
   } catch (err: any) {
@@ -1828,7 +2047,7 @@ export async function closeFormationLevelsWithCascade(data: {
     return {
       success: false,
       error: true,
-      message: err?.message || "Échec de la clôture des niveaux.",
+      message: err?.message || "Échec de la clôture du cycle.",
     };
   }
 }
@@ -2342,6 +2561,117 @@ export async function deleteFormationSession(data: {
   }
 }
 
+export async function executeSafeDeleteFormationGroup(
+  tx: any,
+  classId: number,
+  opts?: { requireRemainingSiblingGroup?: boolean }
+): Promise<{ deletedName: string; languageId: number | null; formationLevelId: number | null }> {
+  const targetClass = await tx.class.findUnique({
+    where: { id: classId },
+    include: {
+      FormationLevel: true,
+      enrollments: {
+        where: { status: { notIn: ["TRANSFERRED", "UNENROLLED"] } },
+        select: { id: true },
+      },
+      vouchers: {
+        where: { isVoided: false },
+        select: { id: true },
+      },
+    },
+  });
+
+  if (!targetClass || !targetClass.isFormation) {
+    throw new Error("Groupe de formation introuvable / الفوج التكويني غير موجود");
+  }
+
+  if (opts?.requireRemainingSiblingGroup && targetClass.formationLevelId) {
+    const siblingCount = await tx.class.count({
+      where: {
+        isFormation: true,
+        formationLevelId: targetClass.formationLevelId,
+      },
+    });
+    if (siblingCount <= 1) {
+      throw new Error(
+        `Impossible de supprimer le seul groupe du niveau "${targetClass.FormationLevel?.name || ""}". Modifiez-le ou supprimez le niveau entier / لا يمكن حذف الفوج الوحيد في هذا المستوى. يمكنك تعديله أو حذف المستوى بالكامل`
+      );
+    }
+  }
+
+  if (targetClass.enrollments.length > 0) {
+    throw new Error(
+      `Impossible de supprimer le groupe "${targetClass.name}" car il contient des élèves inscrits (${targetClass.enrollments.length} élève(s)) / لا يمكن حذف الفوج (${targetClass.name}) لاحتوائه على تلاميذ مسجلين (${targetClass.enrollments.length})`
+    );
+  }
+
+  if (targetClass.vouchers.length > 0) {
+    throw new Error(
+      `Impossible de supprimer le groupe "${targetClass.name}" car des reçus actifs y sont associés / لا يمكن حذف هذا الفوج لوجود وصولات دفع نشطة مسجلة عليه`
+    );
+  }
+
+  const lessons = await tx.lesson.findMany({
+    where: { classId },
+    select: { id: true },
+  });
+  const lessonIds = lessons.map((l: any) => l.id);
+
+  if (lessonIds.length > 0) {
+    await tx.catchUpAttendance.deleteMany({
+      where: {
+        OR: [
+          { missedLessonId: { in: lessonIds } },
+          { catchUpLessonId: { in: lessonIds } },
+        ],
+      },
+    });
+    await tx.attendance.deleteMany({
+      where: { lessonId: { in: lessonIds } },
+    });
+    await tx.lessonGroup.deleteMany({
+      where: { lessonId: { in: lessonIds } },
+    });
+    await tx.lesson.deleteMany({
+      where: { id: { in: lessonIds } },
+    });
+  }
+
+  await tx.lessonGroup.deleteMany({ where: { classId } });
+  await tx.levelTest.deleteMany({ where: { classId } });
+  await tx.photocopyCharge.deleteMany({ where: { classId } });
+  await tx.voucher.updateMany({
+    where: { classId },
+    data: { classId: null },
+  });
+
+  const residualEnrollments = await tx.enrollment.findMany({
+    where: { classId },
+    select: { id: true },
+  });
+  const residualIds = residualEnrollments.map((e: any) => e.id);
+  if (residualIds.length > 0) {
+    await tx.enrollmentTransfer.deleteMany({
+      where: {
+        OR: [
+          { fromEnrollmentId: { in: residualIds } },
+          { toEnrollmentId: { in: residualIds } },
+        ],
+      },
+    });
+    await tx.enrollment.deleteMany({ where: { id: { in: residualIds } } });
+  }
+
+  await tx.announcement.deleteMany({ where: { classId } });
+  await tx.class.delete({ where: { id: classId } });
+
+  return {
+    deletedName: targetClass.name,
+    languageId: targetClass.FormationLevel?.languageId ?? null,
+    formationLevelId: targetClass.formationLevelId,
+  };
+}
+
 export async function deleteFormationGroup(classId: number): Promise<ActionResponse> {
   try {
     const session = await getAuthSession();
@@ -2349,39 +2679,33 @@ export async function deleteFormationGroup(classId: number): Promise<ActionRespo
       return { success: false, error: true, message: "Permissions insuffisantes pour supprimer le groupe / صلاحية غير كافية لحذف الفوج" };
     }
 
-    const targetClass = await prisma.class.findUnique({
+    const existing = await prisma.class.findUnique({
       where: { id: classId },
-      include: {
-        vouchers: { where: { isVoided: false } },
-      },
+      select: { branchId: true },
     });
-
-    if (!targetClass) {
+    if (!existing) {
       return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود" };
     }
 
-    if (targetClass.vouchers.length > 0) {
-      return {
-        success: false,
-        error: true,
-        message: "Impossible de supprimer ce groupe car des reçus actifs y sont associés / لا يمكن حذف هذا الفوج لوجود وصولات دفع نشطة مسجلة عليه",
-      };
+    if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, existing.branchId)) {
+      return { success: false, error: true, message: "Non autorisé dans cette succursale / غير مصرح لك في هذا الفرع" };
     }
 
-    await prisma.$transaction(async (tx) => {
-      const lessons = await tx.lesson.findMany({ where: { classId }, select: { id: true } });
-      const lessonIds = lessons.map((l) => l.id);
-      if (lessonIds.length > 0) {
-        await tx.attendance.deleteMany({ where: { lessonId: { in: lessonIds } } });
-        await tx.lesson.deleteMany({ where: { id: { in: lessonIds } } });
-      }
-      await tx.levelTest.deleteMany({ where: { classId } });
-      await tx.enrollment.deleteMany({ where: { classId } });
-      await tx.class.delete({ where: { id: classId } });
+    const res = await prisma.$transaction(async (tx) => {
+      return await executeSafeDeleteFormationGroup(tx, classId, {
+        requireRemainingSiblingGroup: true,
+      });
     });
 
-    safeRevalidatePath("/list/formations");
-    return { success: true, error: false, message: "Groupe supprimé avec succès / تم حذف الفوج بنجاح" };
+    revalidateFormationPaths({
+      languageId: res.languageId,
+      classIds: [classId],
+    });
+    return {
+      success: true,
+      error: false,
+      message: `Groupe "${res.deletedName}" supprimé avec succès / تم حذف الفوج بنجاح`,
+    };
   } catch (err: any) {
     console.error("Error deleting formation group:", err);
     return { success: false, error: true, message: err?.message || "Échec de la suppression du groupe / فشل في حذف الفوج" };
@@ -2399,24 +2723,55 @@ export async function updateFormationGroup(data: {
 }): Promise<ActionResponse> {
   try {
     const session = await getAuthSession();
-    if (!session.isOwnerOrAdmin && session.role !== "admin") {
+    if (!session.isOwnerOrAdmin && !session.isBranchAdmin && session.role !== "admin") {
       return { success: false, error: true, message: "Permissions insuffisantes pour modifier le groupe / صلاحية غير كافية لتعديل الفوج" };
+    }
+
+    const existing = await prisma.class.findUnique({
+      where: { id: data.id },
+      include: { FormationLevel: true },
+    });
+    if (!existing || !existing.isFormation) {
+      return { success: false, error: true, message: "Groupe introuvable / الفوج غير موجود" };
+    }
+
+    const targetBranchId = data.branchId ? Number(data.branchId) : existing.branchId;
+    if (session.branchIds.length > 0 && !canUserAccessBranch(session.rawRole, session.branchIds, targetBranchId)) {
+      return { success: false, error: true, message: "Non autorisé dans cette succursale / غير مصرح لك في هذا الفرع" };
+    }
+
+    const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      return { success: false, error: true, message: "Le nom du groupe est obligatoire / اسم الفوج مطلوب" };
+    }
+
+    const updatePayload: any = {
+      name: trimmedName,
+      branchId: targetBranchId,
+      teacherId: data.teacherId?.trim() ? data.teacherId.trim() : null,
+      ageGroup: data.ageGroup !== undefined ? (data.ageGroup.trim() || null) : existing.ageGroup,
+    };
+
+    if (data.hasBooks !== undefined) {
+      updatePayload.hasBooks = !!data.hasBooks;
+      updatePayload.bookFee =
+        data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null;
     }
 
     const updated = await prisma.class.update({
       where: { id: data.id },
-      data: {
-        name: data.name.trim(),
-        branchId: data.branchId ? Number(data.branchId) : undefined,
-        teacherId: data.teacherId || null,
-        ageGroup: data.ageGroup?.trim() || null,
-        hasBooks: !!data.hasBooks,
-        bookFee: data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null,
+      data: updatePayload,
+      include: {
+        branch: true,
+        teacher: true,
+        FormationLevel: { include: { Language: true } },
       },
     });
 
-    safeRevalidatePath("/list/formations");
-    safeRevalidatePath(`/list/formations/${data.id}`);
+    revalidateFormationPaths({
+      languageId: updated.FormationLevel?.languageId ?? null,
+      classIds: [data.id],
+    });
     return { success: true, error: false, message: "Groupe mis à jour avec succès / تم تحديث بيانات الفوج بنجاح", data: serializeForClient(updated) };
   } catch (err: any) {
     console.error("Error updating formation group:", err);
@@ -2426,6 +2781,7 @@ export async function updateFormationGroup(data: {
 
 export async function updateFormationWithLevels(data: {
   id: number;
+  languageId?: number;
   name: string;
   branchId?: number;
   teacherId?: string | null;
@@ -2438,6 +2794,14 @@ export async function updateFormationWithLevels(data: {
     lumpSumPrice: number;
     teacherId?: string | null;
     isDeleted?: boolean;
+    groups?: Array<{
+      id?: number;
+      name: string;
+      teacherId?: string | null;
+      branchId?: number;
+      ageGroup?: string;
+      isDeleted?: boolean;
+    }>;
   }>;
 }): Promise<ActionResponse> {
   try {
@@ -2446,85 +2810,108 @@ export async function updateFormationWithLevels(data: {
       return { success: false, error: true, message: "Permissions insuffisantes pour modifier le groupe / صلاحية غير كافية لتعديل الفوج" };
     }
 
-    let targetClass = await prisma.class.findUnique({
-      where: { id: data.id },
-      include: { FormationLevel: true },
-    });
+    let languageId: number | null = data.languageId ? Number(data.languageId) : null;
+    let targetClass: any = null;
 
-    if (!targetClass) {
-      targetClass = await prisma.class.findFirst({
-        where: {
-          isFormation: true,
-          FormationLevel: { languageId: data.id },
-        },
+    if (languageId) {
+      const langCheck = await prisma.language.findUnique({ where: { id: languageId } });
+      if (!langCheck) {
+        languageId = null;
+      } else {
+        targetClass = await prisma.class.findFirst({
+          where: { isFormation: true, FormationLevel: { languageId } },
+          include: { FormationLevel: true },
+          orderBy: { id: "asc" },
+        });
+      }
+    }
+
+    if (!languageId) {
+      targetClass = await prisma.class.findUnique({
+        where: { id: data.id },
         include: { FormationLevel: true },
       });
+
+      if (targetClass?.isFormation && targetClass.FormationLevel) {
+        languageId = targetClass.FormationLevel.languageId;
+      } else {
+        const langById = await prisma.language.findUnique({ where: { id: data.id } });
+        if (langById) {
+          languageId = langById.id;
+          targetClass = await prisma.class.findFirst({
+            where: { isFormation: true, FormationLevel: { languageId } },
+            include: { FormationLevel: true },
+            orderBy: { id: "asc" },
+          });
+        }
+      }
     }
 
-    if (!targetClass || !targetClass.isFormation || !targetClass.FormationLevel) {
-      return { success: false, error: true, message: "Groupe de formation introuvable." };
+    if (!languageId) {
+      return { success: false, error: true, message: "Formation introuvable / التكوين غير موجود." };
     }
 
-    const languageId = targetClass.FormationLevel.languageId;
+    const defaultFormationFee = await getFormationInscriptionFeeAction();
+    const resolvedDefaultBranchId =
+      data.branchId ? Number(data.branchId) : targetClass?.branchId || 1;
+    const resolvedDefaultAgeGroup =
+      data.ageGroup?.trim() || targetClass?.ageGroup || "Adultes (15+ ans)";
+    const resolvedInscriptionFee =
+      targetClass?.inscriptionFee && Number(targetClass.inscriptionFee) > 0
+        ? targetClass.inscriptionFee
+        : new Prisma.Decimal(defaultFormationFee);
+
+    const touchedClassIds = new Set<number>();
+    if (targetClass?.id) touchedClassIds.add(targetClass.id);
 
     await prisma.$transaction(
       async (tx) => {
-        // Update Language name if provided and non-empty
-        if (data.name && data.name.trim()) {
+        const resolvedLanguageId = languageId!;
+        const trimmedFormationName = data.name?.trim() || "";
+
+        // 1. Update Language name if provided
+        if (trimmedFormationName) {
           await tx.language.update({
-            where: { id: languageId },
-            data: { name: data.name.trim() },
+            where: { id: resolvedLanguageId },
+            data: { name: trimmedFormationName },
           });
         }
 
-        // Find matching level for targetClass
-        const targetLevelInput = data.levels?.find(
-          (lvl) => lvl.id === targetClass.formationLevelId && !lvl.isDeleted
-        );
-        const resolvedTargetTeacherId =
-          targetLevelInput && targetLevelInput.teacherId !== undefined
-            ? (targetLevelInput.teacherId?.trim() ? targetLevelInput.teacherId.trim() : null)
-            : (data.teacherId !== undefined ? data.teacherId : targetClass.teacherId);
+        const currentLanguage = await tx.language.findUnique({
+          where: { id: resolvedLanguageId },
+        });
+        const effectiveLangName = currentLanguage?.name || trimmedFormationName || "Formation";
 
-        // 1. Update shared class fields for this formation
+        // 2. Sync shared book fee configuration across all groups of this formation
+        // (preserving each group's own branchId, teacherId, ageGroup, and custom group name)
+        const sharedBookFee =
+          data.hasBooks && data.bookFee ? new Prisma.Decimal(data.bookFee) : null;
+
         await tx.class.updateMany({
           where: {
             isFormation: true,
-            FormationLevel: { languageId },
+            FormationLevel: { languageId: resolvedLanguageId },
           },
           data: {
-            branchId: data.branchId ? Number(data.branchId) : undefined,
-            ageGroup: data.ageGroup?.trim() || null,
             hasBooks: !!data.hasBooks,
-            bookFee:
-              data.hasBooks && data.bookFee
-                ? new Prisma.Decimal(data.bookFee)
-                : null,
+            bookFee: sharedBookFee,
           },
         });
 
-        // Update targetClass specific fields
-        await tx.class.update({
-          where: { id: targetClass.id },
-          data: {
-            teacherId: resolvedTargetTeacherId,
-          },
-        });
-
-        // 2. Process levels if provided
+        // 3. Process levels & per-level groups
         if (data.levels && data.levels.length > 0) {
           const existingLevels = await tx.formationLevel.findMany({
-            where: { languageId },
+            where: { languageId: resolvedLanguageId },
             include: {
               Class: {
-                select: { id: true, teacherId: true, enrollments: { select: { id: true } } },
+                where: { isFormation: true },
+                orderBy: { id: "asc" },
               },
               LevelTest: { select: { id: true } },
             },
             orderBy: { levelNumber: "asc" },
           });
 
-          // 2a. Validate that at least one level remains active
           const remainingActive = data.levels.filter((l) => !l.isDeleted);
           if (remainingActive.length === 0) {
             throw new Error(
@@ -2532,18 +2919,20 @@ export async function updateFormationWithLevels(data: {
             );
           }
 
-          // 2b. Process deletions safely
+          // 3a. Delete levels marked for deletion
           for (const lvl of data.levels) {
             if (lvl.id && lvl.isDeleted) {
               await executeSafeDeleteFormationLevel(tx, lvl.id);
             }
           }
 
-          // 2c. Process updates on existing non-deleted levels
+          // 3b. Update existing non-deleted levels and their groups
           for (const lvl of data.levels) {
             if (lvl.id && !lvl.isDeleted) {
               const existingLvl = existingLevels.find((el) => el.id === lvl.id);
-              const nameChanged = existingLvl && existingLvl.name !== lvl.name.trim();
+              const trimmedLvlName = lvl.name.trim();
+              const newPriceDecimal = new Prisma.Decimal(lvl.lumpSumPrice || 0);
+              const nameChanged = existingLvl && existingLvl.name !== trimmedLvlName;
               const priceChanged =
                 existingLvl &&
                 Number(existingLvl.lumpSumPrice) !== Number(lvl.lumpSumPrice || 0);
@@ -2552,42 +2941,102 @@ export async function updateFormationWithLevels(data: {
                 await tx.formationLevel.update({
                   where: { id: lvl.id },
                   data: {
-                    name: lvl.name.trim(),
-                    lumpSumPrice: new Prisma.Decimal(lvl.lumpSumPrice || 0),
+                    name: trimmedLvlName,
+                    lumpSumPrice: newPriceDecimal,
                   },
                 });
               }
 
-              const lvlTeacherId = lvl.teacherId?.trim()
-                ? lvl.teacherId.trim()
-                : null;
-              const levelClass = existingLvl?.Class[0];
+              // Always keep all groups in this level synced to the level's shared lumpSumPrice
+              if (priceChanged) {
+                await tx.class.updateMany({
+                  where: { isFormation: true, formationLevelId: lvl.id },
+                  data: { pricePerCycle: newPriceDecimal },
+                });
+              }
 
-              if (levelClass) {
-                const classUpdateData: any = {};
-                if (priceChanged) {
-                  classUpdateData.pricePerCycle = new Prisma.Decimal(
-                    lvl.lumpSumPrice || 0
+              if (lvl.groups && lvl.groups.length > 0) {
+                const activeGroupInputs = lvl.groups.filter((g) => !g.isDeleted);
+                if (activeGroupInputs.length === 0) {
+                  throw new Error(
+                    `Le niveau "${trimmedLvlName}" doit conserver au moins un groupe / يجب أن يحتوي المستوى (${trimmedLvlName}) على فوج واحد على الأقل`
                   );
                 }
-                if (lvl.teacherId !== undefined) {
-                  classUpdateData.teacherId = lvlTeacherId;
-                }
-                if (nameChanged && data.name) {
-                  classUpdateData.name = `${data.name.trim()} - ${lvl.name.trim()}`;
+
+                // Delete groups marked as deleted
+                for (const grp of lvl.groups) {
+                  if (grp.id && grp.isDeleted) {
+                    touchedClassIds.add(grp.id);
+                    await executeSafeDeleteFormationGroup(tx, grp.id, {
+                      requireRemainingSiblingGroup: false,
+                    });
+                  }
                 }
 
-                if (Object.keys(classUpdateData).length > 0) {
-                  await tx.class.update({
-                    where: { id: levelClass.id },
-                    data: classUpdateData,
-                  });
+                // Update or create remaining groups
+                for (let gIdx = 0; gIdx < activeGroupInputs.length; gIdx++) {
+                  const grp = activeGroupInputs[gIdx];
+                  const fallbackName =
+                    activeGroupInputs.length === 1
+                      ? `${effectiveLangName} - ${trimmedLvlName}`
+                      : `${effectiveLangName} - ${trimmedLvlName} - Groupe ${gIdx + 1}`;
+                  const resolvedGrpName = grp.name?.trim() || fallbackName;
+                  const resolvedGrpBranchId = grp.branchId
+                    ? Number(grp.branchId)
+                    : resolvedDefaultBranchId;
+                  const resolvedGrpTeacherId = grp.teacherId?.trim()
+                    ? grp.teacherId.trim()
+                    : null;
+                  const resolvedGrpAgeGroup =
+                    grp.ageGroup?.trim() || resolvedDefaultAgeGroup;
+
+                  if (grp.id) {
+                    await tx.class.update({
+                      where: { id: grp.id },
+                      data: {
+                        name: resolvedGrpName,
+                        branchId: resolvedGrpBranchId,
+                        teacherId: resolvedGrpTeacherId,
+                        ageGroup: resolvedGrpAgeGroup,
+                        pricePerCycle: newPriceDecimal,
+                        hasBooks: !!data.hasBooks,
+                        bookFee: sharedBookFee,
+                      },
+                    });
+                    touchedClassIds.add(grp.id);
+                  } else {
+                    const createdGrp = await tx.class.create({
+                      data: {
+                        name: resolvedGrpName,
+                        branchId: resolvedGrpBranchId,
+                        teacherId: resolvedGrpTeacherId,
+                        isFormation: true,
+                        formationLevelId: lvl.id,
+                        ageGroup: resolvedGrpAgeGroup,
+                        pricePerCycle: newPriceDecimal,
+                        hasBooks: !!data.hasBooks,
+                        bookFee: sharedBookFee,
+                        inscriptionFee: resolvedInscriptionFee,
+                      },
+                    });
+                    touchedClassIds.add(createdGrp.id);
+                  }
                 }
+              } else if (existingLvl?.Class[0] && lvl.teacherId !== undefined) {
+                // Legacy fallback when caller does not pass lvl.groups
+                const firstCls = existingLvl.Class[0];
+                await tx.class.update({
+                  where: { id: firstCls.id },
+                  data: {
+                    teacherId: lvl.teacherId?.trim() ? lvl.teacherId.trim() : null,
+                  },
+                });
+                touchedClassIds.add(firstCls.id);
               }
             }
           }
 
-          // 2d. Process creations for new levels
+          // 3c. Create new levels and all their configured groups
           let highestLevelNum = existingLevels.reduce(
             (max, el) => Math.max(max, el.levelNumber),
             0
@@ -2596,32 +3045,50 @@ export async function updateFormationWithLevels(data: {
           for (const lvl of data.levels) {
             if (!lvl.id && !lvl.isDeleted && lvl.name.trim()) {
               highestLevelNum += 1;
+              const trimmedLvlName = lvl.name.trim();
               const newLvl = await tx.formationLevel.create({
                 data: {
-                  languageId,
+                  languageId: resolvedLanguageId,
                   levelNumber: highestLevelNum,
-                  name: lvl.name.trim(),
+                  name: trimmedLvlName,
                   lumpSumPrice: new Prisma.Decimal(lvl.lumpSumPrice || 0),
                 },
               });
 
-              await tx.class.create({
-                data: {
-                  name: `${data.name?.trim() || "Formation"} - ${newLvl.name}`,
-                  branchId: data.branchId ? Number(data.branchId) : targetClass.branchId,
-                  teacherId: lvl.teacherId?.trim() ? lvl.teacherId.trim() : null,
-                  isFormation: true,
-                  formationLevelId: newLvl.id,
-                  ageGroup: data.ageGroup?.trim() || targetClass.ageGroup || "Adultes (15+ ans)",
-                  pricePerCycle: newLvl.lumpSumPrice,
-                  hasBooks: !!data.hasBooks,
-                  bookFee:
-                    data.hasBooks && data.bookFee
-                      ? new Prisma.Decimal(data.bookFee)
-                      : targetClass.bookFee,
-                  inscriptionFee: targetClass.inscriptionFee,
-                },
-              });
+              const groupInputs =
+                lvl.groups && lvl.groups.filter((g) => !g.isDeleted).length > 0
+                  ? lvl.groups.filter((g) => !g.isDeleted)
+                  : [
+                      {
+                        name: "",
+                        teacherId: lvl.teacherId,
+                        branchId: resolvedDefaultBranchId,
+                        ageGroup: resolvedDefaultAgeGroup,
+                      },
+                    ];
+
+              for (let gIdx = 0; gIdx < groupInputs.length; gIdx++) {
+                const grp = groupInputs[gIdx];
+                const fallbackName =
+                  groupInputs.length === 1
+                    ? `${effectiveLangName} - ${newLvl.name}`
+                    : `${effectiveLangName} - ${newLvl.name} - Groupe ${gIdx + 1}`;
+                const createdGrp = await tx.class.create({
+                  data: {
+                    name: grp.name?.trim() || fallbackName,
+                    branchId: grp.branchId ? Number(grp.branchId) : resolvedDefaultBranchId,
+                    teacherId: grp.teacherId?.trim() ? grp.teacherId.trim() : null,
+                    isFormation: true,
+                    formationLevelId: newLvl.id,
+                    ageGroup: grp.ageGroup?.trim() || resolvedDefaultAgeGroup,
+                    pricePerCycle: newLvl.lumpSumPrice,
+                    hasBooks: !!data.hasBooks,
+                    bookFee: sharedBookFee,
+                    inscriptionFee: resolvedInscriptionFee,
+                  },
+                });
+                touchedClassIds.add(createdGrp.id);
+              }
             }
           }
         }
@@ -2629,13 +3096,15 @@ export async function updateFormationWithLevels(data: {
       { timeout: 30000, maxWait: 10000 }
     );
 
-    safeRevalidatePath("/list/formations");
-    safeRevalidatePath(`/list/formations/${data.id}`);
+    revalidateFormationPaths({
+      languageId,
+      classIds: [data.id, ...Array.from(touchedClassIds)],
+    });
 
     return {
       success: true,
       error: false,
-      message: "Formation et niveaux mis à jour avec succès / تم تحديث بيانات التكوين والمستويات بنجاح",
+      message: "Formation, niveaux et groupes mis à jour avec succès / تم تحديث بيانات التكوين والمستويات والأفواج بنجاح",
     };
   } catch (err: any) {
     console.error("Error updating formation with levels:", err);
@@ -2643,6 +3112,320 @@ export async function updateFormationWithLevels(data: {
       success: false,
       error: true,
       message: err?.message || "Échec de la mise à jour de la formation et des niveaux.",
+    };
+  }
+}
+
+// =================================================================
+// 11. SAME-LEVEL FORMATION GROUP TRANSFER (PRESERVES VOUCHERS & TESTS)
+// =================================================================
+
+export async function executeFormationGroupTransferTx(
+  tx: any,
+  params: {
+    fromEnrollmentId: number;
+    toClassId: number;
+    studentId: string;
+    notes?: string | null;
+    performedBy: string;
+  }
+): Promise<{
+  fromClass: any;
+  toClass: any;
+  toEnrollment: any;
+  movedVoucherIds: number[];
+  netMovedFormationAmount: number;
+}> {
+  const fromEnrollment = await tx.enrollment.findUnique({
+    where: { id: params.fromEnrollmentId },
+    include: {
+      class: {
+        include: {
+          FormationLevel: true,
+          branch: true,
+        },
+      },
+    },
+  });
+
+  if (!fromEnrollment || fromEnrollment.studentId !== params.studentId) {
+    throw new Error("Inscription d'origine introuvable / التسجيل الأصلي غير موجود");
+  }
+
+  const fromClass = fromEnrollment.class;
+  const toClass = await tx.class.findUnique({
+    where: { id: params.toClassId },
+    include: {
+      FormationLevel: true,
+      branch: true,
+    },
+  });
+
+  if (!toClass || !fromClass.isFormation || !toClass.isFormation) {
+    throw new Error("Groupe cible invalide / الفوج المستهدف غير صالح");
+  }
+
+  if (fromClass.id === toClass.id) {
+    throw new Error("Le groupe cible doit être différent du groupe actuel / الفوج المستهدف يجب أن يكون مختلفاً عن الفوج الحالي");
+  }
+
+  if (
+    !fromClass.formationLevelId ||
+    fromClass.formationLevelId !== toClass.formationLevelId
+  ) {
+    throw new Error(
+      "Le transfert n'est autorisé qu'entre des groupes du même niveau de formation / لا يمكن نقل التلميذ إلا بين أفواج من نفس المستوى التكويني"
+    );
+  }
+
+  if (isClassInactive(toClass)) {
+    throw new Error(
+      `Impossible de transférer l'élève vers le groupe fermé / en pause "${toClass.name}" / لا يمكن نقل التلميذ إلى الفوج المغلق / المتوقف "${toClass.name}"`
+    );
+  }
+
+  // 1. Find or create target enrollment preserving payer status & discount metadata
+  let toEnrollment = await tx.enrollment.findFirst({
+    where: {
+      studentId: params.studentId,
+      classId: toClass.id,
+      academicYearId: fromEnrollment.academicYearId,
+    },
+  });
+
+  if (!toEnrollment) {
+    toEnrollment = await tx.enrollment.create({
+      data: {
+        studentId: params.studentId,
+        classId: toClass.id,
+        academicYearId: fromEnrollment.academicYearId,
+        inscriptionFeeCharged: fromEnrollment.inscriptionFeeCharged,
+        inscriptionFeeAmount: fromEnrollment.inscriptionFeeAmount,
+        payerStatus: fromEnrollment.payerStatus || "NORMAL",
+        discountType: fromEnrollment.discountType,
+        discountValue: fromEnrollment.discountValue,
+        discountReason: fromEnrollment.discountReason,
+        discountUpdatedBy: fromEnrollment.discountUpdatedBy,
+        discountUpdatedAt: fromEnrollment.discountUpdatedAt,
+        feeOverriddenByOwner: fromEnrollment.feeOverriddenByOwner,
+        feeOverrideNote: fromEnrollment.feeOverrideNote,
+        status: "ACTIVE",
+      },
+    });
+    await tx.enrollmentPayerHistory.create({
+      data: {
+        enrollmentId: toEnrollment.id,
+        payerStatus: fromEnrollment.payerStatus || "NORMAL",
+        discountType: fromEnrollment.discountType,
+        discountValue: fromEnrollment.discountValue,
+        reason: `Transfert depuis ${fromClass.name}`,
+        changedBy: params.performedBy,
+        effectiveFrom: new Date(),
+      },
+    });
+  } else {
+    toEnrollment = await tx.enrollment.update({
+      where: { id: toEnrollment.id },
+      data: {
+        status: "ACTIVE",
+        payerStatus: fromEnrollment.payerStatus || toEnrollment.payerStatus || "NORMAL",
+        discountType: fromEnrollment.discountType ?? toEnrollment.discountType,
+        discountValue: fromEnrollment.discountValue ?? toEnrollment.discountValue,
+        discountReason: fromEnrollment.discountReason ?? toEnrollment.discountReason,
+        inscriptionFeeCharged: fromEnrollment.inscriptionFeeCharged,
+        inscriptionFeeAmount: fromEnrollment.inscriptionFeeAmount ?? toEnrollment.inscriptionFeeAmount,
+      },
+    });
+  }
+
+  // 2. Mark source enrollment as TRANSFERRED (preserving historical session attendances in fromClass)
+  await tx.enrollment.update({
+    where: { id: fromEnrollment.id },
+    data: { status: "TRANSFERRED" },
+  });
+
+  // 3. Move active non-voided formation/book/inscription vouchers from fromClass to toClass
+  // Note: issuingBranchId and issuedAt remain untouched so historical DailyLedger entries never mutate!
+  const vouchersToMove = await tx.voucher.findMany({
+    where: {
+      studentId: params.studentId,
+      classId: fromClass.id,
+      isVoided: false,
+      isRefund: false,
+      paymentType: { in: ["FORMATION", "BOOK", "INSCRIPTION", "TUITION_4SESSION"] },
+    },
+    include: { refunds: true },
+    orderBy: { issuedAt: "asc" },
+  });
+
+  const movedVoucherIds: number[] = [];
+  let netMovedFormationAmount = 0;
+  const auditReason =
+    params.notes?.trim() ||
+    `Transfert de groupe même niveau (${fromClass.name} -> ${toClass.name})`;
+
+  for (const v of vouchersToMove) {
+    movedVoucherIds.push(v.id);
+    if (v.paymentType === "FORMATION" || v.paymentType === "TUITION_4SESSION") {
+      const gross = Number(v.amount || 0);
+      const refunded = (v.refunds || []).reduce(
+        (s: number, r: any) => s + Number(r.amount || 0),
+        0
+      );
+      netMovedFormationAmount += Math.max(0, gross - refunded);
+    }
+
+    await tx.voucher.update({
+      where: { id: v.id },
+      data: {
+        classId: toClass.id,
+        targetBranchId: toClass.branchId,
+        lastEditedAt: new Date(),
+        lastEditedBy: params.performedBy,
+      },
+    });
+
+    await tx.voucherEdit.create({
+      data: {
+        voucherId: v.id,
+        editedBy: params.performedBy,
+        fieldName: "classId",
+        oldValue: String(fromClass.id),
+        newValue: String(toClass.id),
+        reason: auditReason,
+      },
+    });
+  }
+
+  // 4. Move level test records of this formation level from fromClass to toClass
+  await tx.levelTest.updateMany({
+    where: {
+      studentId: params.studentId,
+      classId: fromClass.id,
+      formationLevelId: fromClass.formationLevelId,
+    },
+    data: {
+      classId: toClass.id,
+    },
+  });
+
+  // 5. Record EnrollmentTransfer audit log (embedding moved voucher IDs for reversible undo)
+  const voucherMetaTag =
+    movedVoucherIds.length > 0
+      ? `[FORMATION_VOUCHERS:${movedVoucherIds.join(",")}]`
+      : "[FORMATION_SWITCH]";
+  const combinedNotes = [params.notes?.trim(), voucherMetaTag]
+    .filter(Boolean)
+    .join(" ");
+
+  await tx.enrollmentTransfer.create({
+    data: {
+      fromEnrollmentId: fromEnrollment.id,
+      toEnrollmentId: toEnrollment.id,
+      transferredSessions: 0,
+      amount: new Prisma.Decimal(Math.round(netMovedFormationAmount * 100) / 100),
+      notes: combinedNotes || null,
+      transferredAt: new Date(),
+      transferredBy: params.performedBy,
+    },
+  });
+
+  return {
+    fromClass,
+    toClass,
+    toEnrollment,
+    movedVoucherIds,
+    netMovedFormationAmount,
+  };
+}
+
+export async function transferStudentFormationGroup(data: {
+  enrollmentId: number;
+  fromClassId?: number;
+  toClassId: number;
+  studentId: string;
+  notes?: string;
+}): Promise<ActionResponse> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwnerOrAdmin && !session.isBranchAdmin && session.role !== "admin") {
+      return {
+        success: false,
+        error: true,
+        message: "Permissions insuffisantes / صلاحية غير كافية",
+      };
+    }
+
+    const [srcCheck, dstCheck] = await Promise.all([
+      prisma.enrollment.findUnique({
+        where: { id: data.enrollmentId },
+        include: { class: { include: { FormationLevel: true } } },
+      }),
+      prisma.class.findUnique({
+        where: { id: data.toClassId },
+        select: { id: true, branchId: true },
+      }),
+    ]);
+
+    if (!srcCheck || !dstCheck) {
+      return {
+        success: false,
+        error: true,
+        message: "Inscription ou groupe cible introuvable / التسجيل أو الفوج المستهدف غير موجود",
+      };
+    }
+
+    if (
+      session.branchIds.length > 0 &&
+      !canUserAccessBranch(session.rawRole, session.branchIds, srcCheck.class.branchId) &&
+      !canUserAccessBranch(session.rawRole, session.branchIds, dstCheck.branchId)
+    ) {
+      return {
+        success: false,
+        error: true,
+        message: "Non autorisé pour cette succursale / غير مصرح لك بهذا الفرع",
+      };
+    }
+
+    const txRes = await prisma.$transaction(async (tx) => {
+      return await executeFormationGroupTransferTx(tx, {
+        fromEnrollmentId: data.enrollmentId,
+        toClassId: data.toClassId,
+        studentId: data.studentId,
+        notes: data.notes,
+        performedBy: session.userId || "admin",
+      });
+    });
+
+    await revalidateFinancialRoutes({
+      classId: txRes.toClass.id,
+      studentId: data.studentId,
+      branchId: txRes.toClass.branchId,
+    });
+    await revalidateFinancialRoutes({
+      classId: txRes.fromClass.id,
+      branchId: txRes.fromClass.branchId,
+    });
+    revalidateFormationPaths({
+      languageId: txRes.toClass.FormationLevel?.languageId ?? null,
+      classIds: [txRes.fromClass.id, txRes.toClass.id],
+    });
+    safeRevalidatePath(`/list/attendance/class/${txRes.fromClass.id}`);
+    safeRevalidatePath(`/list/attendance/class/${txRes.toClass.id}`);
+    safeRevalidatePath("/list/payroll");
+
+    return {
+      success: true,
+      error: false,
+      message: `Élève transféré avec succès de "${txRes.fromClass.name}" vers "${txRes.toClass.name}" (paiements et tests conservés) / تم نقل التلميذ بنجاح من "${txRes.fromClass.name}" إلى "${txRes.toClass.name}" مع الحفاظ على المدفوعات والاختبارات`,
+      data: serializeForClient(txRes),
+    };
+  } catch (err: any) {
+    console.error("Error transferring student between formation groups:", err);
+    return {
+      success: false,
+      error: true,
+      message: err?.message || "Échec du transfert de groupe / فشل في نقل التلميذ إلى الفوج الآخر",
     };
   }
 }

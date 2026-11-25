@@ -178,6 +178,7 @@ const FormationsListPage = async (
       const editData = firstClass
         ? {
             id: firstClass.id,
+            languageId: lang.id,
             name: lang.name,
             branchId: firstClass.branchId,
             branch: firstClass.branch,
@@ -189,6 +190,7 @@ const FormationsListPage = async (
           }
         : {
             id: lang.id,
+            languageId: lang.id,
             name: lang.name,
           };
 
@@ -198,11 +200,13 @@ const FormationsListPage = async (
         name: lang.name,
         title: lang.name,
         levelsCount: levels.length,
+        groupsCount: allClasses.length,
         levels: levels.map((lvl) => ({
           id: lvl.id,
           name: lvl.name,
           levelNumber: lvl.levelNumber,
           price: Number(lvl.lumpSumPrice || 0),
+          groupsCount: lvl.Class.length,
         })),
         priceDisplay,
         teacherNames,
@@ -268,7 +272,7 @@ const FormationsListPage = async (
                 className="flex flex-col hover:border-primary/40 transition-colors overflow-hidden group shadow-sm hover:shadow-md"
               >
                 <Link
-                  href={`/${locale}/list/formations/${formation.id}`}
+                  href={`/${locale}/list/formations/${formation.id}?lang=1`}
                   className="block p-6 flex-grow hover:bg-surface-subtle transition-colors"
                 >
                   <div className="flex items-center justify-between gap-4 mb-4">
@@ -326,19 +330,25 @@ const FormationsListPage = async (
 
                   {/* Levels chips preview */}
                   <div className="mb-4 bg-gray-50/70 p-2.5 rounded-lg border border-gray-100">
-                    <div className="flex items-center justify-between text-xs text-gray-600 mb-1.5">
+                    <div className="flex items-center justify-between text-xs text-gray-600 mb-1.5 gap-1 flex-wrap">
                       <span className="font-semibold">{t("formationLevels")} :</span>
-                      <Badge variant="secondary" size="sm">
-                        {formation.levelsCount} {locale === "ar" ? "مستويات" : "niveaux"}
-                      </Badge>
+                      <div className="flex items-center gap-1">
+                        <Badge variant="secondary" size="sm">
+                          {formation.levelsCount} {locale === "ar" ? "مستويات" : "niveaux"}
+                        </Badge>
+                        <Badge variant="neutral" size="sm">
+                          {t("groupsCount", { count: formation.groupsCount })}
+                        </Badge>
+                      </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {formation.levels.slice(0, 4).map((lvl: any) => (
                         <span
                           key={lvl.id}
-                          className="text-[11px] bg-white border border-gray-200 text-gray-700 px-2 py-0.5 rounded font-medium truncate max-w-[140px]"
+                          className="text-[11px] bg-white border border-gray-200 text-gray-700 px-2 py-0.5 rounded font-medium truncate max-w-[165px]"
                         >
                           {lvl.name}
+                          {lvl.groupsCount > 1 ? ` ×${lvl.groupsCount}` : ""}
                         </span>
                       ))}
                       {formation.levelsCount > 4 && (
@@ -375,7 +385,7 @@ const FormationsListPage = async (
 
                 <div className="border-t border-border p-3 bg-surface-subtle flex items-center justify-between gap-2">
                   <Link
-                    href={`/${locale}/list/formations/${formation.id}`}
+                    href={`/${locale}/list/formations/${formation.id}?lang=1`}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                   >
                     <span>{locale === "ar" ? "عرض المستويات والتلاميذ" : "Voir les niveaux"}</span>

@@ -2054,6 +2054,10 @@ export async function computeTeacherPayrollFromData(params: {
         const pStatus = enr.payerStatus || "NORMAL";
         const studentVouchers = classVouchers.filter((v) => v.studentId === enr.studentId);
 
+        if ((enr.status === "TRANSFERRED" || enr.status === "UNENROLLED") && studentVouchers.length === 0) {
+          continue;
+        }
+
         let totalPaidToEnd = 0;
         let totalPaidToStart = 0;
 
@@ -3315,4 +3319,219 @@ export async function getPayrollRunFinancialReport(
     },
   };
 }
+
+export interface TeacherMonthlySalaryPoint {
+  year: number;
+  month: number; // 1-12
+  monthKey: string; // "YYYY-MM"
+  label: string; // e.g. "Novembre 2026"
+  shortLabel: string; // e.g. "Nov. 2026"
+  sessionsCount: number;
+  grossAmount: number;
+  netAmount: number;
+  growthRate: number | null; // % change vs previous month (1 decimal place), null on baseline or 0 prev
+  growthDelta: number | null; // DZD change vs previous month, null on baseline
+  isCurrentPeriod?: boolean;
+}
+
+function parseUtcYearMonth(dateInput: Date | string): { year: number; month0: number } {
+  if (typeof dateInput === "string") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateInput.trim());
+    if (m) {
+      return { year: Number(m[1]), month0: Number(m[2]) - 1 };
+    }
+  }
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) {
+    const now = new Date();
+    return { year: now.getUTCFullYear(), month0: now.getUTCMonth() };
+  }
+  return { year: d.getUTCFullYear(), month0: d.getUTCMonth() };
+}
+
+function capitalizeFrenchLabel(str: string): string {
+  if (!str) return str;
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+/**
+ * Computes the last 3 calendar months of consolidated salary & month-over-month growth
+ * for a teacher, anchored to `referenceDate` (typically the payslip's `periodEnd`).
+ * Uses a single batched payroll pass (`calculateTeachersPayrollBatch`) plus finalized
+ * `Payslip` records so both confirmed and unsaved months are accurately represented.
+ */
+export async function getTeacherThreeMonthSalaryGrowth(params: {
+  teacherId: string;
+  referenceDate: Date | string;
+  groupFilter?: "all" | "normal" | "formation";
+  currentPeriodOverride?: {
+    periodStart?: Date | string;
+    periodEnd?: Date | string;
+    grossAmount: number;
+    netAmount: number;
+    sessionsCount?: number;
+  };
+}): Promise<TeacherMonthlySalaryPoint[]> {
+  const { teacherId, referenceDate, groupFilter = "all", currentPeriodOverride } = params;
+  const { year: refYear, month0: refMonth0 } = parseUtcYearMonth(referenceDate);
+
+  const longFmt = new Intl.DateTimeFormat("fr-FR", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const shortFmt = new Intl.DateTimeFormat("fr-FR", {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+
+  const windows = [-2, -1, 0].map((offset) => {
+    const start = new Date(Date.UTC(refYear, refMonth0 + offset, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(refYear, refMonth0 + offset + 1, 0, 23, 59, 59, 999));
+    const year = start.getUTCFullYear();
+    const month = start.getUTCMonth() + 1;
+    return {
+      offset,
+      start,
+      end,
+      year,
+      month,
+      monthKey: `${year}-${String(month).padStart(2, "0")}`,
+      label: capitalizeFrenchLabel(longFmt.format(start)),
+      shortLabel: capitalizeFrenchLabel(shortFmt.format(start)),
+    };
+  });
+
+  const [batchCalcs, savedPayslips] = await Promise.all([
+    calculateTeachersPayrollBatch(
+      windows.map((w) => ({
+        teacherId,
+        startDate: w.start,
+        endDate: w.end,
+        groupFilter,
+      }))
+    ),
+    prisma.payslip.findMany({
+      where: {
+        personId: teacherId,
+        personType: "TEACHER",
+        PayrollRun: {
+          periodEnd: { gte: windows[0].start },
+          periodStart: { lte: windows[2].end },
+        },
+      },
+      include: {
+        PayrollRun: {
+          select: { periodStart: true, periodEnd: true, status: true },
+        },
+      },
+      orderBy: { id: "desc" },
+    }),
+  ]);
+
+  const DAY_MS = 86_400_000;
+  const CONFIRMED_STATUSES = new Set(["PAID", "VALIDATED", "CONFIRMED"]);
+
+  const rawPoints = windows.map((w, idx) => {
+    const calc = batchCalcs[idx] ?? null;
+    const wStartMs = w.start.getTime();
+    const wEndMs = w.end.getTime();
+
+    // Match monthly payslips whose midpoint falls within this calendar month
+    const matchingSlips = savedPayslips.filter((s) => {
+      const pStart = new Date(s.PayrollRun.periodStart).getTime();
+      const pEnd = new Date(s.PayrollRun.periodEnd).getTime();
+      const spanDays = (pEnd - pStart) / DAY_MS;
+      if (spanDays < 20) return false;
+      const mid = (pStart + pEnd) / 2;
+      return mid >= wStartMs && mid <= wEndMs;
+    });
+
+    const confirmedSlip = matchingSlips.find((s) => CONFIRMED_STATUSES.has(s.PayrollRun.status));
+    const bestSlip = confirmedSlip || matchingSlips[0] || null;
+
+    let grossAmount = 0;
+    let netAmount = 0;
+    let sessionsCount = 0;
+
+    if (groupFilter === "all" && confirmedSlip) {
+      grossAmount = Math.max(
+        0,
+        Number(confirmedSlip.grossAmount) + Number((confirmedSlip as any).bonus || 0)
+      );
+      netAmount = Math.max(0, Number(confirmedSlip.netAmount));
+      sessionsCount = Number(confirmedSlip.sessionsCount ?? calc?.totalSessions ?? 0);
+    } else if (
+      calc &&
+      (calc.grossAmount > 0 ||
+        calc.totalSessions > 0 ||
+        calc.salaryAdvances > 0 ||
+        calc.photocopyDeductions > 0)
+    ) {
+      const draftBonus =
+        groupFilter === "all" && bestSlip ? Number((bestSlip as any).bonus || 0) : 0;
+      grossAmount = Math.max(0, Math.round((calc.grossAmount + draftBonus) * 100) / 100);
+      netAmount = Math.max(0, Math.round((calc.netAmount + draftBonus) * 100) / 100);
+      sessionsCount = calc.totalSessions;
+    } else if (groupFilter === "all" && bestSlip) {
+      grossAmount = Math.max(
+        0,
+        Number(bestSlip.grossAmount) + Number((bestSlip as any).bonus || 0)
+      );
+      netAmount = Math.max(0, Number(bestSlip.netAmount));
+      sessionsCount = Number(bestSlip.sessionsCount || 0);
+    }
+
+    // Reconcile the 3rd column (current payslip month) with the payslip's exact totals when full-month
+    if (w.offset === 0 && currentPeriodOverride) {
+      let isFullMonthOverride = true;
+      if (currentPeriodOverride.periodStart && currentPeriodOverride.periodEnd) {
+        const oStart = normalizeDateToStartOfDay(currentPeriodOverride.periodStart).getTime();
+        const oEnd = normalizeDateToEndOfDay(currentPeriodOverride.periodEnd).getTime();
+        const spanDays = (oEnd - oStart) / DAY_MS;
+        isFullMonthOverride = spanDays >= 20;
+      }
+      if (isFullMonthOverride) {
+        grossAmount = Math.max(0, Math.round(Number(currentPeriodOverride.grossAmount || 0) * 100) / 100);
+        netAmount = Math.max(0, Math.round(Number(currentPeriodOverride.netAmount || 0) * 100) / 100);
+        if (currentPeriodOverride.sessionsCount !== undefined) {
+          sessionsCount = Number(currentPeriodOverride.sessionsCount || 0);
+        }
+      }
+    }
+
+    return {
+      year: w.year,
+      month: w.month,
+      monthKey: w.monthKey,
+      label: w.label,
+      shortLabel: w.shortLabel,
+      sessionsCount,
+      grossAmount: Math.round(grossAmount * 100) / 100,
+      netAmount: Math.round(netAmount * 100) / 100,
+      isCurrentPeriod: w.offset === 0,
+    };
+  });
+
+  return rawPoints.map((pt, idx) => {
+    if (idx === 0) {
+      return {
+        ...pt,
+        growthRate: null,
+        growthDelta: null,
+      };
+    }
+    const prevGross = rawPoints[idx - 1].grossAmount;
+    const delta = Math.round((pt.grossAmount - prevGross) * 100) / 100;
+    const rate =
+      prevGross > 0 ? Math.round(((pt.grossAmount - prevGross) / prevGross) * 1000) / 10 : null;
+    return {
+      ...pt,
+      growthRate: rate,
+      growthDelta: delta,
+    };
+  });
+}
+
 

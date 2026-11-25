@@ -18,7 +18,7 @@ import TeacherPayrollSection from "@/components/teachers/TeacherPayrollSection";
 import TeacherLessonRecordsSection from "@/components/teachers/TeacherLessonRecordsSection";
 import TeacherPhotocopySection from "@/components/teachers/TeacherPhotocopySection";
 import TeacherBooksSection from "@/components/teachers/TeacherBooksSection";
-import { calculateTeacherPayroll } from "@/lib/payroll";
+import { calculateTeacherPayroll, getTeacherThreeMonthSalaryGrowth } from "@/lib/payroll";
 import {
   serializeForClient,
   getAlgiersWeekBounds,
@@ -115,6 +115,7 @@ const SingleTeacherPage = async (
     rawClassrooms,
     allLessonsForTimetable,
     currentPayroll,
+    initialSalaryHistory,
   ] = await Promise.all([
     prisma.teacher.findUnique({
       where: { id },
@@ -187,6 +188,11 @@ const SingleTeacherPage = async (
     }),
     // 6. Current payroll per §2.9
     calculateTeacherPayroll(id, thisMonthStart, thisMonthEnd),
+    // 7. Three-month salary growth for printable payslip
+    getTeacherThreeMonthSalaryGrowth({
+      teacherId: id,
+      referenceDate: thisMonthEnd,
+    }),
   ]);
 
   if (!t) {
@@ -566,6 +572,7 @@ const SingleTeacherPage = async (
             teacherName={t.name}
             teacherPhone={(t as any).phone}
             payroll={serializeForClient(currentPayroll)}
+            initialSalaryHistory={serializeForClient(initialSalaryHistory)}
             periodLabel={thisMonthLabel}
             isOwner={session.isOwner}
             hasFormationGroups={hasFormationGroups}

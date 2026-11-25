@@ -1218,7 +1218,20 @@
     "deletingStudent": "جاري إلغاء التسجيل...",
     "batchDeleteStudents": "إلغاء تسجيل المحددين ({count})",
     "batchDeleteModalTitle": "إلغاء تسجيل التلاميذ المحددين ({count})",
-    "batchDeleteModalDesc": "هل أنت متأكد من رغبتك في إلغاء تسجيل {count} تلميذ(ا) من هذا المستوى التكويني؟ ستبقى ملفاتهم في المؤسسة محفوظة بالكامل."
+    "batchDeleteModalDesc": "هل أنت متأكد من رغبتك في إلغاء تسجيل {count} تلميذ(ا) من هذا المستوى التكويني؟ ستبقى ملفاتهم في المؤسسة محفوظة بالكامل.",
+    "groupsCount": "{count} أفواج",
+    "addGroupToLevel": "+ إضافة فوج",
+    "editGroupTitle": "تعديل الفوج التكويني",
+    "deleteGroupTitle": "حذف الفوج",
+    "cannotDeleteOnlyGroup": "يجب أن يحتوي المستوى على فوج واحد على الأقل. يمكنك تعديل هذا الفوج أو حذف المستوى بالكامل.",
+    "groupSwitcherLabel": "أفواج {level}",
+    "switchStudentGroup": "تغيير الفوج",
+    "transferGroupTitle": "نقل التلميذ إلى فوج آخر (نفس المستوى)",
+    "transferGroupPreservesNote": "سيتم نقل وصولات الدفع (التكوين، الكتب، التسجيل) ونتائج اختبار المستوى تلقائياً إلى الفوج الجديد دون المساس بالسجل اليومي للصندوق.",
+    "finishGroupCycle": "إنهاء دورة الفوج",
+    "reopenGroupCycle": "إعادة فتح الدورة",
+    "selectTargetGroupInNextLevel": "أين تريد تسجيل التلاميذ الناجحين في {nextLevel} ؟",
+    "createNewGroupKeepOpen": "إنشاء فوج جديد في {nextLevel}"
   },
   "finance": {
     "title": "المالية والرواتب",

@@ -5,12 +5,14 @@ import { Link } from "@/i18n/navigation";
 import Image from "next/image";
 import EnrollStudentModal from "./EnrollStudentModal";
 import PaymentForm from "@/components/forms/PaymentForm";
-import { X, UserPlus } from "lucide-react";
+import { X, UserPlus, ArrowRightLeft } from "lucide-react";
 import RecordLevelTestModal from "./RecordLevelTestModal";
 import AssistedLevelUpModal from "./AssistedLevelUpModal";
 import RetakeLevelModal from "./RetakeLevelModal";
 import StudentProgressionModal from "./StudentProgressionModal";
 import DeleteStudentFromFormationModal from "./DeleteStudentFromFormationModal";
+import TransferFormationGroupModal from "./TransferFormationGroupModal";
+import FormationGroupModal from "./FormationGroupModal";
 import RefundForm from "@/components/forms/RefundForm";
 import PrintTicketButton from "@/components/PrintTicketButton";
 import {
@@ -27,6 +29,9 @@ export default function FormationRoster({
   formationLevel,
   nextLevel,
   availableNextGroups = [],
+  sameLevelActiveGroups = [],
+  branches = [],
+  teachers = [],
   enrolledStudents,
   allStudents = [],
   studentRelatedData = { grades: [], classes: [] },
@@ -40,6 +45,7 @@ export default function FormationRoster({
     bookFee?: number | any;
     branchId: number;
     branch?: { name: string };
+    ageGroup?: string | null;
     isPaused?: boolean;
     isCompleted?: boolean;
   };
@@ -55,8 +61,12 @@ export default function FormationRoster({
     id: number;
     name: string;
     levelNumber: number;
+    lumpSumPrice?: number | any;
   } | null;
   availableNextGroups?: any[];
+  sameLevelActiveGroups?: any[];
+  branches?: Array<{ id: number; name: string }>;
+  teachers?: Array<{ id: string; name: string }>;
   enrolledStudents: Array<{
     id: number;
     enrolledAt: Date | string;
@@ -128,6 +138,16 @@ export default function FormationRoster({
       totalPaid: number;
     }>;
   }>({ isOpen: false, enrollments: [] });
+
+  const [transferModalState, setTransferModalState] = useState<{
+    isOpen: boolean;
+    enrollmentId?: number;
+    student?: any;
+    totalPaid?: number;
+    latestTest?: any;
+  }>({ isOpen: false });
+
+  const [isCreateNextGroupOpen, setIsCreateNextGroupOpen] = useState(false);
 
   const levelPrice = Number(formationLevel?.lumpSumPrice || 0);
   const isGroupInactive = Boolean(formationClass.isPaused || formationClass.isCompleted);
@@ -355,6 +375,26 @@ export default function FormationRoster({
                               className="px-3 py-1 text-xs font-semibold bg-amber-100 text-amber-800 rounded-full hover:bg-amber-200"
                             >
                               {t("retake")}
+                            </button>
+                          )}
+
+                          {sameLevelActiveGroups.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTransferModalState({
+                                  isOpen: true,
+                                  enrollmentId: enr.id,
+                                  student,
+                                  totalPaid,
+                                  latestTest: latestTest || null,
+                                })
+                              }
+                              title={t("switchStudentGroup")}
+                              className="px-2.5 py-1 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full hover:bg-indigo-100 inline-flex items-center gap-1"
+                            >
+                              <ArrowRightLeft className="w-3 h-3" />
+                              <span>{t("switchStudentGroup")}</span>
                             </button>
                           )}
 
@@ -630,8 +670,59 @@ export default function FormationRoster({
             setLevelUpModalState({ isOpen: false });
             router.refresh();
           }}
+          onRequestCreateGroup={
+            nextLevel ? () => setIsCreateNextGroupOpen(true) : undefined
+          }
         />
       )}
+
+      {/* CREATE NEXT-LEVEL GROUP MODAL (FROM ASSISTED LEVEL-UP) */}
+      {isCreateNextGroupOpen && nextLevel && (
+        <FormationGroupModal
+          isOpen={isCreateNextGroupOpen}
+          onClose={() => setIsCreateNextGroupOpen(false)}
+          mode="create"
+          languageName={formationLevel.Language?.name || ""}
+          formationLevel={nextLevel}
+          existingGroupsCount={availableNextGroups.length}
+          defaultBranchId={formationClass.branchId}
+          defaultAgeGroup={formationClass.ageGroup}
+          branches={branches}
+          teachers={teachers}
+          onSuccess={() => {
+            setIsCreateNextGroupOpen(false);
+            router.refresh();
+          }}
+        />
+      )}
+
+      {/* SAME-LEVEL GROUP TRANSFER MODAL */}
+      {transferModalState.isOpen &&
+        transferModalState.student &&
+        transferModalState.enrollmentId && (
+          <TransferFormationGroupModal
+            isOpen={transferModalState.isOpen}
+            onClose={() => setTransferModalState({ isOpen: false })}
+            enrollmentId={transferModalState.enrollmentId}
+            student={transferModalState.student}
+            currentGroup={{
+              id: formationClass.id,
+              name: formationClass.name,
+              branchName: formationClass.branch?.name,
+            }}
+            formationLevel={{
+              id: formationLevel.id,
+              name: formationLevel.name,
+            }}
+            totalPaid={transferModalState.totalPaid || 0}
+            latestTest={transferModalState.latestTest || null}
+            availableTargetGroups={sameLevelActiveGroups}
+            onTransferred={() => {
+              setTransferModalState({ isOpen: false });
+              router.refresh();
+            }}
+          />
+        )}
 
       {/* RETAKE LEVEL MODAL */}
       {retakeModalState.isOpen && retakeModalState.student && (

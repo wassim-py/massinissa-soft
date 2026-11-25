@@ -4,21 +4,33 @@ import { useState, Dispatch, SetStateAction } from "react";
 import { useTranslations, useLocale } from "next-intl";
 import { toast } from "react-toastify";
 import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
 import { useRouter } from "next/navigation";
 import {
   createFormationWithLevels,
-  updateFormationGroup,
   updateFormationWithLevels,
 } from "@/lib/formationActions";
+import { Plus, Trash2, Users } from "lucide-react";
+
+type GroupInput = {
+  id?: number;
+  name: string;
+  teacherId: string;
+  branchId: number;
+  ageGroup: string;
+  isDeleted?: boolean;
+  enrollmentsCount?: number;
+  activeVouchersCount?: number;
+};
 
 type LevelInput = {
   id?: number;
   name: string;
   lumpSumPrice: number;
-  teacherId?: string;
   levelNumber?: number;
   isDeleted?: boolean;
   enrollmentsCount?: number;
+  groups: GroupInput[];
 };
 
 interface FormationFormProps {
@@ -31,7 +43,23 @@ interface FormationFormProps {
     teachers?: Array<{ id: string; name: string }>;
     defaultBranchId?: number;
     defaultInscriptionFee?: number;
-    levels?: Array<{ id: number; name: string; lumpSumPrice: number; teacherId?: string; levelNumber?: number; enrollmentsCount?: number }>;
+    levels?: Array<{
+      id: number;
+      name: string;
+      lumpSumPrice: number;
+      teacherId?: string;
+      levelNumber?: number;
+      enrollmentsCount?: number;
+      groups?: Array<{
+        id: number;
+        name: string;
+        branchId: number;
+        teacherId?: string;
+        ageGroup?: string;
+        enrollmentsCount?: number;
+        activeVouchersCount?: number;
+      }>;
+    }>;
   };
 }
 
@@ -50,53 +78,86 @@ const FormationForm = ({
   const languages = relatedData?.languages || [];
   const branches = relatedData?.branches || [];
   const teachers = relatedData?.teachers || [];
-  const defaultBranchId = relatedData?.defaultBranchId;
+  const resolvedInitialBranchId =
+    data?.branch?.id ||
+    data?.branchId ||
+    relatedData?.defaultBranchId ||
+    branches[0]?.id ||
+    1;
+  const resolvedInitialAgeGroup = data?.ageGroup || "Adultes (15+ ans)";
   const defaultInscFee = relatedData?.defaultInscriptionFee ?? 1500;
 
-  // --- Form State for Create / Update ---
   const [selectedLanguageId, setSelectedLanguageId] = useState<number | "new">(
     languages[0]?.id || "new"
   );
   const [newLanguageName, setNewLanguageName] = useState("");
-  const [branchId, setBranchId] = useState<number>(
-    data?.branch?.id || data?.branchId || defaultBranchId || branches[0]?.id || 1
-  );
-  const [teacherId, setTeacherId] = useState<string>(
-    data?.teacher?.id || data?.teacherId || ""
-  );
-  const [ageGroup, setAgeGroup] = useState<string>(
-    data?.ageGroup || "Adultes (15+ ans)"
-  );
-  const [groupName, setGroupName] = useState<string>(data?.name || "");
+  const [branchId, setBranchId] = useState<number>(resolvedInitialBranchId);
+  const [ageGroup, setAgeGroup] = useState<string>(resolvedInitialAgeGroup);
+  const [formationName, setFormationName] = useState<string>(data?.name || "");
 
-  // Book fee settings (§1.2 & §2.11)
   const [hasBooks, setHasBooks] = useState<boolean>(data?.hasBooks || false);
   const [bookFee, setBookFee] = useState<number>(
     data?.bookFee ? Number(data.bookFee) : 2500
   );
-
-  // Inscription fee
   const [inscriptionFee, setInscriptionFee] = useState<number>(
     data?.inscriptionFee ? Number(data.inscriptionFee) : defaultInscFee
   );
 
-  // Levels definition for create or update
+  const makeDefaultGroup = (
+    overrideName = "",
+    overrideTeacherId = ""
+  ): GroupInput => ({
+    name: overrideName,
+    teacherId: overrideTeacherId,
+    branchId: resolvedInitialBranchId,
+    ageGroup: resolvedInitialAgeGroup,
+    isDeleted: false,
+  });
+
   const [levels, setLevels] = useState<LevelInput[]>(() => {
-    if (type === "update" && relatedData?.levels && relatedData.levels.length > 0) {
+    if (
+      type === "update" &&
+      relatedData?.levels &&
+      relatedData.levels.length > 0
+    ) {
       return relatedData.levels.map((lvl) => ({
         id: lvl.id,
         name: lvl.name,
         lumpSumPrice: Number(lvl.lumpSumPrice || 0),
-        teacherId: lvl.teacherId || "",
         levelNumber: lvl.levelNumber,
         isDeleted: false,
         enrollmentsCount: lvl.enrollmentsCount || 0,
+        groups:
+          lvl.groups && lvl.groups.length > 0
+            ? lvl.groups.map((g) => ({
+                id: g.id,
+                name: g.name,
+                branchId: g.branchId || resolvedInitialBranchId,
+                teacherId: g.teacherId || "",
+                ageGroup: g.ageGroup || resolvedInitialAgeGroup,
+                isDeleted: false,
+                enrollmentsCount: g.enrollmentsCount || 0,
+                activeVouchersCount: g.activeVouchersCount || 0,
+              }))
+            : [makeDefaultGroup("", lvl.teacherId || "")],
       }));
     }
     return [
-      { name: "Niveau 1 (A1)", lumpSumPrice: 4000, teacherId: "" },
-      { name: "Niveau 2 (A2)", lumpSumPrice: 4000, teacherId: "" },
-      { name: "Niveau 3 (B1)", lumpSumPrice: 4000, teacherId: "" },
+      {
+        name: "Niveau 1 (A1)",
+        lumpSumPrice: 4000,
+        groups: [makeDefaultGroup()],
+      },
+      {
+        name: "Niveau 2 (A2)",
+        lumpSumPrice: 4000,
+        groups: [makeDefaultGroup()],
+      },
+      {
+        name: "Niveau 3 (B1)",
+        lumpSumPrice: 4000,
+        groups: [makeDefaultGroup()],
+      },
     ];
   });
 
@@ -108,8 +169,16 @@ const FormationForm = ({
       {
         name: `Niveau ${nextNum}`,
         lumpSumPrice: prev[prev.length - 1]?.lumpSumPrice || 4000,
-        teacherId: "",
         isDeleted: false,
+        groups: [
+          {
+            name: "",
+            teacherId: "",
+            branchId,
+            ageGroup,
+            isDeleted: false,
+          },
+        ],
       },
     ]);
   };
@@ -125,14 +194,12 @@ const FormationForm = ({
         );
         return;
       }
-      // Toggle deletion for existing level
       setLevels((prev) =>
         prev.map((item, i) =>
           i === index ? { ...item, isDeleted: !item.isDeleted } : item
         )
       );
     } else {
-      // New unsaved level: remove from array
       if (levels.filter((l) => !l.isDeleted).length <= 1) {
         toast.warning(t("minOneLevelWarning"));
         return;
@@ -143,7 +210,7 @@ const FormationForm = ({
 
   const handleLevelChange = (
     index: number,
-    field: keyof LevelInput,
+    field: "name" | "lumpSumPrice",
     val: string | number
   ) => {
     setLevels((prev) => {
@@ -156,14 +223,126 @@ const FormationForm = ({
     });
   };
 
+  const handleAddGroupToLevel = (levelIdx: number) => {
+    setLevels((prev) =>
+      prev.map((lvl, idx) => {
+        if (idx !== levelIdx) return lvl;
+        const activeCount = lvl.groups.filter((g) => !g.isDeleted).length;
+        const langLabel =
+          type === "update"
+            ? formationName.trim()
+            : selectedLanguageId === "new"
+            ? newLanguageName.trim()
+            : languages.find((l) => l.id === selectedLanguageId)?.name || "";
+        const prefix = [langLabel, lvl.name.trim()].filter(Boolean).join(" - ");
+        const suggestedName = prefix
+          ? `${prefix} - ${
+              locale === "ar"
+                ? `الفوج ${activeCount + 1}`
+                : `Groupe ${activeCount + 1}`
+            }`
+          : "";
+
+        return {
+          ...lvl,
+          groups: [
+            ...lvl.groups,
+            {
+              name: suggestedName,
+              teacherId: "",
+              branchId,
+              ageGroup,
+              isDeleted: false,
+            },
+          ],
+        };
+      })
+    );
+  };
+
+  const handleGroupChange = (
+    levelIdx: number,
+    groupIdx: number,
+    field: keyof GroupInput,
+    val: string | number
+  ) => {
+    setLevels((prev) =>
+      prev.map((lvl, idx) => {
+        if (idx !== levelIdx) return lvl;
+        const nextGroups = [...lvl.groups];
+        nextGroups[groupIdx] = {
+          ...nextGroups[groupIdx],
+          [field]: val,
+        };
+        return { ...lvl, groups: nextGroups };
+      })
+    );
+  };
+
+  const handleRemoveGroupFromLevel = (levelIdx: number, groupIdx: number) => {
+    const lvl = levels[levelIdx];
+    const grp = lvl.groups[groupIdx];
+    const activeGroupsCount = lvl.groups.filter((g) => !g.isDeleted).length;
+
+    if (grp.id) {
+      if (!grp.isDeleted) {
+        if (activeGroupsCount <= 1) {
+          toast.warning(t("cannotDeleteOnlyGroup"));
+          return;
+        }
+        if ((grp.enrollmentsCount || 0) > 0) {
+          toast.error(
+            locale === "ar"
+              ? `لا يمكن حذف الفوج "${grp.name}" لاحتوائه على (${grp.enrollmentsCount}) تلاميذ مسجلين.`
+              : `Impossible de supprimer le groupe "${grp.name}" car il contient ${grp.enrollmentsCount} élève(s) inscrit(s).`
+          );
+          return;
+        }
+        if ((grp.activeVouchersCount || 0) > 0) {
+          toast.error(
+            locale === "ar"
+              ? `لا يمكن حذف الفوج "${grp.name}" لوجود وصولات دفع نشطة مرتبطة به.`
+              : `Impossible de supprimer le groupe "${grp.name}" car des reçus actifs y sont rattachés.`
+          );
+          return;
+        }
+      }
+      setLevels((prev) =>
+        prev.map((item, idx) => {
+          if (idx !== levelIdx) return item;
+          return {
+            ...item,
+            groups: item.groups.map((g, gIdx) =>
+              gIdx === groupIdx ? { ...g, isDeleted: !g.isDeleted } : g
+            ),
+          };
+        })
+      );
+    } else {
+      if (activeGroupsCount <= 1) {
+        toast.warning(t("cannotDeleteOnlyGroup"));
+        return;
+      }
+      setLevels((prev) =>
+        prev.map((item, idx) => {
+          if (idx !== levelIdx) return item;
+          return {
+            ...item,
+            groups: item.groups.filter((_, gIdx) => gIdx !== groupIdx),
+          };
+        })
+      );
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
     try {
       if (type === "update") {
-        if (!groupName.trim()) {
-          toast.error(t("groupNameRequired"));
+        if (!formationName.trim()) {
+          toast.error(t("langRequired"));
           setIsSubmitting(false);
           return;
         }
@@ -175,7 +354,9 @@ const FormationForm = ({
           return;
         }
 
-        if (activeLevels.some((lvl) => !lvl.name.trim() || lvl.lumpSumPrice < 0)) {
+        if (
+          activeLevels.some((lvl) => !lvl.name.trim() || lvl.lumpSumPrice < 0)
+        ) {
           toast.error(t("levelConfigIncomplete"));
           setIsSubmitting(false);
           return;
@@ -183,9 +364,9 @@ const FormationForm = ({
 
         const res = await updateFormationWithLevels({
           id: Number(data.id),
-          name: groupName.trim(),
+          languageId: data?.languageId ? Number(data.languageId) : undefined,
+          name: formationName.trim(),
           branchId: Number(branchId),
-          teacherId: teacherId || null,
           ageGroup: ageGroup.trim(),
           hasBooks,
           bookFee: hasBooks ? Number(bookFee) : null,
@@ -193,8 +374,15 @@ const FormationForm = ({
             id: lvl.id,
             name: lvl.name.trim(),
             lumpSumPrice: Number(lvl.lumpSumPrice) || 0,
-            teacherId: lvl.teacherId ? lvl.teacherId.trim() : null,
             isDeleted: !!lvl.isDeleted,
+            groups: lvl.groups.map((grp) => ({
+              id: grp.id,
+              name: grp.name.trim(),
+              teacherId: grp.teacherId ? grp.teacherId.trim() : null,
+              branchId: Number(grp.branchId || branchId),
+              ageGroup: grp.ageGroup?.trim() || ageGroup.trim(),
+              isDeleted: !!grp.isDeleted,
+            })),
           })),
         });
 
@@ -206,7 +394,6 @@ const FormationForm = ({
           toast.error(res.message);
         }
       } else {
-        // Create Mode
         const langName =
           selectedLanguageId === "new"
             ? newLanguageName.trim()
@@ -227,15 +414,21 @@ const FormationForm = ({
         const res = await createFormationWithLevels({
           languageName: langName,
           languageId:
-            selectedLanguageId === "new" ? undefined : Number(selectedLanguageId),
+            selectedLanguageId === "new"
+              ? undefined
+              : Number(selectedLanguageId),
           levels: levels.map((lvl) => ({
             name: lvl.name.trim(),
             lumpSumPrice: Number(lvl.lumpSumPrice) || 0,
-            teacherId: lvl.teacherId ? lvl.teacherId.trim() : null,
+            groups: lvl.groups.map((grp) => ({
+              name: grp.name.trim() || undefined,
+              teacherId: grp.teacherId ? grp.teacherId.trim() : null,
+              branchId: Number(grp.branchId || branchId),
+              ageGroup: grp.ageGroup?.trim() || ageGroup.trim(),
+            })),
           })),
           branchId: Number(branchId),
           ageGroup: ageGroup.trim(),
-          initialGroupName: groupName.trim() || undefined,
           hasBooks,
           bookFee: hasBooks ? Number(bookFee) : undefined,
           inscriptionFee: Number(inscriptionFee) || 0,
@@ -262,239 +455,71 @@ const FormationForm = ({
         {type === "create" ? t("createTitle") : t("updateTitle")}
       </h1>
 
+      {/* 1. LANGUAGE / FORMATION NAME */}
       {type === "create" ? (
-        <>
-          {/* 1. LANGUAGE SELECTION */}
-          <div className="flex flex-col gap-3">
-            <span className="text-xs text-gray-500 font-medium border-b pb-1">
-              {t("languageSection")}
-            </span>
-            <div className="flex justify-between flex-wrap gap-4">
-              <div className="flex flex-col gap-2 w-full md:w-[48%]">
-                <label className="text-xs text-gray-500">{t("selectLanguage")}</label>
-                <select
-                  value={selectedLanguageId}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setSelectedLanguageId(val === "new" ? "new" : Number(val));
-                  }}
-                  className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-                >
-                  {languages.map((lang) => (
-                    <option key={lang.id} value={lang.id}>
-                      {lang.name}
-                    </option>
-                  ))}
-                  <option value="new">{t("addNewLanguage")}</option>
-                </select>
-              </div>
-
-              {selectedLanguageId === "new" && (
-                <div className="flex flex-col gap-2 w-full md:w-[48%]">
-                  <label className="text-xs text-gray-500">{t("newLanguageName")}</label>
-                  <input
-                    type="text"
-                    value={newLanguageName}
-                    onChange={(e) => setNewLanguageName(e.target.value)}
-                    placeholder={t("newLanguagePlaceholder")}
-                    className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-                    required
-                  />
-                </div>
-              )}
+        <div className="flex flex-col gap-3">
+          <span className="text-xs text-gray-500 font-medium border-b pb-1">
+            {t("languageSection")}
+          </span>
+          <div className="flex justify-between flex-wrap gap-4">
+            <div className="flex flex-col gap-2 w-full md:w-[48%]">
+              <label className="text-xs text-gray-500">
+                {t("selectLanguage")}
+              </label>
+              <select
+                value={selectedLanguageId}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedLanguageId(val === "new" ? "new" : Number(val));
+                }}
+                className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
+              >
+                {languages.map((lang) => (
+                  <option key={lang.id} value={lang.id}>
+                    {lang.name}
+                  </option>
+                ))}
+                <option value="new">{t("addNewLanguage")}</option>
+              </select>
             </div>
-          </div>
 
-          {/* 2. GROUP & BRANCH DETAILS */}
-          <div className="flex flex-col gap-3">
-            <span className="text-xs text-gray-500 font-medium border-b pb-1">
-              {t("groupBranchSection")}
-            </span>
-            <div className="flex justify-between flex-wrap gap-4">
+            {selectedLanguageId === "new" && (
               <div className="flex flex-col gap-2 w-full md:w-[48%]">
-                <label className="text-xs text-gray-500">{t("branch")}</label>
-                <select
-                  value={branchId}
-                  onChange={(e) => setBranchId(Number(e.target.value))}
-                  className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-                >
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex flex-col gap-2 w-full md:w-[48%]">
-                <label className="text-xs text-gray-500">{t("ageGroup")}</label>
-                <input
-                  type="text"
-                  value={ageGroup}
-                  onChange={(e) => setAgeGroup(e.target.value)}
-                  placeholder={t("ageGroupPlaceholder")}
-                  className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-                />
-              </div>
-
-              <div className="flex flex-col gap-2 w-full">
                 <label className="text-xs text-gray-500">
-                  {t("initialGroupName")}
+                  {t("newLanguageName")}
                 </label>
                 <input
                   type="text"
-                  value={groupName}
-                  onChange={(e) => setGroupName(e.target.value)}
-                  placeholder={t("groupDefaultPlaceholder")}
+                  value={newLanguageName}
+                  onChange={(e) => setNewLanguageName(e.target.value)}
+                  placeholder={t("newLanguagePlaceholder")}
                   className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 3. BOOK FEES OPTION (§1.2 & §2.11) */}
-          <div className="flex flex-col gap-3 p-3.5 rounded-lg border border-border bg-surface-subtle">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={hasBooks}
-                onChange={(e) => setHasBooks(e.target.checked)}
-                className="w-4 h-4 rounded text-primary focus:ring-primary border-gray-300"
-              />
-              <span className="text-sm font-semibold text-gray-800">
-                {t("hasBooksCheckbox")}
-              </span>
-            </label>
-
-            {hasBooks && (
-              <div className="flex flex-col gap-2 w-full md:w-1/3 pt-1">
-                <label className="text-xs text-gray-500">
-                  {t("bookFeeAmount")}
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="100"
-                  value={bookFee}
-                  onChange={(e) => setBookFee(Number(e.target.value))}
-                  className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none font-bold text-primary"
-                  required={hasBooks}
+                  required
                 />
               </div>
             )}
           </div>
-
-          {/* 4. DYNAMIC LEVELS DEFINITION (§1.8 & §2.8) */}
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between border-b pb-2">
-              <span className="text-xs text-gray-500 font-medium">
-                {t("levelsConfigSection")}
-              </span>
-              <Button
-                type="button"
-                variant="soft"
-                size="sm"
-                onClick={handleAddLevel}
-              >
-                {t("addLevel")}
-              </Button>
-            </div>
-
-            {levels.map((lvl, idx) => (
-              <div
-                key={idx}
-                className="flex items-center gap-3 p-3 rounded-lg bg-surface-subtle border border-border"
-              >
-                <div className="w-7 h-7 rounded-full bg-primary/10 text-primary font-bold text-xs flex items-center justify-center shrink-0">
-                  {idx + 1}
-                </div>
-
-                <div className="flex-1 flex flex-col md:flex-row gap-3">
-                  <div className="flex-1 flex flex-col gap-1">
-                    <label className="text-xs text-gray-500">{t("levelName")}</label>
-                    <input
-                      type="text"
-                      value={lvl.name}
-                      onChange={(e) =>
-                        handleLevelChange(idx, "name", e.target.value)
-                      }
-                      placeholder="Ex: Niveau 1 (A1)"
-                      className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-                      required
-                    />
-                  </div>
-
-                  <div className="w-full md:w-36 flex flex-col gap-1">
-                    <label className="text-xs text-gray-500">
-                      {t("lumpSumPriceLabel")}
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="500"
-                      value={lvl.lumpSumPrice}
-                      onChange={(e) =>
-                        handleLevelChange(
-                          idx,
-                          "lumpSumPrice",
-                          Number(e.target.value)
-                        )
-                      }
-                      className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none font-bold text-success"
-                      required
-                    />
-                  </div>
-
-                  <div className="w-full md:w-48 flex flex-col gap-1">
-                    <label className="text-xs text-gray-500">{t("teacher")}</label>
-                    <select
-                      value={lvl.teacherId || ""}
-                      onChange={(e) =>
-                        handleLevelChange(idx, "teacherId", e.target.value)
-                      }
-                      className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-                    >
-                      <option value="">{t("unassignedTeacher")}</option>
-                      {teachers.map((tItem) => (
-                        <option key={tItem.id} value={tItem.id}>
-                          {tItem.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {levels.length > 1 && (
-                  <Button
-                    type="button"
-                    variant="soft-danger"
-                    size="sm"
-                    onClick={() => handleRemoveLevel(idx)}
-                    className="self-end mb-1"
-                  >
-                    {t("deleteLevel")}
-                  </Button>
-                )}
-              </div>
-            ))}
-          </div>
-        </>
+        </div>
       ) : (
-        /* UPDATE MODE */
-        <div className="flex justify-between flex-wrap gap-4">
+        <div className="flex flex-col gap-2 w-full">
           <input type="hidden" name="id" value={data?.id} />
+          <label className="text-xs text-gray-500">{t("language")}</label>
+          <input
+            type="text"
+            value={formationName}
+            onChange={(e) => setFormationName(e.target.value)}
+            className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none font-semibold"
+            required
+          />
+        </div>
+      )}
 
-          <div className="flex flex-col gap-2 w-full">
-            <label className="text-xs text-gray-500">{t("name")}</label>
-            <input
-              type="text"
-              value={groupName}
-              onChange={(e) => setGroupName(e.target.value)}
-              className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
-              required
-            />
-          </div>
-
+      {/* 2. DEFAULT BRANCH & AGE GROUP */}
+      <div className="flex flex-col gap-3">
+        <span className="text-xs text-gray-500 font-medium border-b pb-1">
+          {t("groupBranchSection")}
+        </span>
+        <div className="flex justify-between flex-wrap gap-4">
           <div className="flex flex-col gap-2 w-full md:w-[48%]">
             <label className="text-xs text-gray-500">{t("branch")}</label>
             <select
@@ -516,156 +541,315 @@ const FormationForm = ({
               type="text"
               value={ageGroup}
               onChange={(e) => setAgeGroup(e.target.value)}
+              placeholder={t("ageGroupPlaceholder")}
               className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none"
             />
           </div>
+        </div>
+      </div>
 
-          {/* Book fee update */}
-          <div className="flex flex-col gap-3 p-3.5 rounded-lg border border-border bg-surface-subtle w-full mt-2">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={hasBooks}
-                onChange={(e) => setHasBooks(e.target.checked)}
-                className="w-4 h-4 rounded text-primary focus:ring-primary border-gray-300"
-              />
-              <span className="text-sm font-semibold text-gray-800">
-                {t("hasBooksCheckbox")}
-              </span>
+      {/* 3. SHARED BOOK FEES */}
+      <div className="flex flex-col gap-3 p-3.5 rounded-lg border border-border bg-surface-subtle">
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={hasBooks}
+            onChange={(e) => setHasBooks(e.target.checked)}
+            className="w-4 h-4 rounded text-primary focus:ring-primary border-gray-300"
+          />
+          <span className="text-sm font-semibold text-gray-800">
+            {t("hasBooksCheckbox")}
+          </span>
+        </label>
+
+        {hasBooks && (
+          <div className="flex flex-col gap-2 w-full md:w-1/3 pt-1">
+            <label className="text-xs text-gray-500">
+              {t("bookFeeAmount")}
             </label>
-
-            {hasBooks && (
-              <div className="flex flex-col gap-2 w-full md:w-1/3 pt-1">
-                <label className="text-xs text-gray-500">
-                  {t("bookFeeAmount")}
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="100"
-                  value={bookFee}
-                  onChange={(e) => setBookFee(Number(e.target.value))}
-                  className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none font-bold text-primary"
-                  required={hasBooks}
-                />
-              </div>
-            )}
+            <input
+              type="number"
+              min="0"
+              step="100"
+              value={bookFee}
+              onChange={(e) => setBookFee(Number(e.target.value))}
+              className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none font-bold text-primary"
+              required={hasBooks}
+            />
           </div>
+        )}
+      </div>
 
-          {/* Levels Section in Update Mode */}
-          <div className="flex flex-col gap-3 w-full mt-2 pt-4 border-t border-border">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-gray-700 uppercase tracking-wide">
-                {t("levelsConfigSection")}
-              </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleAddLevel}
-              >
-                + {t("addLevel")}
-              </Button>
-            </div>
+      {/* 4. LEVELS & MULTI-GROUPS PER LEVEL */}
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between border-b pb-2">
+          <span className="text-xs font-bold text-gray-700 uppercase tracking-wide">
+            {t("levelsConfigSection")}
+          </span>
+          <Button
+            type="button"
+            variant="soft"
+            size="sm"
+            onClick={handleAddLevel}
+          >
+            {t("addLevel")}
+          </Button>
+        </div>
 
-            <div className="flex flex-col gap-3">
-              {levels.map((lvl, idx) => {
-                const isMarkedDeleted = !!lvl.isDeleted;
-                return (
+        {levels.map((lvl, idx) => {
+          const isLevelDeleted = !!lvl.isDeleted;
+          const activeGroupsInLvl = lvl.groups.filter((g) => !g.isDeleted);
+
+          return (
+            <div
+              key={lvl.id ? `lvl-${lvl.id}` : `new-lvl-${idx}`}
+              className={`rounded-xl border p-4 space-y-3 transition-all ${
+                isLevelDeleted
+                  ? "bg-red-50/70 border-red-200 opacity-60"
+                  : "bg-surface-subtle border-border"
+              }`}
+            >
+              {/* Level Header: Number, Level Name, Shared Price, Delete Level */}
+              <div className="flex flex-col md:flex-row md:items-end gap-3">
+                <div className="flex items-center gap-2.5 flex-1">
                   <div
-                    key={lvl.id ? `id-${lvl.id}` : `new-${idx}`}
-                    className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
-                      isMarkedDeleted
-                        ? "bg-red-50/70 border-red-200 opacity-60 line-through"
-                        : "bg-surface-subtle border-border"
+                    className={`w-7 h-7 rounded-full font-bold text-xs flex items-center justify-center shrink-0 ${
+                      isLevelDeleted
+                        ? "bg-red-100 text-red-600"
+                        : "bg-primary/10 text-primary"
                     }`}
                   >
-                    <div
-                      className={`w-7 h-7 rounded-full font-bold text-xs flex items-center justify-center shrink-0 ${
-                        isMarkedDeleted
-                          ? "bg-red-100 text-red-600"
-                          : "bg-primary/10 text-primary"
-                      }`}
-                    >
-                      {lvl.levelNumber || idx + 1}
-                    </div>
-
-                    <div className="flex-1 flex flex-col md:flex-row gap-3">
-                      <div className="flex-1 flex flex-col gap-1">
-                        <label className="text-xs text-gray-500">{t("levelName")}</label>
-                        <input
-                          type="text"
-                          value={lvl.name}
-                          disabled={isMarkedDeleted}
-                          onChange={(e) =>
-                            handleLevelChange(idx, "name", e.target.value)
-                          }
-                          placeholder="Ex: Niveau 1 (A1)"
-                          className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none disabled:bg-gray-100"
-                          required={!isMarkedDeleted}
-                        />
-                      </div>
-
-                      <div className="w-full md:w-36 flex flex-col gap-1">
-                        <label className="text-xs text-gray-500">
-                          {t("lumpSumPriceLabel")}
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="500"
-                          disabled={isMarkedDeleted}
-                          value={lvl.lumpSumPrice}
-                          onChange={(e) =>
-                            handleLevelChange(
-                              idx,
-                              "lumpSumPrice",
-                              Number(e.target.value)
-                            )
-                          }
-                          className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none font-bold text-success disabled:bg-gray-100"
-                          required={!isMarkedDeleted}
-                        />
-                      </div>
-
-                      <div className="w-full md:w-48 flex flex-col gap-1">
-                        <label className="text-xs text-gray-500">{t("teacher")}</label>
-                        <select
-                          disabled={isMarkedDeleted}
-                          value={lvl.teacherId || ""}
-                          onChange={(e) =>
-                            handleLevelChange(idx, "teacherId", e.target.value)
-                          }
-                          className="ring-[1.5px] ring-gray-300 p-2 rounded-md text-sm w-full h-[42px] focus:ring-2 focus:ring-primary outline-none disabled:bg-gray-100"
-                        >
-                          <option value="">{t("unassignedTeacher")}</option>
-                          {teachers.map((tItem) => (
-                            <option key={tItem.id} value={tItem.id}>
-                              {tItem.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    <Button
-                      type="button"
-                      variant={isMarkedDeleted ? "outline" : "soft-danger"}
-                      size="sm"
-                      onClick={() => handleRemoveLevel(idx)}
-                      className="self-end mb-1 shrink-0"
-                    >
-                      {isMarkedDeleted
-                        ? (locale === "ar" ? "استرجاع" : "Restaurer")
-                        : t("deleteLevel")}
-                    </Button>
+                    {lvl.levelNumber || idx + 1}
                   </div>
-                );
-              })}
+                  <div className="flex-1 flex flex-col gap-1">
+                    <label className="text-xs font-semibold text-gray-600">
+                      {t("levelName")}
+                    </label>
+                    <input
+                      type="text"
+                      value={lvl.name}
+                      disabled={isLevelDeleted}
+                      onChange={(e) =>
+                        handleLevelChange(idx, "name", e.target.value)
+                      }
+                      placeholder="Ex: Niveau 1 (A1)"
+                      className="ring-[1.5px] ring-gray-300 bg-white p-2 rounded-md text-sm w-full h-[40px] focus:ring-2 focus:ring-primary outline-none disabled:bg-gray-100 font-semibold"
+                      required={!isLevelDeleted}
+                    />
+                  </div>
+                </div>
+
+                <div className="w-full md:w-44 flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-gray-600">
+                    {t("lumpSumPriceLabel")}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="500"
+                    disabled={isLevelDeleted}
+                    value={lvl.lumpSumPrice}
+                    onChange={(e) =>
+                      handleLevelChange(
+                        idx,
+                        "lumpSumPrice",
+                        Number(e.target.value)
+                      )
+                    }
+                    className="ring-[1.5px] ring-gray-300 bg-white p-2 rounded-md text-sm w-full h-[40px] focus:ring-2 focus:ring-primary outline-none font-bold text-success disabled:bg-gray-100"
+                    required={!isLevelDeleted}
+                  />
+                </div>
+
+                {(type === "update" || levels.length > 1) && (
+                  <Button
+                    type="button"
+                    variant={isLevelDeleted ? "outline" : "soft-danger"}
+                    size="sm"
+                    onClick={() => handleRemoveLevel(idx)}
+                    className="shrink-0 h-[40px]"
+                  >
+                    {isLevelDeleted
+                      ? locale === "ar"
+                        ? "استرجاع المستوى"
+                        : "Restaurer"
+                      : t("deleteLevel")}
+                  </Button>
+                )}
+              </div>
+
+              {/* Nested Groups for this Level */}
+              {!isLevelDeleted && (
+                <div className="pt-2.5 border-t border-border/70 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-gray-700">
+                      <Users className="w-3.5 h-3.5 text-primary" />
+                      <span>
+                        {t("groupsCount", { count: activeGroupsInLvl.length })}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleAddGroupToLevel(idx)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>{t("addGroupToLevel")}</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {lvl.groups.map((grp, gIdx) => {
+                      const isGrpDeleted = !!grp.isDeleted;
+                      return (
+                        <div
+                          key={grp.id ? `grp-${grp.id}` : `new-grp-${gIdx}`}
+                          className={`p-2.5 rounded-lg border grid grid-cols-1 md:grid-cols-12 gap-2 items-end transition-all ${
+                            isGrpDeleted
+                              ? "bg-red-50/60 border-red-200 opacity-60 line-through"
+                              : "bg-white border-gray-200"
+                          }`}
+                        >
+                          <div className="md:col-span-4 flex flex-col gap-1">
+                            <div className="flex items-center justify-between">
+                              <label className="text-[11px] text-gray-500">
+                                {t("groupNameLabel")} #{gIdx + 1}
+                              </label>
+                              {grp.enrollmentsCount ? (
+                                <Badge variant="secondary" size="sm">
+                                  {grp.enrollmentsCount}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            <input
+                              type="text"
+                              value={grp.name}
+                              disabled={isGrpDeleted}
+                              onChange={(e) =>
+                                handleGroupChange(
+                                  idx,
+                                  gIdx,
+                                  "name",
+                                  e.target.value
+                                )
+                              }
+                              placeholder={t("groupDefaultPlaceholder")}
+                              className="ring-1 ring-gray-300 px-2.5 py-1.5 rounded-md text-xs w-full h-[36px] focus:ring-2 focus:ring-primary outline-none disabled:bg-gray-100"
+                            />
+                          </div>
+
+                          <div className="md:col-span-3 flex flex-col gap-1">
+                            <label className="text-[11px] text-gray-500">
+                              {t("teacher")}
+                            </label>
+                            <select
+                              value={grp.teacherId || ""}
+                              disabled={isGrpDeleted}
+                              onChange={(e) =>
+                                handleGroupChange(
+                                  idx,
+                                  gIdx,
+                                  "teacherId",
+                                  e.target.value
+                                )
+                              }
+                              className="ring-1 ring-gray-300 px-2 py-1.5 rounded-md text-xs w-full h-[36px] focus:ring-2 focus:ring-primary outline-none bg-white disabled:bg-gray-100"
+                            >
+                              <option value="">{t("unassignedTeacher")}</option>
+                              {teachers.map((tItem) => (
+                                <option key={tItem.id} value={tItem.id}>
+                                  {tItem.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="md:col-span-2 flex flex-col gap-1">
+                            <label className="text-[11px] text-gray-500">
+                              {t("branch")}
+                            </label>
+                            <select
+                              value={grp.branchId || branchId}
+                              disabled={isGrpDeleted}
+                              onChange={(e) =>
+                                handleGroupChange(
+                                  idx,
+                                  gIdx,
+                                  "branchId",
+                                  Number(e.target.value)
+                                )
+                              }
+                              className="ring-1 ring-gray-300 px-2 py-1.5 rounded-md text-xs w-full h-[36px] focus:ring-2 focus:ring-primary outline-none bg-white disabled:bg-gray-100"
+                            >
+                              {branches.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="md:col-span-2 flex flex-col gap-1">
+                            <label className="text-[11px] text-gray-500">
+                              {t("ageGroup")}
+                            </label>
+                            <input
+                              type="text"
+                              value={grp.ageGroup || ""}
+                              disabled={isGrpDeleted}
+                              onChange={(e) =>
+                                handleGroupChange(
+                                  idx,
+                                  gIdx,
+                                  "ageGroup",
+                                  e.target.value
+                                )
+                              }
+                              placeholder={t("ageGroupPlaceholder")}
+                              className="ring-1 ring-gray-300 px-2 py-1.5 rounded-md text-xs w-full h-[36px] focus:ring-2 focus:ring-primary outline-none disabled:bg-gray-100"
+                            />
+                          </div>
+
+                          <div className="md:col-span-1 flex justify-end">
+                            {(lvl.groups.length > 1 || isGrpDeleted) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleRemoveGroupFromLevel(idx, gIdx)
+                                }
+                                title={
+                                  isGrpDeleted
+                                    ? locale === "ar"
+                                      ? "استرجاع"
+                                      : "Restaurer"
+                                    : t("deleteGroupTitle")
+                                }
+                                className={`h-[36px] px-2 rounded-md text-xs font-semibold flex items-center justify-center transition-colors cursor-pointer ${
+                                  isGrpDeleted
+                                    ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                    : "text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200"
+                                }`}
+                              >
+                                {isGrpDeleted ? (
+                                  <span>
+                                    {locale === "ar" ? "استرجاع" : "↺"}
+                                  </span>
+                                ) : (
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        </div>
-      )}
+          );
+        })}
+      </div>
 
       <Button
         type="submit"

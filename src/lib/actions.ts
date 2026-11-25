@@ -8218,6 +8218,58 @@ export const transferEnrollmentCredit = async (
       };
     }
 
+    // Same-level Formation Group transfer: preserves lump-sum FORMATION, BOOK & INSCRIPTION vouchers + LevelTests
+    if (fromClass.isFormation && toClass.isFormation) {
+      const { executeFormationGroupTransferTx } = await import("./formationActions");
+      const txRes = await prisma.$transaction(async (tx) => {
+        return await executeFormationGroupTransferTx(tx, {
+          fromEnrollmentId: fromEnrollment.id,
+          toClassId,
+          studentId,
+          notes,
+          performedBy: session.userId || "admin",
+        });
+      });
+
+      try {
+        await revalidateFinancialRoutes({
+          classId: toClassId,
+          studentId,
+          branchId: toClass.branchId,
+        });
+        if (fromEnrollment.classId) {
+          await revalidateFinancialRoutes({
+            classId: fromEnrollment.classId,
+            branchId: fromEnrollment.class.branchId,
+          });
+        }
+        safeRevalidatePath("/list/formations");
+        safeRevalidatePath(`/list/formations/${fromEnrollment.classId}`);
+        safeRevalidatePath(`/list/formations/${toClassId}`);
+        if (fromClass.formationLevelId) {
+          const fl = await prisma.formationLevel.findUnique({
+            where: { id: fromClass.formationLevelId },
+            select: { languageId: true },
+          });
+          if (fl?.languageId) {
+            safeRevalidatePath(`/list/formations/${fl.languageId}`);
+          }
+        }
+        safeRevalidatePath("/list/attendance");
+        safeRevalidatePath(`/list/attendance/class/${fromEnrollment.classId}`);
+        safeRevalidatePath(`/list/attendance/class/${toClassId}`);
+        safeRevalidatePath("/list/payroll");
+      } catch {
+        // Ignore if executed outside Next.js request context
+      }
+
+      return {
+        success: true,
+        error: false,
+        message: `تم نقل التلميذ بنجاح من ${fromEnrollment.class.name} إلى ${toClass.name} مع الحفاظ على وصولات التكوين والاختبارات. / Élève transféré de ${fromEnrollment.class.name} vers ${toClass.name} avec conservation des paiements.`,
+      };
+    }
+
     // 3. Find or create toEnrollment
     let toEnrollment = await prisma.enrollment.findFirst({
       where: {
@@ -8598,6 +8650,65 @@ export const cancelEnrollmentTransfer = async (transferId: number) => {
     const toClassName = transfer.toEnrollment.class.name;
 
     await prisma.$transaction(async (tx) => {
+      const isFormationTransfer = Boolean(
+        transfer.fromEnrollment.class.isFormation && transfer.toEnrollment.class.isFormation
+      );
+
+      if (isFormationTransfer) {
+        const voucherMatch = (transfer.notes || "").match(/\[FORMATION_VOUCHERS:([\d,]+)\]/);
+        const movedVoucherIds = voucherMatch
+          ? voucherMatch[1]
+              .split(",")
+              .map((s) => parseInt(s.trim(), 10))
+              .filter((n) => !isNaN(n) && n > 0)
+          : [];
+
+        if (movedVoucherIds.length > 0) {
+          const revertVouchers = await tx.voucher.findMany({
+            where: {
+              id: { in: movedVoucherIds },
+              studentId,
+              classId: transfer.toEnrollment.classId,
+            },
+            select: { id: true },
+          });
+          for (const rv of revertVouchers) {
+            await tx.voucher.update({
+              where: { id: rv.id },
+              data: {
+                classId: transfer.fromEnrollment.classId,
+                targetBranchId: transfer.fromEnrollment.class.branchId,
+                lastEditedAt: new Date(),
+                lastEditedBy: session.userId || "admin",
+              },
+            });
+            await tx.voucherEdit.create({
+              data: {
+                voucherId: rv.id,
+                editedBy: session.userId || "admin",
+                fieldName: "classId",
+                oldValue: String(transfer.toEnrollment.classId),
+                newValue: String(transfer.fromEnrollment.classId),
+                reason: `Annulation du transfert #${transfer.id}`,
+              },
+            });
+          }
+        }
+
+        if (transfer.fromEnrollment.class.formationLevelId) {
+          await tx.levelTest.updateMany({
+            where: {
+              studentId,
+              classId: transfer.toEnrollment.classId,
+              formationLevelId: transfer.fromEnrollment.class.formationLevelId,
+            },
+            data: {
+              classId: transfer.fromEnrollment.classId,
+            },
+          });
+        }
+      }
+
       // 1. Delete any auto-recorded transfer catch-up attendance created by this transfer
       await tx.catchUpAttendance.deleteMany({
         where: {
@@ -12855,17 +12966,75 @@ export async function calculateIndividualTeacherPayrollAction(formData: {
     if (!session.isOwner && !session.can("manage", "payroll")) {
       return { success: false, error: true, message: "غير مسموح بهذا الإجراء" };
     }
-    const { calculateTeacherPayroll } = await import("./payroll");
-    const payroll = await calculateTeacherPayroll(
-      formData.teacherId,
-      new Date(formData.startDate),
-      new Date(formData.endDate),
-      formData.groupFilter || "all"
-    );
-    return { success: true, error: false, payroll: serializeForClient(payroll) };
+    const { calculateTeacherPayroll, getTeacherThreeMonthSalaryGrowth } = await import("./payroll");
+    const scope = formData.groupFilter || "all";
+    const [payroll, salaryHistory] = await Promise.all([
+      calculateTeacherPayroll(
+        formData.teacherId,
+        new Date(formData.startDate),
+        new Date(formData.endDate),
+        scope
+      ),
+      getTeacherThreeMonthSalaryGrowth({
+        teacherId: formData.teacherId,
+        referenceDate: formData.endDate,
+        groupFilter: scope,
+      }),
+    ]);
+    return {
+      success: true,
+      error: false,
+      payroll: serializeForClient(payroll),
+      salaryHistory: serializeForClient(salaryHistory),
+    };
   } catch (error: any) {
     console.error("Error in calculateIndividualTeacherPayrollAction:", error);
     return { success: false, error: true, message: error.message || "فشل حساب مستحقات الأستاذ" };
+  }
+}
+
+export async function getTeacherSalaryGrowthAction(params: {
+  teacherId: string;
+  periodStart?: string | Date;
+  periodEnd: string | Date;
+  groupFilter?: "all" | "normal" | "formation";
+  currentGrossAmount?: number;
+  currentNetAmount?: number;
+  currentSessionsCount?: number;
+}) {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner && !session.can("view", "finance") && !session.can("manage", "payroll")) {
+      return { success: false, error: true, message: "Accès non autorisé." };
+    }
+    const { getTeacherThreeMonthSalaryGrowth } = await import("./payroll");
+    const salaryHistory = await getTeacherThreeMonthSalaryGrowth({
+      teacherId: params.teacherId,
+      referenceDate: params.periodEnd,
+      groupFilter: params.groupFilter || "all",
+      currentPeriodOverride:
+        params.currentGrossAmount !== undefined && params.currentNetAmount !== undefined
+          ? {
+              periodStart: params.periodStart,
+              periodEnd: params.periodEnd,
+              grossAmount: params.currentGrossAmount,
+              netAmount: params.currentNetAmount,
+              sessionsCount: params.currentSessionsCount,
+            }
+          : undefined,
+    });
+    return {
+      success: true,
+      error: false,
+      salaryHistory: serializeForClient(salaryHistory),
+    };
+  } catch (error: any) {
+    console.error("Error in getTeacherSalaryGrowthAction:", error);
+    return {
+      success: false,
+      error: true,
+      message: error.message || "Erreur lors du calcul de l'évolution salariale",
+    };
   }
 }
 

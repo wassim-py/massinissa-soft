@@ -316,26 +316,32 @@ const FormContainer = async ({
         case "formation": {
           const targetId = id || data?.id;
           let existingLevels: any[] = [];
-          if (targetId) {
-            let languageId: number | null = null;
-            const cls = await prisma.class.findUnique({
-              where: { id: Number(targetId) },
-              select: {
-                formationLevelId: true,
-                FormationLevel: {
-                  select: { languageId: true },
-                },
-              },
-            });
-            if (cls?.FormationLevel?.languageId) {
-              languageId = cls.FormationLevel.languageId;
-            } else {
-              const lang = await prisma.language.findUnique({
+          if (targetId || data?.languageId) {
+            let languageId: number | null = data?.languageId
+              ? Number(data.languageId)
+              : null;
+
+            if (!languageId && targetId) {
+              const cls = await prisma.class.findUnique({
                 where: { id: Number(targetId) },
-                select: { id: true },
+                select: {
+                  isFormation: true,
+                  formationLevelId: true,
+                  FormationLevel: {
+                    select: { languageId: true },
+                  },
+                },
               });
-              if (lang) {
-                languageId = lang.id;
+              if (cls?.isFormation && cls.FormationLevel?.languageId) {
+                languageId = cls.FormationLevel.languageId;
+              } else {
+                const lang = await prisma.language.findUnique({
+                  where: { id: Number(targetId) },
+                  select: { id: true },
+                });
+                if (lang) {
+                  languageId = lang.id;
+                }
               }
             }
 
@@ -344,27 +350,37 @@ const FormContainer = async ({
                 where: { languageId },
                 include: {
                   Class: {
+                    where: { isFormation: true },
                     select: {
                       id: true,
+                      name: true,
+                      branchId: true,
                       teacherId: true,
+                      ageGroup: true,
                       isCompleted: true,
+                      isPaused: true,
                       _count: {
                         select: {
                           enrollments: {
                             where: {
-                              status: "ACTIVE",
-                              transfersFrom: { none: {} },
+                              status: { notIn: ["TRANSFERRED", "UNENROLLED"] },
                             },
+                          },
+                          vouchers: {
+                            where: { isVoided: false },
                           },
                         },
                       },
                     },
+                    orderBy: { id: "asc" },
                   },
                 },
                 orderBy: { levelNumber: "asc" },
               });
               existingLevels = rawLevels.map((lvl) => {
-                const activeClass = lvl.Class.find((c) => !c.isCompleted) || lvl.Class[0];
+                const activeClass =
+                  lvl.Class.find((c) => !c.isCompleted && !c.isPaused) ||
+                  lvl.Class[0];
                 return {
                   id: lvl.id,
                   name: lvl.name,
@@ -375,6 +391,17 @@ const FormContainer = async ({
                     (sum, c) => sum + (c._count?.enrollments || 0),
                     0
                   ),
+                  groups: lvl.Class.map((c) => ({
+                    id: c.id,
+                    name: c.name,
+                    branchId: c.branchId,
+                    teacherId: c.teacherId || "",
+                    ageGroup: c.ageGroup || "Adultes (15+ ans)",
+                    isCompleted: Boolean(c.isCompleted),
+                    isPaused: Boolean(c.isPaused),
+                    enrollmentsCount: c._count?.enrollments || 0,
+                    activeVouchersCount: c._count?.vouchers || 0,
+                  })),
                 };
               });
             }

@@ -1218,7 +1218,20 @@
     "deletingStudent": "Désinscription en cours...",
     "batchDeleteStudents": "Désinscrire la sélection ({count})",
     "batchDeleteModalTitle": "Désinscrire les élèves sélectionnés ({count})",
-    "batchDeleteModalDesc": "Êtes-vous sûr de vouloir désinscrire ces {count} stagiaire(s) de ce niveau de formation ? Leurs profils dans l'établissement restent intacts."
+    "batchDeleteModalDesc": "Êtes-vous sûr de vouloir désinscrire ces {count} stagiaire(s) de ce niveau de formation ? Leurs profils dans l'établissement restent intacts.",
+    "groupsCount": "{count} groupe(s)",
+    "addGroupToLevel": "+ Ajouter un groupe",
+    "editGroupTitle": "Modifier le groupe de formation",
+    "deleteGroupTitle": "Supprimer le groupe",
+    "cannotDeleteOnlyGroup": "Un niveau doit comporter au moins un groupe. Modifiez ce groupe ou supprimez le niveau entier.",
+    "groupSwitcherLabel": "Groupes du {level}",
+    "switchStudentGroup": "Changer de groupe",
+    "transferGroupTitle": "Changer de groupe (même niveau)",
+    "transferGroupPreservesNote": "Les reçus de paiement (formation, manuels, inscription) et les résultats de test de niveau seront automatiquement transférés vers le nouveau groupe sans modifier l'historique de caisse.",
+    "finishGroupCycle": "Clôturer le cycle",
+    "reopenGroupCycle": "Rouvrir le cycle",
+    "selectTargetGroupInNextLevel": "Où inscrire les élèves admis en {nextLevel} ?",
+    "createNewGroupKeepOpen": "Créer un nouveau groupe en {nextLevel}"
   },
   "finance": {
     "title": "Finances & Paie",
