@@ -93,6 +93,7 @@ model Teacher {
   teacherClassRates    TeacherClassRate[]
   books                Book[]
   classes              Class[]
+  workshops            Workshop[]
 }
 
 model Class {
@@ -255,11 +256,16 @@ model Workshop {
   description  String?
   branchId     Int
   guestTeacher String?
+  teacherId    String?
   totalPrice   Decimal
   Branch       Branch                @relation(fields: [branchId], references: [id])
+  teacher      Teacher?              @relation(fields: [teacherId], references: [id], onDelete: SetNull)
   participants WorkshopParticipant[]
   sessions     WorkshopSession[]
   vouchers     Voucher[]
+
+  @@index([teacherId])
+  @@index([branchId])
 }
 
 model WorkshopSession {

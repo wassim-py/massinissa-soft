@@ -23,7 +23,9 @@ const CORE_FINANCIAL_ROUTES: readonly string[] = [
   "/list/daily-ledger",
   "/list/revenue",
   "/list/finance",
+  "/list/payroll",
   "/list/payments",
+  "/list/teachers",
   "/dashboard",
   "/admin",
 ];

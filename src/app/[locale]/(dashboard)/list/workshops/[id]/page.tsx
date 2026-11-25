@@ -32,6 +32,7 @@ const WorkshopDetailsPage = async (props: { params: Promise<{ id: string }> }) =
         where: { id: workshopId },
         include: {
           Branch: { select: { id: true, name: true } },
+          teacher: { select: { id: true, name: true } },
           sessions: {
             include: isAdminOrOwner ? { attendances: true } : undefined,
             orderBy: { startsAt: "asc" },
@@ -80,8 +81,9 @@ const WorkshopDetailsPage = async (props: { params: Promise<{ id: string }> }) =
           id: ws.id,
           title: ws.title,
           description: ws.description || "",
-          teacherName: ws.guestTeacher || "",
-          displayTeacherName: ws.guestTeacher || t("unspecified"),
+          teacherId: ws.teacherId || "",
+          teacherName: ws.teacher?.name || ws.guestTeacher || "",
+          displayTeacherName: ws.teacher?.name || ws.guestTeacher || t("unspecified"),
           price: Number(ws.totalPrice || 0),
           branchId: ws.branchId,
           branch: ws.Branch ? { id: ws.Branch.id, name: ws.Branch.name } : { id: ws.branchId, name: undefined },
@@ -243,10 +245,12 @@ const WorkshopDetailsPage = async (props: { params: Promise<{ id: string }> }) =
                             {workshop.price.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
                           </Badge>
                       </div>
-                      <div className="pt-2 border-t border-border">
-                          <p className="text-gray-500 mb-1 text-xs font-semibold">{t("description")}:</p>
-                          <p className="text-gray-700 text-sm leading-relaxed">{workshop.description || t("noDescription")}</p>
-                      </div>
+                      {workshop.description && (
+                        <div className="pt-2 border-t border-border">
+                            <p className="text-gray-500 mb-1 text-xs font-semibold">{t("description")}:</p>
+                            <p className="text-gray-700 text-sm leading-relaxed">{workshop.description}</p>
+                        </div>
+                      )}
                   </div>
               </Card>
               <WorkshopSchedule 

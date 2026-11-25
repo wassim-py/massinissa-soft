@@ -1280,6 +1280,65 @@ export default function TeacherPayrollSection({
               </div>
             )}
 
+            {/* Dawarat (Workshops) Payment Split Breakdown */}
+            {currentPayroll.workshopStudentBreakdown && currentPayroll.workshopStudentBreakdown.length > 0 && (
+              <div className="space-y-3 p-4 rounded-xl border border-indigo-200 bg-indigo-50/30">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                    <BookOpen className="w-4 h-4 text-indigo-600" />
+                    <span>{locale === "ar" ? "تفاصيل مدفوعات الدورات (Dawarat) — تقسيم الأستاذ / المدرسة" : "Détail des paiements Dawarat — Part enseignant / école"}</span>
+                  </h4>
+                  <Badge variant="neutral" size="sm" className="font-semibold text-indigo-800 bg-indigo-100">
+                    {currentPayroll.workshopStudentBreakdown.length} {locale === "ar" ? "مشارك" : "participant(s)"}
+                  </Badge>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-start border-collapse bg-white rounded-lg border border-indigo-100 shadow-2xs">
+                    <thead>
+                      <tr className="bg-indigo-50/80 border-b border-indigo-200 text-indigo-950 font-bold">
+                        <th className="p-2.5 text-start">{locale === "ar" ? "المشارك" : "Participant"}</th>
+                        <th className="p-2.5 text-start">{locale === "ar" ? "الدورة" : "Dawara"}</th>
+                        <th className="p-2.5 text-end">{locale === "ar" ? "سعر الدورة" : "Prix"}</th>
+                        <th className="p-2.5 text-end font-bold text-indigo-900 bg-indigo-100/50">{locale === "ar" ? "المدفوع هذه الفترة" : "Payé (période)"}</th>
+                        <th className="p-2.5 text-center">{locale === "ar" ? "النسبة" : "Taux"}</th>
+                        <th className="p-2.5 text-end font-bold text-success-text">{locale === "ar" ? "حصة الأستاذ" : "Part Enseignant"}</th>
+                        <th className="p-2.5 text-end font-bold text-blue-800">{locale === "ar" ? "حصة المدرسة" : "Part École"}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-indigo-100">
+                      {currentPayroll.workshopStudentBreakdown.map((wsb, idx) => (
+                        <tr key={idx} className="hover:bg-indigo-50/40 transition-colors">
+                          <td className="p-2.5 font-bold text-gray-900">{wsb.studentName}</td>
+                          <td className="p-2.5 text-gray-700">{wsb.workshopTitle}</td>
+                          <td className="p-2.5 text-end font-mono text-gray-700">{formatDZD(wsb.workshopPrice)}</td>
+                          <td className="p-2.5 text-end font-mono font-bold text-indigo-950 bg-indigo-50/50">{formatDZD(wsb.paidInPeriod)}</td>
+                          <td className="p-2.5 text-center font-mono font-semibold text-gray-700">{wsb.teacherPercentage}%</td>
+                          <td className="p-2.5 text-end font-mono font-bold text-success-text">{formatDZD(wsb.teacherAmount)}</td>
+                          <td className="p-2.5 text-end font-mono font-bold text-blue-800">{formatDZD(wsb.schoolAmount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-indigo-50/60 font-bold border-t border-indigo-200 text-gray-900">
+                      <tr>
+                        <td className="p-2.5" colSpan={3}>{locale === "ar" ? "إجمالي الدورات" : "Total Dawarat"}</td>
+                        <td className="p-2.5 text-end font-mono font-black text-indigo-950 bg-indigo-100/60">
+                          {formatDZD(currentPayroll.workshopStudentBreakdown.reduce((sum, w) => sum + w.paidInPeriod, 0))}
+                        </td>
+                        <td className="p-2.5 text-center font-mono">-</td>
+                        <td className="p-2.5 text-end font-mono text-success-text font-black">
+                          {formatDZD(currentPayroll.workshopStudentBreakdown.reduce((sum, w) => sum + w.teacherAmount, 0))}
+                        </td>
+                        <td className="p-2.5 text-end font-mono text-blue-800 font-black">
+                          {formatDZD(currentPayroll.workshopStudentBreakdown.reduce((sum, w) => sum + w.schoolAmount, 0))}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Granular Session Breakdown Table using DataTable */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">

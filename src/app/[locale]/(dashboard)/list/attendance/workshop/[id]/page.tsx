@@ -65,6 +65,7 @@ export default async function WorkshopAttendancePage(props: {
     where: { id: workshopId },
     include: {
       Branch: { select: { id: true, name: true } },
+      teacher: { select: { id: true, name: true } },
       sessions: {
         include: {
           attendances: true,
@@ -183,7 +184,7 @@ export default async function WorkshopAttendancePage(props: {
             <p className="text-sm text-muted mt-1">
               {t("taughtBy")}{" "}
               <span className="font-semibold text-gray-800">
-                {workshop.guestTeacher || t("unspecified")}
+                {workshop.teacher?.name || workshop.guestTeacher || t("unspecified")}
               </span>
             </p>
           </div>

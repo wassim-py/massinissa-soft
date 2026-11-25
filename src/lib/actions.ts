@@ -677,6 +677,11 @@ export const updateTeacher = async (
       where: { id: data.id },
       data: updateData,
     });
+    // Keep the legacy Dawarat display name in sync with the teacher's name
+    await prisma.workshop.updateMany({
+      where: { teacherId: data.id },
+      data: { guestTeacher: fullName },
+    });
 
     if (data.subjects !== undefined) {
       const allSettings = await prisma.setting.findMany({
@@ -741,6 +746,10 @@ export const deleteTeacher = async (
     }
 
     await prisma.class.updateMany({
+      where: { teacherId: id },
+      data: { teacherId: null },
+    });
+    await prisma.workshop.updateMany({
       where: { teacherId: id },
       data: { teacherId: null },
     });
@@ -10059,11 +10068,7 @@ export const createWorkshop = async (
           : (data as any).totalPrice !== undefined
           ? (data as any).totalPrice
           : 0,
-      teacherName:
-        data.teacherName ||
-        (data as any).guestTeacher ||
-        (data as any).teacher ||
-        "",
+      teacherId: data.teacherId || (data as any).supervisorId || "",
     };
 
     const parsed = workshopSchema.safeParse(normalizedInput);
@@ -10073,6 +10078,14 @@ export const createWorkshop = async (
         error: true,
         message: parsed.error.issues[0]?.message || "بيانات الدورة غير صالحة / Données de l'atelier invalides.",
       };
+    }
+
+    const teacher = await prisma.teacher.findUnique({
+      where: { id: parsed.data.teacherId },
+      select: { id: true, name: true },
+    });
+    if (!teacher) {
+      return { success: false, error: true, message: "الأستاذ المحدد غير موجود / Enseignant sélectionné introuvable." };
     }
 
     const requestedBranchId = parsed.data.branchId ? Number(parsed.data.branchId) : null;
@@ -10098,9 +10111,10 @@ export const createWorkshop = async (
       const newWorkshop = await tx.workshop.create({
         data: {
           title: parsed.data.title.trim(),
-          description: parsed.data.description?.trim() || "",
+          description: null,
           totalPrice: parsed.data.price,
-          guestTeacher: parsed.data.teacherName.trim() || "Professeur Invité",
+          teacherId: teacher.id,
+          guestTeacher: teacher.name,
           branchId,
         },
       });
@@ -10121,6 +10135,8 @@ export const createWorkshop = async (
     safeRevalidatePath("/list/workshops");
     safeRevalidatePath(`/list/workshops/${created.id}`);
     safeRevalidatePath("/list/attendance");
+    safeRevalidatePath(`/list/teachers/${teacher.id}`);
+    safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/admin");
     return { success: true, error: false, message: "Atelier créé avec succès / تم انشاء الدورة بنجاح." };
   } catch (err: any) {
@@ -10144,7 +10160,7 @@ export const updateWorkshop = async (
     const session = await getAuthSession();
     const existingWorkshop = await prisma.workshop.findUnique({
       where: { id: Number(data.id) },
-      select: { id: true, branchId: true, totalPrice: true },
+      select: { id: true, branchId: true, totalPrice: true, teacherId: true },
     });
     if (!existingWorkshop) {
       return { success: false, error: true, message: "Atelier introuvable / الدورة غير موجودة." };
@@ -10163,11 +10179,7 @@ export const updateWorkshop = async (
           : (data as any).totalPrice !== undefined
           ? (data as any).totalPrice
           : 0,
-      teacherName:
-        data.teacherName ||
-        (data as any).guestTeacher ||
-        (data as any).teacher ||
-        "",
+      teacherId: data.teacherId || (data as any).supervisorId || "",
     };
 
     const parsed = workshopSchema.safeParse(normalizedInput);
@@ -10177,6 +10189,14 @@ export const updateWorkshop = async (
         error: true,
         message: parsed.error.issues[0]?.message || "بيانات الدورة غير صالحة / Données de l'atelier invalides.",
       };
+    }
+
+    const teacher = await prisma.teacher.findUnique({
+      where: { id: parsed.data.teacherId },
+      select: { id: true, name: true },
+    });
+    if (!teacher) {
+      return { success: false, error: true, message: "الأستاذ المحدد غير موجود / Enseignant sélectionné introuvable." };
     }
 
     const parsedSessions = parsed.data.sessions.map((s) => {
@@ -10200,9 +10220,9 @@ export const updateWorkshop = async (
         where: { id: existingWorkshop.id },
         data: {
           title: parsed.data.title.trim(),
-          description: parsed.data.description?.trim() || "",
           totalPrice: nextPrice,
-          guestTeacher: parsed.data.teacherName.trim() || "Professeur Invité",
+          teacherId: teacher.id,
+          guestTeacher: teacher.name,
           ...(session.isOwner && parsed.data.branchId ? { branchId: nextBranchId } : {}),
         },
       });
@@ -10260,6 +10280,11 @@ export const updateWorkshop = async (
     safeRevalidatePath(`/list/workshops/${existingWorkshop.id}`);
     safeRevalidatePath("/list/attendance");
     safeRevalidatePath(`/list/attendance/workshop/${existingWorkshop.id}`);
+    safeRevalidatePath(`/list/teachers/${teacher.id}`);
+    if (existingWorkshop.teacherId && existingWorkshop.teacherId !== teacher.id) {
+      safeRevalidatePath(`/list/teachers/${existingWorkshop.teacherId}`);
+    }
+    safeRevalidatePath("/list/payroll");
     safeRevalidatePath("/admin");
     return { success: true, error: false, message: "Atelier mis à jour avec succès / تم تحديث الدورة بنجاح." };
   } catch (err: any) {

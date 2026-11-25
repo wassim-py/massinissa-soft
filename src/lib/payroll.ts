@@ -102,6 +102,18 @@ export interface TeacherPayrollCalculation {
     schoolAmount: number;
     status: "FULL" | "PARTIAL" | "UNPAID";
   }>;
+  workshopStudentBreakdown?: Array<{
+    workshopId: number;
+    workshopTitle: string;
+    branchName: string;
+    studentId: string;
+    studentName: string;
+    workshopPrice: number;
+    paidInPeriod: number;
+    teacherPercentage: number;
+    teacherAmount: number;
+    schoolAmount: number;
+  }>;
   bookRevenue?: number;
   bookRevenueDetails?: Array<{
     voucherId: number;
@@ -581,7 +593,7 @@ export async function calculateTeachersPayrollBatch(
   const allClassIds = Array.from(allClassIdsSet);
   const needsFormation = stage2PerItem.some((s2) => s2 !== null && s2.item.groupFilter !== "normal");
 
-  const [allBookVouchers, allFormationClasses, classHistoryTuple] = await Promise.all([
+  const [allBookVouchers, allFormationClasses, classHistoryTuple, allTeacherWorkshops] = await Promise.all([
     prisma.voucher.findMany({
       where: {
         paymentType: "BOOK",
@@ -742,6 +754,30 @@ export async function calculateTeachersPayrollBatch(
           }),
         ])
       : Promise.resolve(null),
+    // Dawarat (Workshops) taught by these teachers, with their WORKSHOP payments in the period
+    needsFormation
+      ? prisma.workshop.findMany({
+          where: { teacherId: teacherWhere },
+          include: {
+            Branch: { select: { id: true, name: true } },
+            sessions: { select: { id: true, startsAt: true } },
+            vouchers: {
+              where: {
+                paymentType: "WORKSHOP",
+                isVoided: false,
+                isRefund: false,
+                status: { not: "REFUNDED" },
+                issuedAt: { gte: minStartDate, lte: maxEndDate },
+              },
+              include: {
+                refunds: true,
+                student: { select: { id: true, name: true } },
+              },
+              orderBy: { issuedAt: "asc" },
+            },
+          },
+        })
+      : Promise.resolve([]),
   ]);
 
   const allFormationClassIds = allFormationClasses.map((fc) => fc.id);
@@ -968,6 +1004,10 @@ export async function calculateTeachersPayrollBatch(
         prefetchedFormationData: [itemFormationLessons, itemFormationVouchers],
         classHistoryMap,
         lessonByIdMap,
+        workshops:
+          item.groupFilter === "normal"
+            ? []
+            : allTeacherWorkshops.filter((ws) => ws.teacherId === teacher.id),
       })
     );
   }
@@ -1017,6 +1057,7 @@ export async function computeTeacherPayrollFromData(params: {
     }
   >;
   lessonByIdMap: Map<number, any>;
+  workshops?: any[];
 }): Promise<TeacherPayrollCalculation | null> {
   const {
     startDate,
@@ -1034,6 +1075,7 @@ export async function computeTeacherPayrollFromData(params: {
     prefetchedFormationData,
     classHistoryMap,
     lessonByIdMap,
+    workshops = [],
   } = params;
 
   if (!teacher) return null;
@@ -2198,11 +2240,128 @@ export async function computeTeacherPayrollFromData(params: {
     }
   }
 
+  // 3b. Process Dawarat (Workshops) — every WORKSHOP payment received in this period (net of refunds)
+  // is split between the assigned teacher (configured percentage) and the school (remainder).
+  // Applies equally to existing school students and walk-in (non-registered) participants.
+  const workshopStudentBreakdown: NonNullable<TeacherPayrollCalculation["workshopStudentBreakdown"]> = [];
+  const workshopGroupSummaries: Array<{
+    className: string;
+    branchName: string;
+    courseSessionsCount: number;
+    payingCount: number;
+    teacherAmount: number;
+    tuitionGross: number;
+    schoolAmount: number;
+    appliedPercentage: number;
+  }> = [];
+
+  if (groupFilter !== "normal" && workshops.length > 0) {
+    const hasNoPayConfig =
+      (teacher.TeacherPayRate?.length ?? 0) === 0 && defaultSessionRate === 0 && fixedMonthly === 0;
+    const rawWorkshopPct = activePayRate?.percentageOfSessionFee;
+    const workshopTeacherPct =
+      rawWorkshopPct !== null && rawWorkshopPct !== undefined
+        ? Math.min(100, Math.max(0, Number(rawWorkshopPct)))
+        : hasNoPayConfig
+        ? 40
+        : 0;
+
+    for (const ws of workshops) {
+      const branchName = ws.Branch?.name || `Siège ${ws.branchId}`;
+      const wsVouchers = (ws.vouchers || []).filter((v: any) => {
+        const d = new Date(v.issuedAt);
+        return d >= startDate && d <= endDate;
+      });
+      const wsSessionsInPeriod = (ws.sessions || []).filter((s: any) => {
+        const d = new Date(s.startsAt);
+        return d >= startDate && d <= endDate;
+      });
+
+      const paidByStudent = new Map<string, { name: string; paid: number }>();
+      for (const v of wsVouchers) {
+        const refunded = (v.refunds || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+        const netPaid = Math.max(0, Number(v.amount || 0) - refunded);
+        if (netPaid <= 0) continue;
+        const entry = paidByStudent.get(v.studentId) || { name: v.student?.name || v.studentId, paid: 0 };
+        entry.paid += netPaid;
+        paidByStudent.set(v.studentId, entry);
+      }
+
+      let wsTuitionGross = 0;
+      let wsTeacherGross = 0;
+      let wsSchoolGross = 0;
+
+      for (const [studentId, info] of paidByStudent.entries()) {
+        const paid = Math.round(info.paid * 100) / 100;
+        const teacherCut = Math.round(((paid * workshopTeacherPct) / 100) * 100) / 100;
+        const schoolCut = Math.max(0, Math.round((paid - teacherCut) * 100) / 100);
+        wsTuitionGross += paid;
+        wsTeacherGross += teacherCut;
+        wsSchoolGross += schoolCut;
+        workshopStudentBreakdown.push({
+          workshopId: ws.id,
+          workshopTitle: ws.title,
+          branchName,
+          studentId,
+          studentName: info.name,
+          workshopPrice: Number(ws.totalPrice || 0),
+          paidInPeriod: paid,
+          teacherPercentage: workshopTeacherPct,
+          teacherAmount: teacherCut,
+          schoolAmount: schoolCut,
+        });
+      }
+
+      if (wsTuitionGross <= 0 && wsSessionsInPeriod.length === 0) continue;
+
+      wsTuitionGross = Math.round(wsTuitionGross * 100) / 100;
+      wsTeacherGross = Math.round(wsTeacherGross * 100) / 100;
+      wsSchoolGross = Math.round(wsSchoolGross * 100) / 100;
+
+      workshopGroupSummaries.push({
+        className: `${ws.title} (Dawarat)`,
+        branchName,
+        courseSessionsCount: wsSessionsInPeriod.length,
+        payingCount: paidByStudent.size,
+        teacherAmount: wsTeacherGross,
+        tuitionGross: wsTuitionGross,
+        schoolAmount: wsSchoolGross,
+        appliedPercentage: workshopTeacherPct,
+      });
+
+      totalSessions += wsSessionsInPeriod.length;
+      calculatedGross += wsTeacherGross;
+      totalTuitionGross += wsTuitionGross;
+      schoolGrossAmount += wsSchoolGross;
+
+      const bEntry = branchSessionsMap.get(ws.branchId) || {
+        branchName,
+        totalSessions: 0,
+        freeSessions: 0,
+        amount: 0,
+        totalTuition: 0,
+        schoolAmount: 0,
+        totalPresentAttendances: 0,
+      };
+      bEntry.totalSessions += wsSessionsInPeriod.length;
+      bEntry.amount += wsTeacherGross;
+      bEntry.totalTuition = (bEntry.totalTuition || 0) + wsTuitionGross;
+      bEntry.schoolAmount = (bEntry.schoolAmount || 0) + wsSchoolGross;
+      branchSessionsMap.set(ws.branchId, bEntry);
+    }
+  }
+
   const branchBreakdown: TeacherPayrollCalculation["branchBreakdown"] = [];
 
   for (const [branchId, data] of branchSessionsMap.entries()) {
-    // Only include branches where lessons occurred, unless fixedMonthly applies and no lessons occurred anywhere
-    if (data.totalSessions === 0 && fixedMonthly === 0) continue;
+    // Only include branches with activity (lessons, teacher/school amounts or tuition), unless fixedMonthly applies
+    if (
+      data.totalSessions === 0 &&
+      data.amount === 0 &&
+      (data.schoolAmount || 0) === 0 &&
+      (data.totalTuition || 0) === 0 &&
+      fixedMonthly === 0
+    ) continue;
 
     const effectiveRate = branchRateMap.has(branchId)
       ? branchRateMap.get(branchId)!
@@ -2379,6 +2538,33 @@ export async function computeTeacherPayrollFromData(params: {
     groupBreakdownMap.set(key, g);
   });
 
+  // Apply Dawarat (workshop) summaries into groupBreakdownMap
+  workshopGroupSummaries.forEach((wSum) => {
+    const key = `${wSum.className}___${wSum.branchName}`;
+    const g = groupBreakdownMap.get(key) || {
+      className: wSum.className,
+      branchName: wSum.branchName,
+      courseSessionsCount: 0,
+      payableLessonsCount: 0,
+      paidSessionsCount: 0,
+      freeSessionsCount: 0,
+      totalSessionsCount: 0,
+      amount: 0,
+      tuitionGross: 0,
+      schoolAmount: 0,
+      appliedPercentage: wSum.appliedPercentage,
+    };
+    g.courseSessionsCount += wSum.courseSessionsCount;
+    g.totalSessionsCount += wSum.courseSessionsCount;
+    g.payableLessonsCount += wSum.payingCount;
+    g.paidSessionsCount = g.payableLessonsCount;
+    g.amount += wSum.teacherAmount;
+    g.tuitionGross += wSum.tuitionGross;
+    g.schoolAmount += wSum.schoolAmount;
+    g.appliedPercentage = wSum.appliedPercentage;
+    groupBreakdownMap.set(key, g);
+  });
+
   const groupBreakdown = Array.from(groupBreakdownMap.values()).map((g) => ({
     ...g,
     payableLessonsCount: Math.round(g.payableLessonsCount * 100) / 100,
@@ -2411,6 +2597,7 @@ export async function computeTeacherPayrollFromData(params: {
     percentageOfSessionFee,
     sessionDetails,
     formationStudentBreakdown,
+    workshopStudentBreakdown,
     grossAmount,
     salaryAdvances: totalAdvances,
     photocopyDeductions: totalPhotocopyDeductions,
@@ -2473,6 +2660,7 @@ export async function generatePayrollRun(
         calc.totalSessions > 0 ||
         (calc.teacherAbsencesCount && calc.teacherAbsencesCount > 0) ||
         calc.grossAmount > 0 ||
+        (calc.schoolGrossAmount ?? 0) > 0 ||
         calc.salaryAdvances > 0 ||
         calc.photocopyDeductions > 0)
     ) {
@@ -3124,6 +3312,7 @@ export async function getPayrollRunFinancialReport(
       (calc.totalSessions > 0 ||
         (calc.teacherAbsencesCount && calc.teacherAbsencesCount > 0) ||
         calc.grossAmount > 0 ||
+        (calc.schoolGrossAmount ?? 0) > 0 ||
         calc.salaryAdvances > 0 ||
         calc.photocopyDeductions > 0)
     ) {

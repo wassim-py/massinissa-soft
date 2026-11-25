@@ -159,6 +159,7 @@ const AttendanceListPage = async (
       workshopWhere.OR = [
         { title: { contains: search, mode: "insensitive" } },
         { guestTeacher: { contains: search, mode: "insensitive" } },
+        { teacher: { name: { contains: search, mode: "insensitive" } } },
       ];
     }
 
@@ -248,6 +249,7 @@ const AttendanceListPage = async (
           title: true,
           branchId: true,
           guestTeacher: true,
+          teacher: { select: { id: true, name: true } },
           description: true,
           Branch: { select: { id: true, name: true } },
           _count: {
@@ -272,7 +274,7 @@ const AttendanceListPage = async (
           category: "workshop",
           branchId: w.branchId,
           branchName: w.Branch?.name || (locale === "ar" ? `الفرع ${w.branchId}` : `Siège ${w.branchId}`),
-          teacherName: w.guestTeacher || null,
+          teacherName: w.teacher?.name || w.guestTeacher || null,
           description: w.description || null,
           studentCount: w._count.participants,
           sessionCount: w._count.sessions,
@@ -349,6 +351,7 @@ const AttendanceListPage = async (
               title: true,
               branchId: true,
               guestTeacher: true,
+              teacher: { select: { id: true, name: true } },
               description: true,
               Branch: { select: { id: true, name: true } },
               _count: {
@@ -373,7 +376,7 @@ const AttendanceListPage = async (
               category: "workshop",
               branchId: w.branchId,
               branchName: w.Branch?.name || (locale === "ar" ? `الفرع ${w.branchId}` : `Siège ${w.branchId}`),
-              teacherName: w.guestTeacher || null,
+              teacherName: w.teacher?.name || w.guestTeacher || null,
               description: w.description || null,
               studentCount: w._count.participants,
               sessionCount: w._count.sessions,
@@ -392,6 +395,7 @@ const AttendanceListPage = async (
             title: true,
             branchId: true,
             guestTeacher: true,
+            teacher: { select: { id: true, name: true } },
             description: true,
             Branch: { select: { id: true, name: true } },
             _count: {
@@ -416,7 +420,7 @@ const AttendanceListPage = async (
             category: "workshop",
             branchId: w.branchId,
             branchName: w.Branch?.name || (locale === "ar" ? `الفرع ${w.branchId}` : `Siège ${w.branchId}`),
-            teacherName: w.guestTeacher || null,
+            teacherName: w.teacher?.name || w.guestTeacher || null,
             description: w.description || null,
             studentCount: w._count.participants,
             sessionCount: w._count.sessions,

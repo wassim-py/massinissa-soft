@@ -292,9 +292,8 @@ const workshopSessionSchema = z.object({
 export const workshopSchema = z.object({
     id: z.coerce.number().optional(),
     title: z.string().trim().min(1, { message: "اسم الدورة مطلوب!" }),
-    description: z.string().optional(),
     price: z.coerce.number().min(0, { message: "يجب أن يكون المبلغ 0 أو أكثر." }),
-    teacherName: z.string().trim().min(1, { message: "اسم الاستاذ مطلوب!" }),
+    teacherId: z.string().trim().min(1, { message: "يرجى اختيار الأستاذ! / Veuillez sélectionner un enseignant !" }),
     branchId: z.coerce.number().optional(),
     sessions: z.array(workshopSessionSchema).min(1, { message: "مطلوب حصة واحدة على الأقل!" }),
 });

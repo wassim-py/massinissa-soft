@@ -123,6 +123,7 @@ const SingleTeacherPage = async (
         TeacherPayRate: { orderBy: [{ effectiveFrom: "desc" }, { id: "desc" }] },
         TeacherBranch: { include: { Branch: true } },
         teacherClassRates: true,
+        workshops: { select: { id: true } },
         classes: {
           include: {
             branch: true,
@@ -561,6 +562,7 @@ const SingleTeacherPage = async (
         const teacherClasses = t?.classes || allClasses || [];
         const hasFormationGroups =
           teacherClasses.some((c: any) => Boolean(c.isFormation)) ||
+          (t?.workshops?.length ?? 0) > 0 ||
           (thisMonthLessons || []).some((l: any) => Boolean(l.class?.isFormation));
         const hasNormalGroups =
           teacherClasses.some((c: any) => !c.isFormation) ||

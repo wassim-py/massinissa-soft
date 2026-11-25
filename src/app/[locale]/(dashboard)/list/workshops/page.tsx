@@ -41,6 +41,7 @@ const WorkshopListPage = async (
             OR: [
               { title: { contains: search.trim(), mode: "insensitive" } },
               { guestTeacher: { contains: search.trim(), mode: "insensitive" } },
+              { teacher: { name: { contains: search.trim(), mode: "insensitive" } } },
             ],
           }
         : {}),
@@ -51,6 +52,7 @@ const WorkshopListPage = async (
         where: whereClause,
         include: {
           Branch: { select: { id: true, name: true } },
+          teacher: { select: { id: true, name: true } },
           sessions: {
             select: { id: true, startsAt: true, endsAt: true },
             orderBy: { startsAt: "asc" },
@@ -85,8 +87,9 @@ const WorkshopListPage = async (
       title: w.title,
       description: w.description || "",
       price: Number(w.totalPrice || 0),
-      teacherName: w.guestTeacher || "",
-      displayTeacherName: w.guestTeacher || t("unspecified"),
+      teacherId: w.teacherId || "",
+      teacherName: w.teacher?.name || w.guestTeacher || "",
+      displayTeacherName: w.teacher?.name || w.guestTeacher || t("unspecified"),
       branchId: w.branchId,
       branchName: w.Branch?.name || (locale === "ar" ? `الفرع ${w.branchId}` : `Siège ${w.branchId}`),
       sessions: w.sessions.map((s) => ({
@@ -177,9 +180,11 @@ const WorkshopListPage = async (
                         {workshop.price.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")} DZD
                       </Badge>
                     </div>
-                    <p className="text-sm text-gray-600 mb-4 h-10 overflow-hidden line-clamp-2">
-                      {workshop.description}
-                    </p>
+                    {workshop.description && (
+                      <p className="text-sm text-gray-600 mb-4 overflow-hidden line-clamp-2">
+                        {workshop.description}
+                      </p>
+                    )}
                     <div className="text-xs space-y-2 text-gray-600 border-t border-border pt-4">
                       <div className="flex items-center justify-between">
                         <span className="text-gray-500">{t("branch")}:</span>

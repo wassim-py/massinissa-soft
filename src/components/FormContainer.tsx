@@ -292,10 +292,16 @@ const FormContainer = async ({
           break;
         }
         case "workshop": {
-          const branches = await prisma.branch.findMany({
-            select: { id: true, name: true },
-            orderBy: { name: "asc" },
-          });
+          const [branches, teachers] = await Promise.all([
+            prisma.branch.findMany({
+              select: { id: true, name: true },
+              orderBy: { name: "asc" },
+            }),
+            prisma.teacher.findMany({
+              select: { id: true, name: true },
+              orderBy: { name: "asc" },
+            }),
+          ]);
           let workshopDetails: any = null;
           if (type === "update" && id) {
             workshopDetails = await prisma.workshop.findUnique({
@@ -307,6 +313,7 @@ const FormContainer = async ({
           }
           finalRelatedData = {
             branches,
+            teachers,
             isOwner: session.isOwner,
             defaultBranchId: session.branchIds?.[0] || branches[0]?.id || 1,
             workshopDetails,

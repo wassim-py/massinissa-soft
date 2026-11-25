@@ -385,7 +385,7 @@ const LessonListPage = async (props: {
           const selectedTeacherObj = teachers.find((th) => th.id === selectedTeacherId);
           if (selectedTeacherObj) {
             wsWhereConditions.push(
-              Prisma.sql`w."guestTeacher" ILIKE ${'%' + selectedTeacherObj.name + '%'}`
+              Prisma.sql`(w."teacherId" = ${selectedTeacherId} OR (w."teacherId" IS NULL AND w."guestTeacher" ILIKE ${'%' + selectedTeacherObj.name + '%'}))`
             );
           } else {
             wsWhereConditions.push(Prisma.sql`1=0`);
@@ -405,7 +405,7 @@ const LessonListPage = async (props: {
 
         if (search) {
           wsWhereConditions.push(
-            Prisma.sql`(w.title ILIKE ${'%' + search + '%'} OR w."guestTeacher" ILIKE ${'%' + search + '%'})`
+            Prisma.sql`(w.title ILIKE ${'%' + search + '%'} OR w."guestTeacher" ILIKE ${'%' + search + '%'} OR wt.name ILIKE ${'%' + search + '%'})`
           );
         }
 
@@ -416,10 +416,12 @@ const LessonListPage = async (props: {
 
         const rawWorkshopSessions = await prisma.$queryRaw<any[]>`
           SELECT ws.id, ws."workshopId", ws."startsAt", ws."endsAt",
-                 w.title as "workshopTitle", w."guestTeacher", w."branchId",
+                 w.title as "workshopTitle", w."guestTeacher", w."teacherId", w."branchId",
+                 wt.name as "teacherName",
                  b.name as "branchName"
           FROM "WorkshopSession" ws
           JOIN "Workshop" w ON w.id = ws."workshopId"
+          LEFT JOIN "Teacher" wt ON wt.id = w."teacherId"
           LEFT JOIN "Branch" b ON b.id = w."branchId"
           ${wsWhereClause}
           ORDER BY ws."startsAt" ASC
@@ -443,7 +445,7 @@ const LessonListPage = async (props: {
             startsAt: ws.startsAt,
             endsAt: ws.endsAt,
             classId: undefined,
-            teacherId: undefined,
+            teacherId: ws.teacherId || undefined,
             classroomId: null,
             branchId: ws.branchId,
             branchName: ws.branchName || "",
@@ -457,7 +459,7 @@ const LessonListPage = async (props: {
             extraFee: null,
             subject: { id: 0, name: ws.workshopTitle || t("workshopBadge") },
             class: { id: 0, name: ws.workshopTitle || t("workshopBadge") } as any,
-            teacher: { id: "", name: ws.guestTeacher || t("unspecified"), surname: "" } as any,
+            teacher: { id: ws.teacherId || "", name: ws.teacherName || ws.guestTeacher || t("unspecified"), surname: "" } as any,
             classroom: null,
           };
         });
