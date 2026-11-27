@@ -408,6 +408,7 @@ const TakeAttendancePage = async (
         a.lesson.classId === missedClassId ||
         a.lesson.lessonGroups?.some((lg: any) => lg.classId === missedClassId);
       if (!inMissedClass) return false;
+      if (a.isRevisionVisitor) return true;
       return isLessonApplicableToEnrollment(
         {
           ...a.lesson,
@@ -943,13 +944,19 @@ const TakeAttendancePage = async (
     );
     const isRefunded = enrollmentStatus === "REFUNDED";
 
-    const sAttendances = (details?.attendances || []).filter((a: any) => {
-      if (!a.lesson) return true;
+    const allClassAttendancesForStudent = (details?.attendances || []).filter((a: any) => {
+      if (!a.lesson) return false;
       const lessonClassIds = [
         a.lesson.classId,
         ...(a.lesson.lessonGroups?.map((lg: any) => lg.classId) || []),
       ];
-      if (!lessonClassIds.includes(studentClassId)) return false;
+      return lessonClassIds.includes(studentClassId);
+    });
+    const priorRevisionAttendances = allClassAttendancesForStudent.filter((a: any) =>
+      Boolean(a.isRevisionVisitor)
+    );
+    const sAttendances = allClassAttendancesForStudent.filter((a: any) => {
+      if (a.isRevisionVisitor) return true;
       return isLessonApplicableToEnrollment(
         {
           ...a.lesson,
@@ -994,6 +1001,7 @@ const TakeAttendancePage = async (
       payerSessionsRemaining,
       vouchers: details?.vouchers || [],
       attendances: sAttendances,
+      priorRevisionCount: priorRevisionAttendances.length,
       catchUps: sCatchUps,
       transfersFrom: enrollment?.transfersFrom || [],
       transfersTo: enrollment?.transfersTo || [],

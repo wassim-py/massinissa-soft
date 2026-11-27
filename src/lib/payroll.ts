@@ -678,6 +678,7 @@ export async function calculateTeachersPayrollBatch(
               lessonId: true,
               studentId: true,
               status: true,
+              isRevisionVisitor: true,
               lesson: {
                 select: {
                   classId: true,
@@ -810,11 +811,11 @@ export async function calculateTeachersPayrollBatch(
   const globalLessonsByClass = new Map<number, any[]>();
   const globalAttendancesWithDateByClass = new Map<
     number,
-    Array<{ lessonId: number; studentId: string; status: string; startsAtMs: number }>
+    Array<{ lessonId: number; studentId: string; status: string; isRevisionVisitor?: boolean; startsAtMs: number }>
   >();
   const globalAttendancesByClass = new Map<
     number,
-    Array<{ lessonId: number; studentId: string; status: string }>
+    Array<{ lessonId: number; studentId: string; status: string; isRevisionVisitor?: boolean }>
   >();
   const globalCatchUpsByClass = new Map<number, any[]>();
   const globalVouchersByClass = new Map<number, any[]>();
@@ -852,7 +853,12 @@ export async function calculateTeachersPayrollBatch(
         targetClassIds.add(lg.classId);
       }
       const startsAtMs = new Date(a.lesson.startsAt).getTime();
-      const stripped = { lessonId: a.lessonId, studentId: a.studentId, status: a.status };
+      const stripped = {
+        lessonId: a.lessonId,
+        studentId: a.studentId,
+        status: a.status,
+        isRevisionVisitor: Boolean(a.isRevisionVisitor),
+      };
       const withDate = { ...stripped, startsAtMs };
       for (const targetCid of targetClassIds) {
         globalAttendancesByClass.get(targetCid)?.push(stripped);
@@ -964,7 +970,12 @@ export async function calculateTeachersPayrollBatch(
         const cidAttendances = needsEndDateFilter
           ? (globalAttendancesWithDateByClass.get(cid) || [])
               .filter((a) => a.startsAtMs <= itemEndMs)
-              .map(({ lessonId, studentId, status }) => ({ lessonId, studentId, status }))
+              .map(({ lessonId, studentId, status, isRevisionVisitor }) => ({
+                lessonId,
+                studentId,
+                status,
+                isRevisionVisitor,
+              }))
           : globalAttendancesByClass.get(cid) || [];
 
         const rawCatchUps = globalCatchUpsByClass.get(cid) || [];
@@ -1043,7 +1054,7 @@ export async function computeTeacherPayrollFromData(params: {
         branch?: { name: string } | null;
         class?: { id: number; name: string; pricePerCycle: any } | null;
       }>;
-      attendances: Array<{ lessonId: number; studentId: string; status: string }>;
+      attendances: Array<{ lessonId: number; studentId: string; status: string; isRevisionVisitor?: boolean }>;
       catchUps: Array<{
         studentId: string;
         missedLessonId: number;
@@ -1163,7 +1174,7 @@ export async function computeTeacherPayrollFromData(params: {
 
       const studentAttMap = new Map<number, string>(
         historyData.attendances
-          .filter((a: any) => a.studentId === sid)
+          .filter((a: any) => a.studentId === sid && !a.isRevisionVisitor)
           .map((a: any) => [a.lessonId, a.status])
       );
       const studentLessons = historyData.lessons.filter((l: any) => {
@@ -1175,6 +1186,13 @@ export async function computeTeacherPayrollFromData(params: {
         );
       });
       const studentLessonIds = new Set(studentLessons.map((l: any) => l.id));
+      const historyLessonDateMap = new Map<number, Date>(
+        historyData.lessons.map((l: any) => [l.id, new Date(l.startsAt)])
+      );
+      const studentRevisionStartsAt: Date[] = historyData.attendances
+        .filter((a: any) => a.studentId === sid && a.isRevisionVisitor)
+        .map((a: any) => historyLessonDateMap.get(a.lessonId))
+        .filter((d): d is Date => Boolean(d));
       const studentAtts = historyData.attendances.filter(
         (a: any) => a.studentId === sid && studentLessonIds.has(a.lessonId)
       );
@@ -1199,6 +1217,8 @@ export async function computeTeacherPayrollFromData(params: {
         creditResetOffset,
         postTransferStartAfter: latestTransferInTimeAtEnd ? new Date(latestTransferInTimeAtEnd) : null,
         payerHistory,
+        enrolledAt: enrollment?.enrolledAt,
+        revisionLessonStartsAt: studentRevisionStartsAt,
       });
       classifiedAtEnd.forEach((item) => {
         studentStatusAtEnd.set(`${sid}_${cid}_${item.lessonId}`, item);
@@ -1283,6 +1303,8 @@ export async function computeTeacherPayrollFromData(params: {
           creditResetOffset,
           postTransferStartAfter: latestTransferInTimeAtStart ? new Date(latestTransferInTimeAtStart) : null,
           payerHistory,
+          enrolledAt: enrollment?.enrolledAt,
+          revisionLessonStartsAt: studentRevisionStartsAt.filter((d) => d < startDate),
         });
         classifiedAtStart.forEach((item) => {
           studentStatusAtStart.set(`${sid}_${cid}_${item.lessonId}`, item);
@@ -1760,7 +1782,7 @@ export async function computeTeacherPayrollFromData(params: {
     });
 
     for (const pl of priorLessons) {
-      const plAttendances = historyData.attendances.filter((a) => a.lessonId === pl.id);
+      const plAttendances = historyData.attendances.filter((a) => a.lessonId === pl.id && !a.isRevisionVisitor);
       let eligiblePayingWeight = 0;
       let lateTuitionSettlementCount = 0;
       let resolvedAbsenceCount = 0;
@@ -1805,7 +1827,7 @@ export async function computeTeacherPayrollFromData(params: {
           let isEligible = isLateTuitionSettlement;
           if (isResolvedAbsence) {
             isEligible = historyData.attendances.some((a: any) => {
-              if (a.studentId !== att.studentId || a.status !== "PRESENT") return false;
+              if (a.studentId !== att.studentId || a.status !== "PRESENT" || a.isRevisionVisitor) return false;
               const l = historyData.lessons.find((les: any) => les.id === a.lessonId);
               if (!l) return false;
               const lDate = new Date(l.startsAt);

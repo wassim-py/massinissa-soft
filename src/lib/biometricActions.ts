@@ -768,6 +768,7 @@ export async function processBiometricScan(input: {
       prisma.attendance.findMany({
         where: {
           studentId: student.id,
+          isRevisionVisitor: false,
           lessonId: { in: classLessonIds.length > 0 ? classLessonIds : [-1] },
           lesson: {
             isFree: false,
@@ -813,7 +814,7 @@ export async function processBiometricScan(input: {
                 include: { refunds: true },
               },
               attendances: {
-                where: { lesson: { isFree: false } },
+                where: { isRevisionVisitor: false, lesson: { isFree: false } },
                 include: {
                   lesson: { select: { id: true, startsAt: true, isFree: true, classId: true } },
                 },
@@ -903,7 +904,9 @@ export async function processBiometricScan(input: {
     : "UNPAID";
 
   const tuitionVouchers = vouchers.filter(
-    (v) => v.paymentType !== "INSCRIPTION" && v.paymentType !== "BOOK" && (v.classId === classId || !v.classId)
+    (v) =>
+      (v.paymentType === "TUITION_4SESSION" || v.paymentType === "FORMATION") &&
+      (v.classId === classId || !v.classId)
   );
 
   // Exclude the current lesson from prior attendances so we know exact credits available for THIS lesson

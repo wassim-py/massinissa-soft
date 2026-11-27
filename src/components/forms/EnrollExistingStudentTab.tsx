@@ -24,6 +24,11 @@ interface CandidateStudent {
     transferableSessions: number;
     openEndedHeldSessions: number;
   } | null;
+  priorRevisionInfo?: {
+    revisionCount: number;
+    lastRevisionAt: string | null;
+    gapLessonsCount: number;
+  } | null;
 }
 
 interface EnrollExistingStudentTabProps {
@@ -261,7 +266,25 @@ export default function EnrollExistingStudentTab({
                             : `Solde transférable : ${student.transferableInfo!.transferableSessions} s. depuis ${student.transferableInfo!.fromClassName}`}
                         </Badge>
                       )}
+                      {Boolean(student.priorRevisionInfo && !student.isAlreadyEnrolled) && (
+                        <Badge variant="primary" size="sm" withDot className="bg-teal-100 text-teal-950 border-teal-300 font-semibold shadow-2xs">
+                          {locale === "ar"
+                            ? `حضر مراجعة سابقة في هذا الفوج (${student.priorRevisionInfo!.revisionCount})`
+                            : `A effectué une révision dans ce groupe (${student.priorRevisionInfo!.revisionCount})`}
+                        </Badge>
+                      )}
                     </div>
+                    {Boolean(student.priorRevisionInfo && !student.isAlreadyEnrolled) && (
+                      <div className="mt-1.5 px-2.5 py-1 rounded-lg bg-teal-50/90 border border-teal-200 text-[11px] font-medium text-teal-900">
+                        {student.priorRevisionInfo!.gapLessonsCount > 0
+                          ? locale === "ar"
+                            ? `✓ الحصص الفاصلة بين حصة المراجعة والتسجيل الرسمي (${student.priorRevisionInfo!.gapLessonsCount} حصة) معفاة تلقائياً ولن تُحتسب عليه.`
+                            : `✓ L'écart entre la séance de révision et l'inscription officielle (${student.priorRevisionInfo!.gapLessonsCount} séance(s)) ne sera pas facturé.`
+                          : locale === "ar"
+                          ? "✓ لن يتم احتساب أي حصص سابقة قبل تاريخ التسجيل الرسمي في الفوج."
+                          : "✓ Aucune séance antérieure à l'inscription officielle ne sera facturée."}
+                      </div>
+                    )}
                     <div className="flex flex-wrap items-center gap-2 text-xs text-muted mt-1">
                       {student.phone && (
                         <span className="font-mono text-[11px] text-gray-600">

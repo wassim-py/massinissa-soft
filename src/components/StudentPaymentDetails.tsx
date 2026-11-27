@@ -18,6 +18,7 @@ import {
   computeStudentSessionFee,
   computeStudentConsumedSessions,
   computeStudentCreditAndSessions,
+  computePostRevisionEnrollmentGapInfo,
   resolvePayerCredit,
   computeEnrollmentInscriptionStatus,
   isLessonApplicableToEnrollment,
@@ -689,6 +690,19 @@ export default function StudentPaymentDetails({
       ? Math.max(0, effectiveFormationLevelPrice - totalPaidFormation)
       : 0;
 
+    const allStudentAttsInClass = (student.attendances || []).filter((att: any) => {
+      if (!att.lesson || att.lesson.isFree) return false;
+      const isDirectClass = att.lesson.classId === c.id;
+      const isGroupLesson = att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id);
+      return isDirectClass || isGroupLesson;
+    });
+
+    const revisionGapInfo = computePostRevisionEnrollmentGapInfo({
+      lessons: (c as any).lessons || allStudentAttsInClass.map((a: any) => a.lesson).filter(Boolean),
+      attendances: allStudentAttsInClass,
+      enrolledAt: enr.enrolledAt,
+    });
+
     const creditMetrics = computeStudentCreditAndSessions({
       pricePerCycle: isFormation ? formationLevelPrice : Number(c?.pricePerCycle || 0),
       isFormation,
@@ -705,20 +719,13 @@ export default function StudentPaymentDetails({
       transfersIn: enr.transfersTo,
       transfersOut: enr.transfersFrom,
       creditResetOffset: (enr as any).creditResetOffset,
-      attendances: (student.attendances || []).filter(
-        (att: any) => {
-          if (!att.lesson || att.lesson.isFree) return false;
-          const isDirectClass = att.lesson.classId === c.id;
-          const isGroupLesson = att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id);
-          if (!isDirectClass && !isGroupLesson) return false;
-
-          if (!isLessonApplicableToEnrollment({ ...att.lesson, hasExplicitAttendance: att.status === "PRESENT", status: att.status }, c.id, { ...enr, student } as any)) {
-            return false;
-          }
-
-          return true;
+      attendances: allStudentAttsInClass.filter((att: any) => {
+        if (att.isRevisionVisitor) return true;
+        if (!isLessonApplicableToEnrollment({ ...att.lesson, hasExplicitAttendance: att.status === "PRESENT", status: att.status }, c.id, { ...enr, student } as any)) {
+          return false;
         }
-      ),
+        return true;
+      }),
       catchUps: classCatchUps,
       lessons: (c as any).lessons,
       enrolledAt: enr.enrolledAt,
@@ -858,6 +865,7 @@ export default function StudentPaymentDetails({
       transferredIn,
       transferredOut,
       attendedSessions,
+      revisionGapInfo,
       netSessions,
       unconsumedInCycle,
       netRefundableSessions,
@@ -1717,6 +1725,37 @@ export default function StudentPaymentDetails({
                           </span>
                         </div>
                       </div>
+
+                      {/* Post-Revision Official Enrollment Info Banner */}
+                      {cm.revisionGapInfo?.hasPriorRevisionInGroup && (
+                        <div className="mt-2.5 py-2 px-2.5 bg-teal-50/80 rounded-lg border border-teal-200 flex items-center justify-between gap-2 text-[11px] text-teal-950 font-medium flex-wrap">
+                          <span className="flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                            <span>
+                              {locale === "ar"
+                                ? `حضر سابقاً كزائر مراجعة (${cm.revisionGapInfo.priorRevisionCount} حصة مدفوعة مستقلة)${
+                                    cm.revisionGapInfo.enrolledAt
+                                      ? ` • مسجل رسمياً منذ ${formatPaymentDate(cm.revisionGapInfo.enrolledAt)}`
+                                      : ""
+                                  }`
+                                : `Ancien visiteur révision (${cm.revisionGapInfo.priorRevisionCount} séance payée séparément)${
+                                    cm.revisionGapInfo.enrolledAt
+                                      ? ` • Inscrit le ${formatPaymentDate(cm.revisionGapInfo.enrolledAt)}`
+                                      : ""
+                                  }`}
+                            </span>
+                          </span>
+                          <span className="text-[10px] font-bold text-teal-800 bg-teal-100/90 border border-teal-300 px-2 py-0.5 rounded">
+                            {cm.revisionGapInfo.gapLessonsCount > 0
+                              ? locale === "ar"
+                                ? `${cm.revisionGapInfo.gapLessonsCount} حصة فاصلة غير محتسبة`
+                                : `${cm.revisionGapInfo.gapLessonsCount} séance(s) d'écart non facturée(s)`
+                              : locale === "ar"
+                              ? "الفاصل قبل التسجيل غير محتسب"
+                              : "Écart non facturé"}
+                          </span>
+                        </div>
+                      )}
 
                       {/* Pricing / Owed Information row (§7.18) */}
                       <div className="mt-2.5 py-2 px-2.5 bg-surface-subtle rounded-lg border border-border/70 flex items-center justify-between gap-2 text-[11px] flex-wrap">

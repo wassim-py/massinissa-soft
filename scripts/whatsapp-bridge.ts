@@ -6,6 +6,7 @@
  * Listens on port 5001 for internal REST and SSE streams.
  */
 
+import "dotenv/config";
 import http from "http";
 import path from "path";
 import fs from "fs";
@@ -194,7 +195,7 @@ const server = http.createServer(async (req, res) => {
   const reqKey = req.headers["x-api-key"];
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
-  if (reqKey !== API_KEY && url.pathname !== "/api/session/qr-stream") {
+  if (reqKey !== API_KEY) {
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Unauthorized" }));
     return;

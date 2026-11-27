@@ -273,6 +273,7 @@ export default function WhatsAppSection() {
                     src={liveStatus.qr}
                     alt="WhatsApp QR Code"
                     fill
+                    unoptimized
                     className="rounded-lg object-contain"
                   />
                 </div>
@@ -280,9 +281,13 @@ export default function WhatsAppSection() {
                 <div className="w-56 h-56 flex flex-col items-center justify-center text-gray-400 bg-gray-50 rounded-lg">
                   <QrCode className="w-12 h-12 animate-pulse mb-2 text-gray-300" />
                   <span className="text-xs text-center px-4">
-                    {isAr
-                      ? "جارٍ توليد رمز QR من خادم واتساب..."
-                      : "Génération du QR Code en cours..."}
+                    {liveStatus?.bridgeOnline
+                      ? isAr
+                        ? "جارٍ توليد رمز QR من خادم واتساب..."
+                        : "Génération du QR Code en cours..."
+                      : isAr
+                      ? "جسر واتساب غير مشغّل على الحاسوب الرئيسي. شغّل INSTALLER_ET_DEMARRER_PONT_WA.bat أولاً."
+                      : "Pont WhatsApp hors ligne. Lancez INSTALLER_ET_DEMARRER_PONT_WA.bat sur le PC principal."}
                   </span>
                 </div>
               )}

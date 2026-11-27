@@ -14,6 +14,7 @@ import { formatAlgiersDate } from "@/lib/algiersDate";
 import { useTranslations, useLocale } from "next-intl";
 import { usePermission } from "@/hooks/usePermission";
 import { Badge } from "@/components/ui/Badge";
+import { CreditCard } from "lucide-react";
 
 type FullParticipant = WorkshopParticipant & {
   Student?: { name: string; phone: string | null } | null;
@@ -52,16 +53,18 @@ const WorkshopRoster = ({
   workshop,
   participants,
   canManageBranch = true,
+  canRecordPayment = true,
 }: {
   workshop: Workshop;
   participants: FullParticipant[];
   canManageBranch?: boolean;
+  canRecordPayment?: boolean;
 }) => {
   const t = useTranslations("workshops");
   const locale = useLocale();
   const { can, isLoaded } = usePermission();
-  const canEditRoster = (!isLoaded || can("update", "workshops")) && canManageBranch;
-  const canAddOrPay = !isLoaded || can("create", "workshops");
+  const canEditRoster = (canRecordPayment || !isLoaded || can("update", "workshops")) && canManageBranch;
+  const canAddOrPay = canRecordPayment || !isLoaded || can("create", "workshops");
 
   const [isParticipantModalOpen, setIsParticipantModalOpen] = useState(false);
   const [participantModalData, setParticipantModalData] = useState<{
@@ -238,8 +241,21 @@ const WorkshopRoster = ({
                           <Badge variant="success" size="sm">
                             {t("paidInFull")}
                           </Badge>
+                        ) : netPaid > 0 ? (
+                          <div className="flex flex-col items-start gap-0.5">
+                            <Badge variant="warning" size="sm">
+                              {locale === "ar"
+                                ? `دفع جزئي — المتبقي: ${amountOwed.toLocaleString("ar-DZ")} دج`
+                                : `Partiel — Reste : ${amountOwed.toLocaleString("fr-DZ")} DZD`}
+                            </Badge>
+                            <span className="text-[11px] text-gray-500 font-medium">
+                              {locale === "ar"
+                                ? `مدفوع: ${netPaid.toLocaleString("ar-DZ")} دج`
+                                : `Payé : ${netPaid.toLocaleString("fr-DZ")} DZD`}
+                            </span>
+                          </div>
                         ) : (
-                          <Badge variant="warning" size="sm">
+                          <Badge variant="danger" size="sm">
                             {t("remainingBalance", {
                               amount: amountOwed.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ"),
                             })}
@@ -250,20 +266,29 @@ const WorkshopRoster = ({
                       {/* Actions Column */}
                       <td className="p-3 text-end whitespace-nowrap">
                         <div className="flex items-center justify-end gap-2">
+                          {canAddOrPay && !isPaidInFull && !isRefundedStatus && (
+                            <button
+                              type="button"
+                              onClick={() => openPaymentModal("create", participant)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-primary text-white rounded-full hover:bg-primary/90 shadow-2xs transition-colors cursor-pointer"
+                            >
+                              <CreditCard className="w-3.5 h-3.5" />
+                              <span>
+                                {netPaid > 0
+                                  ? locale === "ar"
+                                    ? "تسديد المتبقي"
+                                    : "Régler le reste"
+                                  : t("recordPayment")}
+                              </span>
+                            </button>
+                          )}
                           <button
+                            type="button"
                             onClick={() => toggleHistory(participant.id)}
-                            className="px-3 py-1 text-xs font-semibold bg-gray-200 text-gray-800 rounded-full hover:bg-gray-300"
+                            className="px-3 py-1 text-xs font-semibold bg-gray-200 text-gray-800 rounded-full hover:bg-gray-300 cursor-pointer"
                           >
                             {isHistoryVisible ? t("hideHistory") : t("showHistory")}
                           </button>
-                          {canAddOrPay && !isPaidInFull && (
-                            <button
-                              onClick={() => openPaymentModal("create", participant)}
-                              className="px-3 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full hover:bg-blue-200"
-                            >
-                              {t("recordPayment")}
-                            </button>
-                          )}
                           {canEditRoster && (
                             <>
                               <button

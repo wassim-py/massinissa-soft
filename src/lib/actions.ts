@@ -2996,6 +2996,7 @@ export const saveAttendance = async (
           prisma.attendance.findMany({
             where: {
               studentId: { in: absentStudentIds },
+              isRevisionVisitor: false,
               lesson: { classId: lessonInfo.classId },
             },
             select: { studentId: true, lessonId: true, status: true },
@@ -3285,6 +3286,7 @@ export const autoSaveLessonAttendanceAction = async (lessonId: number): Promise<
           prisma.attendance.findMany({
             where: {
               studentId: { in: absentStudentIds },
+              isRevisionVisitor: false,
               lesson: { classId: lessonInfo.classId },
             },
             select: { studentId: true, lessonId: true, status: true },
@@ -3647,6 +3649,7 @@ export const markSingleAttendanceAction = async (input: {
             prisma.attendance.findMany({
               where: {
                 studentId: input.studentId,
+                isRevisionVisitor: false,
                 lesson: { classId: lessonInfo.classId },
               },
               select: { lessonId: true, status: true },
@@ -3699,6 +3702,7 @@ export const markSingleAttendanceAction = async (input: {
             prisma.attendance.findMany({
               where: {
                 studentId: input.studentId,
+                isRevisionVisitor: false,
                 lesson: { classId: lessonInfo.classId },
               },
               select: { lessonId: true, status: true },
@@ -4185,6 +4189,7 @@ export async function searchCatchUpCandidatesAction(
           },
           select: {
             status: true,
+            enrolledAt: true,
             payerStatus: true,
             discountType: true,
             discountValue: true,
@@ -4353,10 +4358,13 @@ export async function searchCatchUpCandidatesAction(
         const siblingDiscountPct = isPayerInClass ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
         const isSiblingWaived100 = isPayerInClass && siblingDiscountPct >= 100;
         const vTuition = (s.vouchers || []).filter(
-          (v: any) => v.classId === cls.id || !v.classId
+          (v: any) =>
+            (v.paymentType === "TUITION_4SESSION" || v.paymentType === "FORMATION" || !v.paymentType) &&
+            (v.classId === cls.id || !v.classId)
         );
         const vAtts = (s.attendances || []).filter(
           (a: any) =>
+            !a.isRevisionVisitor &&
             (a.lesson.class.id === cls.id ||
               a.lesson.lessonGroups?.some((lg: any) => lg.classId === cls.id)) &&
             isLessonApplicableToEnrollment(
@@ -4448,7 +4456,22 @@ export async function searchCatchUpCandidatesAction(
 
       (s.enrollments || []).forEach((enr) => {
         const cls = enr.class;
+        const enrThresholdMs = enr.enrolledAt
+          ? new Date(enr.enrolledAt).getTime() - 2 * 60 * 60 * 1000
+          : null;
+        const hasPriorRevInCls =
+          enrThresholdMs !== null &&
+          (s.attendances || []).some(
+            (a: any) =>
+              a.isRevisionVisitor &&
+              (a.lesson.class.id === cls.id ||
+                a.lesson.lessonGroups?.some((lg: any) => lg.classId === cls.id)) &&
+              new Date(a.lesson.startsAt).getTime() < enrThresholdMs
+          );
         (cls.lessons || []).forEach((l) => {
+          if (hasPriorRevInCls && enrThresholdMs !== null && new Date(l.startsAt).getTime() < enrThresholdMs) {
+            return;
+          }
           if (
             l.id !== currentLessonId &&
             !alreadyCaughtUpLessonIds.has(l.id) &&
@@ -5562,6 +5585,11 @@ export async function searchStudentsForEnrollmentAction({
       transferableSessions: number;
       openEndedHeldSessions: number;
     } | null;
+    priorRevisionInfo?: {
+      revisionCount: number;
+      lastRevisionAt: string | null;
+      gapLessonsCount: number;
+    } | null;
   }>;
   message?: string;
 }> {
@@ -5571,10 +5599,21 @@ export async function searchStudentsForEnrollmentAction({
       return { success: true, candidates: [] };
     }
 
-    const targetClass = await prisma.class.findUnique({
-      where: { id: classId },
-      select: { id: true, levelId: true, formationLevelId: true, isFormation: true },
-    });
+    const [targetClass, targetClassLessons] = await Promise.all([
+      prisma.class.findUnique({
+        where: { id: classId },
+        select: { id: true, levelId: true, formationLevelId: true, isFormation: true },
+      }),
+      prisma.lesson.findMany({
+        where: {
+          OR: [{ classId }, { lessonGroups: { some: { classId } } }],
+          isFree: false,
+          isTeacherAbsent: false,
+        },
+        select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+        orderBy: { startsAt: "asc" },
+      }),
+    ]);
 
     const isNumeric = !isNaN(Number(trimmed));
 
@@ -5606,6 +5645,7 @@ export async function searchStudentsForEnrollmentAction({
           select: {
             lessonId: true,
             status: true,
+            isRevisionVisitor: true,
             lesson: {
               select: {
                 id: true,
@@ -5613,6 +5653,7 @@ export async function searchStudentsForEnrollmentAction({
                 isFree: true,
                 isTeacherAbsent: true,
                 classId: true,
+                lessonGroups: { select: { classId: true } },
               },
             },
           },
@@ -5689,7 +5730,9 @@ export async function searchStudentsForEnrollmentAction({
           const siblingDiscountPct = isPayerInClass ? Number((s.family as any)?.discountPercentage ?? 50) : 0;
           const isSiblingWaived100 = isPayerInClass && siblingDiscountPct >= 100;
           const vTuition = (s.vouchers || []).filter((v: any) => v.classId === cls.id || !v.classId);
-          const vAtts = (s.attendances || []).filter((a: any) => a.lesson.classId === cls.id);
+          const vAtts = (s.attendances || []).filter(
+            (a: any) => !a.isRevisionVisitor && a.lesson.classId === cls.id
+          );
           const vCatchUps = (s.catchUpAttendances || []).filter(
             (cu: any) => cu.missedLesson?.classId === cls.id
           );
@@ -5738,6 +5781,40 @@ export async function searchStudentsForEnrollmentAction({
         }
       }
 
+      const targetClassAtts = (s.attendances || []).filter(
+        (a: any) =>
+          a.lesson.classId === classId ||
+          a.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)
+      );
+      const targetClassRevisions = targetClassAtts.filter((a: any) => a.isRevisionVisitor);
+      let priorRevisionInfo: {
+        revisionCount: number;
+        lastRevisionAt: string | null;
+        gapLessonsCount: number;
+      } | null = null;
+
+      if (targetClassRevisions.length > 0) {
+        const revTimes = targetClassRevisions
+          .map((r: any) => new Date(r.lesson.startsAt).getTime())
+          .filter((ms: number) => !isNaN(ms))
+          .sort((a: number, b: number) => a - b);
+        const earliestRevMs = revTimes[0];
+        const latestRevMs = revTimes[revTimes.length - 1];
+        const nowThresholdMs = Date.now() - 2 * 60 * 60 * 1000;
+        const revLessonIdSet = new Set(targetClassRevisions.map((r: any) => r.lessonId));
+        const gapCount = (targetClassLessons || []).filter((l) => {
+          if (revLessonIdSet.has(l.id)) return false;
+          const ms = new Date(l.startsAt).getTime();
+          return !isNaN(ms) && ms > earliestRevMs && ms < nowThresholdMs;
+        }).length;
+
+        priorRevisionInfo = {
+          revisionCount: targetClassRevisions.length,
+          lastRevisionAt: latestRevMs ? new Date(latestRevMs).toISOString() : null,
+          gapLessonsCount: gapCount,
+        };
+      }
+
       return {
         id: s.id,
         globalNumber: s.globalNumber,
@@ -5749,6 +5826,7 @@ export async function searchStudentsForEnrollmentAction({
           (e) => e.class.id === classId && (e.status === "ACTIVE" || e.status === "SUSPENDED")
         ),
         transferableInfo: bestTransfer,
+        priorRevisionInfo,
       };
     });
 
@@ -6545,15 +6623,15 @@ export async function issueMultiItemVoucherAction(payload: MultiItemVoucherPaylo
               isPartial = true;
               remainingBalanceVal = remaining;
             }
-            const activePartial = prevVouchers.find(
-              (v) => v.isPartial && Number(v.remainingBalance || 0) > 0
+            const prevPartials = prevVouchers.filter(
+              (v) => v.isPartial && Number(v.remainingBalance || 0) > 0 && v.status !== "PARTIALLY_REFUNDED"
             );
-            if (activePartial) {
-              completesVoucherIdVal = activePartial.id;
-              await tx.voucher.update({
-                where: { id: activePartial.id },
+            if (prevPartials.length > 0) {
+              completesVoucherIdVal = prevPartials[prevPartials.length - 1].id;
+              await tx.voucher.updateMany({
+                where: { id: { in: prevPartials.map((v) => v.id) } },
                 data: {
-                  remainingBalance: remaining > 0 ? new Prisma.Decimal(remaining) : new Prisma.Decimal(0),
+                  remainingBalance: remaining > 0 ? new Prisma.Decimal(remaining) : null,
                   isPartial: remaining > 0,
                 },
               });
@@ -8355,6 +8433,7 @@ export const transferEnrollmentCredit = async (
       const fromAttendances = await tx.attendance.findMany({
         where: {
           studentId: studentId,
+          isRevisionVisitor: false,
           lessonId: { in: fromLessonIds.length > 0 ? fromLessonIds : [-1] },
         },
         select: {
@@ -8801,6 +8880,7 @@ export const cancelEnrollmentTransfer = async (transferId: number) => {
         const targetAttendances = await tx.attendance.findMany({
           where: {
             studentId,
+            isRevisionVisitor: false,
             lessonId: { in: targetLessonIds.length > 0 ? targetLessonIds : [-1] },
           },
           select: { lessonId: true, status: true },
@@ -9085,6 +9165,7 @@ export const createRefund = async (
         prisma.attendance.findMany({
           where: {
             studentId: student.id,
+            isRevisionVisitor: false,
             lesson: { classId: destClassId },
           },
           select: { lessonId: true, status: true },
@@ -9124,6 +9205,7 @@ export const createRefund = async (
         referenceDate: new Date(),
         creditResetOffset: offsetDest,
         postTransferStartAfter: latestInDest ? new Date(latestInDest) : null,
+        enrolledAt: transfer.toEnrollment.enrolledAt,
       });
 
       const trailingHeldLessonIds = classifiedHistory.filter((h) => h.isHeld).map((h) => h.lessonId);
@@ -9430,6 +9512,7 @@ export const createRefund = async (
         prisma.attendance.findMany({
           where: {
             studentId: voucher.studentId,
+            isRevisionVisitor: false,
             ...(voucher.classId ? { lesson: { classId: voucher.classId } } : {}),
           },
           select: { lessonId: true, status: true },
@@ -9545,6 +9628,7 @@ export const createRefund = async (
         prisma.attendance.findMany({
           where: {
             studentId: voucher.studentId,
+            isRevisionVisitor: false,
             lesson: { classId: voucher.classId },
           },
           select: { lessonId: true, status: true },
@@ -9604,6 +9688,7 @@ export const createRefund = async (
         creditResetOffset: offset,
         postTransferStartAfter: latestIn ? new Date(latestIn) : null,
         payerHistory: (enrollment as any)?.payerHistory,
+        enrolledAt: enrollment?.enrolledAt,
       });
 
       trailingHeldLessonIds = classifiedHistory.filter((h) => h.isHeld).map((h) => h.lessonId);
@@ -10812,12 +10897,23 @@ async function executeWorkshopPaymentTx(
       isVoided: false,
       status: "ACTIVE",
     },
+    include: {
+      series: {
+        include: {
+          issuingBranch: { select: { id: true, name: true } },
+          targetBranch: { select: { id: true, name: true } },
+        },
+      },
+    },
   });
 
   if (isPaidInFull && priorPartialVouchers.length > 0) {
     await tx.voucher.updateMany({
-      where: { id: { in: priorPartialVouchers.map((v) => v.id) } },
-      data: { isPartial: false, remainingBalance: new Prisma.Decimal(0) },
+      where: {
+        id: { in: priorPartialVouchers.map((v) => v.id) },
+        status: { not: "PARTIALLY_REFUNDED" },
+      },
+      data: { isPartial: false, remainingBalance: null },
     });
   }
 
@@ -10901,6 +10997,7 @@ export const addWorkshopPayment = async (
       success: true,
       error: false,
       message: `تم إصدار الوصل رقم #${createdVoucher?.number} وتسجيل الدفع بنجاح. / Reçu #${createdVoucher?.number} émis avec succès.`,
+      voucher: createdVoucher ? serializeForClient(createdVoucher) : null,
     };
   } catch (err: any) {
     console.error("addWorkshopPayment error:", err);
@@ -11352,7 +11449,9 @@ export const exportToExcel = async (
             
             const studentAtts: Array<{ lessonId: number; status: string }> = [];
             classTarget.lessons.forEach(l => {
-              const att = l.attendances.find(a => a.studentId === student.id);
+              const att = l.attendances.find(
+                (a: any) => a.studentId === student.id && !a.isRevisionVisitor
+              );
               const hasExplicitAttendance = att?.status === "PRESENT";
               if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance, status: att?.status } as any, classTarget.id, enrollment as any)) {
                 return;
@@ -11836,7 +11935,9 @@ export const exportToExcel = async (
 
             const studentAtts: Array<{ lessonId: number; status: string }> = [];
             classData.lessons.forEach((l) => {
-                const att = l.attendances.find((a: any) => a.studentId === student.id);
+                const att = l.attendances.find(
+                    (a: any) => a.studentId === student.id && !a.isRevisionVisitor
+                );
                 const hasExplicitAttendance = att?.status === "PRESENT";
                 if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance, status: att?.status } as any, classData.id, enrollment as any)) {
                     return;
@@ -11936,10 +12037,51 @@ export const exportToExcel = async (
 
             // 4. Session Attendance Cells
             let nonFreeIndex = 0;
+            const enrThresholdMs = enrollment.enrolledAt
+                ? new Date(enrollment.enrolledAt).getTime() - 2 * 60 * 60 * 1000
+                : null;
+            const studentRevisionTimes = classData.lessons
+                .filter((l: any) =>
+                    l.attendances.some(
+                        (a: any) => a.studentId === student.id && a.isRevisionVisitor
+                    )
+                )
+                .map((l: any) => new Date(l.startsAt).getTime())
+                .filter((ms: number) => !isNaN(ms) && (enrThresholdMs === null || ms < enrThresholdMs));
+            const earliestRevMs =
+                studentRevisionTimes.length > 0 ? Math.min(...studentRevisionTimes) : null;
+
             classData.lessons.forEach((lesson) => {
                 const cellLesson = attendanceSheet.getCell(currentRowIdx, curCol++);
                 const att = lesson.attendances.find((a: any) => a.studentId === student.id);
                 const hasCatchUp = classCatchUps.some((cu: any) => cu.missedLessonId === lesson.id);
+                const lessonMs = new Date(lesson.startsAt).getTime();
+
+                if (att?.isRevisionVisitor) {
+                    cellLesson.value = 'مراجعة';
+                    cellLesson.font = { name: 'Calibri', size: 8.5, bold: true, color: { argb: 'FF0F766E' } };
+                    cellLesson.alignment = { vertical: 'middle', horizontal: 'center' };
+                    cellLesson.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCFBF1' } };
+                    cellLesson.border = thinBorder;
+                    return;
+                }
+
+                const isInRevisionGap =
+                    earliestRevMs !== null &&
+                    enrThresholdMs !== null &&
+                    lessonMs > earliestRevMs &&
+                    lessonMs < enrThresholdMs &&
+                    att?.status !== 'PRESENT' &&
+                    !hasCatchUp;
+
+                if (isInRevisionGap) {
+                    cellLesson.value = '—';
+                    cellLesson.font = { name: 'Calibri', size: 10, bold: false, color: { argb: 'FF888888' } };
+                    cellLesson.alignment = { vertical: 'middle', horizontal: 'center' };
+                    cellLesson.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+                    cellLesson.border = thinBorder;
+                    return;
+                }
 
                 let mark = '-';
                 if (att) {
@@ -15814,9 +15956,9 @@ export async function unsuspendEnrollmentWithDebtClearance(
     const transferredOut = enrollment.transfersFrom.reduce((sum: number, t: any) => sum + t.transferredSessions, 0);
     const transferredIn = enrollment.transfersTo.reduce((sum: number, t: any) => sum + t.transferredSessions, 0);
 
-    // Attendances strictly prior to return date and not excluded
+    // Attendances strictly prior to return date and not excluded (excluding one-time revision visits)
     const priorAtts = (student.attendances || []).filter((att: any) => {
-      if (!att.lesson || att.lesson.classId !== c.id || att.lesson.isFree) return false;
+      if (!att.lesson || att.lesson.classId !== c.id || att.lesson.isFree || att.isRevisionVisitor) return false;
       if ((params.excludeLessonIds || []).includes(att.lesson.id)) return false;
       const lDayStr = new Intl.DateTimeFormat("en-CA", {
         timeZone: "Africa/Algiers",
@@ -15847,6 +15989,7 @@ export async function unsuspendEnrollmentWithDebtClearance(
         catchUpLessonId: cu.catchUpLessonId,
       })),
       payerHistory: (enrollment as any).payerHistory,
+      enrolledAt: enrollment.enrolledAt,
     });
 
     const currentOffset = enrollment.creditResetOffset || 0;
@@ -16558,7 +16701,7 @@ export async function getBiometricScansLiveBillingAction(
             : null;
 
         const filteredAttendances = (student.attendances || []).filter((att: any) => {
-          if (!att.lesson || att.lesson.isFree) return false;
+          if (!att.lesson || att.lesson.isFree || att.isRevisionVisitor) return false;
           const isDirectClass = Number(att.lesson.classId) === Number(resolvedClassId);
           const isGroupLesson = att.lesson.lessonGroups?.some(
             (lg: any) => Number(lg.classId) === Number(resolvedClassId)

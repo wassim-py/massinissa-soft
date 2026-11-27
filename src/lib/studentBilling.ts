@@ -624,12 +624,118 @@ export type AttendanceClassification =
   | "NOT_DEFINED"
   | "CAUGHT_UP_ABSENCE"
   | "PRE_START_ABSENCE"
+  | "REVISION_VISITOR"
   | "INTERLEAVED_ABSENCE"
   | "TRAILING_ABSENCE_HELD"
   | "FORFEITED_DROPOUT"
   | "TEACHER_ABSENT"
   | "SUSPENDED_ABSENCE"
   | "NON_PAYER_EXEMPT";
+
+export interface PostRevisionEnrollmentGapInfo {
+  hasPriorRevisionInGroup: boolean;
+  priorRevisionCount: number;
+  earliestRevisionAt: string | null;
+  latestRevisionAt: string | null;
+  enrolledAt: string | null;
+  gapLessonIds: number[];
+  gapLessonsCount: number;
+}
+
+/**
+ * Computes metadata about a student's prior revision visit(s) in a group and the
+ * non-billable gap lessons between their earliest revision visit and official enrollment.
+ */
+export function computePostRevisionEnrollmentGapInfo({
+  lessons = [],
+  attendances = [],
+  enrolledAt = null,
+}: {
+  lessons?: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
+  attendances?: Array<{
+    lessonId: number;
+    status?: string | null;
+    isRevisionVisitor?: boolean | null;
+    date?: Date | string | null;
+    lesson?: { id?: number; startsAt?: Date | string | null; isFree?: boolean } | null;
+  }>;
+  enrolledAt?: Date | string | null;
+}): PostRevisionEnrollmentGapInfo {
+  const lessonTimeById = new Map<number, number>();
+  for (const l of lessons || []) {
+    const ms = new Date(l.startsAt).getTime();
+    if (!isNaN(ms)) {
+      lessonTimeById.set(l.id, ms);
+    }
+  }
+
+  const revisionLessonIds = new Set<number>();
+  const regularPresentLessonIds = new Set<number>();
+  const revisionTimes: number[] = [];
+
+  for (const a of attendances || []) {
+    const lid = Number(a.lessonId ?? a.lesson?.id);
+    if (a.isRevisionVisitor) {
+      if (!isNaN(lid)) revisionLessonIds.add(lid);
+      const rawDate = a.lesson?.startsAt ?? a.date ?? (lid ? lessonTimeById.get(lid) : undefined);
+      if (rawDate !== undefined && rawDate !== null) {
+        const ms = new Date(rawDate).getTime();
+        if (!isNaN(ms)) revisionTimes.push(ms);
+      }
+    } else if (a.status === "PRESENT" && !isNaN(lid)) {
+      regularPresentLessonIds.add(lid);
+    }
+  }
+
+  revisionTimes.sort((a, b) => a - b);
+  const enrolledMs = enrolledAt ? new Date(enrolledAt).getTime() : NaN;
+  const hasValidEnrolled = !isNaN(enrolledMs);
+  // 2-hour grace margin for same-day desk enrollment during an ongoing lesson
+  const enrolledThresholdMs = hasValidEnrolled ? enrolledMs - 2 * 60 * 60 * 1000 : NaN;
+
+  const priorRevisions = hasValidEnrolled
+    ? revisionTimes.filter((ms) => ms < enrolledThresholdMs)
+    : revisionTimes;
+
+  if (priorRevisions.length === 0) {
+    return {
+      hasPriorRevisionInGroup: revisionTimes.length > 0,
+      priorRevisionCount: revisionTimes.length,
+      earliestRevisionAt: revisionTimes.length > 0 ? new Date(revisionTimes[0]).toISOString() : null,
+      latestRevisionAt:
+        revisionTimes.length > 0 ? new Date(revisionTimes[revisionTimes.length - 1]).toISOString() : null,
+      enrolledAt: hasValidEnrolled ? new Date(enrolledMs).toISOString() : null,
+      gapLessonIds: [],
+      gapLessonsCount: 0,
+    };
+  }
+
+  const earliestRevisionMs = priorRevisions[0];
+  const latestRevisionMs = priorRevisions[priorRevisions.length - 1];
+  const gapLessonIds: number[] = [];
+
+  if (hasValidEnrolled) {
+    for (const l of lessons || []) {
+      if (l.isFree || l.isTeacherAbsent) continue;
+      if (revisionLessonIds.has(l.id) || regularPresentLessonIds.has(l.id)) continue;
+      const ms = new Date(l.startsAt).getTime();
+      if (isNaN(ms)) continue;
+      if (ms > earliestRevisionMs && ms < enrolledThresholdMs) {
+        gapLessonIds.push(l.id);
+      }
+    }
+  }
+
+  return {
+    hasPriorRevisionInGroup: true,
+    priorRevisionCount: revisionTimes.length,
+    earliestRevisionAt: new Date(earliestRevisionMs).toISOString(),
+    latestRevisionAt: new Date(latestRevisionMs).toISOString(),
+    enrolledAt: hasValidEnrolled ? new Date(enrolledMs).toISOString() : null,
+    gapLessonIds,
+    gapLessonsCount: gapLessonIds.length,
+  };
+}
 
 export interface StudentAttendanceHistoryItem {
   lessonId: number;
@@ -665,9 +771,11 @@ export function classifyStudentAttendanceHistory({
   creditResetOffset = 0,
   postTransferStartAfter = null,
   payerHistory = null,
+  enrolledAt = null,
+  revisionLessonStartsAt = null,
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
-  attendances: Array<{ lessonId: number; status: string }>;
+  attendances: Array<{ lessonId: number; status: string; isRevisionVisitor?: boolean | null }>;
   catchUps?: Array<{
     missedLessonId: number;
     catchUpLessonId?: number;
@@ -679,14 +787,58 @@ export function classifyStudentAttendanceHistory({
   creditResetOffset?: number;
   postTransferStartAfter?: Date | string | null;
   payerHistory?: EnrollmentPayerHistoryEntry[] | null;
+  enrolledAt?: Date | string | null;
+  revisionLessonStartsAt?: Array<Date | string | number> | null;
 }): StudentAttendanceHistoryItem[] {
   // Sort lessons chronologically
   const sortedLessons = [...lessons]
     .filter((l) => !l.isFree)
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
+  const revisionVisitorLessonIds = new Set<number>();
   const attendanceMap = new Map<number, string>();
-  attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
+  attendances.forEach((a) => {
+    if (a.isRevisionVisitor) {
+      revisionVisitorLessonIds.add(a.lessonId);
+    } else {
+      attendanceMap.set(a.lessonId, a.status);
+    }
+  });
+
+  // Collect timestamps of any prior revision visits so lessons in the gap between
+  // a revision visit and official enrollment (`enrolledAt`) never charge the student.
+  const enrolledThresholdMs =
+    enrolledAt && !isNaN(new Date(enrolledAt).getTime())
+      ? new Date(enrolledAt).getTime() - 2 * 60 * 60 * 1000
+      : null;
+
+  const allRevisionMs: number[] = [];
+  if (revisionVisitorLessonIds.size > 0) {
+    sortedLessons.forEach((l) => {
+      if (revisionVisitorLessonIds.has(l.id)) {
+        const ms = new Date(l.startsAt).getTime();
+        if (!isNaN(ms)) allRevisionMs.push(ms);
+      }
+    });
+  }
+  if (Array.isArray(revisionLessonStartsAt)) {
+    revisionLessonStartsAt.forEach((d) => {
+      const ms = typeof d === "number" ? d : new Date(d).getTime();
+      if (!isNaN(ms)) allRevisionMs.push(ms);
+    });
+  }
+  const preEnrollmentRevisions =
+    enrolledThresholdMs !== null
+      ? allRevisionMs.filter((ms) => ms < enrolledThresholdMs)
+      : [];
+  const earliestPreEnrollmentRevisionMs =
+    preEnrollmentRevisions.length > 0 ? Math.min(...preEnrollmentRevisions) : null;
+
+  const isLessonInRevisionEnrollmentGap = (lessonMs: number): boolean =>
+    earliestPreEnrollmentRevisionMs !== null &&
+    enrolledThresholdMs !== null &&
+    lessonMs >= earliestPreEnrollmentRevisionMs &&
+    lessonMs < enrolledThresholdMs;
 
   const catchUpSet = new Set<number>();
   const transferCatchUpSet = new Set<number>();
@@ -714,9 +866,9 @@ export function classifyStudentAttendanceHistory({
     ? new Date(postTransferStartAfter).getTime() - 2 * 60 * 60 * 1000
     : null;
 
-  // Determine presence at each lesson (teacher absent lessons are never treated as student presence or normal sessions)
+  // Determine presence at each lesson (teacher absent lessons and revision visitor lessons are never treated as cycle-starting or cycle-consuming presence)
   const presenceArray: boolean[] = sortedLessons.map((l) => {
-    if (l.isTeacherAbsent) return false;
+    if (l.isTeacherAbsent || revisionVisitorLessonIds.has(l.id)) return false;
     const rawStatus = attendanceMap.get(l.id);
     const hasCatchUp = catchUpSet.has(l.id);
     return rawStatus === "PRESENT" || hasCatchUp;
@@ -809,6 +961,23 @@ export function classifyStudentAttendanceHistory({
         status: (rawStatus as any) || "ABSENT",
         isCatchUp: false,
         classification: "TEACHER_ABSENT",
+        isConsumedCredit: false,
+        isTeacherPayable: false,
+        isRefundable: false,
+        isHeld: false,
+      });
+      continue;
+    }
+
+    // Rule: Revision visitor attendance was already settled via its dedicated REVISION_SESSION voucher.
+    // It never consumes cycle credit and never triggers subsequent absence deductions.
+    if (revisionVisitorLessonIds.has(lesson.id)) {
+      history.push({
+        lessonId: lesson.id,
+        startsAt,
+        status: "PRESENT",
+        isCatchUp: false,
+        classification: "REVISION_VISITOR",
         isConsumedCredit: false,
         isTeacherPayable: false,
         isRefundable: false,
@@ -966,6 +1135,23 @@ export function classifyStudentAttendanceHistory({
     }
 
     // Otherwise, rawStatus === "ABSENT"
+    // 0. Lessons in the gap between a student's revision attendance and their real enrollment
+    //    never charge the student (0 credit consumed, 0 teacher pay).
+    if (isLessonInRevisionEnrollmentGap(startsAt.getTime())) {
+      history.push({
+        lessonId: lesson.id,
+        startsAt,
+        status: "ABSENT",
+        isCatchUp: false,
+        classification: "PRE_START_ABSENCE",
+        isConsumedCredit: false,
+        isTeacherPayable: false,
+        isRefundable: true,
+        isHeld: false,
+      });
+      continue;
+    }
+
     // 1. Check if this absence is before student's very first presence in this group
     //    (UNLESS the student transferred into this group and the lesson is on/after the transfer timestamp)
     const isPostTransferLesson =
@@ -1068,9 +1254,10 @@ export function computeStudentConsumedSessions({
   attendances,
   catchUps = [],
   payerHistory = null,
+  enrolledAt = null,
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean }>;
-  attendances: Array<{ lessonId: number; status: string }>;
+  attendances: Array<{ lessonId: number; status: string; isRevisionVisitor?: boolean | null }>;
   catchUps?: Array<{
     missedLessonId: number;
     catchUpLessonId?: number;
@@ -1079,8 +1266,10 @@ export function computeStudentConsumedSessions({
     isTransferCatchUp?: boolean;
   }>;
   payerHistory?: EnrollmentPayerHistoryEntry[] | null;
+  enrolledAt?: Date | string | null;
 }): number {
-  if (!lessons || lessons.length === 0 || !attendances || attendances.length === 0) {
+  const nonRevisionAttendances = (attendances || []).filter((a) => !a.isRevisionVisitor);
+  if (!lessons || lessons.length === 0 || nonRevisionAttendances.length === 0) {
     const validCatchUps = (catchUps || []).filter(
       (c: any) => !c.isTransferCatchUp && c.recordedBy !== "transfer"
     );
@@ -1091,6 +1280,7 @@ export function computeStudentConsumedSessions({
     attendances,
     catchUps,
     payerHistory,
+    enrolledAt,
   });
   const accountedCatchUps = new Set(history.filter((h) => h.isCatchUp).map((h) => h.lessonId));
   const lessonIds = new Set(lessons.map((l) => l.id));
@@ -1189,7 +1379,7 @@ export function computeStudentConsecutiveAbsences({
   enrolledAt,
 }: {
   lessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
-  attendances: Array<{ lessonId: number; status: string }>;
+  attendances: Array<{ lessonId: number; status: string; isRevisionVisitor?: boolean | null }>;
   catchUps?: Array<{ missedLessonId: number }>;
   hasPaidCycle?: boolean;
   enrolledAt?: Date | string | null;
@@ -1201,13 +1391,32 @@ export function computeStudentConsecutiveAbsences({
     .filter((l) => !l.isFree && !l.isTeacherAbsent)
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
+  const revisionLessonIds = new Set<number>();
   const attendanceMap = new Map<number, string>();
-  (attendances || []).forEach((a) => attendanceMap.set(a.lessonId, a.status));
+  (attendances || []).forEach((a) => {
+    if (a.isRevisionVisitor) {
+      revisionLessonIds.add(a.lessonId);
+    } else {
+      attendanceMap.set(a.lessonId, a.status);
+    }
+  });
   const catchUpSet = new Set<number>();
   (catchUps || []).forEach((c) => catchUpSet.add(c.missedLessonId));
 
-  // Determine if the student has started attending in this group (at least one PRESENT or CatchUp)
+  // If the student attended a revision before enrolling, never count gap lessons prior to enrolledAt
+  const enrolledTimeMs = enrolledAt
+    ? new Date(enrolledAt).getTime() - 2 * 60 * 60 * 1000
+    : 0;
+  const hasPriorRevision =
+    enrolledTimeMs > 0 &&
+    sortedLessons.some(
+      (l) => revisionLessonIds.has(l.id) && new Date(l.startsAt).getTime() < enrolledTimeMs
+    );
+
+  // Determine if the student has started attending as an enrolled student in this group
   const hasStarted = sortedLessons.some((l) => {
+    if (revisionLessonIds.has(l.id)) return false;
+    if (hasPriorRevision && new Date(l.startsAt).getTime() < enrolledTimeMs) return false;
     const status = attendanceMap.get(l.id);
     return status === "PRESENT" || catchUpSet.has(l.id);
   });
@@ -1220,16 +1429,13 @@ export function computeStudentConsecutiveAbsences({
       return 0;
     }
 
-    const enrolledTimeMs = enrolledAt
-      ? new Date(enrolledAt).getTime() - 2 * 60 * 60 * 1000 // 2-hour grace margin for same-day registrations
-      : 0;
-
     let consecutiveAbsences = 0;
     for (let i = sortedLessons.length - 1; i >= 0; i--) {
       const l = sortedLessons[i];
       if (enrolledTimeMs > 0 && new Date(l.startsAt).getTime() < enrolledTimeMs) {
         break; // Stop at lessons held prior to student's enrollment
       }
+      if (revisionLessonIds.has(l.id)) continue;
       const status = attendanceMap.get(l.id);
       if (status === "NOT_DEFINED") continue;
       if (status === "PRESENT" || catchUpSet.has(l.id)) {
@@ -1246,6 +1452,10 @@ export function computeStudentConsecutiveAbsences({
   let consecutiveAbsences = 0;
   for (let i = sortedLessons.length - 1; i >= 0; i--) {
     const l = sortedLessons[i];
+    if (revisionLessonIds.has(l.id)) continue;
+    if (hasPriorRevision && new Date(l.startsAt).getTime() < enrolledTimeMs) {
+      break;
+    }
     const status = attendanceMap.get(l.id);
     if (!status) continue;
     if (status === "NOT_DEFINED") continue;
@@ -1274,6 +1484,7 @@ export interface ComputeStudentCreditParams {
   tuitionVouchers?: Array<{
     id?: number;
     amount?: any;
+    paymentType?: string | null;
     isVoided?: boolean;
     isRefund?: boolean;
     status?: string | null;
@@ -1306,6 +1517,7 @@ export interface ComputeStudentCreditParams {
   attendances?: Array<{
     lessonId: number;
     status: string;
+    isRevisionVisitor?: boolean | null;
     lesson?: { id: number; startsAt?: Date | string; isFree?: boolean; isTeacherAbsent?: boolean } | null;
   }>;
   lessons?: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }>;
@@ -1577,7 +1789,7 @@ export function resolvePayerCredit({
     );
 
     const atts = (payerStudent.attendances || []).filter((a: any) => {
-      if (!a.lesson || a.lesson.isFree) return false;
+      if (!a.lesson || a.lesson.isFree || a.isRevisionVisitor) return false;
       return (
         a.lesson.classId === cId ||
         a.lesson.lessonGroups?.some((lg: any) => lg.classId === cId)
@@ -1808,10 +2020,12 @@ export function isLessonApplicableToEnrollment(
       lessonGroups.some((lg) => lg.classId !== targetClassId));
 
   const rawStatus = (lesson as any)?.status || (lObj as any)?.status || null;
-  const hasExplicitAttendance =
-    lesson.hasExplicitAttendance !== undefined
-      ? Boolean(lesson.hasExplicitAttendance)
-      : rawStatus === "PRESENT";
+  const isRevVisitor = Boolean((lesson as any)?.isRevisionVisitor || (lObj as any)?.isRevisionVisitor);
+  const hasExplicitAttendance = isRevVisitor
+    ? false
+    : lesson.hasExplicitAttendance !== undefined
+    ? Boolean(lesson.hasExplicitAttendance)
+    : rawStatus === "PRESENT";
   const lessonStatus = rawStatus;
 
   // Collect chronological transfer-out and transfer-in timestamps for this enrollment
@@ -1980,9 +2194,18 @@ export function buildPaidSessionSlotSchedule({
   const cyclePrice = Math.max(0, Number(pricePerCycle || 0));
   const baseLessonPrice = cyclePrice > 0 ? cyclePrice / 4 : 0;
 
+  const NON_CYCLE_PAYMENT_TYPES = new Set([
+    "REVISION_SESSION",
+    "INSCRIPTION",
+    "BOOK",
+    "WORKSHOP",
+    "EXTRA_SESSION",
+  ]);
+
   const validVouchers = (tuitionVouchers || [])
     .filter((v) => {
       if (v.isVoided || v.isRefund || v.status === "REFUNDED") return false;
+      if (v.paymentType && NON_CYCLE_PAYMENT_TYPES.has(v.paymentType)) return false;
       if (referenceDate && v.issuedAt && new Date(v.issuedAt) > referenceDate) return false;
       return true;
     })
@@ -2361,8 +2584,20 @@ export function computeStudentCreditAndSessions({
     isPayerActiveAndPaid,
   });
 
+  const NON_CYCLE_TYPES = new Set([
+    "REVISION_SESSION",
+    "INSCRIPTION",
+    "BOOK",
+    "WORKSHOP",
+    "EXTRA_SESSION",
+  ]);
+
   const validVouchers = tuitionVouchers.filter(
-    (v) => !v.isVoided && !v.isRefund && v.status !== "REFUNDED"
+    (v) =>
+      !v.isVoided &&
+      !v.isRefund &&
+      v.status !== "REFUNDED" &&
+      !(v.paymentType && NON_CYCLE_TYPES.has(v.paymentType))
   );
 
   let effectiveLessonPrice = feeCalc.baseSessionFee;
@@ -2460,8 +2695,23 @@ export function computeStudentCreditAndSessions({
   const relevantLessons: Array<{ id: number; startsAt: Date | string; isFree?: boolean; isTeacherAbsent?: boolean }> = [];
   const relevantAttendances: Array<{ lessonId: number; status: string }> = [];
 
+  const lessonStartsLookup = new Map<number, Date | string>();
+  if (lessons) {
+    lessons.forEach((l) => lessonStartsLookup.set(l.id, l.startsAt));
+  }
+
+  const revisionLessonStartsAt: Array<Date | string> = [];
+  const regularAttendances = attendances.filter((a) => {
+    if (a.isRevisionVisitor) {
+      const revDate = a.lesson?.startsAt ?? lessonStartsLookup.get(a.lessonId);
+      if (revDate) revisionLessonStartsAt.push(revDate);
+      return false;
+    }
+    return true;
+  });
+
   const attendanceMap = new Map<number, string>();
-  attendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
+  regularAttendances.forEach((a) => attendanceMap.set(a.lessonId, a.status));
 
   const catchUpSet = new Set<number>();
   const nonTransferCatchUpSet = new Set<number>();
@@ -2583,7 +2833,7 @@ export function computeStudentCreditAndSessions({
     });
   } else {
     const seenLessonIds = new Set<number>();
-    attendances.forEach((a) => {
+    regularAttendances.forEach((a) => {
       if (a.lesson && !a.lesson.isFree) {
         if (isExcludedByTransferWindow(a.lesson.startsAt, a.lessonId || a.lesson.id, a.status)) {
           return;
@@ -2641,6 +2891,8 @@ export function computeStudentCreditAndSessions({
               ? new Date(latestTransferInTime)
               : null,
           payerHistory,
+          enrolledAt,
+          revisionLessonStartsAt,
         })
       : [];
 

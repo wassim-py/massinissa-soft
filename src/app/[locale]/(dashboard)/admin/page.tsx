@@ -283,7 +283,9 @@ const AdminPage = async () => {
 
       const studentAtts: Array<{ lessonId: number; status: string }> = [];
       cls.lessons.forEach((l) => {
-        const att = l.attendances.find((a) => a.studentId === student.id);
+        const att = l.attendances.find(
+          (a) => a.studentId === student.id && !(a as any).isRevisionVisitor
+        );
         if (att) {
           studentAtts.push({ lessonId: l.id, status: att.status });
         }

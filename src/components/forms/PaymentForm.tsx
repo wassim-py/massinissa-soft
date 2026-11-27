@@ -48,6 +48,7 @@ const PaymentForm = ({
   initialNotes,
   isRetake,
   isBookPaid,
+  isCompletingPartial,
   onSuccess,
 }: {
   student: ExtendedStudent;
@@ -63,6 +64,7 @@ const PaymentForm = ({
   initialNotes?: string;
   isRetake?: boolean;
   isBookPaid?: boolean;
+  isCompletingPartial?: boolean;
   onSuccess?: (bundle?: any) => void;
 }) => {
   const router = useRouter();
@@ -219,10 +221,13 @@ const PaymentForm = ({
             paidGroupsCount: res.paidGroupsCount,
           });
           // If not paid and not exempt, check inscription by default for convenience
-          // and populate the configured inscription fee into the field
+          // UNLESS we are specifically completing a partial payment balance
+          const skipAutoInsc =
+            Boolean(isCompletingPartial) ||
+            (amountOwedByStudent !== undefined && amountOwedByStudent > 0);
           if (!res.isAlreadyPaidInThisClass && !res.hasPaidThreeInscriptions) {
-            setIsInscriptionChecked(true);
             setInscriptionAmount(fee);
+            setIsInscriptionChecked(!skipAutoInsc);
           } else {
             setIsInscriptionChecked(false);
           }
@@ -554,6 +559,33 @@ const PaymentForm = ({
           </p>
         </div>
       </div>
+
+      {/* Partial Payment Remainder Banner */}
+      {amountOwedByStudent !== undefined && amountOwedByStudent > 0 && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Info className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              {locale === "ar"
+                ? `المبلغ المتبقي لإكمال الدفعة الجزئية: `
+                : `Reste à payer sur le règlement partiel : `}
+              <strong className="font-mono">{formatDZD(amountOwedByStudent, locale)}</strong>
+            </span>
+          </div>
+          {tuitionAmount !== amountOwedByStudent && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsTuitionChecked(true);
+                setTuitionAmount(amountOwedByStudent);
+              }}
+              className="text-[11px] font-bold text-primary hover:underline cursor-pointer"
+            >
+              {locale === "ar" ? "تحديد كامل المتبقي" : "Tout régler"}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Owner Discount Alert */}
       {feeCalc.isDiscounted && (

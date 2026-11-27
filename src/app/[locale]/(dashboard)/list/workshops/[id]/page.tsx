@@ -223,6 +223,7 @@ const WorkshopDetailsPage = async (props: { params: Promise<{ id: string }> }) =
                 workshop={workshop as any}
                 participants={workshop.participants as any}
                 canManageBranch={canManageBranch}
+                canRecordPayment={isAdminOrOwner}
               />
             </div>
           )}

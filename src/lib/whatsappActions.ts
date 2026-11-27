@@ -5,67 +5,95 @@ import { getAuthSession } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import {
   getOrCreateWhatsAppConfig,
-  resolveStudentWhatsAppRecipient,
   verifyCreditIsStillZeroJit,
+  buildStudentPhoneCandidates,
+  PhoneCandidate,
 } from "./whatsappUtils";
 import { WhatsAppMode, WhatsAppTriggerType } from "@prisma/client";
 
-const BRIDGE_URL = process.env.WHATSAPP_BRIDGE_URL || "http://127.0.0.1:5001";
+const DIRECT_BRIDGE_URL = process.env.WHATSAPP_BRIDGE_URL?.trim() || "";
 const BRIDGE_API_KEY = process.env.WHATSAPP_BRIDGE_SECRET || "massinissa_secret_key_2026";
+const STATE_SETTING_KEY = "WHATSAPP_BRIDGE_STATE";
+const CMD_SETTING_KEY = "WHATSAPP_BRIDGE_CMD";
+
+async function readSyncedBridgeState(): Promise<{
+  isConnected: boolean;
+  phone: string | null;
+  name: string | null;
+  qr: string | null;
+  bridgeOnline: boolean;
+}> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { id: STATE_SETTING_KEY } });
+    if (!row?.value) {
+      return { isConnected: false, phone: null, name: null, qr: null, bridgeOnline: false };
+    }
+    const parsed = JSON.parse(row.value);
+    const updatedAtMs = parsed.updatedAt ? new Date(parsed.updatedAt).getTime() : 0;
+    const isFresh = Date.now() - updatedAtMs < 45 * 1000;
+    return {
+      isConnected: Boolean(parsed.isConnected) && isFresh,
+      phone: parsed.phone || null,
+      name: parsed.name || null,
+      qr: isFresh && !parsed.isConnected ? parsed.qr || null : null,
+      bridgeOnline: isFresh,
+    };
+  } catch {
+    return { isConnected: false, phone: null, name: null, qr: null, bridgeOnline: false };
+  }
+}
 
 /**
  * Retrieves the global WhatsApp configuration and live bridge status.
- * Strictly OWNER-ONLY for full control, read-only status for admins.
+ * Supports both Cloud-Sync mode (Vercel + standalone wa-bridge) and Direct mode (local/OCI).
  */
 export async function getWhatsAppStatusAction() {
   const session = await getAuthSession();
-  const config = await getOrCreateWhatsAppConfig();
+  const [config, syncedState] = await Promise.all([
+    getOrCreateWhatsAppConfig(),
+    readSyncedBridgeState(),
+  ]);
 
-  let liveStatus = {
-    isConnected: config.isConnected,
-    phone: config.connectedPhone,
-    name: config.connectedName,
-    qr: null as string | null,
-    bridgeOnline: false,
-  };
+  let liveStatus = { ...syncedState };
 
-  try {
-    const res = await fetch(`${BRIDGE_URL}/api/session/status`, {
-      headers: { "x-api-key": BRIDGE_API_KEY },
-      cache: "no-store",
-      signal: AbortSignal.timeout(2000),
-    });
+  if (DIRECT_BRIDGE_URL) {
+    try {
+      const res = await fetch(`${DIRECT_BRIDGE_URL}/api/session/status`, {
+        headers: { "x-api-key": BRIDGE_API_KEY },
+        cache: "no-store",
+        signal: AbortSignal.timeout(6000),
+      });
 
-    if (res.ok) {
-      const data = await res.json();
-      liveStatus = {
-        isConnected: Boolean(data.isConnected),
-        phone: data.phone || config.connectedPhone,
-        name: data.name || config.connectedName,
-        qr: data.qr || null,
-        bridgeOnline: true,
-      };
+      if (res.ok) {
+        const data = await res.json();
+        liveStatus = {
+          isConnected: Boolean(data.isConnected),
+          phone: data.phone || config.connectedPhone,
+          name: data.name || config.connectedName,
+          qr: data.qr || null,
+          bridgeOnline: true,
+        };
 
-      if (data.isConnected !== config.isConnected) {
-        await prisma.whatsAppConfig.update({
-          where: { id: "GLOBAL" },
-          data: {
-            isConnected: data.isConnected,
-            connectedPhone: data.phone,
-            connectedName: data.name,
-          },
-        });
+        if (data.isConnected !== config.isConnected) {
+          await prisma.whatsAppConfig.update({
+            where: { id: "GLOBAL" },
+            data: {
+              isConnected: Boolean(data.isConnected),
+              connectedPhone: data.phone || null,
+              connectedName: data.name || null,
+            },
+          });
+        }
       }
+    } catch {
+      // Fallback to syncedState from Cloud-Sync
     }
-  } catch (err) {
-    // Bridge offline
-    liveStatus.bridgeOnline = false;
   }
 
   return {
     isOwner: session.isOwner,
     config,
-    liveStatus,
+    liveStatus: session.isOwner ? liveStatus : { ...liveStatus, qr: null },
   };
 }
 
@@ -163,26 +191,65 @@ export async function disconnectWhatsAppSessionAction() {
   }
 
   try {
-    const res = await fetch(`${BRIDGE_URL}/api/session/disconnect`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BRIDGE_API_KEY,
-      },
-    });
+    // Queue remote DISCONNECT command for standalone wa-bridge (executed within ~4s)
+    await Promise.all([
+      prisma.setting.upsert({
+        where: { id: CMD_SETTING_KEY },
+        update: { value: "DISCONNECT" },
+        create: { id: CMD_SETTING_KEY, value: "DISCONNECT" },
+      }),
+      prisma.setting
+        .upsert({
+          where: { id: STATE_SETTING_KEY },
+          update: {
+            value: JSON.stringify({
+              isConnected: false,
+              phone: null,
+              name: null,
+              qr: null,
+              updatedAt: new Date().toISOString(),
+            }),
+          },
+          create: {
+            id: STATE_SETTING_KEY,
+            value: JSON.stringify({
+              isConnected: false,
+              phone: null,
+              name: null,
+              qr: null,
+              updatedAt: new Date().toISOString(),
+            }),
+          },
+        })
+        .catch(() => {}),
+      prisma.whatsAppConfig.update({
+        where: { id: "GLOBAL" },
+        data: {
+          isConnected: false,
+          connectedPhone: null,
+          connectedName: null,
+          lastDisconnectedAt: new Date(),
+        },
+      }),
+    ]);
 
-    await prisma.whatsAppConfig.update({
-      where: { id: "GLOBAL" },
-      data: {
-        isConnected: false,
-        connectedPhone: null,
-        connectedName: null,
-        lastDisconnectedAt: new Date(),
-      },
-    });
+    if (DIRECT_BRIDGE_URL) {
+      await fetch(`${DIRECT_BRIDGE_URL}/api/session/disconnect`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": BRIDGE_API_KEY,
+        },
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
+    }
 
     revalidatePath("/admin/configuration");
-    return { success: true, message: "Session WhatsApp déconnectée avec succès" };
+    return {
+      success: true,
+      message:
+        "Session WhatsApp déconnectée. Un nouveau QR Code va s'afficher dans quelques secondes.",
+    };
   } catch (err: any) {
     return { success: false, message: err?.message || "Erreur lors de la déconnexion" };
   }
@@ -274,6 +341,7 @@ export async function getBranchWhatsAppQueueAction(params: {
 
 /**
  * Dispatches a single staged notification with JIT conflict protection.
+ * Works via Direct Bridge if configured, or queues for instant Cloud-Sync pickup by `wa-bridge`.
  */
 export async function sendSingleWhatsAppNotificationAction(notificationId: string) {
   const session = await getAuthSession();
@@ -308,6 +376,7 @@ export async function sendSingleWhatsAppNotificationAction(notificationId: strin
           errorMessage: "Paiement régularisé avant l'envoi / تم تسوية الاشتراك قبل الإرسال",
         },
       });
+      revalidatePath("/list/whatsapp-queue");
       return {
         success: false,
         revoked: true,
@@ -316,67 +385,135 @@ export async function sendSingleWhatsAppNotificationAction(notificationId: strin
     }
   }
 
-  // Dispatch via Bridge
-  try {
-    const res = await fetch(`${BRIDGE_URL}/api/send-message`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BRIDGE_API_KEY,
-      },
-      body: JSON.stringify({
-        to: notification.recipientPhone,
-        text: notification.messageContent,
-        notificationId: notification.id,
-      }),
-      signal: AbortSignal.timeout(8000),
-    });
+  // Path A: Direct Bridge configured (local dev / co-located OCI)
+  if (DIRECT_BRIDGE_URL) {
+    try {
+      const ctx = (notification.contextData || {}) as { candidates?: PhoneCandidate[] };
+      const candidates =
+        Array.isArray(ctx.candidates) && ctx.candidates.length > 0
+          ? ctx.candidates
+          : (await buildStudentPhoneCandidates(notification.studentId)).candidates;
 
-    const data = await res.json();
-    if (res.ok && data.success) {
-      await prisma.whatsAppNotification.update({
-        where: { id: notificationId },
-        data: {
-          status: "SENT",
-          sentAt: new Date(),
-          approvedBy: session.userId || "BRANCH_ADMIN",
-          approvedAt: new Date(),
+      const res = await fetch(`${DIRECT_BRIDGE_URL}/api/send-message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": BRIDGE_API_KEY,
         },
+        body: JSON.stringify({
+          to: notification.recipientPhone,
+          text: notification.messageContent,
+          notificationId: notification.id,
+          candidates,
+        }),
+        signal: AbortSignal.timeout(8000),
       });
 
-      revalidatePath("/list/whatsapp-queue");
-      return { success: true, message: "Message WhatsApp envoyé avec succès / تم إرسال الرسالة بنجاح." };
-    } else {
-      await prisma.whatsAppNotification.update({
-        where: { id: notificationId },
-        data: {
-          status: "FAILED_ERROR",
-          errorMessage: data.error || "Erreur de passerelle",
-          attemptCount: { increment: 1 },
-        },
-      });
-      return { success: false, message: data.error || "Échec de l'envoi" };
+      const data = await res.json();
+      if (res.ok && data.success) {
+        await prisma.whatsAppNotification.update({
+          where: { id: notificationId },
+          data: {
+            status: "SENT",
+            sentAt: new Date(),
+            approvedBy: session.userId || "BRANCH_ADMIN",
+            approvedAt: new Date(),
+            ...(data.recipientPhone ? { recipientPhone: data.recipientPhone } : {}),
+            ...(data.recipientType ? { recipientType: data.recipientType } : {}),
+            ...(data.checkedNumbers ? { checkedNumbers: data.checkedNumbers } : {}),
+          },
+        });
+        revalidatePath("/list/whatsapp-queue");
+        return {
+          success: true,
+          message: "Message WhatsApp envoyé avec succès / تم إرسال الرسالة بنجاح.",
+        };
+      }
+
+      if (res.ok && data.noWhatsApp) {
+        await prisma.whatsAppNotification.update({
+          where: { id: notificationId },
+          data: {
+            status: "FAILED_NO_WHATSAPP",
+            recipientPhone: null,
+            errorMessage: "Aucun numéro WhatsApp actif",
+            ...(data.checkedNumbers ? { checkedNumbers: data.checkedNumbers } : {}),
+          },
+        });
+        revalidatePath("/list/whatsapp-queue");
+        return {
+          success: false,
+          message: "Aucun des numéros enregistrés n'utilise WhatsApp.",
+        };
+      }
+    } catch {
+      // Fall through to Cloud-Sync queue if standalone wa-bridge is online
     }
-  } catch (err: any) {
-    await prisma.whatsAppNotification.update({
-      where: { id: notificationId },
-      data: {
-        status: "FAILED_ERROR",
-        errorMessage: err?.message || "Passerelle WhatsApp indisponible",
-        attemptCount: { increment: 1 },
-      },
-    });
-    return { success: false, message: "Passerelle WhatsApp inaccessible. Vérifiez la connexion du mobile." };
   }
+
+  // Path B: Cloud-Sync Queue (Vercel + standalone wa-bridge on Host PC)
+  const bridgeState = await readSyncedBridgeState();
+  if (!bridgeState.bridgeOnline) {
+    return {
+      success: false,
+      message:
+        "Le pont WhatsApp est hors ligne sur le PC principal. Vérifiez qu'il est démarré / جسر واتساب غير متصل على الحاسوب الرئيسي.",
+    };
+  }
+  if (!bridgeState.isConnected) {
+    return {
+      success: false,
+      message:
+        "Aucun téléphone WhatsApp connecté. Le propriétaire doit scanner le QR Code / هاتف المؤسسة غير مرتبط بواتساب.",
+    };
+  }
+
+  await prisma.whatsAppNotification.update({
+    where: { id: notificationId },
+    data: {
+      status: "QUEUED",
+      approvedBy: session.userId || "BRANCH_ADMIN",
+      approvedAt: new Date(),
+      errorMessage: null,
+    },
+  });
+
+  revalidatePath("/list/whatsapp-queue");
+  return {
+    success: true,
+    queued: true,
+    message:
+      "Message mis en file d'envoi (expédition sous quelques secondes) / تم وضع الرسالة قيد الإرسال الفوري.",
+  };
 }
 
 /**
  * Bulk dispatches all PENDING_MANUAL notifications for a specific branch.
+ * Queues atomically so Vercel never times out even on large batches, while
+ * `wa-bridge` spaces messages 4-8s apart for Anti-Ban protection.
  */
 export async function sendAllPendingBranchAction(branchId: number) {
   const session = await getAuthSession();
   if (!session.isOwner && !session.branchIds.includes(branchId)) {
     return { success: false, message: "Accès non autorisé pour ce siège" };
+  }
+
+  const bridgeState = await readSyncedBridgeState();
+  if (!DIRECT_BRIDGE_URL) {
+    if (!bridgeState.bridgeOnline) {
+      return {
+        success: false,
+        message:
+          "Le pont WhatsApp est hors ligne sur le PC principal / جسر واتساب غير متصل على الحاسوب الرئيسي.",
+      };
+    }
+    if (!bridgeState.isConnected) {
+      return {
+        success: false,
+        message:
+          "Téléphone WhatsApp non connecté. Scannez d'abord le QR Code / يرجى مسح رمز QR أولاً.",
+      };
+    }
   }
 
   const pending = await prisma.whatsAppNotification.findMany({
@@ -392,55 +529,47 @@ export async function sendAllPendingBranchAction(branchId: number) {
     return { success: true, count: 0, message: "Aucune notification en attente." };
   }
 
-  let sentCount = 0;
+  let queuedCount = 0;
   let revokedCount = 0;
-  let failedCount = 0;
 
   for (const notif of pending) {
-    // Conflict Protection: JIT Check
-    if (notif.triggerType === "CREDIT_ZERO_INSTANT" || notif.triggerType === "CREDIT_ZERO_PRE_LESSON_24H") {
+    if (
+      notif.triggerType === "CREDIT_ZERO_INSTANT" ||
+      notif.triggerType === "CREDIT_ZERO_PRE_LESSON_24H"
+    ) {
       const isStillZero = await verifyCreditIsStillZeroJit(notif.studentId, notif.classId);
       if (!isStillZero) {
         await prisma.whatsAppNotification.update({
           where: { id: notif.id },
-          data: { status: "REVOKED_PAYMENT" },
+          data: {
+            status: "REVOKED_PAYMENT",
+            errorMessage: "Paiement régularisé avant l'envoi",
+          },
         });
         revokedCount++;
         continue;
       }
     }
 
-    try {
-      const res = await fetch(`${BRIDGE_URL}/api/send-message`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": BRIDGE_API_KEY,
-        },
-        body: JSON.stringify({
-          to: notif.recipientPhone,
-          text: notif.messageContent,
-          notificationId: notif.id,
-        }),
-      });
-
-      if (res.ok) {
-        sentCount++;
-      } else {
-        failedCount++;
-      }
-    } catch {
-      failedCount++;
-    }
+    await prisma.whatsAppNotification.update({
+      where: { id: notif.id },
+      data: {
+        status: "QUEUED",
+        approvedBy: session.userId || "BRANCH_ADMIN",
+        approvedAt: new Date(),
+        errorMessage: null,
+      },
+    });
+    queuedCount++;
   }
 
   revalidatePath("/list/whatsapp-queue");
   return {
     success: true,
-    sentCount,
+    sentCount: queuedCount,
     revokedCount,
-    failedCount,
-    message: `Envoi groupé terminé : ${sentCount} envoyés, ${revokedCount} annulés (paiement réglé), ${failedCount} échoués.`,
+    failedCount: 0,
+    message: `Envoi lancé : ${queuedCount} message(s) en cours d'expédition automatique (espacés de 4 à 8s), ${revokedCount} annulé(s) car déjà payé(s).`,
   };
 }
 

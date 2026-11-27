@@ -13,6 +13,7 @@ import {
   computeStudentSessionFee,
   computeStudentConsumedSessions,
   computeStudentCreditAndSessions,
+  computePostRevisionEnrollmentGapInfo,
   resolvePayerCredit,
   computeEnrollmentInscriptionStatus,
   isLessonApplicableToEnrollment,
@@ -479,17 +480,40 @@ export default function PaymentGrid({
       (formationPrice > 0 && totalPaidFormation >= formationPrice);
     const isFormationPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
 
-    // Consumed non-free sessions (accounting for Massinissa absence rules)
-    const studentAtts: Array<{ lessonId: number; status: string }> = [];
+    // Consumed non-free sessions (accounting for Massinissa absence rules & preserving revision visits for gap exemption)
+    const studentAtts: Array<{ lessonId: number; status: string; isRevisionVisitor?: boolean; lesson?: { id: number; startsAt?: Date | string } }> = [];
+    const studentAllClassAttsForGap: Array<{ lessonId: number; status: string; isRevisionVisitor?: boolean; date?: Date | string }> = [];
     classData.lessons.forEach((l) => {
       const att = l.attendances.find((a) => a.studentId === student.id);
+      if (att) {
+        studentAllClassAttsForGap.push({
+          lessonId: l.id,
+          status: att.status,
+          isRevisionVisitor: Boolean((att as any).isRevisionVisitor),
+          date: (l as any).startsAt,
+        });
+      }
+      if (!att) return;
+      if ((att as any).isRevisionVisitor) {
+        studentAtts.push({
+          lessonId: l.id,
+          status: att.status,
+          isRevisionVisitor: true,
+          lesson: { id: l.id, startsAt: (l as any).startsAt },
+        });
+        return;
+      }
       const hasExplicitAttendance = att?.status === "PRESENT";
       if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance, status: att?.status } as any, classData.id, enrollment as any)) {
         return;
       }
-      if (att) {
-        studentAtts.push({ lessonId: l.id, status: att.status });
-      }
+      studentAtts.push({ lessonId: l.id, status: att.status });
+    });
+
+    const revisionGapInfo = computePostRevisionEnrollmentGapInfo({
+      lessons: classData.lessons as any,
+      attendances: studentAllClassAttsForGap,
+      enrolledAt: enrollment.enrolledAt,
     });
 
     const classCatchUps = ((student as any).catchUpAttendances || []).filter(
@@ -610,6 +634,7 @@ export default function PaymentGrid({
       transferredOut,
       attendedSessions,
       consumedLessons: attendedSessions,
+      revisionGapInfo,
       netSessions,
       refundableSessions,
       netRefundableSessions,
@@ -1117,6 +1142,20 @@ export default function PaymentGrid({
             {((item.enrollment as any)?.payerStatus || (s as any)?.payerStatus) === "SCHOOL_FEES_ONLY" && (
               <Badge variant="primary" size="sm" className="bg-sky-100 text-sky-900 border border-sky-300 font-semibold">
                 {locale === "ar" ? "حصة المدرسة فقط" : "Frais école seuls"}
+              </Badge>
+            )}
+            {item.revisionGapInfo?.hasPriorRevisionInGroup && (
+              <Badge
+                variant="neutral"
+                size="sm"
+                className="bg-teal-50 text-teal-900 border-teal-300 font-semibold shadow-2xs cursor-help"
+                title={
+                  locale === "ar"
+                    ? `حضر حصة مراجعة سابقة قبل التسجيل الرسمي${item.revisionGapInfo.gapLessonsCount > 0 ? ` — ${item.revisionGapInfo.gapLessonsCount} حصة فاصلة غير محتسبة` : " — الفاصل غير محتسب"}`
+                    : `A suivi une révision avant l'inscription officielle${item.revisionGapInfo.gapLessonsCount > 0 ? ` — ${item.revisionGapInfo.gapLessonsCount} séance(s) d'écart non facturée(s)` : " — écart non facturé"}`
+                }
+              >
+                {locale === "ar" ? "مراجعة سابقة" : "Ex-révision"}
               </Badge>
             )}
             {item.isDiscounted && (
@@ -1820,6 +1859,19 @@ export default function PaymentGrid({
                       ? modalItem.cycleRemainingFee
                       : undefined
                   }
+                  amountOwedByStudent={
+                    modalItem && modalItem.cycleRemainingFee > 0
+                      ? modalItem.cycleRemainingFee
+                      : undefined
+                  }
+                  isCompletingPartial={Boolean(
+                    modalItem &&
+                      modalItem.cycleRemainingFee > 0 &&
+                      (modalItem.isFormation
+                        ? modalItem.isFormationPartiallyPaid
+                        : modalItem.tuitionVouchers.length > 0)
+                  )}
+                  isBookPaid={Boolean(modalItem?.bookVoucher)}
                   defaultInscriptionFee={configuredInscriptionFee}
                 />
               );

@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/Badge";
 import { FilterTabs } from "@/components/ui/FilterTabs";
 import { formatVoucherDisplay } from "@/lib/voucherUtils";
 import { getTranslations, getLocale } from "next-intl/server";
+import { getPartialPaymentsData } from "@/lib/partialPayments";
+import PartialPaymentsSection from "@/components/payments/PartialPaymentsSection";
 import {
   ACTIVE_CLASS_WHERE,
   INACTIVE_CLASS_WHERE,
@@ -95,7 +97,14 @@ const TransactionHistory = ({
 );
 
 const PaymentsListPage = async (props: {
-  searchParams: Promise<{ studentId?: string; search?: string; branchId?: string; page?: string; status?: string }>;
+  searchParams: Promise<{
+    studentId?: string;
+    search?: string;
+    branchId?: string;
+    page?: string;
+    status?: string;
+    tab?: string;
+  }>;
 }) => {
   const searchParams = await props.searchParams;
   const t = await getTranslations("payments");
@@ -216,7 +225,8 @@ const PaymentsListPage = async (props: {
   // BRANCH SCOPING (§1.0 & Phase 16):
   // - Branch Admin sees only groups at their own branch.
   // - Owner gets filter tabs to see the whole school or filter to a specific branch.
-  const { search, branchId: selectedBranchParam, page, status } = searchParams;
+  const { search, branchId: selectedBranchParam, page, status, tab } = searchParams;
+  const activeMainTab: "groups" | "partial" = tab === "partial" ? "partial" : "groups";
   const activeStatus = normalizeClassFilterStatus(status);
   const isOwner = session.isOwner;
   const pageNum = page ? parseInt(page, 10) : 1;
@@ -243,53 +253,63 @@ const PaymentsListPage = async (props: {
       : {}),
   };
 
-  const createPaymentsFilterUrl = (overrides: { branchId?: string; status?: "active" | "inactive" | "all" }) => {
+  const createPaymentsFilterUrl = (overrides: {
+    branchId?: string;
+    status?: "active" | "inactive" | "all";
+    tab?: "groups" | "partial";
+  }) => {
     const params = new URLSearchParams();
+    const tabVal = overrides.tab !== undefined ? overrides.tab : activeMainTab;
+    if (tabVal === "partial") params.set("tab", "partial");
     const branchVal = overrides.branchId !== undefined ? overrides.branchId : (selectedBranchParam || "all");
     if (isOwner && branchVal) params.set("branchId", branchVal);
     const statusVal = overrides.status !== undefined ? overrides.status : activeStatus;
-    if (statusVal && statusVal !== "active") params.set("status", statusVal);
-    if (search) params.set("search", search);
+    if (tabVal !== "partial" && statusVal && statusVal !== "active") params.set("status", statusVal);
+    if (tabVal !== "partial" && search) params.set("search", search);
     const qs = params.toString();
     return qs ? `/list/payments?${qs}` : "/list/payments";
   };
 
-  const [branches, activeClassesCount, inactiveClassesCount, classesData] = await Promise.all([
+  const [branches, activeClassesCount, inactiveClassesCount, classesData, partialPayments] = await Promise.all([
     prisma.branch.findMany({
       select: { id: true, name: true },
       orderBy: { id: "asc" },
     }),
     prisma.class.count({ where: { ...baseClassWhere, ...ACTIVE_CLASS_WHERE } }),
     prisma.class.count({ where: { ...baseClassWhere, ...INACTIVE_CLASS_WHERE } }),
-    prisma.class.findMany({
-      where: classWhere,
-      skip: ITEM_PER_PAGE * (p - 1),
-      take: ITEM_PER_PAGE,
-      select: {
-        id: true,
-        name: true,
-        branchId: true,
-        pricePerCycle: true,
-        isCompleted: true,
-        isPaused: true,
-        branch: { select: { id: true, name: true } },
-        level: { select: { id: true, name: true } },
-        _count: {
+    activeMainTab === "groups"
+      ? prisma.class.findMany({
+          where: classWhere,
+          skip: ITEM_PER_PAGE * (p - 1),
+          take: ITEM_PER_PAGE,
           select: {
-            enrollments: {
-              where: {
-                status: "ACTIVE",
-
+            id: true,
+            name: true,
+            branchId: true,
+            pricePerCycle: true,
+            isCompleted: true,
+            isPaused: true,
+            branch: { select: { id: true, name: true } },
+            level: { select: { id: true, name: true } },
+            _count: {
+              select: {
+                enrollments: {
+                  where: {
+                    status: "ACTIVE",
+                  },
+                },
               },
             },
           },
-        },
-      },
-      orderBy: [
-        { branchId: "asc" },
-        { name: "asc" },
-      ],
-    }),
+          orderBy: [
+            { branchId: "asc" },
+            { name: "asc" },
+          ],
+        })
+      : Promise.resolve([]),
+    activeMainTab === "partial"
+      ? getPartialPaymentsData(branchFilter)
+      : Promise.resolve([]),
   ]);
 
   const allClassesCount = activeClassesCount + inactiveClassesCount;
@@ -337,111 +357,143 @@ const PaymentsListPage = async (props: {
           )}
         </div>
 
-        {/* Status Filter Tabs (Active / Closed & Paused / All) */}
-        <div className="flex flex-wrap items-center gap-2 mt-4 pb-4 border-b border-border/70">
-          <span className="text-xs font-bold text-muted ms-1">
-            {locale === "ar" ? "تصفية حسب الحالة:" : "Statut :"}
-          </span>
+        {/* Top-Level View Tabs: Group Payment Grids vs Partial Payments */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pb-4 border-b border-border/70">
           <FilterTabs
-            activeTab={activeStatus}
+            activeTab={activeMainTab}
             tabs={[
               {
-                id: "active",
-                label: locale === "ar" ? "الأفواج النشطة" : "Groupes actifs",
-                count: activeClassesCount,
-                href: createPaymentsFilterUrl({ status: "active" }),
-              },
-              {
-                id: "inactive",
-                label: locale === "ar" ? "مغلقة / متوقفة" : "Fermés / En pause",
-                count: inactiveClassesCount,
-                href: createPaymentsFilterUrl({ status: "inactive" }),
-              },
-              {
-                id: "all",
-                label: locale === "ar" ? "الكل" : "Tous",
+                id: "groups",
+                label: t("groupsGridTab"),
                 count: allClassesCount,
-                href: createPaymentsFilterUrl({ status: "all" }),
+                href: createPaymentsFilterUrl({ tab: "groups" }),
+              },
+              {
+                id: "partial",
+                label: t("partialPaymentsTab"),
+                count: activeMainTab === "partial" ? partialPayments.length : undefined,
+                href: createPaymentsFilterUrl({ tab: "partial" }),
               },
             ]}
           />
-        </div>
 
-        <div className="mt-6">
-          <PageHeader
-            title=""
-            searchPlaceholder={t("searchClassPlaceholder")}
-            createAction={null}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 mt-4">
-          {classesData.map((c) => {
-            const inactive = isClassInactive(c);
-            return (
-            <Link
-              href={`/list/payments/class/${c.id}`}
-              key={c.id}
-              className="block group h-full"
-            >
-              <Card className={`h-full border-border/80 group-hover:border-primary/50 group-hover:shadow-md transition-all flex flex-col justify-between ${inactive ? "bg-amber-50/20" : ""}`}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-primary-light flex items-center justify-center shrink-0">
-                      <Image src="/finance.png" alt="finance icon" width={20} height={20} />
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                      {inactive && (
-                        <Badge variant="warning" size="sm" withDot>
-                          {locale === "ar" ? "مغلق / متوقف" : "Fermé / En pause"}
-                        </Badge>
-                      )}
-                      {c.level && (
-                        <Badge variant="secondary" size="sm">
-                          {c.level.name}
-                        </Badge>
-                      )}
-                      <Badge variant="primary" size="sm">
-                        {c.branch.name}
-                      </Badge>
-                    </div>
-                  </div>
-                  <CardTitle className="text-card-title font-bold text-gray-900 group-hover:text-primary transition-colors line-clamp-1">
-                    {c.name}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0 pb-4 text-xs space-y-2 text-muted">
-                  <div className="flex justify-between items-center">
-                    <span>{t("pricePerCycle")}</span>
-                    <strong className="text-gray-900 font-mono text-xs">
-                      {Number(c.pricePerCycle || 0).toLocaleString(locale)} DZD
-                    </strong>
-                  </div>
-                  <div className="flex justify-between items-center border-t border-border/60 pt-2">
-                    <span>{t("totalEnrolled")} :</span>
-                    <strong className="text-primary font-bold">
-                      {t("enrolledCount", { count: c._count.enrollments })}
-                    </strong>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-            );
-          })}
-          {classesData.length === 0 && (
-            <div className="col-span-full text-center py-16 px-4 border-2 border-dashed border-border rounded-xl">
-              <p className="text-table-body text-muted">
-                {search
-                  ? t("noClassesMatchingSearch", { search })
-                  : t("noClassesFound")}
-              </p>
+          {activeMainTab === "groups" && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-muted ms-1">
+                {locale === "ar" ? "تصفية حسب الحالة:" : "Statut :"}
+              </span>
+              <FilterTabs
+                activeTab={activeStatus}
+                tabs={[
+                  {
+                    id: "active",
+                    label: locale === "ar" ? "الأفواج النشطة" : "Groupes actifs",
+                    count: activeClassesCount,
+                    href: createPaymentsFilterUrl({ status: "active" }),
+                  },
+                  {
+                    id: "inactive",
+                    label: locale === "ar" ? "مغلقة / متوقفة" : "Fermés / En pause",
+                    count: inactiveClassesCount,
+                    href: createPaymentsFilterUrl({ status: "inactive" }),
+                  },
+                  {
+                    id: "all",
+                    label: locale === "ar" ? "الكل" : "Tous",
+                    count: allClassesCount,
+                    href: createPaymentsFilterUrl({ status: "all" }),
+                  },
+                ]}
+              />
             </div>
           )}
         </div>
 
-        <div className="mt-6 flex justify-center">
-          <Pagination count={totalClassesCount} />
-        </div>
+        {activeMainTab === "partial" ? (
+          <PartialPaymentsSection items={partialPayments} />
+        ) : (
+          <>
+            <div className="mt-6">
+              <PageHeader
+                title=""
+                searchPlaceholder={t("searchClassPlaceholder")}
+                createAction={null}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 mt-4">
+              {classesData.map((c) => {
+                const inactive = isClassInactive(c);
+                return (
+                  <Link
+                    href={`/list/payments/class/${c.id}`}
+                    key={c.id}
+                    className="block group h-full"
+                  >
+                    <Card
+                      className={`h-full border-border/80 group-hover:border-primary/50 group-hover:shadow-md transition-all flex flex-col justify-between ${
+                        inactive ? "bg-amber-50/20" : ""
+                      }`}
+                    >
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="w-10 h-10 rounded-xl bg-primary-light flex items-center justify-center shrink-0">
+                            <Image src="/finance.png" alt="finance icon" width={20} height={20} />
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                            {inactive && (
+                              <Badge variant="warning" size="sm" withDot>
+                                {locale === "ar" ? "مغلق / متوقف" : "Fermé / En pause"}
+                              </Badge>
+                            )}
+                            {c.level && (
+                              <Badge variant="secondary" size="sm">
+                                {c.level.name}
+                              </Badge>
+                            )}
+                            <Badge variant="primary" size="sm">
+                              {c.branch.name}
+                            </Badge>
+                          </div>
+                        </div>
+                        <CardTitle className="text-card-title font-bold text-gray-900 group-hover:text-primary transition-colors line-clamp-1">
+                          {c.name}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-0 pb-4 text-xs space-y-2 text-muted">
+                        <div className="flex justify-between items-center">
+                          <span>{t("pricePerCycle")}</span>
+                          <strong className="text-gray-900 font-mono text-xs">
+                            {Number(c.pricePerCycle || 0).toLocaleString(locale)} DZD
+                          </strong>
+                        </div>
+                        <div className="flex justify-between items-center border-t border-border/60 pt-2">
+                          <span>{t("totalEnrolled")} :</span>
+                          <strong className="text-primary font-bold">
+                            {t("enrolledCount", { count: c._count.enrollments })}
+                          </strong>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                );
+              })}
+              {classesData.length === 0 && (
+                <div className="col-span-full text-center py-16 px-4 border-2 border-dashed border-border rounded-xl">
+                  <p className="text-table-body text-muted">
+                    {search
+                      ? t("noClassesMatchingSearch", { search })
+                      : t("noClassesFound")}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex justify-center">
+              <Pagination count={totalClassesCount} />
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );

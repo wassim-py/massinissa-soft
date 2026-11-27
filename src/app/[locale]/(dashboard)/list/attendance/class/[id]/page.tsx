@@ -13,7 +13,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { getTranslations, getLocale } from "next-intl/server";
-import { classifyStudentAttendanceHistory, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, computeStudentSessionFee, formatDiscountBadgeLabel, resolvePayerCredit, isLessonApplicableToEnrollment } from "@/lib/studentBilling";
+import { classifyStudentAttendanceHistory, computePostRevisionEnrollmentGapInfo, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, computeStudentSessionFee, formatDiscountBadgeLabel, resolvePayerCredit, isLessonApplicableToEnrollment } from "@/lib/studentBilling";
 import { getAlgiersDateInfo } from "@/lib/utils";
 import { StudentBalanceInfo } from "@/components/AttendanceGrid";
 import { autoSaveLessonAttendanceAction } from "@/lib/actions";
@@ -34,6 +34,7 @@ export type AttendanceCellDetail = {
     status: "PRESENT" | "ABSENT" | "NOT_DEFINED";
     justification?: string | null;
     isPreStart?: boolean;
+    isRevisionGap?: boolean;
     isTeacherAbsent?: boolean;
     isRevisionVisitor?: boolean;
     revisionAmountPaid?: number | null;
@@ -582,6 +583,24 @@ const ClassAttendancePage = async (
                 }
 
                 const enrollment = details?.enrollments?.[0];
+                const studentClassAttsForGap = (details?.attendances || s.attendances || []).filter(
+                    (att: any) =>
+                        !att.lesson ||
+                        att.lesson.classId === classId ||
+                        att.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)
+                );
+                const gapInfo = computePostRevisionEnrollmentGapInfo({
+                    lessons: classLessonsForBilling,
+                    attendances: studentClassAttsForGap,
+                    enrolledAt: enrollment?.enrolledAt || s.enrolledAt,
+                });
+                s.hasPriorRevisionInGroup = gapInfo.hasPriorRevisionInGroup;
+                s.priorRevisionCount = gapInfo.priorRevisionCount;
+                s.earliestRevisionAt = gapInfo.earliestRevisionAt;
+                s.latestRevisionAt = gapInfo.latestRevisionAt;
+                s.revisionGapLessonsCount = gapInfo.gapLessonsCount;
+                s.revisionGapLessonIds = gapInfo.gapLessonIds;
+
                 const effectivePayerStatus = enrollment?.payerStatus || details?.payerStatus || "NORMAL";
                 const enrDiscountType = enrollment?.discountType || null;
                 const enrDiscountValue = enrollment?.discountValue != null ? Number(enrollment.discountValue) : null;
@@ -688,17 +707,25 @@ const ClassAttendancePage = async (
                     );
 
                     const sAttendances = (details?.attendances || []).filter(
-                        (att: any) =>
-                            !att.isRevisionVisitor &&
-                            att.lesson &&
-                            (att.lesson.classId === classId ||
-                                att.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)) &&
-                            !att.lesson.isFree &&
-                            isLessonApplicableToEnrollment(
+                        (att: any) => {
+                            if (
+                                !att.lesson ||
+                                !(att.lesson.classId === classId ||
+                                    att.lesson.lessonGroups?.some((lg: any) => lg.classId === classId)) ||
+                                att.lesson.isFree
+                            ) {
+                                return false;
+                            }
+                            // Preserve revision visitor records so computeStudentCreditAndSessions
+                            // extracts their timestamps for revision-to-enrollment gap exemption
+                            // while excluding them from regular cycle consumption.
+                            if (att.isRevisionVisitor) return true;
+                            return isLessonApplicableToEnrollment(
                                 { ...att.lesson, hasExplicitAttendance: att.status === "PRESENT", status: att.status },
                                 classId,
                                 enrollment as any
-                            )
+                            );
+                        }
                     );
 
                     const sCatchUps = (details?.catchUpAttendances || []).filter(
@@ -949,6 +976,11 @@ const ClassAttendancePage = async (
             isTeacherAbsent: Boolean(a.isTeacherAbsent),
         }));
 
+        const studentRevisionStarts = (student.attendances || [])
+            .filter((a: any) => Boolean(a.isRevisionVisitor) && a.date)
+            .map((a: any) => a.date);
+        const revisionGapIdSet = new Set<number>(student.revisionGapLessonIds || []);
+
         const classified = classifyStudentAttendanceHistory({
             lessons: studentLessons,
             attendances: applicableAttendances.map((a: any) => ({
@@ -961,6 +993,8 @@ const ClassAttendancePage = async (
                 isTransferCatchUp: c.isTransferCatchUp,
             })),
             postTransferStartAfter: latestTransferInTime ? new Date(latestTransferInTime) : null,
+            enrolledAt: enrollment?.enrolledAt || student.enrolledAt,
+            revisionLessonStartsAt: studentRevisionStarts,
         });
 
         const classificationMap = new Map<number, string>();
@@ -972,20 +1006,27 @@ const ClassAttendancePage = async (
             const catchUpInfo = studentCatchUps.find((cu) => cu.missedLessonId === record.lessonId);
             const visitorCu = visitorCatchUpsByLessonId.get(record.lessonId);
             const isApplicable = isLessonApplicableToEnrollment(
-                { id: record.lessonId, classId, startsAt: record.date, hasExplicitAttendance: record.status === "PRESENT", status: record.status },
+                { id: record.lessonId, classId, startsAt: record.date, hasExplicitAttendance: record.status === "PRESENT" && !record.isRevisionVisitor, status: record.status, isRevisionVisitor: record.isRevisionVisitor } as any,
                 classId,
                 enrollment as any
             );
+            const isRevisionGap =
+                !visitorCu &&
+                !record.isRevisionVisitor &&
+                record.status !== "PRESENT" &&
+                revisionGapIdSet.has(record.lessonId);
             const isPreStart =
                 !visitorCu &&
+                !record.isRevisionVisitor &&
                 record.status !== "PRESENT" &&
-                (!isApplicable || classificationMap.get(record.lessonId) === "PRE_START_ABSENCE");
+                (isRevisionGap || !isApplicable || classificationMap.get(record.lessonId) === "PRE_START_ABSENCE");
             const isTeacherAbsent = Boolean(record.isTeacherAbsent) || classificationMap.get(record.lessonId) === "TEACHER_ABSENT";
 
             studentRecords.set(instanceKey, {
                 status: record.status || (record.present ? "PRESENT" : "ABSENT"),
                 justification: record.justification || null,
                 isPreStart: record.status === "PRESENT" ? false : Boolean(isPreStart),
+                isRevisionGap: Boolean(isRevisionGap),
                 isTeacherAbsent,
                 isRevisionVisitor: Boolean(record.isRevisionVisitor),
                 revisionAmountPaid: record.isRevisionVisitor
@@ -1141,6 +1182,15 @@ const ClassAttendancePage = async (
                         students={classData.students}
                         lessonInstances={lessonInstances}
                         attendanceMap={studentAttendanceMap}
+                        classId={classData.id}
+                        className={classData.name}
+                        canEnroll={
+                            !isClassInactive(classHeader) &&
+                            (session.can("create", "student") ||
+                                session.isOwner ||
+                                session.isBranchAdmin ||
+                                session.isOwnerOrAdmin)
+                        }
                     />
                 </div>
             </CardContent>

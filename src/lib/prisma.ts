@@ -82,7 +82,8 @@ const getPrismaInstance = () => {
       !(globalThis.prismaGlobal as any).level ||
       !(globalThis.prismaGlobal as any).missingMoney ||
       !(globalThis.prismaGlobal as any).surplusMoney ||
-      !(globalThis.prismaGlobal as any).bookReceipt
+      !(globalThis.prismaGlobal as any).bookReceipt ||
+      !(globalThis.prismaGlobal as any).whatsAppConfig
     ) {
       globalThis.prismaGlobal = prismaClientSingleton()
     }

@@ -7,26 +7,74 @@ import prisma from "@/lib/prisma";
 import {
   getOrCreateWhatsAppConfig,
   resolveStudentWhatsAppRecipient,
+  verifyCreditIsStillZeroJit,
+  isWithinQuietHours,
+  PhoneCandidate,
 } from "./whatsappUtils";
 import { formatWhatsAppMessage, DEFAULT_TEMPLATES } from "./whatsappTemplates";
 
-const BRIDGE_URL = process.env.WHATSAPP_BRIDGE_URL || "http://127.0.0.1:5001";
+const DIRECT_BRIDGE_URL = process.env.WHATSAPP_BRIDGE_URL?.trim() || "";
 const BRIDGE_API_KEY = process.env.WHATSAPP_BRIDGE_SECRET || "massinissa_secret_key_2026";
 
-async function dispatchMessageDirect(to: string, text: string, notificationId: string) {
+/**
+ * Attempts direct dispatch ONLY if WHATSAPP_BRIDGE_URL is explicitly configured
+ * and outside Quiet Hours; otherwise leaves notification as `QUEUED` so the
+ * standalone `wa-bridge` daemon pulls and sends it via Cloud-Sync within seconds.
+ */
+async function tryAutoDispatchOrLeaveQueued(
+  notificationId: string,
+  to: string,
+  text: string,
+  candidates: PhoneCandidate[],
+  config: { quietHoursEnabled?: boolean; quietHoursStart?: string | null; quietHoursEnd?: string | null }
+) {
+  if (!DIRECT_BRIDGE_URL || isWithinQuietHours(config)) {
+    return false;
+  }
+
   try {
-    const res = await fetch(`${BRIDGE_URL}/api/send-message`, {
+    const res = await fetch(`${DIRECT_BRIDGE_URL}/api/send-message`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-api-key": BRIDGE_API_KEY,
       },
-      body: JSON.stringify({ to, text, notificationId }),
-      signal: AbortSignal.timeout(4000),
+      body: JSON.stringify({ to, text, notificationId, candidates }),
+      signal: AbortSignal.timeout(7000),
     });
-    return res.ok;
-  } catch (err) {
-    console.error("[WA Trigger] Direct dispatch failed:", err);
+
+    if (!res.ok) return false;
+    const data = await res.json();
+
+    if (data?.success) {
+      await prisma.whatsAppNotification.update({
+        where: { id: notificationId },
+        data: {
+          status: "SENT",
+          sentAt: new Date(),
+          recipientPhone: data.recipientPhone || to,
+          ...(data.recipientType ? { recipientType: data.recipientType } : {}),
+          ...(data.recipientName ? { recipientName: data.recipientName } : {}),
+          ...(data.checkedNumbers ? { checkedNumbers: data.checkedNumbers } : {}),
+        },
+      });
+      return true;
+    }
+
+    if (data?.noWhatsApp) {
+      await prisma.whatsAppNotification.update({
+        where: { id: notificationId },
+        data: {
+          status: "FAILED_NO_WHATSAPP",
+          recipientPhone: null,
+          errorMessage: data.error || "Aucun numéro WhatsApp actif",
+          ...(data.checkedNumbers ? { checkedNumbers: data.checkedNumbers } : {}),
+        },
+      });
+    }
+    return false;
+  } catch {
+    // Leave as QUEUED so Cloud-Sync picks it up automatically
     return false;
   }
 }
@@ -63,19 +111,20 @@ export async function handleAttendanceWhatsAppTrigger({
     if (!lesson) return;
 
     const dateStr = lesson.startsAt.toLocaleDateString("ar-DZ", {
+      timeZone: "Africa/Algiers",
       weekday: "long",
       year: "numeric",
       month: "long",
       day: "numeric",
     });
     const startTimeStr = lesson.startsAt.toLocaleTimeString("fr-FR", {
+      timeZone: "Africa/Algiers",
       hour: "2-digit",
       minute: "2-digit",
     });
 
     // 1A. Handle Absences (Generate Notifications)
     for (const studentId of absentStudentIds) {
-      // Coalescence check: avoid duplicates for same lesson
       const existing = await prisma.whatsAppNotification.findFirst({
         where: {
           studentId,
@@ -118,14 +167,20 @@ export async function handleAttendanceWhatsAppTrigger({
           recipientName: recipient.recipientName,
           messageContent: message,
           status: notifStatus,
+          contextData: { candidates: recipient.candidates } as any,
           checkedNumbers: recipient.checkedAudit as any,
           triggeredBy: adminId,
         },
       });
 
-      // Auto-dispatch if mode is AUTO and recipient exists
       if (config.mode === "AUTO" && recipient.recipientPhone) {
-        await dispatchMessageDirect(recipient.recipientPhone, message, createdNotif.id);
+        await tryAutoDispatchOrLeaveQueued(
+          createdNotif.id,
+          recipient.recipientPhone,
+          message,
+          recipient.candidates,
+          config
+        );
       }
     }
 
@@ -142,7 +197,6 @@ export async function handleAttendanceWhatsAppTrigger({
       if (!priorAbsence) continue;
 
       if (priorAbsence.status === "PENDING_MANUAL" || priorAbsence.status === "QUEUED") {
-        // Pending draft deleted - parent never receives alarm
         await prisma.whatsAppNotification.update({
           where: { id: priorAbsence.id },
           data: {
@@ -151,7 +205,11 @@ export async function handleAttendanceWhatsAppTrigger({
           },
         });
       } else if (priorAbsence.status === "SENT") {
-        // Was already sent: stage reassuring correction message
+        const alreadyCorrected = await prisma.whatsAppNotification.findFirst({
+          where: { studentId, lessonId, triggerType: "ABSENCE_CORRECTION" },
+        });
+        if (alreadyCorrected) continue;
+
         const student = await prisma.student.findUnique({ where: { id: studentId } });
         if (!student || !priorAbsence.recipientPhone) continue;
 
@@ -162,6 +220,14 @@ export async function handleAttendanceWhatsAppTrigger({
             class_name: lesson.class.name,
           }
         );
+
+        const candidates: PhoneCandidate[] = [
+          {
+            phone: priorAbsence.recipientPhone,
+            type: priorAbsence.recipientType || "STUDENT_PRIMARY",
+            name: priorAbsence.recipientName || student.name,
+          },
+        ];
 
         const correctionNotif = await prisma.whatsAppNotification.create({
           data: {
@@ -175,12 +241,19 @@ export async function handleAttendanceWhatsAppTrigger({
             recipientName: priorAbsence.recipientName,
             messageContent: correctionMsg,
             status: config.mode === "AUTO" ? "QUEUED" : "PENDING_MANUAL",
+            contextData: { candidates } as any,
             triggeredBy: adminId,
           },
         });
 
         if (config.mode === "AUTO") {
-          await dispatchMessageDirect(priorAbsence.recipientPhone, correctionMsg, correctionNotif.id);
+          await tryAutoDispatchOrLeaveQueued(
+            correctionNotif.id,
+            priorAbsence.recipientPhone,
+            correctionMsg,
+            candidates,
+            config
+          );
         }
       }
     }
@@ -190,7 +263,7 @@ export async function handleAttendanceWhatsAppTrigger({
 }
 
 // =================================================================
-// 2. TRIGGER 2: ZERO-CREDIT INSTANT ALERT
+// 2. TRIGGER 2A: ZERO-CREDIT INSTANT ALERT
 // =================================================================
 
 export async function handleCreditZeroInstantTrigger({
@@ -208,7 +281,6 @@ export async function handleCreditZeroInstantTrigger({
     const config = await getOrCreateWhatsAppConfig();
     if (config.mode === "OFF" || !config.enableCreditZeroTrigger) return;
 
-    // Cooldown check: No credit alert in last 7 days for this class
     const recent = await prisma.whatsAppNotification.findFirst({
       where: {
         studentId,
@@ -253,17 +325,150 @@ export async function handleCreditZeroInstantTrigger({
         recipientName: recipient.recipientName,
         messageContent: message,
         status: notifStatus,
+        contextData: { candidates: recipient.candidates } as any,
         checkedNumbers: recipient.checkedAudit as any,
         triggeredBy: adminId,
       },
     });
 
     if (config.mode === "AUTO" && recipient.recipientPhone) {
-      await dispatchMessageDirect(recipient.recipientPhone, message, createdNotif.id);
+      await tryAutoDispatchOrLeaveQueued(
+        createdNotif.id,
+        recipient.recipientPhone,
+        message,
+        recipient.candidates,
+        config
+      );
     }
   } catch (err) {
     console.error("[WA Trigger] handleCreditZeroInstantTrigger error:", err);
   }
+}
+
+// =================================================================
+// 2B. TRIGGER 2B: 24-HOUR PRE-LESSON (-1 BALANCE) SCANNER
+// =================================================================
+
+export async function run24hPreLessonScan(): Promise<{ stagedCount: number; skippedReason?: string }> {
+  const config = await getOrCreateWhatsAppConfig();
+
+  if (config.mode === "OFF" || !config.enablePreLesson24hTrigger) {
+    return { stagedCount: 0, skippedReason: "Mode OFF or 24h trigger disabled" };
+  }
+
+  const now = new Date();
+  const windowStart = new Date(now.getTime() + 23 * 60 * 60 * 1000);
+  const windowEnd = new Date(now.getTime() + 25 * 60 * 60 * 1000);
+
+  const upcomingLessons = await prisma.lesson.findMany({
+    where: {
+      startsAt: { gte: windowStart, lte: windowEnd },
+      isFree: false,
+      OR: [{ recurrenceEndAt: null }, { recurrenceEndAt: { gte: windowEnd } }],
+      class: { isFormation: false, isCompleted: false, isPaused: false },
+    },
+    include: {
+      class: {
+        include: {
+          enrollments: {
+            where: { status: "ACTIVE", payerStatus: "NORMAL" },
+            include: { student: true },
+          },
+        },
+      },
+      branch: true,
+      teacher: true,
+    },
+  });
+
+  let stagedCount = 0;
+
+  for (const lesson of upcomingLessons) {
+    const dateStr = lesson.startsAt.toLocaleDateString("ar-DZ", {
+      timeZone: "Africa/Algiers",
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const startTimeStr = lesson.startsAt.toLocaleTimeString("fr-FR", {
+      timeZone: "Africa/Algiers",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    for (const enrollment of lesson.class.enrollments) {
+      try {
+        const isZero = await verifyCreditIsStillZeroJit(enrollment.studentId, lesson.classId);
+        if (!isZero) continue;
+
+        const recentReminder = await prisma.whatsAppNotification.findFirst({
+          where: {
+            studentId: enrollment.studentId,
+            classId: lesson.classId,
+            triggerType: "CREDIT_ZERO_PRE_LESSON_24H",
+            createdAt: { gte: new Date(now.getTime() - 48 * 60 * 60 * 1000) },
+          },
+        });
+
+        if (recentReminder) continue;
+
+        const recipient = await resolveStudentWhatsAppRecipient(enrollment.studentId);
+        const message = formatWhatsAppMessage(
+          config.templatePreLesson24hAr || DEFAULT_TEMPLATES.preLesson24hAr,
+          {
+            student_name: enrollment.student.name,
+            global_number: enrollment.student.globalNumber,
+            class_name: lesson.class.name,
+            teacher_name: lesson.teacher.name,
+            date: dateStr,
+            start_time: startTimeStr,
+            branch_name: lesson.branch.name,
+          }
+        );
+
+        const notifStatus = !recipient.recipientPhone
+          ? "FAILED_NO_WHATSAPP"
+          : config.mode === "AUTO"
+          ? "QUEUED"
+          : "PENDING_MANUAL";
+
+        const createdNotif = await prisma.whatsAppNotification.create({
+          data: {
+            branchId: lesson.branchId,
+            studentId: enrollment.studentId,
+            lessonId: lesson.id,
+            classId: lesson.classId,
+            triggerType: "CREDIT_ZERO_PRE_LESSON_24H",
+            recipientPhone: recipient.recipientPhone,
+            recipientType: recipient.recipientType,
+            recipientName: recipient.recipientName,
+            messageContent: message,
+            status: notifStatus,
+            contextData: { candidates: recipient.candidates } as any,
+            checkedNumbers: recipient.checkedAudit as any,
+            triggeredBy: "CRON_WORKER_24H",
+          },
+        });
+
+        stagedCount++;
+
+        if (config.mode === "AUTO" && recipient.recipientPhone) {
+          await tryAutoDispatchOrLeaveQueued(
+            createdNotif.id,
+            recipient.recipientPhone,
+            message,
+            recipient.candidates,
+            config
+          );
+        }
+      } catch (err) {
+        console.error(`[WA 24h Scan] Error evaluating student ${enrollment.studentId}:`, err);
+      }
+    }
+  }
+
+  return { stagedCount };
 }
 
 // =================================================================
@@ -302,27 +507,33 @@ export async function handleSpecialLessonWhatsAppTrigger({
 
     if (!lesson) return;
 
-    const allAssociatedClassIds = [
-      lesson.classId,
-      ...(lesson.lessonGroups?.map((g) => g.classId) || []),
-    ];
+    const allAssociatedClassIds = Array.from(
+      new Set([lesson.classId, ...(lesson.lessonGroups?.map((g) => g.classId) || [])])
+    );
 
-    // Determine lesson type label
     let lessonType = "حصة خاصة";
     if (lesson.isExtra) lessonType = "حصة إضافية";
     else if (lesson.isCatchUp) lessonType = "حصة استدراكية";
     else if (lesson.isFree) lessonType = "حصة مجانية";
 
     const dateStr = lesson.startsAt.toLocaleDateString("ar-DZ", {
+      timeZone: "Africa/Algiers",
       weekday: "long",
       year: "numeric",
       month: "long",
       day: "numeric",
     });
-    const startTimeStr = lesson.startsAt.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-    const endTimeStr = lesson.endsAt.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    const startTimeStr = lesson.startsAt.toLocaleTimeString("fr-FR", {
+      timeZone: "Africa/Algiers",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const endTimeStr = lesson.endsAt.toLocaleTimeString("fr-FR", {
+      timeZone: "Africa/Algiers",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
-    // Fetch active enrollments across all associated classes
     const activeEnrollments = await prisma.enrollment.findMany({
       where: {
         classId: { in: allAssociatedClassIds },
@@ -335,15 +546,13 @@ export async function handleSpecialLessonWhatsAppTrigger({
 
     // 3A. SPECIAL LESSON CANCELLED
     if (actionType === "CANCEL") {
-      // Purge pending drafts
       await prisma.whatsAppNotification.deleteMany({
         where: {
           lessonId,
-          status: "PENDING_MANUAL",
+          status: { in: ["PENDING_MANUAL", "QUEUED"] },
         },
       });
 
-      // Find students who received an alert previously
       const priorSent = await prisma.whatsAppNotification.findMany({
         where: {
           lessonId,
@@ -352,6 +561,7 @@ export async function handleSpecialLessonWhatsAppTrigger({
       });
 
       for (const sentNotif of priorSent) {
+        if (!sentNotif.recipientPhone) continue;
         const cancelMsg = formatWhatsAppMessage(
           config.templateSpecialLessonCanAr || DEFAULT_TEMPLATES.specialLessonCanAr,
           {
@@ -363,6 +573,14 @@ export async function handleSpecialLessonWhatsAppTrigger({
             start_time: startTimeStr,
           }
         );
+
+        const candidates: PhoneCandidate[] = [
+          {
+            phone: sentNotif.recipientPhone,
+            type: sentNotif.recipientType || "STUDENT_PRIMARY",
+            name: sentNotif.recipientName || "",
+          },
+        ];
 
         const cancelNotif = await prisma.whatsAppNotification.create({
           data: {
@@ -376,12 +594,19 @@ export async function handleSpecialLessonWhatsAppTrigger({
             recipientName: sentNotif.recipientName,
             messageContent: cancelMsg,
             status: config.mode === "AUTO" ? "QUEUED" : "PENDING_MANUAL",
+            contextData: { candidates } as any,
             triggeredBy: adminId,
           },
         });
 
-        if (config.mode === "AUTO" && sentNotif.recipientPhone) {
-          await dispatchMessageDirect(sentNotif.recipientPhone, cancelMsg, cancelNotif.id);
+        if (config.mode === "AUTO") {
+          await tryAutoDispatchOrLeaveQueued(
+            cancelNotif.id,
+            sentNotif.recipientPhone,
+            cancelMsg,
+            candidates,
+            config
+          );
         }
       }
       return;
@@ -389,20 +614,25 @@ export async function handleSpecialLessonWhatsAppTrigger({
 
     // 3B. SPECIAL LESSON UPDATED / RESCHEDULED
     if (actionType === "UPDATE") {
-      const oldDateStr = oldDetails?.startsAt
-        ? oldDetails.startsAt.toLocaleDateString("ar-DZ", {
+      const oldStarts = oldDetails?.startsAt ? new Date(oldDetails.startsAt) : null;
+      const oldDateStr = oldStarts
+        ? oldStarts.toLocaleDateString("ar-DZ", {
+            timeZone: "Africa/Algiers",
             weekday: "long",
             year: "numeric",
             month: "long",
             day: "numeric",
           })
         : dateStr;
-      const oldTimeStr = oldDetails?.startsAt
-        ? oldDetails.startsAt.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
+      const oldTimeStr = oldStarts
+        ? oldStarts.toLocaleTimeString("fr-FR", {
+            timeZone: "Africa/Algiers",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
         : startTimeStr;
 
       for (const enr of activeEnrollments) {
-        // Check prior notification
         const prior = await prisma.whatsAppNotification.findFirst({
           where: {
             lessonId,
@@ -427,8 +657,7 @@ export async function handleSpecialLessonWhatsAppTrigger({
           }
         );
 
-        if (prior && prior.status === "PENDING_MANUAL") {
-          // Update draft in place!
+        if (prior && (prior.status === "PENDING_MANUAL" || prior.status === "QUEUED")) {
           await prisma.whatsAppNotification.update({
             where: { id: prior.id },
             data: {
@@ -437,7 +666,6 @@ export async function handleSpecialLessonWhatsAppTrigger({
             },
           });
         } else {
-          // If already sent or not drafted yet, create update revision confirmation
           const recipient = await resolveStudentWhatsAppRecipient(enr.studentId);
           const updateNotif = await prisma.whatsAppNotification.create({
             data: {
@@ -456,12 +684,20 @@ export async function handleSpecialLessonWhatsAppTrigger({
                 : config.mode === "AUTO"
                 ? "QUEUED"
                 : "PENDING_MANUAL",
+              contextData: { candidates: recipient.candidates } as any,
+              checkedNumbers: recipient.checkedAudit as any,
               triggeredBy: adminId,
             },
           });
 
           if (config.mode === "AUTO" && recipient.recipientPhone) {
-            await dispatchMessageDirect(recipient.recipientPhone, updateMsg, updateNotif.id);
+            await tryAutoDispatchOrLeaveQueued(
+              updateNotif.id,
+              recipient.recipientPhone,
+              updateMsg,
+              recipient.candidates,
+              config
+            );
           }
         }
       }
@@ -505,13 +741,20 @@ export async function handleSpecialLessonWhatsAppTrigger({
           recipientName: recipient.recipientName,
           messageContent: newMsg,
           status: notifStatus,
+          contextData: { candidates: recipient.candidates } as any,
           checkedNumbers: recipient.checkedAudit as any,
           triggeredBy: adminId,
         },
       });
 
       if (config.mode === "AUTO" && recipient.recipientPhone) {
-        await dispatchMessageDirect(recipient.recipientPhone, newMsg, createdNotif.id);
+        await tryAutoDispatchOrLeaveQueued(
+          createdNotif.id,
+          recipient.recipientPhone,
+          newMsg,
+          recipient.candidates,
+          config
+        );
       }
     }
   } catch (err) {

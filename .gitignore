@@ -47,3 +47,11 @@ CLAUDE.md
 # zk-bridge runtime cache
 zk-bridge/*.json
 zk-bridge/*.log
+
+# whatsapp bridge runtime & session keys (never commit!)
+data/wa-session/
+wa-bridge/node_modules/
+wa-bridge/package-lock.json
+wa-bridge/wa-session/
+wa-bridge/wa_bridge_config.json
+wa-bridge/*.log

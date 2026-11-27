@@ -8,8 +8,8 @@ import { useRouter } from "next/navigation";
 import { LessonInstance, AttendanceCellDetail } from "@/app/[locale]/(dashboard)/list/attendance/class/[id]/page";
 import { useTranslations, useLocale } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { Search, X, Check, FileText, RotateCcw, Loader2, Users, UserCheck } from "lucide-react";
-import { markSingleAttendanceAction, deleteSingleAttendanceAction } from "@/lib/actions";
+import { Search, X, Check, FileText, RotateCcw, Loader2, Users, UserCheck, UserPlus } from "lucide-react";
+import { markSingleAttendanceAction, deleteSingleAttendanceAction, enrollStudentInClassAction } from "@/lib/actions";
 import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import { toast } from "react-toastify";
 import { Badge } from "@/components/ui/Badge";
@@ -207,6 +207,12 @@ type AttendanceGridProps = {
         isTransferred?: boolean;
         isRevisionVisitorOnly?: boolean;
         revisionPaidTotal?: number;
+        hasPriorRevisionInGroup?: boolean;
+        priorRevisionCount?: number;
+        earliestRevisionAt?: string | null;
+        latestRevisionAt?: string | null;
+        revisionGapLessonsCount?: number;
+        revisionGapLessonIds?: number[];
         status?: string;
         transferredAt?: string | null;
         enrolledAt?: string | null;
@@ -214,9 +220,19 @@ type AttendanceGridProps = {
     })[];
     lessonInstances: LessonInstance[];
     attendanceMap: Map<string, Map<string, AttendanceCellDetail | boolean>>;
+    classId?: number;
+    className?: string;
+    canEnroll?: boolean;
 };
 
-const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: AttendanceGridProps) => {
+const AttendanceGrid = ({
+    students,
+    lessonInstances,
+    attendanceMap,
+    classId,
+    className,
+    canEnroll = false,
+}: AttendanceGridProps) => {
     const t = useTranslations("attendance");
     const locale = useLocale();
     const router = useRouter();
@@ -482,6 +498,75 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
         date: string;
         justification: string;
     } | null>(null);
+
+    const [enrollVisitorModal, setEnrollVisitorModal] = useState<{
+        studentId: string;
+        studentName: string;
+        globalNumber?: number;
+        revisionPaidTotal?: number;
+        earliestRevisionDateStr?: string;
+        gapCount: number;
+    } | null>(null);
+    const [isEnrollingVisitor, setIsEnrollingVisitor] = useState(false);
+
+    const handleOpenEnrollVisitor = (student: AttendanceGridProps["students"][number]) => {
+        const recs = localAttendanceMap.get(student.id);
+        const revMsList: number[] = [];
+        const revKeys = new Set<string>();
+        if (recs) {
+            for (const inst of lessonInstances) {
+                const r = recs.get(inst.key);
+                if (r && typeof r !== "boolean" && r.isRevisionVisitor) {
+                    revKeys.add(inst.key);
+                    const ms = new Date(inst.startsAt || `${inst.date}T12:00:00Z`).getTime();
+                    if (!isNaN(ms)) revMsList.push(ms);
+                }
+            }
+        }
+        revMsList.sort((a, b) => a - b);
+        const earliestMs = revMsList.length > 0 ? revMsList[0] : null;
+        const nowThreshold = Date.now() - 2 * 60 * 60 * 1000;
+        const gapCount =
+            earliestMs !== null
+                ? lessonInstances.filter((inst) => {
+                      if (inst.isFree || revKeys.has(inst.key)) return false;
+                      const ms = new Date(inst.startsAt || `${inst.date}T12:00:00Z`).getTime();
+                      return !isNaN(ms) && ms > earliestMs && ms < nowThreshold;
+                  }).length
+                : 0;
+
+        setEnrollVisitorModal({
+            studentId: student.id,
+            studentName: student.name,
+            globalNumber: student.globalNumber,
+            revisionPaidTotal: student.revisionPaidTotal,
+            earliestRevisionDateStr: earliestMs !== null ? new Date(earliestMs).toISOString() : undefined,
+            gapCount,
+        });
+    };
+
+    const handleConfirmEnrollVisitor = async () => {
+        if (!enrollVisitorModal || !classId) return;
+        setIsEnrollingVisitor(true);
+        try {
+            const res = await enrollStudentInClassAction({
+                studentId: enrollVisitorModal.studentId,
+                classId,
+            });
+            if (res.success) {
+                toast.success(res.message);
+                setEnrollVisitorModal(null);
+                setActiveTab("group");
+                router.refresh();
+            } else {
+                toast.error(res.message);
+            }
+        } catch (err: any) {
+            toast.error(err?.message || "Erreur lors de l'inscription");
+        } finally {
+            setIsEnrollingVisitor(false);
+        }
+    };
 
     const activeGroupStudents = useMemo(
         () =>
@@ -807,6 +892,10 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                         <span>{locale === "ar" ? "حاضر كزائر مراجعة (ضيف حصة واحدة)" : "Présent visiteur révision (invité 1 séance)"}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 rounded-full bg-teal-50 border border-dashed border-teal-500 text-teal-700 inline-flex items-center justify-center text-[9px] font-mono font-bold leading-none shadow-2xs">—</span>
+                        <span>{t("legendRevisionGap")}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded-full bg-rose-500 inline-block shadow-2xs"></span>
                         <span>{locale === "ar" ? "أستاذ غائب (محفوظ)" : "Prof absent (préservé)"}</span>
                     </div>
@@ -1048,6 +1137,32 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                                 {locale === "ar" ? "زائر مراجعة" : "Visiteur révision"}
                                                             </span>
                                                         )}
+                                                        {isRevisionRow && !student.isRevisionVisitorOnly && (
+                                                            <span
+                                                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs"
+                                                                title={
+                                                                    student.enrolledAt
+                                                                        ? locale === "ar"
+                                                                            ? `سُجّل رسمياً في الفوج بتاريخ ${formatCatchUpDate(student.enrolledAt)} (الفاصل قبل التسجيل غير محتسب)`
+                                                                            : `Inscrit officiellement le ${formatCatchUpDate(student.enrolledAt)} (écart non facturé)`
+                                                                        : undefined
+                                                                }
+                                                            >
+                                                                {locale === "ar" ? "سُجّل في الفوج ✓" : "Inscrit ✓"}
+                                                            </span>
+                                                        )}
+                                                        {!isRevisionRow && student.hasPriorRevisionInGroup && (
+                                                            <span
+                                                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-50 text-teal-900 border border-teal-300 shadow-2xs"
+                                                                title={
+                                                                    locale === "ar"
+                                                                        ? `حضر ${student.priorRevisionCount || 1} حصة مراجعة سابقة${student.enrolledAt ? ` قبل تسجيله الرسمي يوم ${formatCatchUpDate(student.enrolledAt)}` : ""}${student.revisionGapLessonsCount ? ` — ${student.revisionGapLessonsCount} حصة فاصلة غير محتسبة` : ""}`
+                                                                        : `A suivi ${student.priorRevisionCount || 1} révision(s)${student.enrolledAt ? ` avant son inscription le ${formatCatchUpDate(student.enrolledAt)}` : ""}${student.revisionGapLessonsCount ? ` — ${student.revisionGapLessonsCount} séance(s) d'écart non facturée(s)` : ""}`
+                                                                }
+                                                            >
+                                                                {locale === "ar" ? "مراجعة سابقة" : "Ex-révision"}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <div className="flex items-center gap-1.5 flex-wrap">
                                                         {student.globalNumber ? (
@@ -1059,6 +1174,25 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold font-mono bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs leading-none">
                                                                 {formatDZD(student.revisionPaidTotal!, locale)}
                                                             </span>
+                                                        )}
+                                                        {isRevisionRow && student.isRevisionVisitorOnly && canEnroll && classId && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => {
+                                                                    e.preventDefault();
+                                                                    e.stopPropagation();
+                                                                    handleOpenEnrollVisitor(student);
+                                                                }}
+                                                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-2xs transition-colors cursor-pointer leading-tight"
+                                                                title={
+                                                                    locale === "ar"
+                                                                        ? "تسجيل هذا الزائر رسمياً في الفوج (دون احتساب الحصص الفاصلة)"
+                                                                        : "Inscrire officiellement ce visiteur dans le groupe (sans facturer l'écart)"
+                                                                }
+                                                            >
+                                                                <UserPlus className="w-2.5 h-2.5" />
+                                                                <span>{locale === "ar" ? "تسجيل في الفوج" : "Inscrire"}</span>
+                                                            </button>
                                                         )}
                                                         {!isRevisionRow && student.balance && (
                                                             <BalanceBadge balance={student.balance} locale={locale} />
@@ -1142,6 +1276,101 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                                             }`}
                                                             title={locale === "ar" ? "قبل تاريخ التحويل للفوج (انقر للتسجيل الاستثنائي)" : "Avant la date de transfert dans ce groupe (Cliquer pour déroger/enregistrer)"}
                                                         />
+                                                    </td>
+                                                );
+                                            }
+
+                                            // Post-revision pre-enrollment gap (unbilled lessons between revision attendance and official enrollment)
+                                            const instanceStartMs = new Date(
+                                                instance.startsAt || `${instance.date}T12:00:00Z`
+                                            ).getTime();
+                                            const studentEarliestRevMs = student.earliestRevisionAt
+                                                ? new Date(student.earliestRevisionAt).getTime()
+                                                : null;
+                                            const studentEnrolledThresholdMs = student.enrolledAt
+                                                ? new Date(student.enrolledAt).getTime() - 2 * 60 * 60 * 1000
+                                                : null;
+
+                                            const isUnrecordedRevisionGap = Boolean(
+                                                !isRevisionRow &&
+                                                !isFree &&
+                                                !rawRecord &&
+                                                (student.revisionGapLessonIds?.includes(instance.lessonId) ||
+                                                    (studentEarliestRevMs !== null &&
+                                                        studentEnrolledThresholdMs !== null &&
+                                                        instanceStartMs > studentEarliestRevMs &&
+                                                        instanceStartMs < studentEnrolledThresholdMs))
+                                            );
+
+                                            const isUnrecordedBeforePriorRevision = Boolean(
+                                                !isRevisionRow &&
+                                                !isFree &&
+                                                !rawRecord &&
+                                                studentEarliestRevMs !== null &&
+                                                studentEnrolledThresholdMs !== null &&
+                                                studentEarliestRevMs < studentEnrolledThresholdMs &&
+                                                instanceStartMs < studentEarliestRevMs
+                                            );
+
+                                            if (isUnrecordedRevisionGap) {
+                                                const gapTitle =
+                                                    locale === "ar"
+                                                        ? `فترة ما بين حصة المراجعة والتسجيل الرسمي${student.enrolledAt ? ` (${formatCatchUpDate(student.enrolledAt)})` : ""} — غير محتسبة في الرصيد`
+                                                        : `Période entre la séance de révision et l'inscription officielle${student.enrolledAt ? ` (${formatCatchUpDate(student.enrolledAt)})` : ""} — non décomptée du solde`;
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <div className="relative group/revgap inline-flex items-center justify-center">
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => handleCircleClick(e, student, instance)}
+                                                                className={`w-5 h-5 mx-auto rounded-full bg-teal-50/90 hover:bg-teal-100 border border-dashed border-teal-500 text-teal-800 font-mono text-[10px] font-bold flex items-center justify-center transition-all hover:scale-125 cursor-pointer shadow-2xs focus:outline-none ${
+                                                                    isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                                }`}
+                                                                title={gapTitle}
+                                                            >
+                                                                —
+                                                            </button>
+                                                            <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/revgap:flex flex-col items-center z-40 min-w-[200px] max-w-xs transition-all">
+                                                                <div className="bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-xl text-center font-normal">
+                                                                    <div className="font-bold text-teal-300 mb-0.5">
+                                                                        {locale === "ar"
+                                                                            ? "فاصل قبل التسجيل (غير محتسب)"
+                                                                            : "Écart avant inscription (0 déduit)"}
+                                                                    </div>
+                                                                    <div className="text-[11px] text-gray-200 leading-snug">
+                                                                        {gapTitle}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                );
+                                            }
+
+                                            if (isUnrecordedBeforePriorRevision) {
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => handleCircleClick(e, student, instance)}
+                                                            className={`w-5 h-5 mx-auto rounded-full bg-slate-50 border border-dashed border-slate-300 text-slate-400 font-mono text-[10px] flex items-center justify-center hover:scale-125 hover:border-primary focus:outline-none transition-all cursor-pointer shadow-2xs ${
+                                                                isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                            }`}
+                                                            title={
+                                                                locale === "ar"
+                                                                    ? "قبل انضمام التلميذ للفوج (غير محتسبة)"
+                                                                    : "Avant l'inscription de l'élève dans ce groupe (non facturée)"
+                                                            }
+                                                        >
+                                                            —
+                                                        </button>
                                                     </td>
                                                 );
                                             }
@@ -1377,6 +1606,45 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                             }
 
                                             // Status is ABSENT
+                                            if (record.isRevisionGap) {
+                                                const gapTitle =
+                                                    locale === "ar"
+                                                        ? `فترة ما بين حصة المراجعة والتسجيل الرسمي${student.enrolledAt ? ` (${formatCatchUpDate(student.enrolledAt)})` : ""} — غير محتسبة في الرصيد`
+                                                        : `Période entre la séance de révision et l'inscription officielle${student.enrolledAt ? ` (${formatCatchUpDate(student.enrolledAt)})` : ""} — non décomptée du solde`;
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <div className="relative group/revgap inline-flex items-center justify-center">
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => handleCircleClick(e, student, instance, record)}
+                                                                className={`w-5 h-5 mx-auto rounded-full bg-teal-50/90 hover:bg-teal-100 border border-dashed border-teal-500 text-teal-800 font-mono text-[10px] font-bold flex items-center justify-center transition-all hover:scale-125 cursor-pointer shadow-2xs focus:outline-none ${
+                                                                    isActiveCell ? "ring-2 ring-primary ring-offset-2 scale-125" : ""
+                                                                }`}
+                                                                title={gapTitle}
+                                                            >
+                                                                —
+                                                            </button>
+                                                            <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/revgap:flex flex-col items-center z-40 min-w-[200px] max-w-xs transition-all">
+                                                                <div className="bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-xl text-center font-normal">
+                                                                    <div className="font-bold text-teal-300 mb-0.5">
+                                                                        {locale === "ar"
+                                                                            ? "فاصل قبل التسجيل (غير محتسب)"
+                                                                            : "Écart avant inscription (0 déduit)"}
+                                                                    </div>
+                                                                    <div className="text-[11px] text-gray-200 leading-snug">
+                                                                        {gapTitle}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                );
+                                            }
+
                                             if (record.isPreStart) {
                                                 // Neutral grayed circle: pre-start absence (Rule 10)
                                                 return (
@@ -1606,6 +1874,100 @@ const AttendanceGrid = ({ students, lessonInstances, attendanceMap }: Attendance
                                 className="px-5 py-2 text-xs font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors cursor-pointer"
                             >
                                 {t("closeDialog")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Enroll Former Revision Visitor Confirmation Modal */}
+            {enrollVisitorModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 font-sans backdrop-blur-xs animate-in fade-in duration-150"
+                    onClick={() => !isEnrollingVisitor && setEnrollVisitorModal(null)}
+                >
+                    <div
+                        className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100 animate-in zoom-in-95 duration-150"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between pb-4 mb-4 border-b border-gray-100">
+                            <div className="flex items-center gap-2.5">
+                                <span className="w-9 h-9 rounded-full bg-teal-100 text-teal-800 flex items-center justify-center">
+                                    <UserPlus className="w-4 h-4" />
+                                </span>
+                                <div>
+                                    <h3 className="font-bold text-base text-gray-900">
+                                        {locale === "ar"
+                                            ? "تسجيل زائر المراجعة رسمياً في الفوج"
+                                            : "Inscrire le visiteur de révision dans le groupe"}
+                                    </h3>
+                                    <p className="text-xs text-gray-500">
+                                        {enrollVisitorModal.studentName}
+                                        {enrollVisitorModal.globalNumber
+                                            ? ` (#${enrollVisitorModal.globalNumber})`
+                                            : ""}
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                disabled={isEnrollingVisitor}
+                                onClick={() => setEnrollVisitorModal(null)}
+                                className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+
+                        <div className="space-y-3 mb-6">
+                            <div className="p-3.5 bg-teal-50/80 border border-teal-200 rounded-xl text-teal-950 text-xs leading-relaxed space-y-1.5">
+                                <div className="font-bold text-teal-900 flex items-center gap-1.5">
+                                    <Check className="w-4 h-4 text-teal-700 shrink-0 stroke-[2.5]" />
+                                    <span>
+                                        {locale === "ar"
+                                            ? "الفاصل قبل التسجيل غير محتسب تلقائياً"
+                                            : "Écart avant inscription non facturé"}
+                                    </span>
+                                </div>
+                                <p>
+                                    {locale === "ar"
+                                        ? `سيتم تسجيل التلميذ رسمياً في الفوج${className ? ` "${className}"` : ""} ابتداءً من اليوم.${
+                                              enrollVisitorModal.gapCount > 0
+                                                  ? ` الحصص الفاصلة بين حصة المراجعة واليوم (${enrollVisitorModal.gapCount} حصة) لن تُحتسب ولن تُخصم من رصيده.`
+                                                  : " لن يتم احتساب أي حصص سابقة قبل تاريخ التسجيل."
+                                          }`
+                                        : `L'élève sera inscrit officiellement${className ? ` dans "${className}"` : ""} à compter d'aujourd'hui.${
+                                              enrollVisitorModal.gapCount > 0
+                                                  ? ` Les ${enrollVisitorModal.gapCount} séance(s) entre sa révision et aujourd'hui ne seront pas décomptées de son solde.`
+                                                  : " Aucune séance antérieure à l'inscription ne sera facturée."
+                                          }`}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2">
+                            <button
+                                type="button"
+                                disabled={isEnrollingVisitor}
+                                onClick={() => setEnrollVisitorModal(null)}
+                                className="px-4 py-2 text-xs font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                                {locale === "ar" ? "إلغاء" : "Annuler"}
+                            </button>
+                            <button
+                                type="button"
+                                disabled={isEnrollingVisitor}
+                                onClick={handleConfirmEnrollVisitor}
+                                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+                            >
+                                {isEnrollingVisitor ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                    <UserPlus className="w-3.5 h-3.5" />
+                                )}
+                                <span>
+                                    {locale === "ar" ? "تأكيد التسجيل في الفوج" : "Confirmer l'inscription"}
+                                </span>
                             </button>
                         </div>
                     </div>

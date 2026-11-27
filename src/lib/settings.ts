@@ -71,4 +71,5 @@ export const routeAccessMap: RouteAccessMap = {
   "/list/payments(.*)": [...ADMIN_ROLES, "student", "parent"],
   "/list/workshops(.*)": [...ADMIN_ROLES, "student", "parent"],
   "/list/announcements(.*)": [...ADMIN_ROLES, "teacher", "student", "parent"],
+  "/list/whatsapp-queue(.*)": ADMIN_ROLES,
 };

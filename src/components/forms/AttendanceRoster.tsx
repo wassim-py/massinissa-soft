@@ -137,6 +137,7 @@ type FullStudent = Student & {
   revisionAttendanceId?: number;
   revisionAmount?: number;
   revisionVoucher?: any;
+  priorRevisionCount?: number;
 };
 
 type FullLesson = Lesson & {
@@ -915,11 +916,13 @@ const AttendanceRoster = ({
 
   const buildLiveStudentAttendances = useCallback(
     (student: FullStudent, status?: AttendanceStatus) => {
+      // Keep prior revision visitor attendances so computeStudentCreditAndSessions
+      // extracts their timestamps for post-revision enrollment gap exemption without consuming credits.
       const baseOtherAttendances = (student.attendances || []).filter(
         (a: any) => !isSameSessionAttendance(a)
       );
       const existingCurrentAtt: any = (student.attendances || []).find(
-        (a: any) => isSameSessionAttendance(a)
+        (a: any) => isSameSessionAttendance(a) && !a.isRevisionVisitor
       );
 
       if (
@@ -1504,6 +1507,7 @@ const AttendanceRoster = ({
             const studentAtts = liveStudentAttendances.map((a: any) => ({
               lessonId: a.lessonId,
               status: a.status,
+              isRevisionVisitor: Boolean(a.isRevisionVisitor),
             }));
 
             const hasPaidCycle = Boolean(
@@ -1838,6 +1842,22 @@ const AttendanceRoster = ({
                                 : (locale === "ar" ? "إلغاء الحضور" : "Annuler")}
                             </button>
                           </div>
+                        )}
+
+                        {!student.isRevisionVisitor && (student.priorRevisionCount || 0) > 0 && (
+                          <Badge
+                            variant="neutral"
+                            size="sm"
+                            withDot
+                            className="bg-teal-50 text-teal-900 border-teal-300 font-semibold shadow-2xs"
+                            title={
+                              locale === "ar"
+                                ? "التلميذ حضر حصة مراجعة سابقة قبل تسجيله الرسمي — الفاصل قبل التسجيل غير محتسب في رصيد الحصص"
+                                : "L'élève a assisté à une révision avant son inscription — l'écart avant inscription n'est pas facturé"
+                            }
+                          >
+                            {locale === "ar" ? "مراجعة سابقة (الفاصل معفى)" : "Ex-révision (écart exonéré)"}
+                          </Badge>
                         )}
 
                         {caughtUpMap.has(student.id) && (

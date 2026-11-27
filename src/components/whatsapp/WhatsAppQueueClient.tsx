@@ -65,8 +65,8 @@ export default function WhatsAppQueueClient({
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editText, setEditText] = useState("");
 
-  const loadQueue = useCallback(async () => {
-    setLoading(true);
+  const loadQueue = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await getBranchWhatsAppQueueAction({
         branchId: selectedBranchId,
@@ -85,15 +85,27 @@ export default function WhatsAppQueueClient({
       }
     } catch (err) {
       console.error(err);
-      toast.error(isAr ? "فشل تحميل قائمة الانتظار" : "Erreur de chargement de la file d'attente");
+      if (!silent) {
+        toast.error(isAr ? "فشل تحميل قائمة الانتظار" : "Erreur de chargement de la file d'attente");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [selectedBranchId, triggerFilter, statusFilter, searchTerm, page, isAr]);
 
   useEffect(() => {
     loadQueue();
   }, [loadQueue]);
+
+  // Auto-poll silently while queued/sending items are dispatching via wa-bridge
+  useEffect(() => {
+    const hasInFlight = items.some((i) => i.status === "QUEUED" || i.status === "SENDING");
+    if (!hasInFlight) return;
+    const timer = setInterval(() => {
+      loadQueue(true);
+    }, 4500);
+    return () => clearInterval(timer);
+  }, [items, loadQueue]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -223,11 +235,26 @@ export default function WhatsAppQueueClient({
             {isAr ? "بانتظار الإرسال" : "En attente"}
           </span>
         );
+      case "QUEUED":
+      case "SENDING":
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+            <RefreshCw className="w-3 h-3 animate-spin" />
+            {isAr ? "قيد الإرسال..." : "En cours d'envoi..."}
+          </span>
+        );
       case "SENT":
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700">
             <CheckCircle2 className="w-3 h-3" />
             {isAr ? "تم الإرسال" : "Envoyé"}
+          </span>
+        );
+      case "FAILED_ERROR":
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+            <AlertTriangle className="w-3 h-3" />
+            {isAr ? "فشل الإرسال" : "Échec d'envoi"}
           </span>
         );
       case "REVOKED_PAYMENT":
@@ -354,6 +381,7 @@ export default function WhatsAppQueueClient({
           >
             <option value="ALL">{isAr ? "جميع الحالات" : "Tous les statuts"}</option>
             <option value="PENDING_MANUAL">{isAr ? "معلق بانتظار الإرسال" : "En attente"}</option>
+            <option value="QUEUED">{isAr ? "قيد الإرسال الآن" : "En cours d'envoi"}</option>
             <option value="SENT">{isAr ? "تم الإرسال بنجاح" : "Envoyés"}</option>
             <option value="REVOKED_PAYMENT">{isAr ? "مُلغى (تم دفع الاشتراك)" : "Régularisé guichet"}</option>
             <option value="FAILED_NO_WHATSAPP">{isAr ? "أرقام بدون واتساب" : "Sans WhatsApp"}</option>
@@ -466,7 +494,7 @@ export default function WhatsAppQueueClient({
 
                     {/* Actions */}
                     <td className="p-3.5 text-right space-x-1">
-                      {item.status === "PENDING_MANUAL" && (
+                      {(item.status === "PENDING_MANUAL" || item.status === "FAILED_ERROR") && (
                         <>
                           <button
                             onClick={() => handleSendSingle(item.id)}
@@ -475,7 +503,15 @@ export default function WhatsAppQueueClient({
                             title={isAr ? "إرسال الآن" : "Envoyer"}
                           >
                             <Send className="w-3 h-3" />
-                            <span>{isAr ? "إرسال" : "Envoyer"}</span>
+                            <span>
+                              {item.status === "FAILED_ERROR"
+                                ? isAr
+                                  ? "إعادة"
+                                  : "Réessayer"
+                                : isAr
+                                ? "إرسال"
+                                : "Envoyer"}
+                            </span>
                           </button>
 
                           <button

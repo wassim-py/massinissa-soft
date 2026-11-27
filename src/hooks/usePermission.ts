@@ -54,7 +54,11 @@ export function usePermission(): UsePermissionReturn {
   const { user, isLoaded } = useUser();
 
   const role = useMemo(() => {
-    return (user?.publicMetadata?.role as string) || undefined;
+    return (
+      (user?.publicMetadata?.role as string) ||
+      ((user as any)?.unsafeMetadata?.role as string) ||
+      undefined
+    );
   }, [user]);
 
   const canonicalRole = useMemo(() => {

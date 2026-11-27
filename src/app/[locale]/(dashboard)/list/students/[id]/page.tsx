@@ -469,6 +469,9 @@ const SingleStudentPage = async (
             const isDirectClass = att.lesson.classId === c.id;
             const isGroupLesson = att.lesson.lessonGroups?.some((lg: any) => lg.classId === c.id);
             if (!isDirectClass && !isGroupLesson) return false;
+            // Preserve revision visits so computeStudentCreditAndSessions extracts
+            // their dates for post-revision enrollment gap exemption without consuming credits.
+            if (att.isRevisionVisitor) return true;
             return isLessonApplicableToEnrollment(
               {
                 ...att.lesson,

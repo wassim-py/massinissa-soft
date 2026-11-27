@@ -2,6 +2,12 @@ import prisma from "@/lib/prisma";
 import { computeStudentCreditAndSessions } from "@/lib/studentBilling";
 import { DEFAULT_TEMPLATES } from "./whatsappTemplates";
 
+export interface PhoneCandidate {
+  phone: string;
+  type: "STUDENT_PRIMARY" | "PARENT_PHONE" | "FAMILY_PAYER";
+  name: string;
+}
+
 /**
  * Normalizes Algerian mobile numbers to WhatsApp JID format (213XXXXXXXXX)
  */
@@ -60,83 +66,50 @@ export async function getOrCreateWhatsAppConfig() {
 }
 
 /**
- * Checks WhatsApp availability with a 14-day database cache layer.
- * Calls the local Baileys bridge daemon if not cached.
+ * Checks whether the current Algiers wall-clock time falls inside Quiet Hours.
  */
-export async function checkWhatsAppWithCache(phone: string): Promise<boolean> {
-  const normPhone = normalizeAlgerianPhone(phone);
-  if (!normPhone) return false;
+export function isWithinQuietHours(config: {
+  quietHoursEnabled?: boolean;
+  quietHoursStart?: string | null;
+  quietHoursEnd?: string | null;
+}): boolean {
+  if (!config.quietHoursEnabled) return false;
+  const startStr = config.quietHoursStart || "22:00";
+  const endStr = config.quietHoursEnd || "08:00";
 
-  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  const cached = await prisma.whatsAppNumberCache.findUnique({
-    where: { phone: normPhone },
+  const [sh, sm] = startStr.split(":").map(Number);
+  const [eh, em] = endStr.split(":").map(Number);
+  if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return false;
+
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Algiers",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   });
+  const nowStr = formatter.format(new Date());
+  const [nh, nm] = nowStr.split(":").map(Number);
 
-  if (cached && cached.lastCheckedAt > fourteenDaysAgo) {
-    return cached.hasWhatsApp;
+  const curMins = nh * 60 + nm;
+  const startMins = sh * 60 + sm;
+  const endMins = eh * 60 + em;
+
+  if (startMins <= endMins) {
+    return curMins >= startMins && curMins < endMins;
   }
-
-  // Query Baileys daemon
-  const bridgeUrl = process.env.WHATSAPP_BRIDGE_URL || "http://127.0.0.1:5001";
-  const apiKey = process.env.WHATSAPP_BRIDGE_SECRET || "massinissa_secret_key_2026";
-
-  let hasWhatsApp = false;
-  try {
-    const res = await fetch(`${bridgeUrl}/api/check-number`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({ phone: normPhone }),
-      // Short timeout to avoid blocking if daemon is starting
-      signal: AbortSignal.timeout(3500),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      hasWhatsApp = Boolean(data.exists);
-    } else {
-      // If bridge is offline or hasn't connected yet, default to assuming true if phone format is valid
-      hasWhatsApp = true;
-    }
-  } catch (err) {
-    // Fallback: If bridge daemon is offline, accept well-formed Algerian numbers
-    hasWhatsApp = true;
-  }
-
-  await prisma.whatsAppNumberCache.upsert({
-    where: { phone: normPhone },
-    update: {
-      hasWhatsApp,
-      jid: hasWhatsApp ? `${normPhone}@s.whatsapp.net` : null,
-      lastCheckedAt: new Date(),
-    },
-    create: {
-      phone: normPhone,
-      hasWhatsApp,
-      jid: hasWhatsApp ? `${normPhone}@s.whatsapp.net` : null,
-      lastCheckedAt: new Date(),
-    },
-  });
-
-  return hasWhatsApp;
-}
-
-export interface ResolvedRecipient {
-  recipientPhone: string | null;
-  recipientType: "STUDENT_PRIMARY" | "PARENT_PHONE" | "FAMILY_PAYER" | null;
-  recipientName: string | null;
-  checkedAudit: Array<{ phone: string; type: string; hasWhatsApp: boolean }>;
+  // Wraps past midnight (e.g., 22:00 -> 08:00)
+  return curMins >= startMins || curMins < endMins;
 }
 
 /**
- * Sequential waterfall contact resolution:
- * 1. Student Primary Phone (student.phone)
- * 2. Parent Phone Numbers (parentPhoneNumbers[])
- * 3. Family Payer Student Phone
+ * Builds the deduplicated waterfall phone list for a student:
+ * 1. Student primary phone (student.phone)
+ * 2. Parent phone numbers (student.parentPhoneNumbers[])
+ * 3. Family payer phone & parents
  */
-export async function resolveStudentWhatsAppRecipient(studentId: string): Promise<ResolvedRecipient> {
+export async function buildStudentPhoneCandidates(
+  studentId: string
+): Promise<{ student: any; candidates: PhoneCandidate[] }> {
   const student = await prisma.student.findUnique({
     where: { id: studentId },
     include: {
@@ -152,92 +125,167 @@ export async function resolveStudentWhatsAppRecipient(studentId: string): Promis
   });
 
   if (!student) {
-    return {
-      recipientPhone: null,
-      recipientType: null,
-      recipientName: null,
-      checkedAudit: [],
-    };
+    return { student: null, candidates: [] };
   }
 
-  const checkedAudit: Array<{ phone: string; type: string; hasWhatsApp: boolean }> = [];
+  const seen = new Set<string>();
+  const candidates: PhoneCandidate[] = [];
+
+  const pushCandidate = (
+    rawPhone: string | null | undefined,
+    type: PhoneCandidate["type"],
+    name: string
+  ) => {
+    const norm = normalizeAlgerianPhone(rawPhone);
+    if (norm && !seen.has(norm)) {
+      seen.add(norm);
+      candidates.push({ phone: norm, type, name });
+    }
+  };
 
   // 1. Student Global/Primary Phone
-  if (student.phone) {
-    const norm = normalizeAlgerianPhone(student.phone);
-    if (norm) {
-      const hasWA = await checkWhatsAppWithCache(norm);
-      checkedAudit.push({ phone: norm, type: "STUDENT_PRIMARY", hasWhatsApp: hasWA });
-      if (hasWA) {
-        return {
-          recipientPhone: norm,
-          recipientType: "STUDENT_PRIMARY",
-          recipientName: student.name,
-          checkedAudit,
-        };
-      }
-    }
-  }
+  pushCandidate(student.phone, "STUDENT_PRIMARY", student.name);
 
   // 2. Parent Phone Numbers
   for (const p of student.parentPhoneNumbers) {
-    const norm = normalizeAlgerianPhone(p.phone);
-    if (norm) {
-      const hasWA = await checkWhatsAppWithCache(norm);
-      checkedAudit.push({ phone: norm, type: "PARENT_PHONE", hasWhatsApp: hasWA });
-      if (hasWA) {
-        return {
-          recipientPhone: norm,
-          recipientType: "PARENT_PHONE",
-          recipientName: `ولي أمر ${student.name}`,
-          checkedAudit,
-        };
-      }
-    }
+    pushCandidate(p.phone, "PARENT_PHONE", `ولي أمر ${student.name}`);
   }
 
   // 3. Family Payer Fallback
   if (student.family?.payerStudent && student.family.payerStudent.id !== student.id) {
     const payer = student.family.payerStudent;
-    if (payer.phone) {
-      const norm = normalizeAlgerianPhone(payer.phone);
-      if (norm) {
-        const hasWA = await checkWhatsAppWithCache(norm);
-        checkedAudit.push({ phone: norm, type: "FAMILY_PAYER", hasWhatsApp: hasWA });
-        if (hasWA) {
-          return {
-            recipientPhone: norm,
-            recipientType: "FAMILY_PAYER",
-            recipientName: `المسؤول العائلي (${payer.name})`,
-            checkedAudit,
-          };
-        }
-      }
-    }
-    // Also check payer's parents
+    pushCandidate(payer.phone, "FAMILY_PAYER", `المسؤول العائلي (${payer.name})`);
     for (const p of payer.parentPhoneNumbers || []) {
-      const norm = normalizeAlgerianPhone(p.phone);
-      if (norm) {
-        const hasWA = await checkWhatsAppWithCache(norm);
-        checkedAudit.push({ phone: norm, type: "FAMILY_PAYER_PARENT", hasWhatsApp: hasWA });
-        if (hasWA) {
-          return {
-            recipientPhone: norm,
-            recipientType: "FAMILY_PAYER",
-            recipientName: `ولي أمر العائلة (${payer.name})`,
-            checkedAudit,
-          };
-        }
-      }
+      pushCandidate(p.phone, "FAMILY_PAYER", `ولي أمر العائلة (${payer.name})`);
     }
   }
 
-  // 4. No number found on WhatsApp
+  return { student, candidates };
+}
+
+export interface ResolvedRecipient {
+  recipientPhone: string | null;
+  recipientType: "STUDENT_PRIMARY" | "PARENT_PHONE" | "FAMILY_PAYER" | null;
+  recipientName: string | null;
+  checkedAudit: Array<{ phone: string; type: string; hasWhatsApp: boolean }>;
+  candidates: PhoneCandidate[];
+}
+
+/**
+ * Sequential waterfall contact resolution:
+ * 1. Uses 14-day WhatsAppNumberCache in PostgreSQL first.
+ * 2. If WHATSAPP_BRIDGE_URL is explicitly configured (direct mode), verifies uncached numbers via bridge.
+ * 3. In Cloud-Sync mode (Vercel + standalone wa-bridge), tentatively selects the highest-priority
+ *    non-rejected number and passes the full waterfall `candidates` list so `wa-bridge` verifies
+ *    availability live via `sock.onWhatsApp()` at dispatch time.
+ */
+export async function resolveStudentWhatsAppRecipient(studentId: string): Promise<ResolvedRecipient> {
+  const { student, candidates } = await buildStudentPhoneCandidates(studentId);
+
+  if (!student || candidates.length === 0) {
+    return {
+      recipientPhone: null,
+      recipientType: null,
+      recipientName: null,
+      checkedAudit: [],
+      candidates: [],
+    };
+  }
+
+  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const cachedRows = await prisma.whatsAppNumberCache.findMany({
+    where: {
+      phone: { in: candidates.map((c) => c.phone) },
+      lastCheckedAt: { gte: fourteenDaysAgo },
+    },
+  });
+  const cacheMap = new Map(cachedRows.map((r) => [r.phone, r.hasWhatsApp]));
+
+  const directBridgeUrl = process.env.WHATSAPP_BRIDGE_URL?.trim();
+  const apiKey = process.env.WHATSAPP_BRIDGE_SECRET || "massinissa_secret_key_2026";
+  const checkedAudit: Array<{ phone: string; type: string; hasWhatsApp: boolean }> = [];
+  const viableCandidates: PhoneCandidate[] = [];
+
+  for (const cand of candidates) {
+    if (cacheMap.has(cand.phone)) {
+      const hasWA = Boolean(cacheMap.get(cand.phone));
+      checkedAudit.push({ phone: cand.phone, type: cand.type, hasWhatsApp: hasWA });
+      if (hasWA) {
+        viableCandidates.push(cand);
+      }
+      continue;
+    }
+
+    // If direct bridge URL is explicitly configured, try synchronous verification
+    if (directBridgeUrl) {
+      try {
+        const res = await fetch(`${directBridgeUrl}/api/check-number`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+          },
+          body: JSON.stringify({ phone: cand.phone }),
+          signal: AbortSignal.timeout(5000),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const hasWA = Boolean(data.exists);
+          checkedAudit.push({ phone: cand.phone, type: cand.type, hasWhatsApp: hasWA });
+          await prisma.whatsAppNumberCache.upsert({
+            where: { phone: cand.phone },
+            update: {
+              hasWhatsApp: hasWA,
+              jid: hasWA ? `${cand.phone}@s.whatsapp.net` : null,
+              lastCheckedAt: new Date(),
+            },
+            create: {
+              phone: cand.phone,
+              hasWhatsApp: hasWA,
+              jid: hasWA ? `${cand.phone}@s.whatsapp.net` : null,
+              lastCheckedAt: new Date(),
+            },
+          });
+          if (hasWA) {
+            viableCandidates.push(cand);
+            // Since verified live, include any remaining unchecked fallbacks just in case
+            const idx = candidates.indexOf(cand);
+            for (let j = idx + 1; j < candidates.length; j++) {
+              if (cacheMap.get(candidates[j].phone) !== false) {
+                viableCandidates.push(candidates[j]);
+              }
+            }
+            break;
+          }
+          continue;
+        }
+      } catch {
+        // Direct bridge temporarily unreachable; keep candidate for async verification on send
+      }
+    }
+
+    // Uncached in Cloud-Sync mode: keep in waterfall list for live verification by wa-bridge
+    viableCandidates.push(cand);
+  }
+
+  if (viableCandidates.length === 0) {
+    return {
+      recipientPhone: null,
+      recipientType: null,
+      recipientName: null,
+      checkedAudit,
+      candidates: [],
+    };
+  }
+
+  const primary = viableCandidates[0];
   return {
-    recipientPhone: null,
-    recipientType: null,
-    recipientName: null,
+    recipientPhone: primary.phone,
+    recipientType: primary.type,
+    recipientName: primary.name,
     checkedAudit,
+    candidates: viableCandidates,
   };
 }
 
@@ -245,7 +293,10 @@ export async function resolveStudentWhatsAppRecipient(studentId: string): Promis
  * Just-In-Time (JIT) Verification of Student Credit Balance.
  * Returns true if student still has 0 or negative credits, false if payment was settled.
  */
-export async function verifyCreditIsStillZeroJit(studentId: string, classId?: number | null): Promise<boolean> {
+export async function verifyCreditIsStillZeroJit(
+  studentId: string,
+  classId?: number | null
+): Promise<boolean> {
   if (!classId) return true;
 
   try {
@@ -257,27 +308,16 @@ export async function verifyCreditIsStillZeroJit(studentId: string, classId?: nu
       },
       include: {
         class: true,
-        payerHistory: { orderBy: { effectiveFrom: "asc" } },
       },
     });
 
-    if (
-      !enrollment ||
-      (enrollment.payerStatus !== "NORMAL" && enrollment.payerStatus !== "DISCOUNTED")
-    ) {
+    if (!enrollment || enrollment.payerStatus !== "NORMAL") {
       return false; // Exempt or inactive
     }
 
-    // Live calculation of remaining credits
     const [tuitionVouchers, attendances, catchUps] = await Promise.all([
       prisma.voucher.findMany({
-        where: {
-          studentId,
-          classId,
-          isVoided: false,
-          isRefund: false,
-          paymentType: { in: ["TUITION_4SESSION", "TUITION"] },
-        },
+        where: { studentId, classId, isVoided: false, isRefund: false, paymentType: "TUITION" },
         include: { refunds: true },
       }),
       prisma.attendance.findMany({
@@ -294,24 +334,15 @@ export async function verifyCreditIsStillZeroJit(studentId: string, classId?: nu
       pricePerCycle: Number(enrollment.class.pricePerCycle || 0),
       isFormation: Boolean(enrollment.class.isFormation),
       payerStatus: enrollment.payerStatus,
-      discountType: enrollment.discountType,
-      discountValue: enrollment.discountValue,
-      payerHistory: enrollment.payerHistory,
       tuitionVouchers,
       attendances,
       catchUps,
       creditResetOffset: Number((enrollment as any).creditResetOffset || 0),
-      enrolledAt: enrollment.enrolledAt,
-      enrollmentStatus: enrollment.status,
     });
-
-    if (creditResult.isZeroFeeDiscount) {
-      return false;
-    }
 
     return creditResult.netSessions <= 0;
   } catch (err) {
     console.error("verifyCreditIsStillZeroJit error:", err);
-    return true; // Default to allowing reminder if error
+    return true;
   }
 }
