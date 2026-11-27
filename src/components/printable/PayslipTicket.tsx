@@ -68,6 +68,7 @@ export interface PayslipPrintData {
     studentName?: string;
     amount: number;
     date: string | Date;
+    branchId?: number;
     branchName?: string;
   }>;
   advances: number;
@@ -97,6 +98,19 @@ export interface PayslipPrintData {
     date: string | Date;
   }>;
   salaryHistory?: PayslipSalaryGrowthPoint[];
+  displayOptions?: {
+    includeRegularLessons?: boolean;
+    includeFormationCourses?: boolean;
+    includeBooks?: boolean;
+    includeAdvances?: boolean;
+    includePhotocopy?: boolean;
+    showSalaryGrowth?: boolean;
+    showGroupBreakdown?: boolean;
+    showBranchBreakdown?: boolean;
+    showSessionDetails?: boolean;
+    showFreeSessions?: boolean;
+    showTeacherAbsences?: boolean;
+  };
 }
 
 function computeNiceAxisMax(maxVal: number): number {
@@ -202,6 +216,23 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
   };
 
   const formatDZD = (num: number) => formatDZDLib(num, 'fr');
+
+  // Selective display flags (all default to true for backwards compatibility)
+  const opts = data.displayOptions;
+  const includeRegular = opts?.includeRegularLessons !== false;
+  const includeFormation = opts?.includeFormationCourses !== false;
+  const includeBooks = opts?.includeBooks !== false;
+  const includeAdvances = opts?.includeAdvances !== false;
+  const includePhotocopy = opts?.includePhotocopy !== false;
+  const showSalaryGrowth = opts?.showSalaryGrowth !== false;
+  const showGroupBreakdown = opts?.showGroupBreakdown !== false;
+  const showBranchBreakdown = opts?.showBranchBreakdown !== false;
+  const showSessionDetails = opts?.showSessionDetails !== false;
+  const showFreeSessions = opts?.showFreeSessions !== false;
+  const showTeacherAbsences = opts?.showTeacherAbsences !== false;
+  const hasCoursesSelected = includeRegular || includeFormation;
+  const effectiveBookRevenue = includeBooks ? Number(data.bookRevenue || 0) : 0;
+  const effectiveCoursesGross = Math.max(0, Number(data.grossAmount) - effectiveBookRevenue);
 
   const allSessions = React.useMemo(() => data.sessions || [], [data.sessions]);
   const absentLessons = allSessions.filter((s) => s.isTeacherAbsent);
@@ -323,76 +354,116 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       </div>
 
       {/* Key Metrics Banner: Total Payable Lessons, Late Regulated (if any), Course Sessions, Gross, Net */}
-      <div className={`grid ${totalRetroactiveLessons > 0 ? 'grid-cols-5' : 'grid-cols-4'} gap-2.5 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center`}>
-        <div className="bg-blue-50 border-2 border-blue-400 p-2.5 rounded-md">
-          <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block">
-            Séances Payables
-          </span>
-          <span className="text-2xl font-black text-blue-950 font-mono block mt-0.5">
-            {totalPayableLessons > 0 ? totalPayableLessons : totalPaidSessions}
-          </span>
-          <span className="text-[10px] text-blue-700 font-semibold block">
-            {totalRetroactiveLessons > 0
-              ? `dont ${totalRetroactiveLessons} régul. mois passé`
-              : "présences + absences"}
-          </span>
-        </div>
-
-        {totalRetroactiveLessons > 0 && (
+      {!hasCoursesSelected && includeBooks ? (
+        <div className="grid grid-cols-3 gap-2.5 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center">
           <div className="bg-purple-50 border-2 border-purple-400 p-2.5 rounded-md">
             <span className="text-[11px] font-bold text-purple-900 uppercase tracking-wide block">
-              Régul. Mois Passé
+              Ventes de Livres
             </span>
             <span className="text-2xl font-black text-purple-950 font-mono block mt-0.5">
-              {totalRetroactiveLessons}
+              {data.bookRevenueDetails?.length || 0}
             </span>
             <span className="text-[10px] text-purple-700 font-semibold block">
-              séances payables
+              exemplaire{(data.bookRevenueDetails?.length || 0) > 1 ? "s" : ""} payé{(data.bookRevenueDetails?.length || 0) > 1 ? "s" : ""}
             </span>
           </div>
-        )}
 
-        <div className="bg-white border border-gray-200 p-2.5 rounded-md">
-          <span className="text-[11px] font-semibold text-gray-600 block">
-            Séances de Cours
-          </span>
-          <span className="text-2xl font-bold text-gray-900 font-mono block mt-0.5">
-            {totalCourseSessions > 0 ? totalCourseSessions : totalPaidSessions}
-          </span>
-          <span className="text-[10px] text-gray-500 block">
-            {totalFreeSessions > 0
-              ? `dont ${totalFreeSessions} gratuite${totalFreeSessions > 1 ? "s" : ""}`
-              : "dispensées"}
-          </span>
-        </div>
+          <div className="bg-white border border-gray-200 p-2.5 rounded-md">
+            <span className="text-[11px] font-semibold text-gray-600 block">
+              Total Livres (100%)
+            </span>
+            <span className="text-base font-bold text-purple-900 font-mono block mt-1">
+              {formatDZD(effectiveBookRevenue)}
+            </span>
+            <span className="text-[10px] text-gray-500 block">
+              part enseignant
+            </span>
+          </div>
 
-        <div className="bg-white border border-gray-200 p-2.5 rounded-md">
-          <span className="text-[11px] font-semibold text-gray-600 block">
-            Rémunération Cours
-          </span>
-          <span className="text-base font-bold text-gray-900 font-mono block mt-1">
-            {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}
-          </span>
-          <span className="text-[10px] text-gray-500 block">
-            brut des séances
-          </span>
+          <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950">
+            <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block">
+              Net à Payer
+            </span>
+            <span className="text-base font-black text-white font-mono block mt-1">
+              {formatDZD(Number(data.netAmount))}
+            </span>
+            <span className="text-[10px] text-blue-200 block">
+              net de déductions
+            </span>
+          </div>
         </div>
+      ) : (
+        <div className={`grid ${totalRetroactiveLessons > 0 ? 'grid-cols-5' : 'grid-cols-4'} gap-2.5 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center`}>
+          <div className="bg-blue-50 border-2 border-blue-400 p-2.5 rounded-md">
+            <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block">
+              Séances Payables
+            </span>
+            <span className="text-2xl font-black text-blue-950 font-mono block mt-0.5">
+              {totalPayableLessons > 0 ? totalPayableLessons : totalPaidSessions}
+            </span>
+            <span className="text-[10px] text-blue-700 font-semibold block">
+              {totalRetroactiveLessons > 0
+                ? `dont ${totalRetroactiveLessons} régul. mois passé`
+                : "présences + absences"}
+            </span>
+          </div>
 
-        <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950">
-          <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block">
-            Net à Payer
-          </span>
-          <span className="text-base font-black text-white font-mono block mt-1">
-            {formatDZD(Number(data.netAmount))}
-          </span>
-          <span className="text-[10px] text-blue-200 block">
-            net de déductions
-          </span>
+          {totalRetroactiveLessons > 0 && (
+            <div className="bg-purple-50 border-2 border-purple-400 p-2.5 rounded-md">
+              <span className="text-[11px] font-bold text-purple-900 uppercase tracking-wide block">
+                Régul. Mois Passé
+              </span>
+              <span className="text-2xl font-black text-purple-950 font-mono block mt-0.5">
+                {totalRetroactiveLessons}
+              </span>
+              <span className="text-[10px] text-purple-700 font-semibold block">
+                séances payables
+              </span>
+            </div>
+          )}
+
+          <div className="bg-white border border-gray-200 p-2.5 rounded-md">
+            <span className="text-[11px] font-semibold text-gray-600 block">
+              Séances de Cours
+            </span>
+            <span className="text-2xl font-bold text-gray-900 font-mono block mt-0.5">
+              {totalCourseSessions > 0 ? totalCourseSessions : totalPaidSessions}
+            </span>
+            <span className="text-[10px] text-gray-500 block">
+              {totalFreeSessions > 0
+                ? `dont ${totalFreeSessions} gratuite${totalFreeSessions > 1 ? "s" : ""}`
+                : "dispensées"}
+            </span>
+          </div>
+
+          <div className="bg-white border border-gray-200 p-2.5 rounded-md">
+            <span className="text-[11px] font-semibold text-gray-600 block">
+              Rémunération Cours
+            </span>
+            <span className="text-base font-bold text-gray-900 font-mono block mt-1">
+              {formatDZD(effectiveCoursesGross)}
+            </span>
+            <span className="text-[10px] text-gray-500 block">
+              brut des séances
+            </span>
+          </div>
+
+          <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950">
+            <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block">
+              Net à Payer
+            </span>
+            <span className="text-base font-black text-white font-mono block mt-1">
+              {formatDZD(Number(data.netAmount))}
+            </span>
+            <span className="text-[10px] text-blue-200 block">
+              net de déductions
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Three-Month Salary Growth Column Graph */}
-      {data.salaryHistory && data.salaryHistory.length > 0 && (() => {
+      {showSalaryGrowth && data.salaryHistory && data.salaryHistory.length > 0 && (() => {
         const history = data.salaryHistory.slice(-3);
         const maxGross = Math.max(...history.map((m) => Number(m.grossAmount || 0)), 0);
         const niceMax = computeNiceAxisMax(maxGross);
@@ -784,7 +855,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       })()}
 
       {/* Section 1a: Per-Group Breakdown (Classes / Groupes) */}
-      {groupLines.length > 0 && (
+      {showGroupBreakdown && groupLines.length > 0 && (
         <div className="mb-6">
           <div className="flex justify-between items-center mb-2">
             <h2 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
@@ -863,7 +934,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                   {totalFreeSessions}
                 </td>
                 <td className="p-2 border border-gray-300 font-mono text-emerald-900 text-right font-black">
-                  {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}
+                  {formatDZD(effectiveCoursesGross)}
                 </td>
               </tr>
             </tfoot>
@@ -872,6 +943,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       )}
 
       {/* Section 1: Per-Branch Breakdown */}
+      {showBranchBreakdown && (
       <div className="mb-6">
         <div className="flex justify-between items-center mb-2">
           <h2 className="text-sm font-bold text-gray-900 flex items-center gap-1">
@@ -948,9 +1020,10 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           </tfoot>
         </table>
       </div>
+      )}
 
       {/* Section 2: Detailed Paid Lessons Breakdown */}
-      {paidLessons.length > 0 && (
+      {showSessionDetails && paidLessons.length > 0 && (
         <div className="mb-6">
           <div className="flex justify-between items-center mb-2">
             <h2 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
@@ -1019,7 +1092,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       )}
 
       {/* Section 2b: Séances payables régularisées (Mois précédent) - Dans une case sans détails */}
-      {totalRetroactiveLessons > 0 && (
+      {showSessionDetails && totalRetroactiveLessons > 0 && (
         <div className="mb-6 border-2 border-purple-400 bg-purple-50/40 rounded-lg p-3.5 shadow-2xs">
           <div className="flex justify-between items-center bg-purple-900 text-white font-bold px-3 py-2 rounded-md shadow-xs">
             <span className="text-xs font-black uppercase tracking-wider">
@@ -1046,6 +1119,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       )}
 
       {/* Section 3: SEPARATED FREE LESSONS (Highlighted in ORANGE) */}
+      {showFreeSessions && hasCoursesSelected && (
       <div className="mb-6 border-2 border-orange-400 bg-orange-50/40 rounded-lg p-3.5 shadow-2xs">
         <div className="flex justify-between items-center bg-orange-500 text-white font-bold px-3 py-2 rounded-md mb-2.5 shadow-xs">
           <div className="flex items-center gap-2">
@@ -1122,9 +1196,10 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           </div>
         )}
       </div>
+      )}
 
       {/* Section 3b: Teacher Absence Sessions */}
-      {(absentLessons.length > 0 || (data.teacherAbsencesCount ?? 0) > 0) && (
+      {showTeacherAbsences && (absentLessons.length > 0 || (data.teacherAbsencesCount ?? 0) > 0) && (
         <div className="mb-6">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-xs font-bold text-gray-700">
@@ -1169,7 +1244,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       )}
 
       {/* Section 4: Detailed Deductions (Photocopy & Advances) */}
-      {data.photocopyDetails && data.photocopyDetails.length > 0 && (
+      {includePhotocopy && data.photocopyDetails && data.photocopyDetails.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-bold text-gray-700 mb-2">
             Détail des frais de photocopie déduits (Photocopies) :
@@ -1200,7 +1275,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       )}
 
       {/* Section 4b: Book Revenue Details (100% Enseignant) */}
-      {data.bookRevenueDetails && data.bookRevenueDetails.length > 0 && (
+      {includeBooks && data.bookRevenueDetails && data.bookRevenueDetails.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-bold text-gray-700 mb-2">
             Détail des ventes de livres (100% Enseignant) :
@@ -1243,7 +1318,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       )}
 
       {/* Section 4c: Salary Advances Details */}
-      {data.advanceDetails && data.advanceDetails.length > 0 && (
+      {includeAdvances && data.advanceDetails && data.advanceDetails.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-bold text-gray-700 mb-2">
             Détail des avances sur salaire déduites :
@@ -1293,56 +1368,73 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           <h2 className="text-sm font-bold text-gray-900 mb-3 border-b border-gray-300 pb-1">
             Calcul du Net à Payer :
           </h2>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between items-center gap-2 text-gray-800">
-              <span className="font-semibold">1. Rémunération des cours :</span>
-              <span className="font-mono font-bold text-base whitespace-nowrap shrink-0">
-                {formatDZD(Number(data.grossAmount) - Number(data.bookRevenue || 0))}
-              </span>
-            </div>
-
-            {(data.bookRevenue ?? 0) > 0 && (
-              <div className="flex justify-between items-center gap-2 text-purple-900 font-semibold">
-                <span>+ Vente de livres (100% Enseignant) :</span>
-                <span className="font-mono font-bold text-purple-900 whitespace-nowrap shrink-0">
-                  + {formatDZD(Number(data.bookRevenue))}
-                </span>
-              </div>
-            )}
-
-            <div className="flex justify-between items-center gap-2 text-gray-900 border-t border-gray-200 pt-1 font-bold">
-              <span>Total Brut :</span>
-              <span className="font-mono font-bold whitespace-nowrap shrink-0">
-                {formatDZD(Number(data.grossAmount))}
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center gap-2 text-red-700">
-              <div>
-                <span>2. Déduction des avances sur salaire :</span>
-                {data.advanceDetails && data.advanceDetails.length === 1 && data.advanceDetails[0].remarque && (
-                  <span className="text-xs text-gray-600 ml-2 italic">({data.advanceDetails[0].remarque})</span>
+          {(() => {
+            let stepIndex = 0;
+            const showCoursesRow = hasCoursesSelected || effectiveCoursesGross > 0;
+            const showBooksRow = includeBooks && effectiveBookRevenue > 0;
+            return (
+              <div className="space-y-2 text-sm">
+                {showCoursesRow && (
+                  <div className="flex justify-between items-center gap-2 text-gray-800">
+                    <span className="font-semibold">{++stepIndex}. Rémunération des cours :</span>
+                    <span className="font-mono font-bold text-base whitespace-nowrap shrink-0">
+                      {formatDZD(effectiveCoursesGross)}
+                    </span>
+                  </div>
                 )}
+
+                {showBooksRow && (
+                  <div className="flex justify-between items-center gap-2 text-purple-900 font-semibold">
+                    <span>
+                      {showCoursesRow
+                        ? "+ Vente de livres (100% Enseignant) :"
+                        : `${++stepIndex}. Vente de livres (100% Enseignant) :`}
+                    </span>
+                    <span className="font-mono font-bold text-purple-900 whitespace-nowrap shrink-0">
+                      {showCoursesRow ? "+ " : ""}{formatDZD(effectiveBookRevenue)}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex justify-between items-center gap-2 text-gray-900 border-t border-gray-200 pt-1 font-bold">
+                  <span>Total Brut :</span>
+                  <span className="font-mono font-bold whitespace-nowrap shrink-0">
+                    {formatDZD(Number(data.grossAmount))}
+                  </span>
+                </div>
+
+                {includeAdvances && (
+                  <div className="flex justify-between items-center gap-2 text-red-700">
+                    <div>
+                      <span>{++stepIndex}. Déduction des avances sur salaire :</span>
+                      {data.advanceDetails && data.advanceDetails.length === 1 && data.advanceDetails[0].remarque && (
+                        <span className="text-xs text-gray-600 ml-2 italic">({data.advanceDetails[0].remarque})</span>
+                      )}
+                    </div>
+                    <span className="font-mono font-semibold whitespace-nowrap shrink-0">
+                      - {formatDZD(Number(data.advances))}
+                    </span>
+                  </div>
+                )}
+
+                {includePhotocopy && (
+                  <div className="flex justify-between items-center gap-2 text-amber-800">
+                    <span>{++stepIndex}. Déduction des frais de photocopie :</span>
+                    <span className="font-mono font-semibold whitespace-nowrap shrink-0">
+                      - {formatDZD(Number(data.photocopyDeductions))}
+                    </span>
+                  </div>
+                )}
+
+                <div className="border-t-2 border-dashed border-gray-900 pt-2 mt-2 flex justify-between items-center gap-2 text-lg font-black text-gray-900 bg-white p-3 rounded border">
+                  <span>Net à payer :</span>
+                  <span className="font-mono text-blue-900 text-xl whitespace-nowrap shrink-0">
+                    {formatDZD(Number(data.netAmount))}
+                  </span>
+                </div>
               </div>
-              <span className="font-mono font-semibold whitespace-nowrap shrink-0">
-                - {formatDZD(Number(data.advances))}
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center gap-2 text-amber-800">
-              <span>3. Déduction des frais de photocopie :</span>
-              <span className="font-mono font-semibold whitespace-nowrap shrink-0">
-                - {formatDZD(Number(data.photocopyDeductions))}
-              </span>
-            </div>
-
-            <div className="border-t-2 border-dashed border-gray-900 pt-2 mt-2 flex justify-between items-center gap-2 text-lg font-black text-gray-900 bg-white p-3 rounded border">
-              <span>Net à payer :</span>
-              <span className="font-mono text-blue-900 text-xl whitespace-nowrap shrink-0">
-                {formatDZD(Number(data.netAmount))}
-              </span>
-            </div>
-          </div>
+            );
+          })()}
         </div>
 
         {/* Signatures */}

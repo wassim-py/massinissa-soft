@@ -121,8 +121,10 @@ export interface TeacherPayrollCalculation {
     studentName?: string;
     amount: number;
     date: Date;
+    branchId?: number;
     branchName?: string;
   }>;
+  isFixedMonthly?: boolean;
   salaryAdvanceDetails: Array<{
     id: number;
     amount: number;
@@ -1760,6 +1762,7 @@ export async function computeTeacherPayrollFromData(params: {
         studentName: bv.student?.name || "Élève",
         amount: netBookAmount,
         date: bv.issuedAt,
+        branchId: targetBranchId,
         branchName: resolvedBranchName,
       });
     }
@@ -2646,6 +2649,7 @@ export async function computeTeacherPayrollFromData(params: {
     })),
     bookRevenue: totalBookRevenue,
     bookRevenueDetails,
+    isFixedMonthly: fixedMonthly > 0,
   };
 }
 

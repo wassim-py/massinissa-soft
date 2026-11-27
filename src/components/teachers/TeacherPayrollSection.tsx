@@ -772,6 +772,8 @@ export default function TeacherPayrollSection({
                     {printData && (
                       <PrintPayslipButton
                         data={printData}
+                        initialBonus={savedBonus}
+                        initialScope={calculationScope}
                         label={locale === "ar" ? "طباعة القسيمة" : "Imprimer Fiche"}
                         className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer h-[38px]"
                       />

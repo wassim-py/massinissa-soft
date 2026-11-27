@@ -1685,6 +1685,525 @@ export async function getTeacherSelectiveReportDataAction(
 }
 
 // =================================================================
+// 7b. SELECTIVE TEACHER PAYSLIP DATA FETCHER (FOR PRINT CONFIG MODAL)
+// =================================================================
+
+export interface SelectivePayslipBranchLine {
+  branchId: number;
+  branchName: string;
+  sessionsCount: number;
+  freeSessionsCount: number;
+  amount: number;
+}
+
+export interface SelectivePayslipGroupLine {
+  className: string;
+  branchName: string;
+  courseSessionsCount: number;
+  payableLessonsCount: number;
+  paidSessionsCount: number;
+  freeSessionsCount: number;
+  totalSessionsCount: number;
+  amount: number;
+}
+
+export interface SelectivePayslipSessionItem {
+  lessonId: number;
+  startsAt: string;
+  className: string;
+  branchName: string;
+  presentCount: number;
+  payingCount?: number;
+  sessionPrice?: number;
+  teacherCut?: number;
+  lessonAmount: number;
+  isFree: boolean;
+  isExtra?: boolean;
+  isCatchUp?: boolean;
+  isTeacherAbsent?: boolean;
+  isRetroactive?: boolean;
+  retroactiveNote?: string;
+  isFormation?: boolean;
+}
+
+export interface TeacherSelectivePayslipData {
+  payslipId: number;
+  status: string;
+  periodStart: string;
+  periodEnd: string;
+  teacher: {
+    id: string;
+    name: string;
+    phone?: string | null;
+  };
+  regularLessons: {
+    grossAmount: number;
+    sessionsCount: number;
+    paidSessionsCount: number;
+    freeSessionsCount: number;
+    teacherAbsencesCount: number;
+    payableLessonsCount: number;
+    retroactiveLessonsCount: number;
+    retroactiveAmount: number;
+    groupLines: SelectivePayslipGroupLine[];
+    branchLines: SelectivePayslipBranchLine[];
+    sessions: SelectivePayslipSessionItem[];
+  };
+  formationCourses: {
+    grossAmount: number;
+    sessionsCount: number;
+    paidSessionsCount: number;
+    freeSessionsCount: number;
+    teacherAbsencesCount: number;
+    payableLessonsCount: number;
+    groupLines: SelectivePayslipGroupLine[];
+    branchLines: SelectivePayslipBranchLine[];
+    sessions: SelectivePayslipSessionItem[];
+  };
+  booksFinance: {
+    totalRevenue: number;
+    vouchersCount: number;
+    branchTotals: Array<{
+      branchId: number;
+      branchName: string;
+      amount: number;
+    }>;
+    details: Array<{
+      voucherId: number;
+      bookTitle?: string;
+      studentName?: string;
+      amount: number;
+      date: string;
+      branchId?: number;
+      branchName?: string;
+    }>;
+  };
+  salaryAdvances: {
+    total: number;
+    details: Array<{
+      id?: number;
+      amount: number;
+      date: string;
+      remarque?: string | null;
+    }>;
+  };
+  photocopyDeductions: {
+    total: number;
+    pages: number;
+    details: Array<{
+      id?: number;
+      branchName: string;
+      pages: number;
+      costAmount: number;
+      date: string;
+    }>;
+  };
+  bonus: number;
+  salaryHistory: Array<{
+    year: number;
+    month: number;
+    monthKey: string;
+    label: string;
+    shortLabel: string;
+    sessionsCount: number;
+    grossAmount: number;
+    netAmount: number;
+    growthRate: number | null;
+    growthDelta: number | null;
+    isCurrentPeriod?: boolean;
+  }>;
+}
+
+export async function getTeacherSelectivePayslipDataAction(params: {
+  teacherId?: string;
+  startDate?: string;
+  endDate?: string;
+  payslipId?: number;
+  initialBonus?: number;
+  status?: string;
+}): Promise<{
+  success: boolean;
+  error?: boolean;
+  message?: string;
+  data?: TeacherSelectivePayslipData;
+}> {
+  try {
+    const session = await getAuthSession();
+    if (!session.isOwner && !session.can("manage", "payroll") && !session.can("view", "finance")) {
+      return { success: false, error: true, message: "Accès non autorisé." };
+    }
+
+    const {
+      calculateTeachersPayrollBatch,
+      getTeacherThreeMonthSalaryGrowth,
+      normalizeDateToEndOfDay,
+    } = await import("./payroll");
+    const { normalizeDateToStartOfDay } = await import("./ledger");
+
+    let resolvedTeacherId = params.teacherId || "";
+    let resolvedStart: Date | null = params.startDate ? normalizeDateToStartOfDay(params.startDate) : null;
+    let resolvedEnd: Date | null = params.endDate ? normalizeDateToEndOfDay(params.endDate) : null;
+    let resolvedStatus = params.status || "ESTIMATED";
+    let resolvedPayslipId = params.payslipId || 0;
+    let resolvedBonus = Number(params.initialBonus || 0);
+    let savedPayslip: {
+      id: number;
+      personId: string;
+      sessionsCount: number | null;
+      grossAmount: any;
+      bonus: any;
+      advances: any;
+      photocopyDeductions: any;
+      PayrollRun: { periodStart: Date; periodEnd: Date; status: string };
+      PayslipBranchLine: Array<{
+        branchId: number;
+        sessionsCount: number;
+        amount: any;
+        Branch: { id: number; name: string };
+      }>;
+    } | null = null;
+
+    if (params.payslipId && params.payslipId > 0) {
+      savedPayslip = await prisma.payslip.findUnique({
+        where: { id: params.payslipId },
+        include: {
+          PayrollRun: { select: { periodStart: true, periodEnd: true, status: true } },
+          PayslipBranchLine: {
+            include: { Branch: { select: { id: true, name: true } } },
+          },
+        },
+      });
+      if (savedPayslip) {
+        resolvedTeacherId = savedPayslip.personId;
+        resolvedStart = normalizeDateToStartOfDay(savedPayslip.PayrollRun.periodStart);
+        resolvedEnd = normalizeDateToEndOfDay(savedPayslip.PayrollRun.periodEnd);
+        resolvedStatus = savedPayslip.PayrollRun.status;
+        resolvedPayslipId = savedPayslip.id;
+        resolvedBonus = Number((savedPayslip as any).bonus || 0);
+      }
+    }
+
+    if (!resolvedTeacherId || !resolvedStart || !resolvedEnd) {
+      return {
+        success: false,
+        error: true,
+        message: "Paramètres de période ou d'enseignant manquants.",
+      };
+    }
+
+    const teacher = await prisma.teacher.findUnique({
+      where: { id: resolvedTeacherId },
+      select: { id: true, name: true, phone: true },
+    });
+
+    if (!teacher) {
+      return { success: false, error: true, message: "Enseignant introuvable." };
+    }
+
+    const [batchCalcs, salaryHistory] = await Promise.all([
+      calculateTeachersPayrollBatch([
+        {
+          teacherId: teacher.id,
+          startDate: resolvedStart,
+          endDate: resolvedEnd,
+          groupFilter: "normal",
+        },
+        {
+          teacherId: teacher.id,
+          startDate: resolvedStart,
+          endDate: resolvedEnd,
+          groupFilter: "formation",
+        },
+      ]),
+      getTeacherThreeMonthSalaryGrowth({
+        teacherId: teacher.id,
+        referenceDate: resolvedEnd,
+      }),
+    ]);
+
+    const normalCalc = batchCalcs[0] ?? null;
+    const formationCalc = batchCalcs[1] ?? null;
+
+    const round2 = (n: number) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
+    // 1. Books (100% Enseignant — matches payroll engine exactly, excluding formation books & subtracting refunds)
+    const rawBookDetails = (normalCalc?.bookRevenueDetails || []).map((b) => ({
+      voucherId: b.voucherId,
+      bookTitle: b.bookTitle,
+      studentName: b.studentName,
+      amount: round2(b.amount),
+      date: new Date(b.date).toISOString(),
+      branchId: b.branchId,
+      branchName: b.branchName,
+    }));
+
+    const booksByBranchMap = new Map<number, { branchId: number; branchName: string; amount: number }>();
+    for (const b of rawBookDetails) {
+      const bid = b.branchId ?? 0;
+      const existing = booksByBranchMap.get(bid) || {
+        branchId: bid,
+        branchName: b.branchName || "Siège",
+        amount: 0,
+      };
+      existing.amount = round2(existing.amount + b.amount);
+      booksByBranchMap.set(bid, existing);
+    }
+    const booksBranchTotals = Array.from(booksByBranchMap.values());
+    const totalBookRevenue = round2(normalCalc?.bookRevenue || 0);
+
+    // 2. Regular lessons (cleanly separated from book revenue)
+    const isFixedMonthly = Boolean(normalCalc?.isFixedMonthly);
+    const regularSessions: SelectivePayslipSessionItem[] = (normalCalc?.sessionDetails || []).map((s) => ({
+      lessonId: s.lessonId,
+      startsAt: new Date(s.startsAt).toISOString(),
+      className: s.className,
+      branchName: s.branchName,
+      presentCount: s.presentCount,
+      payingCount: s.payingCount,
+      sessionPrice: s.sessionPrice,
+      teacherCut: s.teacherCut,
+      lessonAmount: round2(s.lessonAmount),
+      isFree: s.isFree,
+      isExtra: s.isExtra,
+      isCatchUp: s.isCatchUp,
+      isTeacherAbsent: s.isTeacherAbsent,
+      isRetroactive: s.isRetroactive,
+      retroactiveNote: s.retroactiveNote,
+      isFormation: s.isFormation,
+    }));
+
+    const regularGroupLines: SelectivePayslipGroupLine[] = (normalCalc?.groupBreakdown || []).map((g) => ({
+      className: g.className,
+      branchName: g.branchName,
+      courseSessionsCount: g.courseSessionsCount,
+      payableLessonsCount: round2(g.payableLessonsCount),
+      paidSessionsCount: round2(g.paidSessionsCount ?? g.payableLessonsCount),
+      freeSessionsCount: g.freeSessionsCount,
+      totalSessionsCount: g.totalSessionsCount,
+      amount: round2(g.amount),
+    }));
+
+    let regularBranchLines: SelectivePayslipBranchLine[] = (normalCalc?.branchBreakdown || [])
+      .map((b) => {
+        const bookAmtInBranch = isFixedMonthly ? 0 : (booksByBranchMap.get(b.branchId)?.amount || 0);
+        const amount = Math.max(0, round2(Number(b.amount || 0) - bookAmtInBranch));
+        return {
+          branchId: b.branchId,
+          branchName: b.branchName,
+          sessionsCount: b.sessionsCount,
+          freeSessionsCount: b.freeSessionsCount ?? 0,
+          amount,
+        };
+      })
+      .filter((b) => b.sessionsCount > 0 || b.amount > 0);
+
+    let regularGrossAmount = normalCalc
+      ? isFixedMonthly
+        ? round2(normalCalc.grossAmount)
+        : Math.max(0, round2(normalCalc.grossAmount - totalBookRevenue))
+      : 0;
+
+    let regularSessionsCount = normalCalc?.totalSessions || 0;
+    const regularFreeCount =
+      normalCalc?.totalFreeSessions ??
+      regularSessions.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length;
+    let regularPaidCount =
+      normalCalc?.totalPaidSessions ??
+      regularSessions.filter((s) => !s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length;
+    const regularAbsencesCount =
+      normalCalc?.teacherAbsencesCount ?? regularSessions.filter((s) => s.isTeacherAbsent).length;
+    const regularRetroLessons = round2(
+      regularSessions
+        .filter((s) => s.isRetroactive)
+        .reduce((sum, s) => sum + Number(s.payingCount ?? 1), 0)
+    );
+    const regularRetroAmount = round2(
+      regularSessions
+        .filter((s) => s.isRetroactive)
+        .reduce((sum, s) => sum + Number(s.lessonAmount || 0), 0)
+    );
+    const regularPayableLessons = round2(
+      regularGroupLines.reduce((sum, g) => sum + Number(g.payableLessonsCount || 0), 0)
+    );
+
+    // 3. Formation courses & Dawarat (Workshops)
+    const formationSessions: SelectivePayslipSessionItem[] = (formationCalc?.sessionDetails || []).map((s) => ({
+      lessonId: s.lessonId,
+      startsAt: new Date(s.startsAt).toISOString(),
+      className: s.className,
+      branchName: s.branchName,
+      presentCount: s.presentCount,
+      payingCount: s.payingCount,
+      sessionPrice: s.sessionPrice,
+      teacherCut: s.teacherCut,
+      lessonAmount: round2(s.lessonAmount),
+      isFree: s.isFree,
+      isExtra: s.isExtra,
+      isCatchUp: s.isCatchUp,
+      isTeacherAbsent: s.isTeacherAbsent,
+      isRetroactive: s.isRetroactive,
+      retroactiveNote: s.retroactiveNote,
+      isFormation: s.isFormation ?? true,
+    }));
+
+    const formationGroupLines: SelectivePayslipGroupLine[] = (formationCalc?.groupBreakdown || []).map((g) => ({
+      className: g.className,
+      branchName: g.branchName,
+      courseSessionsCount: g.courseSessionsCount,
+      payableLessonsCount: round2(g.payableLessonsCount),
+      paidSessionsCount: round2(g.paidSessionsCount ?? g.payableLessonsCount),
+      freeSessionsCount: g.freeSessionsCount,
+      totalSessionsCount: g.totalSessionsCount,
+      amount: round2(g.amount),
+    }));
+
+    const formationBranchLines: SelectivePayslipBranchLine[] = (formationCalc?.branchBreakdown || [])
+      .map((b) => ({
+        branchId: b.branchId,
+        branchName: b.branchName,
+        sessionsCount: b.sessionsCount,
+        freeSessionsCount: b.freeSessionsCount ?? 0,
+        amount: round2(b.amount),
+      }))
+      .filter((b) => b.sessionsCount > 0 || b.amount > 0);
+
+    const formationGrossAmount = round2(formationCalc?.grossAmount || 0);
+    const formationSessionsCount = formationCalc?.totalSessions || 0;
+    const formationFreeCount =
+      formationCalc?.totalFreeSessions ??
+      formationSessions.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length;
+    const formationPaidCount =
+      formationCalc?.totalPaidSessions ??
+      formationSessions.filter((s) => !s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length;
+    const formationAbsencesCount =
+      formationCalc?.teacherAbsencesCount ?? formationSessions.filter((s) => s.isTeacherAbsent).length;
+    const formationPayableLessons = round2(
+      formationGroupLines.reduce((sum, g) => sum + Number(g.payableLessonsCount || 0), 0)
+    );
+
+    // Fallback for legacy saved payslips with no live calculated lines
+    if (
+      savedPayslip &&
+      regularBranchLines.length === 0 &&
+      formationBranchLines.length === 0 &&
+      regularGrossAmount === 0 &&
+      formationGrossAmount === 0 &&
+      totalBookRevenue === 0 &&
+      (Number(savedPayslip.grossAmount || 0) > 0 || savedPayslip.PayslipBranchLine.length > 0)
+    ) {
+      regularGrossAmount = round2(Number(savedPayslip.grossAmount || 0));
+      regularSessionsCount = savedPayslip.sessionsCount || 0;
+      regularPaidCount = regularSessionsCount;
+      regularBranchLines = savedPayslip.PayslipBranchLine.map((bl) => ({
+        branchId: bl.branchId,
+        branchName: bl.Branch?.name || `Siège #${bl.branchId}`,
+        sessionsCount: bl.sessionsCount,
+        freeSessionsCount: 0,
+        amount: round2(Number(bl.amount || 0)),
+      }));
+    }
+
+    // 4. Salary advances (deduped)
+    const rawAdvances = normalCalc?.salaryAdvanceDetails || formationCalc?.salaryAdvanceDetails || [];
+    const advanceDetails = rawAdvances.map((a) => ({
+      id: a.id,
+      amount: round2(a.amount),
+      date: new Date(a.date).toISOString(),
+      remarque: a.remarque || null,
+    }));
+    const advancesTotal = round2(advanceDetails.reduce((s, a) => s + a.amount, 0));
+
+    // 5. Photocopy deductions (union of normal + formation charges, deduped by id)
+    const photocopyMap = new Map<
+      number,
+      { id: number; branchName: string; pages: number; costAmount: number; date: string }
+    >();
+    for (const calc of [normalCalc, formationCalc]) {
+      for (const pc of calc?.photocopyChargeDetails || []) {
+        if (!photocopyMap.has(pc.id)) {
+          photocopyMap.set(pc.id, {
+            id: pc.id,
+            branchName: pc.branchName,
+            pages: pc.pages,
+            costAmount: round2(pc.costAmount),
+            date: new Date(pc.date).toISOString(),
+          });
+        }
+      }
+    }
+    const photocopyDetails = Array.from(photocopyMap.values()).sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    const photocopyTotal = round2(photocopyDetails.reduce((s, p) => s + p.costAmount, 0));
+    const photocopyPages = photocopyDetails.reduce((s, p) => s + Number(p.pages || 0), 0);
+
+    return {
+      success: true,
+      error: false,
+      data: {
+        payslipId: resolvedPayslipId,
+        status: resolvedStatus,
+        periodStart: resolvedStart.toISOString(),
+        periodEnd: resolvedEnd.toISOString(),
+        teacher: {
+          id: teacher.id,
+          name: teacher.name,
+          phone: teacher.phone,
+        },
+        regularLessons: {
+          grossAmount: regularGrossAmount,
+          sessionsCount: regularSessionsCount,
+          paidSessionsCount: regularPaidCount,
+          freeSessionsCount: regularFreeCount,
+          teacherAbsencesCount: regularAbsencesCount,
+          payableLessonsCount: regularPayableLessons,
+          retroactiveLessonsCount: regularRetroLessons,
+          retroactiveAmount: regularRetroAmount,
+          groupLines: regularGroupLines,
+          branchLines: regularBranchLines,
+          sessions: regularSessions,
+        },
+        formationCourses: {
+          grossAmount: formationGrossAmount,
+          sessionsCount: formationSessionsCount,
+          paidSessionsCount: formationPaidCount,
+          freeSessionsCount: formationFreeCount,
+          teacherAbsencesCount: formationAbsencesCount,
+          payableLessonsCount: formationPayableLessons,
+          groupLines: formationGroupLines,
+          branchLines: formationBranchLines,
+          sessions: formationSessions,
+        },
+        booksFinance: {
+          totalRevenue: totalBookRevenue,
+          vouchersCount: rawBookDetails.length,
+          branchTotals: booksBranchTotals,
+          details: rawBookDetails,
+        },
+        salaryAdvances: {
+          total: advancesTotal,
+          details: advanceDetails,
+        },
+        photocopyDeductions: {
+          total: photocopyTotal,
+          pages: photocopyPages,
+          details: photocopyDetails,
+        },
+        bonus: round2(resolvedBonus),
+        salaryHistory,
+      },
+    };
+  } catch (error: any) {
+    console.error("getTeacherSelectivePayslipDataAction error:", error);
+    return {
+      success: false,
+      error: true,
+      message: error?.message || "Erreur lors de la préparation des options du bulletin de paie.",
+    };
+  }
+}
+
+// =================================================================
 // 8. GLOBAL FINANCIAL REPORT DATA FETCHER (FOR THE 5 SELECTIVE STREAMS)
 // =================================================================
 

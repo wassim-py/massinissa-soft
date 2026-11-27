@@ -326,6 +326,8 @@ export default async function PayslipDetailPage(props: PageProps) {
           ) : (
             <PrintPayslipButton
               data={printData}
+              payslipId={payslip.id}
+              initialBonus={Number((payslip as any).bonus || 0)}
               label={locale === "ar" ? "طباعة" : "Imprimer"}
             />
           )}

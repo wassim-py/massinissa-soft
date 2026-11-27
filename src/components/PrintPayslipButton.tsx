@@ -6,22 +6,46 @@ import { useLocale } from "next-intl";
 import { buildPrintableReportHtml } from "@/lib/printReportHtml";
 import { getTeacherSalaryGrowthAction } from "@/lib/actions";
 import { PayslipTicket, PayslipPrintData } from "./printable/PayslipTicket";
+import TeacherPayslipConfigModal from "@/components/teachers/TeacherPayslipConfigModal";
 
 interface PrintPayslipButtonProps {
   data: PayslipPrintData;
+  payslipId?: number;
+  initialBonus?: number;
+  initialScope?: "all" | "normal" | "formation";
+  enableSelectiveModal?: boolean;
   label?: string;
   className?: string;
 }
 
+function toIsoDateOnly(value: string | Date): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    return value.trim();
+  }
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toISOString().split("T")[0];
+}
+
 export const PrintPayslipButton = ({
   data,
+  payslipId,
+  initialBonus = 0,
+  initialScope = "all",
+  enableSelectiveModal = true,
   label,
   className = "bg-primary hover:bg-primary-hover text-white font-medium px-4 py-2 rounded-lg text-xs flex items-center gap-2 shadow-xs transition-colors",
 }: PrintPayslipButtonProps) => {
   const locale = useLocale();
   const isAr = locale === "ar";
   const [isLoading, setIsLoading] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const defaultLabel = isAr ? "طباعة قسيمة الراتب" : "Imprimer le bulletin de paie";
+  const buttonTitle = enableSelectiveModal
+    ? isAr
+      ? "طباعة قسيمة الراتب (اختيار العناصر: الدروس، التكوين، الكتب، الاقتطاعات)"
+      : "Imprimer le bulletin de paie (choisir les rubriques : cours, formations, livres, déductions)"
+    : defaultLabel;
 
   const writePayslipToWindow = (printWindow: Window, enrichedData: PayslipPrintData) => {
     const printContent = ReactDOMServer.renderToString(
@@ -47,6 +71,11 @@ export const PrintPayslipButton = ({
   };
 
   const handlePrint = async () => {
+    if (enableSelectiveModal) {
+      setIsModalOpen(true);
+      return;
+    }
+
     if (isLoading) return;
     const printWindow = window.open("", "_blank", "width=900,height=800");
     if (!printWindow) return;
@@ -93,23 +122,48 @@ export const PrintPayslipButton = ({
   };
 
   return (
-    <button type="button" onClick={handlePrint} disabled={isLoading} className={className}>
-      <svg
-        className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`}
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-        xmlns="http://www.w3.org/2000/svg"
+    <>
+      <button
+        type="button"
+        onClick={handlePrint}
+        disabled={isLoading}
+        className={className}
+        title={buttonTitle}
       >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="2"
-          d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+        <svg
+          className={`w-4 h-4 shrink-0 ${isLoading ? "animate-spin" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+          />
+        </svg>
+        <span>{label ?? defaultLabel}</span>
+      </button>
+
+      {isModalOpen && (
+        <TeacherPayslipConfigModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          teacherId={data.teacher.id}
+          teacherName={data.teacher.name}
+          teacherPhone={data.teacher.phone}
+          startDate={toIsoDateOnly(data.periodStart)}
+          endDate={toIsoDateOnly(data.periodEnd)}
+          payslipId={payslipId}
+          initialBonus={initialBonus}
+          initialStatus={data.status}
+          initialScope={initialScope}
+          locale={locale}
         />
-      </svg>
-      <span>{label ?? defaultLabel}</span>
-    </button>
+      )}
+    </>
   );
 };
 

@@ -854,6 +854,8 @@ export default function PayrollClientTabs({
                               <span>{t("previewBtn")}</span>
                             </Link>
                             <PrintPayslipButton
+                              payslipId={p.id}
+                              initialBonus={p.bonus || 0}
                               label={locale === "ar" ? "الأستاذ" : "Enseignant"}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs cursor-pointer"
                               data={{
@@ -1043,6 +1045,8 @@ export default function PayrollClientTabs({
                           </Link>
 
                           <PrintPayslipButton
+                            payslipId={p.id}
+                            initialBonus={p.bonus || 0}
                             label={locale === "ar" ? "الأستاذ" : "Enseignant"}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-gray-800 hover:bg-gray-900 text-white transition-colors shadow-xs"
                             data={{
