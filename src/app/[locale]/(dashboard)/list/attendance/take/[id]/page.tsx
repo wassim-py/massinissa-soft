@@ -19,6 +19,8 @@ import {
 } from "@/lib/studentBilling";
 import { resolveOrCreateLessonForDate } from "@/lib/lessonInstances";
 import { autoSaveLessonAttendanceAction } from "@/lib/actions";
+import { buildVoucherBundleForPrint } from "@/lib/voucherUtils";
+import { getAlgiersDateInfo } from "@/lib/algiersDate";
 
 // This is the Server Component that fetches all the necessary data for taking attendance.
 const TakeAttendancePage = async (
@@ -491,63 +493,159 @@ const TakeAttendancePage = async (
     catchUpStartsAt: c.catchUpLesson.startsAt,
   }));
 
-  // Fetch Revision Visitors for this lesson
+  // Fetch Revision Visitors for this lesson — BOTH checked-in (Attendance) AND pre-paid pending (Voucher without Attendance yet)
   let revisionVisitors: any[] = [];
+  const prepaidRevisionByStudentId = new Map<string, any>();
   try {
-    const revAttendances = await prisma.attendance.findMany({
-      where: { lessonId, isRevisionVisitor: true },
-      include: {
-        student: {
-          select: {
-            id: true,
-            name: true,
-            globalNumber: true,
-            phone: true,
-            vouchers: {
-              where: {
-                lessonId,
-                paymentType: "REVISION_SESSION",
-                isVoided: false,
-              },
-              include: {
-                student: {
-                  select: { id: true, name: true, globalNumber: true, phone: true },
-                },
-                refunds: true,
-                class: {
-                  include: {
-                    branch: { select: { id: true, name: true } },
-                    level: { select: { id: true, name: true } },
-                  },
-                },
-                series: {
-                  include: {
-                    issuingBranch: { select: { id: true, name: true } },
-                    targetBranch: { select: { id: true, name: true } },
-                    level: { select: { id: true, name: true } },
-                  },
-                },
-              },
-              orderBy: { issuedAt: "desc" },
-              take: 1,
+    const [revAttendances, revVouchers] = await Promise.all([
+      prisma.attendance.findMany({
+        where: { lessonId, isRevisionVisitor: true },
+        include: {
+          student: {
+            select: {
+              id: true,
+              name: true,
+              globalNumber: true,
+              phone: true,
             },
           },
         },
-      },
+      }),
+      prisma.voucher.findMany({
+        where: {
+          lessonId,
+          paymentType: "REVISION_SESSION",
+          isVoided: false,
+          isRefund: false,
+        },
+        include: {
+          student: {
+            select: { id: true, name: true, globalNumber: true, phone: true },
+          },
+          lesson: {
+            select: { id: true, startsAt: true, endsAt: true, isExtra: true },
+          },
+          refunds: true,
+          class: {
+            include: {
+              branch: { select: { id: true, name: true } },
+              level: { select: { id: true, name: true } },
+            },
+          },
+          series: {
+            include: {
+              issuingBranch: { select: { id: true, name: true } },
+              targetBranch: { select: { id: true, name: true } },
+              level: { select: { id: true, name: true } },
+            },
+          },
+        },
+        orderBy: { issuedAt: "desc" },
+      }),
+    ]);
+
+    // Fetch sibling vouchers sharing (seriesId, number) so multi-date BONs print as one unified receipt
+    const bundlePairs = Array.from(
+      new Map(
+        revVouchers.map((v) => [`${v.seriesId}_${v.number}`, { seriesId: v.seriesId, number: v.number }])
+      ).values()
+    );
+    let siblingVouchers: any[] = [];
+    if (bundlePairs.length > 0) {
+      siblingVouchers = await prisma.voucher.findMany({
+        where: {
+          OR: bundlePairs.map((p) => ({
+            seriesId: p.seriesId,
+            number: p.number,
+            paymentType: "REVISION_SESSION",
+            isVoided: false,
+            isRefund: false,
+          })),
+        },
+        include: {
+          lesson: { select: { id: true, startsAt: true, endsAt: true, isExtra: true } },
+          refunds: true,
+        },
+        orderBy: { id: "asc" },
+      });
+    }
+
+    const todayAlgiersStr = getAlgiersDateInfo(new Date()).dateStr;
+    const attByStudentId = new Map(revAttendances.map((a) => [a.studentId, a]));
+    const voucherByStudentId = new Map<string, any>();
+    for (const v of revVouchers) {
+      const refunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+      if (Number(v.amount) - refunded <= 0) continue;
+      if (!voucherByStudentId.has(v.studentId)) {
+        voucherByStudentId.set(v.studentId, v);
+      }
+    }
+
+    const allRevStudentIds = Array.from(
+      new Set([...attByStudentId.keys(), ...voucherByStudentId.keys()])
+    );
+
+    revisionVisitors = allRevStudentIds.map((sid) => {
+      const att = attByStudentId.get(sid) || null;
+      const v = voucherByStudentId.get(sid) || null;
+      const studentObj = att?.student || v?.student;
+      const isCheckedIn = Boolean(att && att.status === "PRESENT");
+      const isPrepaidPending = !isCheckedIn && Boolean(v);
+
+      let voucherForPrint = v;
+      let bundleSessionCount = 1;
+      let bundleSessionIndex = 1;
+      if (v) {
+        const matchedSiblings = siblingVouchers
+          .filter(
+            (sv) =>
+              sv.seriesId === v.seriesId &&
+              sv.number === v.number &&
+              sv.studentId === v.studentId
+          )
+          .sort((a, b) => {
+            const aT = a.lesson?.startsAt ? new Date(a.lesson.startsAt).getTime() : a.id;
+            const bT = b.lesson?.startsAt ? new Date(b.lesson.startsAt).getTime() : b.id;
+            return aT - bT;
+          });
+        if (matchedSiblings.length > 1) {
+          bundleSessionCount = matchedSiblings.length;
+          const idx = matchedSiblings.findIndex((sv) => sv.id === v.id);
+          bundleSessionIndex = idx >= 0 ? idx + 1 : 1;
+          voucherForPrint = buildVoucherBundleForPrint(v, matchedSiblings);
+        }
+      }
+
+      const issuedDateStr = v?.issuedAt ? getAlgiersDateInfo(v.issuedAt).dateStr : null;
+      const entry = {
+        id: att?.id ?? -(v?.id ?? 0),
+        studentId: sid,
+        studentName: studentObj?.name || "",
+        globalNumber: studentObj?.globalNumber ?? 0,
+        phone: studentObj?.phone || null,
+        status: isCheckedIn ? "PRESENT" : "PREPAID",
+        isCheckedIn,
+        isPrepaidPending,
+        amount: v ? Number(v.amount) : 0,
+        voucherId: v?.id ?? null,
+        voucherNumber: v?.number ?? null,
+        issuedAt: v?.issuedAt ?? null,
+        isPaidToday: issuedDateStr ? issuedDateStr === todayAlgiersStr : true,
+        bundleSessionCount,
+        bundleSessionIndex,
+        voucher: voucherForPrint,
+      };
+      if (isPrepaidPending) {
+        prepaidRevisionByStudentId.set(sid, entry);
+      }
+      return entry;
     });
 
-    revisionVisitors = revAttendances.map((r) => {
-      const v = r.student.vouchers?.[0] || null;
-      return {
-        id: r.id,
-        studentId: r.student.id,
-        studentName: r.student.name,
-        globalNumber: r.student.globalNumber,
-        phone: r.student.phone,
-        status: r.status,
-        amount: v ? Number(v.amount) : 0,
-        voucher: v,
-      };
+    // Sort pre-paid pending visitors first so admins immediately spot who to check in
+    revisionVisitors.sort((a, b) => {
+      if (a.isPrepaidPending && !b.isPrepaidPending) return -1;
+      if (!a.isPrepaidPending && b.isPrepaidPending) return 1;
+      return a.studentName.localeCompare(b.studentName);
     });
   } catch (revErr) {
     console.error("Error fetching revision visitors:", revErr);
@@ -1021,6 +1119,13 @@ const TakeAttendancePage = async (
     (s: any) => !s.isRefunded
   );
 
+  // Deduplicate: if a student bought a pre-paid revision voucher and later enrolled in the group,
+  // avoid rendering a duplicate row in revisionVisitors (still keep already-checked-in revision rows distinct).
+  const enrolledRosterIdSet = new Set(rosterStudents.map((s: any) => s.id));
+  const filteredRevisionVisitors = revisionVisitors.filter(
+    (rv: any) => !enrolledRosterIdSet.has(rv.studentId) || rv.isCheckedIn
+  );
+
   const todaysAttendance = existingAttendance.map((a) => ({
     ...a,
     status: a.status,
@@ -1066,7 +1171,7 @@ const TakeAttendancePage = async (
           existingRecords={serializeForClient(todaysAttendance) as any}
           groupBooks={serializeForClient(groupBooks) as any}
           catchUpVisitors={serializeForClient(formattedCatchUpVisitors) as any}
-          revisionVisitors={serializeForClient(revisionVisitors) as any}
+          revisionVisitors={serializeForClient(filteredRevisionVisitors) as any}
           caughtUpAbsentees={serializeForClient(formattedCaughtUpAbsentees) as any}
           inGroupCatchUps={serializeForClient(formattedInGroupCatchUps) as any}
           initialSearch={searchQuery}

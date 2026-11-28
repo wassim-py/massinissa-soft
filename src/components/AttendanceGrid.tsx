@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { LessonInstance, AttendanceCellDetail } from "@/app/[locale]/(dashboard)/list/attendance/class/[id]/page";
 import { useTranslations, useLocale } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { Search, X, Check, FileText, RotateCcw, Loader2, Users, UserCheck, UserPlus } from "lucide-react";
+import { Search, X, Check, FileText, RotateCcw, Loader2, Users, UserCheck, UserPlus, Clock } from "lucide-react";
 import { markSingleAttendanceAction, deleteSingleAttendanceAction, enrollStudentInClassAction } from "@/lib/actions";
 import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import { toast } from "react-toastify";
@@ -735,7 +735,7 @@ const AttendanceGrid = ({
     const displayedLessonInstances = useMemo(() => {
         const reversed = [...lessonInstances].reverse();
         if (activeTab !== "revision") {
-            return reversed;
+            return reversed.filter((inst) => !inst.isPrepaidOnlyFutureColumn);
         }
         return reversed.filter((inst) => {
             const st = presentStatsByLessonKey.get(inst.key);
@@ -1515,6 +1515,53 @@ const AttendanceGrid = ({
                                                                     </div>
                                                                     <div className="text-[11px] text-gray-200 leading-snug">
                                                                         {tooltipText}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                );
+                                            }
+
+                                            if (record.isRevisionVisitor && record.isPrepaidRevision) {
+                                                // Amber/teal dashed clock circle: Pre-paid future revision visitor awaiting check-in
+                                                const paidSuffix =
+                                                    record.revisionAmountPaid && record.revisionAmountPaid > 0
+                                                        ? ` — ${formatDZD(record.revisionAmountPaid, locale)}`
+                                                        : "";
+                                                const bonSuffix = record.revisionVoucherNumber
+                                                    ? ` (BON #${record.revisionVoucherNumber})`
+                                                    : "";
+                                                const prepaidTooltip =
+                                                    (locale === "ar"
+                                                        ? "مراجعة مدفوعة مسبقاً (بانتظار تأكيد الحضور)"
+                                                        : "Révision prépayée (en attente de pointage)") +
+                                                    paidSuffix +
+                                                    bonSuffix;
+                                                return (
+                                                    <td
+                                                        key={`${student.id}-${instance.key}-${studentIndex}`}
+                                                        className={`p-3 text-center border-b border-border ${cellBg}`}
+                                                    >
+                                                        <div className="relative group/revprepaid inline-flex items-center justify-center">
+                                                            <Link
+                                                                href={`/list/attendance/take/${instance.lessonId}`}
+                                                                className="w-5 h-5 mx-auto rounded-full bg-amber-100 hover:bg-amber-200 text-amber-800 border-2 border-dashed border-amber-500 flex items-center justify-center transition-all hover:scale-125 shadow-2xs"
+                                                                title={prepaidTooltip}
+                                                            >
+                                                                <Clock className="w-2.5 h-2.5 stroke-[2.5]" />
+                                                            </Link>
+                                                            <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/revprepaid:flex flex-col items-center z-40 min-w-[200px] max-w-xs transition-all">
+                                                                <div className="bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-xl text-center font-normal">
+                                                                    <div className="font-bold text-amber-300 mb-0.5 flex items-center justify-center gap-1.5">
+                                                                        <Clock className="w-3 h-3 text-amber-300" />
+                                                                        <span>
+                                                                            {locale === "ar" ? "مدفوع مسبقاً" : "Prépayé"}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="text-[11px] text-gray-200 leading-snug">
+                                                                        {prepaidTooltip}
                                                                     </div>
                                                                 </div>
                                                                 <div className="w-2 h-2 bg-gray-900 rotate-45 -mt-1" />

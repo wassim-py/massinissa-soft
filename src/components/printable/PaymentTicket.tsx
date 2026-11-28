@@ -2,6 +2,7 @@ import React from 'react';
 import { Voucher, Student, Class } from "@prisma/client";
 import {
   formatVoucherDisplay,
+  formatPaymentDate,
   getPaymentTypeLabel,
   resolveVoucherTicketStatus,
 } from "@/lib/voucherUtils";
@@ -70,7 +71,23 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
       lineHeight: '1.3',
     };
 
-    const typeLabel = getPaymentTypeLabel(voucher?.paymentType, locale);
+    const baseTypeLabel = getPaymentTypeLabel(voucher?.paymentType, locale);
+    const singleLessonDate =
+      voucher?.paymentType === "REVISION_SESSION" && (voucher as any)?.lesson?.startsAt
+        ? formatPaymentDate((voucher as any).lesson.startsAt)
+        : "";
+    const typeLabel = singleLessonDate
+      ? `${baseTypeLabel} — ${singleLessonDate}`
+      : baseTypeLabel;
+    const effectiveSessionsCount =
+      sessionsCount !== undefined
+        ? sessionsCount
+        : (voucher as any)?.revisionSessionsCount !== undefined
+        ? Number((voucher as any).revisionSessionsCount)
+        : Array.isArray(voucher?.items) &&
+          voucher.items.filter((it: any) => it?.type === "REVISION_SESSION").length > 1
+        ? voucher.items.filter((it: any) => it?.type === "REVISION_SESSION").length
+        : undefined;
     const amountNum = Number(voucher?.amount ?? 0);
     const displayTotal =
       voucher?.totalAmount !== undefined && voucher?.totalAmount !== null
@@ -117,7 +134,7 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
 
     const showAdditionalSection =
       Boolean(discountInfo) ||
-      sessionsCount !== undefined ||
+      effectiveSessionsCount !== undefined ||
       showRemainingSessions ||
       (statusInfo.restToCompleteCycle !== undefined && statusInfo.restToCompleteCycle > 0) ||
       statusInfo.isPartiallyRefunded ||
@@ -251,10 +268,10 @@ export class PaymentTicket extends React.Component<VoucherTicketProps> {
                 </span>
               </div>
             )}
-            {sessionsCount !== undefined && (
+            {effectiveSessionsCount !== undefined && (
               <div className="flex justify-between">
                 <span className="font-semibold">{isAr ? "عدد الحصص:" : "Séances :"}</span>
-                <span className="font-bold">{sessionsCount}</span>
+                <span className="font-bold">{effectiveSessionsCount}</span>
               </div>
             )}
             {showRemainingSessions && (

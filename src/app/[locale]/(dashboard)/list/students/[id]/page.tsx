@@ -249,6 +249,14 @@ const SingleStudentPage = async (
                   level: true,
                 },
               },
+              lesson: {
+                select: {
+                  id: true,
+                  startsAt: true,
+                  endsAt: true,
+                  isExtra: true,
+                },
+              },
               workshop: {
                 select: {
                   id: true,

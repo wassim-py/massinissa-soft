@@ -12,6 +12,7 @@ import {
   formatPaymentDate,
   formatPaymentTime,
   formatPaymentDateTime,
+  buildVoucherBundleForPrint,
 } from "@/lib/voucherUtils";
 import { transferEnrollmentCredit, cancelEnrollmentTransfer, createRefund, editVoucher } from "@/lib/actions";
 import {
@@ -123,6 +124,12 @@ export type ExtendedVoucherItem = Voucher & {
     branchId: number;
     Branch?: { id: number; name: string } | null;
   } | null;
+  lesson?: {
+    id: number;
+    startsAt: Date | string;
+    endsAt?: Date | string;
+    isExtra?: boolean;
+  } | null;
   issuingBranch?: { name: string } | null;
   targetBranch?: { name: string } | null;
   edits?: VoucherEdit[];
@@ -223,8 +230,6 @@ export default function StudentPaymentDetails({
         return t("typeWorkshop");
       case "FORMATION":
         return t("typeFormation");
-      case "REVISION_SESSION":
-        return locale === "ar" ? "حصة مراجعة (زائر)" : "Séance de révision (Visiteur)";
       case "MULTI_ITEM":
         return locale === "ar" ? "دفع مجمّع" : "Paiement combiné";
       default:
@@ -2320,9 +2325,19 @@ export default function StudentPaymentDetails({
 
                           {/* Payment Type */}
                           <td className="p-3 text-start">
-                            <Badge variant={isRefundVoucher ? "danger" : "neutral"} size="sm">
-                              {getPaymentTypeLabel(v.paymentType)}
-                            </Badge>
+                            <div className="flex flex-col items-start gap-1">
+                              <Badge variant={isRefundVoucher ? "danger" : "neutral"} size="sm">
+                                {getPaymentTypeLabel(v.paymentType)}
+                              </Badge>
+                              {v.paymentType === "REVISION_SESSION" && v.lesson?.startsAt && (
+                                <span
+                                  className="text-[10px] font-mono font-semibold text-teal-800 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded"
+                                  dir="ltr"
+                                >
+                                  {locale === "ar" ? "الحصة:" : "Séance :"} {formatPaymentDate(v.lesson.startsAt)}
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           {/* Date */}
@@ -2399,21 +2414,25 @@ export default function StudentPaymentDetails({
                                   availableBranches.find((b) => b.id === v.issuingBranchId)?.name ||
                                   availableBranches[0]?.name ||
                                   "ECOLE";
+                                const bundledForPrint = buildVoucherBundleForPrint(
+                                  {
+                                    ...v,
+                                    student: student as any,
+                                    class: (v.class ||
+                                      (!isWorkshopVoucher ? classMetrics[0]?.class : null) || {
+                                        name: isWorkshopVoucher
+                                          ? v.workshop?.title || (locale === "ar" ? "ورشة عمل / دورة" : "Atelier")
+                                          : locale === "ar"
+                                          ? "فوج دراسي"
+                                          : "Groupe",
+                                        branch: { name: fallbackBranchName },
+                                      }) as any,
+                                  } as any,
+                                  student.vouchers || []
+                                );
                                 return (
                                   <PrintTicketButton
-                                    voucher={{
-                                      ...v,
-                                      student: student as any,
-                                      class: (v.class ||
-                                        (!isWorkshopVoucher ? classMetrics[0]?.class : null) || {
-                                          name: isWorkshopVoucher
-                                            ? v.workshop?.title || (locale === "ar" ? "ورشة عمل / دورة" : "Atelier")
-                                            : locale === "ar"
-                                            ? "فوج دراسي"
-                                            : "Groupe",
-                                          branch: { name: fallbackBranchName },
-                                        }) as any,
-                                    } as any}
+                                    voucher={bundledForPrint as any}
                                     remainingSessions={
                                       !isWorkshopVoucher && v.paymentType !== "REVISION_SESSION"
                                         ? classMetric?.effectiveRemainingSessions

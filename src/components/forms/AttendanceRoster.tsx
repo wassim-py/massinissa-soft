@@ -8,18 +8,28 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
-import { saveAttendance, removeCatchUpAttendanceAction, markSingleAttendanceAction, removeRevisionVisitorAction } from "@/lib/actions";
+import {
+  saveAttendance,
+  removeCatchUpAttendanceAction,
+  markSingleAttendanceAction,
+  removeRevisionVisitorAction,
+  checkInPrepaidRevisionVisitorAction,
+  undoRevisionVisitorCheckInAction,
+  reschedulePrepaidRevisionAction,
+  getClassRevisionLessonOptionsAction,
+} from "@/lib/actions";
 import { notifyAttendanceChanged } from "@/lib/attendanceEvents";
 import { executeWithRetry } from "@/lib/retryUtils";
 import { toast } from "react-toastify";
 import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences, computeStudentCreditAndSessions, computeStudentSessionFee, formatDiscountBadgeLabel } from "@/lib/studentBilling";
-import { buildVoucherBundleForPrint } from "@/lib/voucherUtils";
+import { buildVoucherBundleForPrint, formatPaymentDate } from "@/lib/voucherUtils";
+import { type RevisionLessonOption } from "@/lib/revisionSchedule";
 import { useTranslations, useLocale } from "next-intl";
 import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
 import CatchUpVisitorModal from "./CatchUpVisitorModal";
 import RevisionVisitorModal from "./RevisionVisitorModal";
-import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, Send, Clock, CheckCircle2 } from "lucide-react";
+import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, Send, Clock, CheckCircle2, CalendarClock, RotateCcw, Loader2 } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
 import BookStatusBadge, { computeBookStatus, BookDetailItem } from "@/components/books/BookStatusBadge";
@@ -60,7 +70,15 @@ export interface RevisionVisitor {
   globalNumber: number;
   phone?: string | null;
   status: string;
+  isCheckedIn?: boolean;
+  isPrepaidPending?: boolean;
   amount: number;
+  voucherId?: number | null;
+  voucherNumber?: number | null;
+  issuedAt?: string | Date | null;
+  isPaidToday?: boolean;
+  bundleSessionCount?: number;
+  bundleSessionIndex?: number;
   voucher?: any;
 }
 
@@ -134,9 +152,17 @@ type FullStudent = Student & {
   pricePerCycle?: number;
   isFormation?: boolean;
   isRevisionVisitor?: boolean;
+  isRevisionCheckedIn?: boolean;
+  isRevisionPrepaidPending?: boolean;
   revisionAttendanceId?: number;
   revisionAmount?: number;
   revisionVoucher?: any;
+  revisionVoucherId?: number | null;
+  revisionVoucherNumber?: number | null;
+  revisionIssuedAt?: string | Date | null;
+  revisionIsPaidToday?: boolean;
+  revisionBundleCount?: number;
+  revisionBundleIndex?: number;
   priorRevisionCount?: number;
 };
 
@@ -217,6 +243,18 @@ const AttendanceRoster = ({
   const [preselectedStudentForEnroll, setPreselectedStudentForEnroll] = useState<any>(null);
   const [isRevisionModalOpen, setIsRevisionModalOpen] = useState(false);
   const [deletingRevisionVisitorId, setDeletingRevisionVisitorId] = useState<string | null>(null);
+  const [checkingInRevisionId, setCheckingInRevisionId] = useState<string | null>(null);
+  const [undoingRevisionId, setUndoingRevisionId] = useState<string | null>(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState<{
+    studentId: string;
+    studentName: string;
+    voucherId: number;
+  } | null>(null);
+  const [rescheduleOptions, setRescheduleOptions] = useState<RevisionLessonOption[]>([]);
+  const [loadingRescheduleOptions, setLoadingRescheduleOptions] = useState(false);
+  const [selectedRescheduleKey, setSelectedRescheduleKey] = useState<string>("");
+  const [submittingReschedule, setSubmittingReschedule] = useState(false);
+  const [lastRevisionRefundVoucher, setLastRevisionRefundVoucher] = useState<any | null>(null);
 
   const resolvedStudentRelatedData = useMemo(() => {
     const grades = studentRelatedData?.grades || [];
@@ -310,22 +348,36 @@ const AttendanceRoster = ({
       inscriptionStatus: "PAID" as const,
     } as any));
 
-    const revVisitors: FullStudent[] = (revisionVisitors || []).map((rv: any) => ({
+    const mapRevVisitor = (rv: any): FullStudent => ({
       id: rv.studentId,
       globalNumber: rv.globalNumber,
       name: rv.studentName,
       phone: rv.phone || null,
       surname: "",
-      className: locale === "ar" ? "زائر مراجعة" : "Visiteur Révision",
+      className: rv.isPrepaidPending
+        ? locale === "ar"
+          ? "مراجعة (مدفوع مسبقاً)"
+          : "Révision (Prépayé)"
+        : locale === "ar"
+        ? "زائر مراجعة"
+        : "Visiteur Révision",
       payerStatus: "NORMAL",
       enrollmentStatus: "ACTIVE",
       isSuspended: false,
       isRefunded: false,
       isVisitor: false,
       isRevisionVisitor: true,
+      isRevisionCheckedIn: rv.isCheckedIn ?? rv.status === "PRESENT",
+      isRevisionPrepaidPending: Boolean(rv.isPrepaidPending),
       revisionAttendanceId: rv.id,
       revisionAmount: rv.amount,
       revisionVoucher: rv.voucher,
+      revisionVoucherId: rv.voucherId ?? rv.voucher?.id ?? null,
+      revisionVoucherNumber: rv.voucherNumber ?? rv.voucher?.number ?? null,
+      revisionIssuedAt: rv.issuedAt ?? rv.voucher?.issuedAt ?? null,
+      revisionIsPaidToday: rv.isPaidToday ?? true,
+      revisionBundleCount: rv.bundleSessionCount ?? 1,
+      revisionBundleIndex: rv.bundleSessionIndex ?? 1,
       vouchers: rv.voucher ? [rv.voucher] : [],
       attendances: [],
       catchUps: [],
@@ -339,9 +391,14 @@ const AttendanceRoster = ({
       outstandingBooks: [],
       bookDetails: [],
       inscriptionStatus: "PAID" as const,
-    } as any));
+    } as any);
 
-    return [...regular, ...visitors, ...revVisitors];
+    const revVisitors: FullStudent[] = (revisionVisitors || []).map(mapRevVisitor);
+    const prepaidRevVisitors = revVisitors.filter((rv) => rv.isRevisionPrepaidPending);
+    const checkedInRevVisitors = revVisitors.filter((rv) => !rv.isRevisionPrepaidPending);
+
+    // Pin pre-paid pending revision visitors at the top so admins immediately spot them for 1-click check-in
+    return [...prepaidRevVisitors, ...regular, ...visitors, ...checkedInRevVisitors];
   }, [students, catchUpVisitors, revisionVisitors, locale]);
 
   const filteredStudents = useMemo(() => {
@@ -388,16 +445,30 @@ const AttendanceRoster = ({
         name: rv.studentName,
         phone: rv.phone || null,
         surname: "",
-        className: locale === "ar" ? "زائر مراجعة" : "Visiteur Révision",
+        className: rv.isPrepaidPending
+          ? locale === "ar"
+            ? "مراجعة (مدفوع مسبقاً)"
+            : "Révision (Prépayé)"
+          : locale === "ar"
+          ? "زائر مراجعة"
+          : "Visiteur Révision",
         payerStatus: "NORMAL",
         enrollmentStatus: "ACTIVE",
         isSuspended: false,
         isRefunded: false,
         isVisitor: false,
         isRevisionVisitor: true,
+        isRevisionCheckedIn: rv.isCheckedIn ?? rv.status === "PRESENT",
+        isRevisionPrepaidPending: Boolean(rv.isPrepaidPending),
         revisionAttendanceId: rv.id,
         revisionAmount: rv.amount,
         revisionVoucher: rv.voucher,
+        revisionVoucherId: rv.voucherId ?? rv.voucher?.id ?? null,
+        revisionVoucherNumber: rv.voucherNumber ?? rv.voucher?.number ?? null,
+        revisionIssuedAt: rv.issuedAt ?? rv.voucher?.issuedAt ?? null,
+        revisionIsPaidToday: rv.isPaidToday ?? true,
+        revisionBundleCount: rv.bundleSessionCount ?? 1,
+        revisionBundleIndex: rv.bundleSessionIndex ?? 1,
         vouchers: rv.voucher ? [rv.voucher] : [],
         attendances: [],
         catchUps: [],
@@ -702,22 +773,134 @@ const AttendanceRoster = ({
     }
   };
 
-  const handleRemoveRevisionVisitor = async (studentId: string) => {
-    const confirmMsg =
-      locale === "ar"
-        ? "هل أنت متأكد من إلغاء زائر المراجعة؟ سيتم إلغاء الوصل وتعديل السجل المالي تلقائياً."
-        : "Êtes-vous sûr d'annuler ce visiteur révision ? Le reçu sera annulé et le grand livre ajusté.";
+  const handleCheckInRevisionVisitor = async (studentId: string) => {
+    try {
+      setCheckingInRevisionId(studentId);
+      const res = await checkInPrepaidRevisionVisitorAction({
+        lessonId: currentLessonId,
+        studentId,
+      });
+      if (res.success) {
+        toast.success(res.message);
+        notifyAttendanceChanged({ lessonId: currentLessonId, source: "checkin-revision-visitor" });
+        router.refresh();
+      } else {
+        toast.error(res.message || "Erreur lors de la confirmation");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erreur inattendue");
+    } finally {
+      setCheckingInRevisionId(null);
+    }
+  };
+
+  const handleUndoRevisionCheckIn = async (studentId: string) => {
+    try {
+      setUndoingRevisionId(studentId);
+      const res = await undoRevisionVisitorCheckInAction({
+        lessonId: currentLessonId,
+        studentId,
+      });
+      if (res.success) {
+        toast.success(res.message);
+        notifyAttendanceChanged({ lessonId: currentLessonId, source: "undo-revision-checkin" });
+        router.refresh();
+      } else {
+        toast.error(res.message || "Erreur lors de l'annulation du pointage");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erreur inattendue");
+    } finally {
+      setUndoingRevisionId(null);
+    }
+  };
+
+  const handleOpenRescheduleModal = async (student: FullStudent) => {
+    const voucherId = student.revisionVoucherId ?? student.revisionVoucher?.id;
+    if (!voucherId) return;
+    setRescheduleTarget({
+      studentId: student.id,
+      studentName: student.name,
+      voucherId,
+    });
+    setSelectedRescheduleKey("");
+    setRescheduleOptions([]);
+    setLoadingRescheduleOptions(true);
+    try {
+      const res = await getClassRevisionLessonOptionsAction({
+        lessonId: currentLessonId,
+        classId: lesson.class.id,
+        studentId: student.id,
+        weeksAhead: 6,
+      });
+      if (res.success) {
+        const eligible = (res.options || []).filter(
+          (o) => !o.isCurrentLesson && !o.isAlreadyBookedByStudent
+        );
+        setRescheduleOptions(eligible);
+        if (eligible[0]) {
+          setSelectedRescheduleKey(eligible[0].key);
+        }
+      } else {
+        toast.error(res.message || "Impossible de charger les dates.");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erreur inattendue");
+    } finally {
+      setLoadingRescheduleOptions(false);
+    }
+  };
+
+  const handleConfirmReschedule = async () => {
+    if (!rescheduleTarget || !selectedRescheduleKey) return;
+    const chosen = rescheduleOptions.find((o) => o.key === selectedRescheduleKey);
+    if (!chosen) return;
+    try {
+      setSubmittingReschedule(true);
+      const res = await reschedulePrepaidRevisionAction({
+        voucherId: rescheduleTarget.voucherId,
+        targetLessonId: chosen.lessonId,
+        templateLessonId: chosen.templateLessonId,
+        targetDateStr: chosen.targetDateStr,
+      });
+      if (res.success) {
+        toast.success(res.message);
+        setRescheduleTarget(null);
+        notifyAttendanceChanged({ lessonId: currentLessonId, source: "reschedule-revision" });
+        router.refresh();
+      } else {
+        toast.error(res.message || "Échec du report.");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erreur inattendue");
+    } finally {
+      setSubmittingReschedule(false);
+    }
+  };
+
+  const handleRemoveRevisionVisitor = async (student: FullStudent) => {
+    const isPaidToday = student.revisionIsPaidToday !== false;
+    const confirmMsg = isPaidToday
+      ? locale === "ar"
+        ? "هل أنت متأكد من إلغاء حصة المراجعة؟ سيتم إلغاء وصل هذه الحصة فقط وتعديل السجل المالي لليوم تلقائياً."
+        : "Annuler cette séance de révision ? Le reçu de cette séance sera annulé et le grand livre du jour ajusté."
+      : locale === "ar"
+      ? "تم دفع هذه الحصة في يوم سابق. هل تريد إلغاءها وتسجيل وصل استرداد (Refund) في صندوق اليوم دون المساس بصندوق اليوم السابق؟"
+      : "Cette séance a été payée un jour précédent. L'annuler et enregistrer un remboursement (Refund) sur la caisse d'aujourd'hui ?";
     if (!window.confirm(confirmMsg)) return;
 
     try {
-      setDeletingRevisionVisitorId(studentId);
-      const res = await removeRevisionVisitorAction({ lessonId: currentLessonId, studentId });
+      setDeletingRevisionVisitorId(student.id);
+      const res = await removeRevisionVisitorAction({
+        lessonId: currentLessonId,
+        studentId: student.id,
+        voucherId: student.revisionVoucherId ?? undefined,
+      });
       if (res.success) {
-        toast.success(
-          locale === "ar"
-            ? "تم إلغاء زائر المراجعة بنجاح"
-            : "Visiteur révision retiré avec succès"
-        );
+        toast.success(res.message);
+        if (res.refundVoucher) {
+          setLastRevisionRefundVoucher(res.refundVoucher);
+        }
         notifyAttendanceChanged({ lessonId: currentLessonId, source: "remove-revision-visitor" });
         router.refresh();
       } else {
@@ -1250,13 +1433,29 @@ const AttendanceRoster = ({
               {t("catchUpVisitorsCount", { count: catchUpVisitors.length })}
             </span>
           )}
-          {revisionVisitors.length > 0 && (
-            <span className="text-teal-700 font-medium">
-              {locale === "ar"
-                ? `${revisionVisitors.length} زائر مراجعة`
-                : `${revisionVisitors.length} visiteur(s) révision`}
-            </span>
-          )}
+          {revisionVisitors.length > 0 && (() => {
+            const pendingCount = revisionVisitors.filter((rv: any) => rv.isPrepaidPending).length;
+            const checkedInCount = revisionVisitors.length - pendingCount;
+            return (
+              <div className="inline-flex items-center gap-2 flex-wrap">
+                {checkedInCount > 0 && (
+                  <span className="text-teal-700 font-medium">
+                    {locale === "ar"
+                      ? `${checkedInCount} زائر مراجعة`
+                      : `${checkedInCount} visiteur(s) révision`}
+                  </span>
+                )}
+                {pendingCount > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300 font-bold text-[11px]">
+                    <Clock className="w-3 h-3 text-amber-700" />
+                    {locale === "ar"
+                      ? `${pendingCount} مدفوع مسبقاً بانتظار الحضور`
+                      : `${pendingCount} prépayé(s) en attente`}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Status Color Indicators Legend */}
           <div className="flex items-center gap-1.5 ms-auto sm:ms-2 flex-wrap">
@@ -1305,6 +1504,28 @@ const AttendanceRoster = ({
           </button>
         </div>
       </div>
+
+      {lastRevisionRefundVoucher && (
+        <div className="mb-4 p-3 rounded-xl border border-rose-200 bg-rose-50/70 flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
+          <div className="flex items-center gap-2 text-rose-900 font-semibold">
+            <span>
+              {locale === "ar"
+                ? `تم إصدار وصل استرداد #${lastRevisionRefundVoucher.number} (${lastRevisionRefundVoucher.amount} د.ج) لحصة المراجعة الملغاة.`
+                : `Reçu de remboursement #${lastRevisionRefundVoucher.number} (${lastRevisionRefundVoucher.amount} DZD) émis.`}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <PrintTicketButton voucher={lastRevisionRefundVoucher} />
+            <button
+              type="button"
+              onClick={() => setLastRevisionRefundVoucher(null)}
+              className="px-2.5 py-1 rounded-md bg-white border border-rose-200 text-rose-800 hover:bg-rose-100 font-bold cursor-pointer"
+            >
+              {locale === "ar" ? "إخفاء" : "Fermer"}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-3 font-sans">
         {filteredStudents.length === 0 ? (
@@ -1656,7 +1877,11 @@ const AttendanceRoster = ({
               <div
                 key={student.id}
                 className={`p-3.5 sm:p-4 rounded-xl border transition-all ${
-                  currentStatus === "PRESENT"
+                  student.isRevisionPrepaidPending
+                    ? "bg-amber-50/60 border-amber-400 border-dashed shadow-xs"
+                    : student.isRevisionVisitor
+                    ? "bg-teal-50/40 border-teal-300 shadow-2xs"
+                    : currentStatus === "PRESENT"
                     ? "bg-emerald-50/40 border-emerald-300 shadow-2xs"
                     : currentStatus === "ABSENT"
                     ? "bg-rose-50/40 border-rose-300 shadow-2xs"
@@ -1811,11 +2036,31 @@ const AttendanceRoster = ({
 
                         {student.isRevisionVisitor && (
                           <div className="inline-flex items-center gap-1.5 flex-wrap">
-                            <Badge variant="primary" size="sm" withDot className="bg-teal-100 text-teal-950 border-teal-300 font-bold shadow-2xs">
-                              {locale === "ar"
-                                ? `زائر مراجعة (رسوم: ${student.revisionAmount || 0} د.ج)`
-                                : `Visiteur révision (Frais : ${student.revisionAmount || 0} DA)`}
-                            </Badge>
+                            {student.isRevisionPrepaidPending ? (
+                              <Badge variant="warning" size="sm" withDot className="bg-amber-100 text-amber-950 border-amber-400 font-bold shadow-2xs">
+                                {locale === "ar"
+                                  ? `مدفوع مسبقاً (${student.revisionAmount || 0} د.ج${student.revisionVoucherNumber ? ` · وصل #${student.revisionVoucherNumber}` : ""})`
+                                  : `Prépayé (${student.revisionAmount || 0} DA${student.revisionVoucherNumber ? ` · BON #${student.revisionVoucherNumber}` : ""})`}
+                              </Badge>
+                            ) : (
+                              <Badge variant="primary" size="sm" withDot className="bg-teal-100 text-teal-950 border-teal-300 font-bold shadow-2xs">
+                                {locale === "ar"
+                                  ? `زائر مراجعة (${student.revisionAmount || 0} د.ج${student.revisionVoucherNumber ? ` · وصل #${student.revisionVoucherNumber}` : ""})`
+                                  : `Visiteur révision (${student.revisionAmount || 0} DA${student.revisionVoucherNumber ? ` · BON #${student.revisionVoucherNumber}` : ""})`}
+                              </Badge>
+                            )}
+                            {(student.revisionBundleCount || 1) > 1 && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-900 border border-indigo-200">
+                                {locale === "ar"
+                                  ? `باقة ${student.revisionBundleIndex || 1}/${student.revisionBundleCount}`
+                                  : `Séance ${student.revisionBundleIndex || 1}/${student.revisionBundleCount}`}
+                              </span>
+                            )}
+                            {student.isRevisionPrepaidPending && student.revisionIssuedAt && (
+                              <span className="text-[10px] font-mono text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded" dir="ltr">
+                                {locale === "ar" ? "دُفع:" : "Payé :"} {formatPaymentDate(student.revisionIssuedAt)}
+                              </span>
+                            )}
                             {student.revisionVoucher && (
                               <PrintTicketButton
                                 voucher={{
@@ -1828,17 +2073,55 @@ const AttendanceRoster = ({
                                   },
                                   class: student.revisionVoucher.class || lesson.class,
                                 }}
+                                sessionsForThisPayment={
+                                  (student.revisionBundleCount || 1) > 1
+                                    ? student.revisionBundleCount
+                                    : undefined
+                                }
                               />
+                            )}
+                            {student.isRevisionPrepaidPending && student.revisionVoucherId && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenRescheduleModal(student)}
+                                className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                                title={locale === "ar" ? "تأجيل هذه الحصة المدفوعة إلى تاريخ آخر" : "Reporter cette séance prépayée à une autre date"}
+                              >
+                                <CalendarClock className="w-3 h-3" />
+                                <span>{locale === "ar" ? "تأجيل" : "Reporter"}</span>
+                              </button>
+                            )}
+                            {!student.isRevisionPrepaidPending && student.revisionVoucherId && (
+                              <button
+                                type="button"
+                                disabled={undoingRevisionId === student.id}
+                                onClick={() => handleUndoRevisionCheckIn(student.id)}
+                                className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 hover:text-amber-900 hover:bg-amber-50 border border-amber-200 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                                title={locale === "ar" ? "إلغاء تأكيد الحضور مع الإبقاء على الدفع المسبق" : "Annuler le pointage (garder en prépayé)"}
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>
+                                  {undoingRevisionId === student.id
+                                    ? (locale === "ar" ? "..." : "...")
+                                    : (locale === "ar" ? "تراجع" : "Dépointer")}
+                                </span>
+                              </button>
                             )}
                             <button
                               type="button"
                               disabled={deletingRevisionVisitorId === student.id}
-                              onClick={() => handleRemoveRevisionVisitor(student.id)}
+                              onClick={() => handleRemoveRevisionVisitor(student)}
                               className="text-[11px] font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 border border-rose-200 px-2 py-0.5 rounded cursor-pointer transition-colors"
-                              title={locale === "ar" ? "إلغاء زائر المراجعة واسترجاع الرسوم" : "Annuler le visiteur révision"}
+                              title={
+                                student.revisionIsPaidToday === false
+                                  ? (locale === "ar" ? "إلغاء الحصة وإصدار وصل استرداد" : "Annuler et rembourser la séance")
+                                  : (locale === "ar" ? "إلغاء زائر المراجعة واسترجاع الرسوم" : "Annuler le visiteur révision")
+                              }
                             >
                               {deletingRevisionVisitorId === student.id
                                 ? (locale === "ar" ? "جاري الإلغاء..." : "Annulation...")
+                                : student.revisionIsPaidToday === false
+                                ? (locale === "ar" ? "إلغاء / استرداد" : "Rembourser")
                                 : (locale === "ar" ? "إلغاء الحضور" : "Annuler")}
                             </button>
                           </div>
@@ -1967,10 +2250,30 @@ const AttendanceRoster = ({
 
                   <div className="flex flex-wrap items-center gap-2">
                     {student.isRevisionVisitor ? (
-                      <div className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-teal-600 text-white shadow-xs">
-                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                        <span>{locale === "ar" ? "حاضر (مراجعة)" : "Présent (Révision)"}</span>
-                      </div>
+                      student.isRevisionPrepaidPending ? (
+                        <button
+                          type="button"
+                          disabled={checkingInRevisionId === student.id}
+                          onClick={() => handleCheckInRevisionVisitor(student.id)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white shadow-xs transition-all cursor-pointer active:scale-95"
+                        >
+                          {checkingInRevisionId === student.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                          )}
+                          <span>
+                            {checkingInRevisionId === student.id
+                              ? (locale === "ar" ? "جاري التأكيد..." : "Confirmation...")
+                              : (locale === "ar" ? "تأكيد الحضور" : "Confirmer présence")}
+                          </span>
+                        </button>
+                      ) : (
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-teal-600 text-white shadow-xs">
+                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                          <span>{locale === "ar" ? "حاضر (مراجعة)" : "Présent (Révision)"}</span>
+                        </div>
+                      )
                     ) : (
                       <>
                         {/* Restyled Attendance Buttons: Green (Present) / Red (Absent) / Blue (Not defined) */}
@@ -2309,16 +2612,116 @@ const AttendanceRoster = ({
         onClose={() => setIsCatchUpModalOpen(false)}
       />
 
-      {/* Revision Visitor Modal */}
+      {/* Revision Visitor Modal (keep open on success so admin can print the unified BON receipt) */}
       <RevisionVisitorModal
         lessonId={currentLessonId}
+        classId={lesson.class.id}
+        className={lesson.class.name}
         isOpen={isRevisionModalOpen}
         onClose={() => setIsRevisionModalOpen(false)}
         onSuccess={() => {
-          setIsRevisionModalOpen(false);
           router.refresh();
         }}
       />
+
+      {/* Reschedule Pre-Paid Revision Modal */}
+      {rescheduleTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !submittingReschedule) {
+              setRescheduleTarget(null);
+            }
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3.5 border-b border-indigo-100 bg-indigo-50/70">
+              <div className="flex items-center gap-2">
+                <CalendarClock className="w-5 h-5 text-indigo-700" />
+                <div>
+                  <h3 className="font-bold text-sm text-indigo-950">
+                    {locale === "ar" ? "تأجيل حصة المراجعة المدفوعة" : "Reporter la séance prépayée"}
+                  </h3>
+                  <p className="text-[11px] text-indigo-700">{rescheduleTarget.studentName}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={submittingReschedule}
+                onClick={() => setRescheduleTarget(null)}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3 text-xs">
+              <p className="text-gray-600">
+                {locale === "ar"
+                  ? "اختر التاريخ الجديد ضمن نفس الفوج. لن يتأثر السجل المالي لأن الدفع تم مسبقاً."
+                  : "Choisissez la nouvelle date dans le même groupe. La caisse reste inchangée."}
+              </p>
+              {loadingRescheduleOptions ? (
+                <div className="py-6 flex items-center justify-center gap-2 text-gray-400">
+                  <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                  <span>{locale === "ar" ? "جارٍ تحميل التواريخ..." : "Chargement..."}</span>
+                </div>
+              ) : rescheduleOptions.length === 0 ? (
+                <div className="py-4 text-center rounded-lg border border-dashed border-gray-300 text-gray-500">
+                  {locale === "ar"
+                    ? "لا توجد تواريخ قادمة متاحة للتأجيل."
+                    : "Aucune date à venir disponible pour le report."}
+                </div>
+              ) : (
+                <div className="max-h-52 overflow-y-auto space-y-1.5">
+                  {rescheduleOptions.map((opt) => {
+                    const isSelected = selectedRescheduleKey === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setSelectedRescheduleKey(opt.key)}
+                        className={`w-full text-start px-3 py-2 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
+                          isSelected
+                            ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-400 font-bold text-indigo-950"
+                            : "border-gray-200 hover:border-indigo-300 text-gray-800"
+                        }`}
+                      >
+                        <span className="font-mono font-bold" dir="ltr">
+                          {opt.displayDate} ({opt.startTime}–{opt.endTime})
+                        </span>
+                        {opt.isExtra && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 font-bold">
+                            {locale === "ar" ? "إضافية" : "Extra"}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={submittingReschedule}
+                  onClick={() => setRescheduleTarget(null)}
+                  className="px-3.5 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold cursor-pointer"
+                >
+                  {locale === "ar" ? "إلغاء" : "Annuler"}
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedRescheduleKey || submittingReschedule}
+                  onClick={handleConfirmReschedule}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  {submittingReschedule && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{locale === "ar" ? "تأكيد التأجيل" : "Confirmer le report"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Free Session Confirmation Popup Modal */}
       {isConfirmModalOpen && (

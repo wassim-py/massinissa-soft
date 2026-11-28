@@ -9,7 +9,9 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { FilterTabs } from "@/components/ui/FilterTabs";
 import { getTranslations, getLocale } from "next-intl/server";
-import { BookOpen, GraduationCap, Sparkles } from "lucide-react";
+import { BookOpen, GraduationCap, Sparkles, Clock } from "lucide-react";
+import QuickRevisionButton from "@/components/forms/QuickRevisionButton";
+import { getAlgiersDayBounds } from "@/lib/algiersDate";
 import {
   ACTIVE_CLASS_WHERE,
   INACTIVE_CLASS_WHERE,
@@ -27,6 +29,7 @@ type AttendanceItem = {
   description?: string | null;
   studentCount: number;
   sessionCount: number;
+  prepaidRevisionCount?: number;
   href: string;
   isInactive?: boolean;
 };
@@ -434,6 +437,57 @@ const AttendanceListPage = async (
     items = [];
   }
 
+  // Compute upcoming unredeemed pre-paid revision counts per class card shown on this page
+  const visibleClassIds = items
+    .filter((it) => it.category === "class")
+    .map((it) => it.id);
+  if (visibleClassIds.length > 0) {
+    try {
+      const { startUtc } = getAlgiersDayBounds(new Date());
+      const upcomingRevVouchers = await prisma.voucher.findMany({
+        where: {
+          classId: { in: visibleClassIds },
+          paymentType: "REVISION_SESSION",
+          isVoided: false,
+          isRefund: false,
+          lessonId: { not: null },
+          lesson: { startsAt: { gte: startUtc } },
+        },
+        select: { classId: true, lessonId: true, studentId: true, amount: true, refunds: { select: { amount: true } } },
+      });
+      if (upcomingRevVouchers.length > 0) {
+        const revLessonIds = Array.from(
+          new Set(upcomingRevVouchers.map((v) => v.lessonId!).filter(Boolean))
+        );
+        const checkedIn = await prisma.attendance.findMany({
+          where: {
+            lessonId: { in: revLessonIds },
+            isRevisionVisitor: true,
+            status: "PRESENT",
+          },
+          select: { lessonId: true, studentId: true },
+        });
+        const checkedInSet = new Set(checkedIn.map((a) => `${a.lessonId}_${a.studentId}`));
+        const countByClass = new Map<number, number>();
+        for (const v of upcomingRevVouchers) {
+          if (!v.classId || !v.lessonId) continue;
+          const refunded = (v.refunds || []).reduce((s, r) => s + Number(r.amount || 0), 0);
+          if (Number(v.amount || 0) - refunded <= 0) continue;
+          if (!checkedInSet.has(`${v.lessonId}_${v.studentId}`)) {
+            countByClass.set(v.classId, (countByClass.get(v.classId) || 0) + 1);
+          }
+        }
+        items = items.map((it) =>
+          it.category === "class"
+            ? { ...it, prepaidRevisionCount: countByClass.get(it.id) || 0 }
+            : it
+        );
+      }
+    } catch (prepaidErr) {
+      console.warn("Could not load upcoming prepaid revision counts:", prepaidErr);
+    }
+  }
+
   const totalAllCount = classCount + formationCount + workshopCount;
   const currentCount =
     activeType === "classes"
@@ -444,6 +498,9 @@ const AttendanceListPage = async (
       ? workshopCount
       : totalAllCount;
 
+  const canRecordRevision =
+    session.isOwner || session.isBranchAdmin || session.isOwnerOrAdmin;
+
   return (
     <Card className="flex-1 w-full border-border/80 shadow-xs font-sans">
       <CardContent className="p-4 sm:p-5 md:p-6">
@@ -451,6 +508,7 @@ const AttendanceListPage = async (
           title={pageTitle}
           searchPlaceholder={t("searchPlaceholder")}
           createAction={null}
+          extraAction={canRecordRevision ? <QuickRevisionButton /> : null}
         />
 
         {/* Status Tabs: Active vs Closed / Paused */}
@@ -609,13 +667,26 @@ const AttendanceListPage = async (
                   )}
 
                   <div className="mt-auto border-t border-border/60 pt-3 flex items-center justify-between text-table-body text-muted">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <Badge variant="neutral" size="sm">
                         {item.studentCount} {isWorkshop ? (locale === "ar" ? "مشارك" : "parts") : (locale === "ar" ? "تلميذ" : "élèves")}
                       </Badge>
                       <Badge variant="secondary" size="sm">
                         {item.sessionCount} {locale === "ar" ? "حصة" : "séances"}
                       </Badge>
+                      {(item.prepaidRevisionCount || 0) > 0 && (
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-950 border border-amber-300"
+                          title={
+                            locale === "ar"
+                              ? "حصص مراجعة مدفوعة مسبقاً بانتظار تأكيد الحضور"
+                              : "Séances de révision prépayées en attente de pointage"
+                          }
+                        >
+                          <Clock className="w-2.5 h-2.5 text-amber-700" />
+                          {item.prepaidRevisionCount} {locale === "ar" ? "مدفوع" : "prép."}
+                        </span>
+                      )}
                     </div>
                     <span className="text-xs font-bold text-primary opacity-0 group-hover:opacity-100 transition-opacity">
                       {locale === "ar" ? "عرض ←" : "Voir →"}

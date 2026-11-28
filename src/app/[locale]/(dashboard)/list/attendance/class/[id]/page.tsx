@@ -17,6 +17,7 @@ import { classifyStudentAttendanceHistory, computePostRevisionEnrollmentGapInfo,
 import { getAlgiersDateInfo } from "@/lib/utils";
 import { StudentBalanceInfo } from "@/components/AttendanceGrid";
 import { autoSaveLessonAttendanceAction } from "@/lib/actions";
+import QuickRevisionButton from "@/components/forms/QuickRevisionButton";
 
 // This type will represent a unique column in our grid
 export type LessonInstance = {
@@ -28,6 +29,7 @@ export type LessonInstance = {
     isFree?: boolean;
     isExtra?: boolean;
     isCatchUp?: boolean;
+    isPrepaidOnlyFutureColumn?: boolean;
 };
 
 export type AttendanceCellDetail = {
@@ -37,7 +39,9 @@ export type AttendanceCellDetail = {
     isRevisionGap?: boolean;
     isTeacherAbsent?: boolean;
     isRevisionVisitor?: boolean;
+    isPrepaidRevision?: boolean;
     revisionAmountPaid?: number | null;
+    revisionVoucherNumber?: number | null;
     catchUp?: {
         catchUpDate: string;
         catchUpGroupName: string;
@@ -368,6 +372,85 @@ const ClassAttendancePage = async (
                 }
             } catch (revErr) {
                 console.error("Error fetching revision attendances in ClassAttendancePage:", revErr);
+            }
+
+            // Also load active PRE-PAID (unredeemed) REVISION_SESSION vouchers for this class
+            // so future pre-paid revision bookings appear immediately in the Revision Visitors tab
+            let prepaidRevisionBookings: Array<{
+                voucherId: number;
+                voucherNumber: number;
+                studentId: string;
+                lessonId: number;
+                lessonStartsAt: Date;
+                isExtra: boolean;
+                isCatchUp: boolean;
+                isFree: boolean;
+                amount: number;
+            }> = [];
+            try {
+                const classLessonIdList = allClassLessons.map((l) => l.id);
+                const rawPrepaidRevVouchers = await prisma.voucher.findMany({
+                    where: {
+                        paymentType: "REVISION_SESSION",
+                        isVoided: false,
+                        isRefund: false,
+                        lessonId: { not: null },
+                        OR: [
+                            { classId: classId },
+                            ...(classLessonIdList.length > 0 ? [{ lessonId: { in: classLessonIdList } }] : []),
+                        ],
+                    },
+                    include: {
+                        student: { select: { id: true, name: true, globalNumber: true, phone: true } },
+                        lesson: { select: { id: true, startsAt: true, isExtra: true, isCatchUp: true, isFree: true } },
+                        refunds: { select: { amount: true } },
+                    },
+                });
+
+                for (const v of rawPrepaidRevVouchers) {
+                    if (!v.lesson || !v.student) continue;
+                    const refunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+                    const netPaid = Math.max(0, Number(v.amount || 0) - refunded);
+                    if (netPaid <= 0) continue;
+
+                    if (!studentMap.has(v.student.id)) {
+                        studentMap.set(v.student.id, {
+                            id: v.student.id,
+                            name: v.student.name,
+                            globalNumber: v.student.globalNumber,
+                            phone: v.student.phone,
+                            surname: "",
+                            status: "ACTIVE",
+                            isTransferred: false,
+                            isRevisionVisitorOnly: true,
+                            transferredAt: null,
+                            enrolledAt: null,
+                            transferredInAt: null,
+                            transferredFromClassId: null,
+                            attendances: [],
+                        });
+                    }
+
+                    const s = studentMap.get(v.student.id);
+                    const alreadyHasAttendance = (s?.attendances || []).some(
+                        (a: any) => a.lessonId === v.lesson!.id && a.isRevisionVisitor
+                    );
+                    if (!alreadyHasAttendance) {
+                        prepaidRevisionBookings.push({
+                            voucherId: v.id,
+                            voucherNumber: v.number,
+                            studentId: v.student.id,
+                            lessonId: v.lesson.id,
+                            lessonStartsAt: v.lesson.startsAt,
+                            isExtra: Boolean(v.lesson.isExtra),
+                            isCatchUp: Boolean(v.lesson.isCatchUp),
+                            isFree: Boolean(v.lesson.isFree),
+                            amount: netPaid,
+                        });
+                    }
+                }
+            } catch (prepaidErr) {
+                console.error("Error fetching prepaid revision vouchers in ClassAttendancePage:", prepaidErr);
             }
 
             let catchUpAttendances: any[] = [];
@@ -800,6 +883,7 @@ const ClassAttendancePage = async (
                 branchName: classHeader.branch?.name || `الفرع ${classHeader.branchId}`,
                 students: sortedStudents,
                 catchUpAttendances,
+                prepaidRevisionBookings,
             };
     } catch (err) {
         console.error("Error fetching class data:", err);
@@ -824,6 +908,7 @@ const ClassAttendancePage = async (
         isFree?: boolean;
         isExtra?: boolean;
         isCatchUp?: boolean;
+        isPrepaidOnlyFutureColumn?: boolean;
     }[] = [];
     const seenInstancesTemp = new Set<string>();
 
@@ -868,6 +953,30 @@ const ClassAttendancePage = async (
         }
     });
 
+    // Ensure any future pre-paid revision booking appears as a column in the Revision Visitors tab
+    // without polluting the regular enrolled Group Attendance tab with empty future columns.
+    (classData.prepaidRevisionBookings || []).forEach((pb: any) => {
+        const dateKey = getAlgiersDateInfo(pb.lessonStartsAt).dateStr;
+        const instanceKey = `${pb.lessonId}-${dateKey}`;
+        if (!seenInstancesTemp.has(instanceKey)) {
+            seenInstancesTemp.add(instanceKey);
+            const lessonMeta = allClassLessonsMap.get(pb.lessonId);
+            uniqueLessonInstancesTemp.push({
+                key: instanceKey,
+                lessonId: pb.lessonId,
+                subjectName: classHeader.name || "درس",
+                date: dateKey,
+                startsAt: lessonMeta?.startsAt
+                    ? new Date(lessonMeta.startsAt).toISOString()
+                    : new Date(pb.lessonStartsAt).toISOString(),
+                isFree: Boolean(lessonMeta?.isFree ?? pb.isFree),
+                isExtra: Boolean(lessonMeta?.isExtra ?? pb.isExtra),
+                isCatchUp: Boolean(lessonMeta?.isCatchUp ?? pb.isCatchUp),
+                isPrepaidOnlyFutureColumn: true,
+            });
+        }
+    });
+
     // 2. Count how many times each subject appears on each day from the unique list
     const dailySubjectCounts = new Map<string, number>();
     uniqueLessonInstancesTemp.forEach(instance => {
@@ -906,6 +1015,7 @@ const ClassAttendancePage = async (
             isFree: instance.isFree,
             isExtra: instance.isExtra,
             isCatchUp: instance.isCatchUp,
+            isPrepaidOnlyFutureColumn: instance.isPrepaidOnlyFutureColumn,
         });
     });
 
@@ -1088,6 +1198,28 @@ const ClassAttendancePage = async (
             }
         });
 
+        // Represent unredeemed PRE-PAID revision bookings in studentRecords so they render as amber-teal pending indicators
+        (classData.prepaidRevisionBookings || [])
+            .filter((pb: any) => pb.studentId === student.id)
+            .forEach((pb: any) => {
+                const dateKey = getAlgiersDateInfo(pb.lessonStartsAt).dateStr;
+                const instanceKey = `${pb.lessonId}-${dateKey}`;
+                if (!studentRecords.has(instanceKey)) {
+                    studentRecords.set(instanceKey, {
+                        status: "NOT_DEFINED",
+                        justification: null,
+                        isPreStart: false,
+                        isTeacherAbsent: false,
+                        isRevisionVisitor: true,
+                        isPrepaidRevision: true,
+                        revisionAmountPaid: pb.amount,
+                        revisionVoucherNumber: pb.voucherNumber,
+                        catchUp: null,
+                        visitorCatchUp: null,
+                    });
+                }
+            });
+
         studentAttendanceMap.set(student.id, studentRecords);
     });
 
@@ -1130,6 +1262,15 @@ const ClassAttendancePage = async (
                             isOwner={session.isOwner}
                             showBadge
                         />
+                        {!classData.isFormation &&
+                            !isClassInactive(classHeader) &&
+                            (session.isOwner || session.isBranchAdmin || session.isOwnerOrAdmin) && (
+                                <QuickRevisionButton
+                                    classId={classData.id}
+                                    className={classData.name}
+                                    compact
+                                />
+                            )}
                         {todayMatchingLesson && !isClassInactive(classHeader) && (
                             <Link
                                 href={`/list/attendance/take/${todayMatchingLesson.id}?date=${encodeURIComponent(takeAttendanceDateStr)}`}

@@ -39,6 +39,13 @@ export interface VoucherDisplayData {
     level?: { name?: string | null } | null;
     branch?: { name?: string | null } | null;
   } | null;
+  lessonId?: number | null;
+  lesson?: {
+    id?: number | string;
+    startsAt?: Date | string | number | null;
+    endsAt?: Date | string | number | null;
+    isExtra?: boolean | null;
+  } | null;
   series?: {
     id?: number | string;
     prefix?: string | null;
@@ -611,29 +618,49 @@ export function buildVoucherBundleForPrint<T extends Record<string, any>>(
     return primaryVoucher;
   }
 
-  const items = matched.map((v) => {
+  // Sort revision items chronologically by lesson date so multi-date receipts read cleanly
+  const orderedMatched = [...matched].sort((a, b) => {
+    if (a.paymentType === "REVISION_SESSION" && b.paymentType === "REVISION_SESSION") {
+      const aTime = a.lesson?.startsAt ? new Date(a.lesson.startsAt).getTime() : Number(a.id || 0);
+      const bTime = b.lesson?.startsAt ? new Date(b.lesson.startsAt).getTime() : Number(b.id || 0);
+      return aTime - bTime;
+    }
+    return Number(a.id || 0) - Number(b.id || 0);
+  });
+
+  const items = orderedMatched.map((v) => {
     const pType = String(v.paymentType || "TUITION_4SESSION");
     const entry = PAYMENT_TYPE_LABELS[pType];
+    const lessonDate =
+      pType === "REVISION_SESSION" && v.lesson?.startsAt
+        ? formatPaymentDate(v.lesson.startsAt)
+        : "";
+    const baseAr = entry?.ar || pType;
+    const baseFr = entry?.fr || pType;
     return {
       type: pType,
-      labelAr: entry?.ar || pType,
-      labelFr: entry?.fr || pType,
-      label: entry?.fr || pType,
+      lessonId: v.lessonId ?? v.lesson?.id ?? undefined,
+      lessonDate: lessonDate || undefined,
+      labelAr: lessonDate ? `حصة مراجعة — ${lessonDate}` : baseAr,
+      labelFr: lessonDate ? `Séance de révision — ${lessonDate}` : baseFr,
+      label: lessonDate ? `Séance de révision — ${lessonDate}` : baseFr,
       amount: Number(v.amount || 0),
     };
   });
 
   const totalAmount = items.reduce((sum, it) => sum + Number(it.amount || 0), 0);
-  const mergedRefunds = matched.flatMap((v) =>
+  const mergedRefunds = orderedMatched.flatMap((v) =>
     Array.isArray(v.refunds) ? v.refunds : []
   );
+  const revisionItemsCount = items.filter((it) => it.type === "REVISION_SESSION").length;
 
   return {
     ...primaryVoucher,
     isPartial:
-      Boolean(primaryVoucher.isPartial) || matched.some((v) => Boolean(v.isPartial)),
+      Boolean(primaryVoucher.isPartial) || orderedMatched.some((v) => Boolean(v.isPartial)),
     refunds: mergedRefunds.length > 0 ? mergedRefunds : primaryVoucher.refunds,
     items,
     totalAmount,
+    ...(revisionItemsCount > 1 ? { revisionSessionsCount: revisionItemsCount } : {}),
   };
 }
