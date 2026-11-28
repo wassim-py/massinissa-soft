@@ -50,28 +50,31 @@ const TakeAttendancePage = async (
 
   const searchQuery = searchParams.search;
 
-  const rawLesson = await prisma.$queryRaw<any[]>`
-    SELECT l.*,
-           c.name as "className",
-           c."pricePerCycle" as "classPrice",
-           c."pricePerCycle",
-           c."inscriptionFee",
-           c."bookFee",
-           c."hasBooks",
-           c."isFormation",
-           c."formationLevelId",
-           c."teacherId" as "classTeacherId",
-           c."levelId" as "classLevelId",
-           c."branchId" as "classBranchId",
-           cr."branchId" as "classroomBranchId",
-           t.name as "teacherName"
-    FROM "Lesson" l
-    LEFT JOIN "Class" c ON c.id = l."classId"
-    LEFT JOIN "Classroom" cr ON cr.id = l."classroomId"
-    LEFT JOIN "Teacher" t ON t.id = l."teacherId"
-    WHERE l.id = ${lessonId}
-    LIMIT 1
-  `;
+  const [rawLesson, activeTrimester] = await Promise.all([
+    prisma.$queryRaw<any[]>`
+      SELECT l.*,
+             c.name as "className",
+             c."pricePerCycle" as "classPrice",
+             c."pricePerCycle",
+             c."inscriptionFee",
+             c."bookFee",
+             c."hasBooks",
+             c."isFormation",
+             c."formationLevelId",
+             c."teacherId" as "classTeacherId",
+             c."levelId" as "classLevelId",
+             c."branchId" as "classBranchId",
+             cr."branchId" as "classroomBranchId",
+             t.name as "teacherName"
+      FROM "Lesson" l
+      LEFT JOIN "Class" c ON c.id = l."classId"
+      LEFT JOIN "Classroom" cr ON cr.id = l."classroomId"
+      LEFT JOIN "Teacher" t ON t.id = l."teacherId"
+      WHERE l.id = ${lessonId}
+      LIMIT 1
+    `,
+    getActiveTrimester(),
+  ]);
 
   if (!rawLesson || rawLesson.length === 0) {
     notFound();
@@ -112,26 +115,170 @@ const TakeAttendancePage = async (
     );
   }
 
-  // Fetch all associated groups (primary + additional from LessonGroup)
-  const lessonGroups = await prisma.lessonGroup.findMany({
-    where: { lessonId: lessonId },
-    include: {
-      class: {
-        select: {
-          id: true,
-          name: true,
-          pricePerCycle: true,
-          inscriptionFee: true,
-          bookFee: true,
-          hasBooks: true,
-          isFormation: true,
-          formationLevelId: true,
-          levelId: true,
-          branchId: true,
+  // Stage 2: Run all lessonId-scoped queries in ONE parallel batch
+  const [
+    lessonGroups,
+    teacherRates,
+    catchUpVisitors,
+    caughtUpStudents,
+    revAttendancesRaw,
+    revVouchersRaw,
+  ] = await Promise.all([
+    prisma.lessonGroup.findMany({
+      where: { lessonId: lessonId },
+      include: {
+        class: {
+          select: {
+            id: true,
+            name: true,
+            pricePerCycle: true,
+            inscriptionFee: true,
+            bookFee: true,
+            hasBooks: true,
+            isFormation: true,
+            formationLevelId: true,
+            levelId: true,
+            branchId: true,
+          },
         },
       },
-    },
-  });
+    }),
+    l.teacherId
+      ? prisma.teacherPayRate.findMany({
+          where: { teacherId: l.teacherId },
+          orderBy: { effectiveFrom: "desc" },
+          take: 1,
+        })
+      : Promise.resolve([]),
+    prisma.catchUpAttendance.findMany({
+      where: { catchUpLessonId: lessonId },
+      include: {
+        student: {
+          include: {
+            family: true,
+            vouchers: {
+              where: { isVoided: false, paymentType: "TUITION_4SESSION" },
+              include: { refunds: true },
+            },
+            attendances: {
+              where: { lesson: { isFree: false } },
+              include: {
+                lesson: {
+                  select: {
+                    id: true,
+                    startsAt: true,
+                    isFree: true,
+                    isTeacherAbsent: true,
+                    classId: true,
+                    lessonGroups: { select: { classId: true } },
+                  },
+                },
+              },
+            },
+            enrollments: {
+              include: {
+                transfersFrom: true,
+                transfersTo: {
+                  include: {
+                    fromEnrollment: {
+                      include: { class: true },
+                    },
+                  },
+                },
+                payerHistory: { orderBy: { effectiveFrom: "asc" } },
+              },
+            },
+            catchUpAttendances: {
+              include: {
+                missedLesson: {
+                  select: {
+                    id: true,
+                    startsAt: true,
+                    isFree: true,
+                    isTeacherAbsent: true,
+                    classId: true,
+                    lessonGroups: { select: { classId: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        missedLesson: {
+          include: {
+            class: true,
+            teacher: true,
+          },
+        },
+      },
+      orderBy: { recordedAt: "asc" },
+    }),
+    prisma.catchUpAttendance.findMany({
+      where: { missedLessonId: lessonId },
+      include: {
+        catchUpLesson: {
+          include: {
+            class: { select: { name: true } },
+            teacher: { select: { name: true } },
+          },
+        },
+      },
+    }),
+    prisma.attendance
+      .findMany({
+        where: { lessonId, isRevisionVisitor: true },
+        include: {
+          student: {
+            select: {
+              id: true,
+              name: true,
+              globalNumber: true,
+              phone: true,
+            },
+          },
+        },
+      })
+      .catch((revErr) => {
+        console.error("Error fetching revision visitor attendances:", revErr);
+        return [] as any[];
+      }),
+    prisma.voucher
+      .findMany({
+        where: {
+          lessonId,
+          paymentType: "REVISION_SESSION",
+          isVoided: false,
+          isRefund: false,
+        },
+        include: {
+          student: {
+            select: { id: true, name: true, globalNumber: true, phone: true },
+          },
+          lesson: {
+            select: { id: true, startsAt: true, endsAt: true, isExtra: true },
+          },
+          refunds: true,
+          class: {
+            include: {
+              branch: { select: { id: true, name: true } },
+              level: { select: { id: true, name: true } },
+            },
+          },
+          series: {
+            include: {
+              issuingBranch: { select: { id: true, name: true } },
+              targetBranch: { select: { id: true, name: true } },
+              level: { select: { id: true, name: true } },
+            },
+          },
+        },
+        orderBy: { issuedAt: "desc" },
+      })
+      .catch((revErr) => {
+        console.error("Error fetching revision visitor vouchers:", revErr);
+        return [] as any[];
+      }),
+  ]);
 
   const allClassIds = Array.from(
     new Set([l.classId, ...lessonGroups.map((g) => g.classId)].filter(Boolean))
@@ -180,18 +327,105 @@ const TakeAttendancePage = async (
     .map((c) => c.name)
     .join(" + ");
 
-  const [teacherRates, classRates] = await Promise.all([
-    l.teacherId
-      ? prisma.teacherPayRate.findMany({
-          where: { teacherId: l.teacherId },
-          orderBy: { effectiveFrom: "desc" },
-          take: 1,
-        })
-      : Promise.resolve([]),
-    prisma.teacherClassRate.findMany({
-      where: { classId: { in: allClassIds } },
-    }),
-  ]);
+  const teacherId = l.classTeacherId || l.teacherId;
+  const levelId = l.classLevelId != null ? Number(l.classLevelId) : null;
+  const allLevelIds = Array.from(
+    new Set(
+      [
+        levelId,
+        ...lessonGroups.map((g) => (g.class?.levelId != null ? Number(g.class.levelId) : null)),
+      ].filter((id): id is number => id !== null)
+    )
+  );
+
+  const bundlePairs = Array.from(
+    new Map(
+      revVouchersRaw.map((v: any) => [
+        `${v.seriesId}_${v.number}`,
+        { seriesId: v.seriesId, number: v.number },
+      ])
+    ).values()
+  );
+
+  // Stage 3: Run all allClassIds-scoped queries + revision bundle lookup + candidate enrollments in ONE parallel batch
+  const [classRates, groupBooks, bookVouchers, siblingVouchers, candidateEnrollments] =
+    await Promise.all([
+      prisma.teacherClassRate.findMany({
+        where: { classId: { in: allClassIds } },
+      }),
+      teacherId && (levelId || allLevelIds.length > 0)
+        ? prisma.book.findMany({
+            where: {
+              teacherId,
+              levelId: allLevelIds.length > 0 ? { in: allLevelIds } : levelId!,
+              ...(activeTrimester
+                ? {
+                    OR: [{ trimesterId: activeTrimester.id }, { trimesterId: null }],
+                  }
+                : {}),
+            },
+            select: { id: true, title: true },
+            orderBy: { createdAt: "asc" },
+          })
+        : Promise.resolve([] as Array<{ id: number; title: string }>),
+      activeTrimester
+        ? prisma.voucher.findMany({
+            where: {
+              trimesterId: activeTrimester.id,
+              paymentType: "BOOK",
+              isVoided: false,
+              OR: [
+                { classId: { in: allClassIds } },
+                ...(teacherId && (levelId || allLevelIds.length > 0)
+                  ? [
+                      {
+                        class: {
+                          teacherId,
+                          levelId: allLevelIds.length > 0 ? { in: allLevelIds } : levelId!,
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            },
+            select: { studentId: true },
+          })
+        : Promise.resolve([] as Array<{ studentId: string }>),
+      bundlePairs.length > 0
+        ? prisma.voucher
+            .findMany({
+              where: {
+                OR: bundlePairs.map((p: any) => ({
+                  seriesId: p.seriesId,
+                  number: p.number,
+                  paymentType: "REVISION_SESSION",
+                  isVoided: false,
+                  isRefund: false,
+                })),
+              },
+              include: {
+                lesson: { select: { id: true, startsAt: true, endsAt: true, isExtra: true } },
+                refunds: true,
+              },
+              orderBy: { id: "asc" },
+            })
+            .catch(() => [] as any[])
+        : Promise.resolve([] as any[]),
+      prisma
+        .$queryRaw<any[]>`
+          SELECT s.id, s.name, s."globalNumber", s.phone,
+                 e.id as "enrollmentId", e."classId" as "enrolledClassId", e.status as "enrollmentStatus", e."enrolledAt"
+          FROM "Student" s
+          JOIN "Enrollment" e ON e."studentId" = s.id
+          WHERE e."classId" IN (${Prisma.join(allClassIds)})
+            AND (e.status IS NULL OR e.status IN ('ACTIVE', 'SUSPENDED'))
+          ORDER BY s."globalNumber" ASC, s.name ASC, e."enrolledAt" DESC
+        `
+        .catch((err) => {
+          console.error("Error fetching students:", err);
+          return [] as any[];
+        }),
+    ]);
 
   const lesson = {
     id: l.id,
@@ -229,137 +463,7 @@ const TakeAttendancePage = async (
     branchId: l.branchId != null ? Number(l.branchId) : null,
   };
 
-  // Resolve active trimester (§7.20)
-  const activeTrimester = await getActiveTrimester();
-
-  // Resolve books for this group's teacher + level in the active trimester (§7.20)
-  const teacherId = l.classTeacherId || l.teacherId;
-  const levelId = l.classLevelId != null ? Number(l.classLevelId) : null;
-  const allLevelIds = Array.from(
-    new Set(
-      [
-        levelId,
-        ...lessonGroups.map((g) => (g.class?.levelId != null ? Number(g.class.levelId) : null)),
-      ].filter((id): id is number => id !== null)
-    )
-  );
-
-  let groupBooks: Array<{ id: number; title: string }> = [];
-  if (teacherId && (levelId || allLevelIds.length > 0)) {
-    groupBooks = await prisma.book.findMany({
-      where: {
-        teacherId,
-        levelId: allLevelIds.length > 0 ? { in: allLevelIds } : levelId!,
-        ...(activeTrimester
-          ? {
-              OR: [
-                { trimesterId: activeTrimester.id },
-                { trimesterId: null },
-              ],
-            }
-          : {}),
-      },
-      select: {
-        id: true,
-        title: true,
-      },
-      orderBy: { createdAt: "asc" },
-    });
-  }
-
-  // Fetch student book eligibility: paid BOOK voucher for THIS group in THIS active trimester (§7.20)
-  let bookPaidStudentIds = new Set<string>();
-  if (activeTrimester) {
-    const bookVouchers = await prisma.voucher.findMany({
-      where: {
-        trimesterId: activeTrimester.id,
-        paymentType: "BOOK",
-        isVoided: false,
-        OR: [
-          { classId: { in: allClassIds } },
-          ...(teacherId && (levelId || allLevelIds.length > 0)
-            ? [
-                {
-                  class: {
-                    teacherId,
-                    levelId: allLevelIds.length > 0 ? { in: allLevelIds } : levelId!,
-                  },
-                },
-              ]
-            : []),
-        ],
-      },
-      select: {
-        studentId: true,
-      },
-    });
-    bookPaidStudentIds = new Set(bookVouchers.map((v) => v.studentId));
-  }
-
-  // Fetch CatchUpAttendance visitors for this lesson (§2.12)
-  const catchUpVisitors = await prisma.catchUpAttendance.findMany({
-    where: { catchUpLessonId: lessonId },
-    include: {
-      student: {
-        include: {
-          family: true,
-          vouchers: {
-            where: { isVoided: false, paymentType: "TUITION_4SESSION" },
-            include: { refunds: true },
-          },
-          attendances: {
-            where: { lesson: { isFree: false } },
-            include: {
-              lesson: {
-                select: {
-                  id: true,
-                  startsAt: true,
-                  isFree: true,
-                  isTeacherAbsent: true,
-                  classId: true,
-                  lessonGroups: { select: { classId: true } },
-                },
-              },
-            },
-          },
-          enrollments: {
-            include: {
-              transfersFrom: true,
-              transfersTo: {
-                include: {
-                  fromEnrollment: {
-                    include: { class: true },
-                  },
-                },
-              },
-              payerHistory: { orderBy: { effectiveFrom: "asc" } },
-            },
-          },
-          catchUpAttendances: {
-            include: {
-              missedLesson: {
-                select: {
-                  id: true,
-                  startsAt: true,
-                  isFree: true,
-                  isTeacherAbsent: true,
-                  classId: true,
-                  lessonGroups: { select: { classId: true } },
-                },
-              },
-            },
-          },
-        },
-      },
-      missedLesson: {
-        include: {
-          class: true,
-          teacher: true,
-        },
-      },
-    },
-    orderBy: { recordedAt: "asc" },
-  });
+  const bookPaidStudentIds = new Set<string>(bookVouchers.map((v) => v.studentId));
 
   const externalCatchUpVisitors = catchUpVisitors.filter(
     (v) => !allClassIds.includes(v.missedLesson.classId)
@@ -472,19 +576,6 @@ const TakeAttendancePage = async (
     };
   });
 
-  // Fetch enrolled students of THIS lesson who already caught up in another group (§2.12)
-  const caughtUpStudents = await prisma.catchUpAttendance.findMany({
-    where: { missedLessonId: lessonId },
-    include: {
-      catchUpLesson: {
-        include: {
-          class: { select: { name: true } },
-          teacher: { select: { name: true } },
-        },
-      },
-    },
-  });
-
   const formattedCaughtUpAbsentees = caughtUpStudents.map((c) => ({
     studentId: c.studentId,
     catchUpLessonId: c.catchUpLessonId,
@@ -493,88 +584,15 @@ const TakeAttendancePage = async (
     catchUpStartsAt: c.catchUpLesson.startsAt,
   }));
 
-  // Fetch Revision Visitors for this lesson — BOTH checked-in (Attendance) AND pre-paid pending (Voucher without Attendance yet)
+  // Assemble Revision Visitors from Stage 2 & Stage 3 parallel queries
   let revisionVisitors: any[] = [];
   const prepaidRevisionByStudentId = new Map<string, any>();
   try {
-    const [revAttendances, revVouchers] = await Promise.all([
-      prisma.attendance.findMany({
-        where: { lessonId, isRevisionVisitor: true },
-        include: {
-          student: {
-            select: {
-              id: true,
-              name: true,
-              globalNumber: true,
-              phone: true,
-            },
-          },
-        },
-      }),
-      prisma.voucher.findMany({
-        where: {
-          lessonId,
-          paymentType: "REVISION_SESSION",
-          isVoided: false,
-          isRefund: false,
-        },
-        include: {
-          student: {
-            select: { id: true, name: true, globalNumber: true, phone: true },
-          },
-          lesson: {
-            select: { id: true, startsAt: true, endsAt: true, isExtra: true },
-          },
-          refunds: true,
-          class: {
-            include: {
-              branch: { select: { id: true, name: true } },
-              level: { select: { id: true, name: true } },
-            },
-          },
-          series: {
-            include: {
-              issuingBranch: { select: { id: true, name: true } },
-              targetBranch: { select: { id: true, name: true } },
-              level: { select: { id: true, name: true } },
-            },
-          },
-        },
-        orderBy: { issuedAt: "desc" },
-      }),
-    ]);
-
-    // Fetch sibling vouchers sharing (seriesId, number) so multi-date BONs print as one unified receipt
-    const bundlePairs = Array.from(
-      new Map(
-        revVouchers.map((v) => [`${v.seriesId}_${v.number}`, { seriesId: v.seriesId, number: v.number }])
-      ).values()
-    );
-    let siblingVouchers: any[] = [];
-    if (bundlePairs.length > 0) {
-      siblingVouchers = await prisma.voucher.findMany({
-        where: {
-          OR: bundlePairs.map((p) => ({
-            seriesId: p.seriesId,
-            number: p.number,
-            paymentType: "REVISION_SESSION",
-            isVoided: false,
-            isRefund: false,
-          })),
-        },
-        include: {
-          lesson: { select: { id: true, startsAt: true, endsAt: true, isExtra: true } },
-          refunds: true,
-        },
-        orderBy: { id: "asc" },
-      });
-    }
-
     const todayAlgiersStr = getAlgiersDateInfo(new Date()).dateStr;
-    const attByStudentId = new Map(revAttendances.map((a) => [a.studentId, a]));
+    const attByStudentId = new Map(revAttendancesRaw.map((a: any) => [a.studentId, a]));
     const voucherByStudentId = new Map<string, any>();
-    for (const v of revVouchers) {
-      const refunded = (v.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    for (const v of revVouchersRaw) {
+      const refunded = (v.refunds || []).reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
       if (Number(v.amount) - refunded <= 0) continue;
       if (!voucherByStudentId.has(v.studentId)) {
         voucherByStudentId.set(v.studentId, v);
@@ -641,49 +659,33 @@ const TakeAttendancePage = async (
       return entry;
     });
 
-    // Sort pre-paid pending visitors first so admins immediately spot who to check in
     revisionVisitors.sort((a, b) => {
       if (a.isPrepaidPending && !b.isPrepaidPending) return -1;
       if (!a.isPrepaidPending && b.isPrepaidPending) return 1;
       return a.studentName.localeCompare(b.studentName);
     });
   } catch (revErr) {
-    console.error("Error fetching revision visitors:", revErr);
+    console.error("Error assembling revision visitors:", revErr);
     revisionVisitors = [];
   }
 
-  let rawStudents: any[] = [];
-  try {
-    const candidateEnrollments = await prisma.$queryRaw<any[]>`
-      SELECT s.id, s.name, s."globalNumber", s.phone,
-             e.id as "enrollmentId", e."classId" as "enrolledClassId", e.status as "enrollmentStatus", e."enrolledAt"
-      FROM "Student" s
-      JOIN "Enrollment" e ON e."studentId" = s.id
-      WHERE e."classId" IN (${Prisma.join(allClassIds)})
-        AND (e.status IS NULL OR e.status IN ('ACTIVE', 'SUSPENDED'))
-      ORDER BY s."globalNumber" ASC, s.name ASC, e."enrolledAt" DESC
-    `;
-    // Deduplicate defensively, prioritizing ACTIVE over SUSPENDED
-    const sMap = new Map<string, any>();
-    for (const row of candidateEnrollments) {
-      const existing = sMap.get(row.id);
-      if (!existing) {
-        sMap.set(row.id, {
-          ...row,
-          className: classesMap.get(row.enrolledClassId)?.name || "",
-        });
-      } else if (existing.enrollmentStatus !== "ACTIVE" && row.enrollmentStatus === "ACTIVE") {
-        sMap.set(row.id, {
-          ...row,
-          className: classesMap.get(row.enrolledClassId)?.name || "",
-        });
-      }
+  // Deduplicate candidate enrollments defensively, prioritizing ACTIVE over SUSPENDED
+  const sMap = new Map<string, any>();
+  for (const row of candidateEnrollments) {
+    const existing = sMap.get(row.id);
+    if (!existing) {
+      sMap.set(row.id, {
+        ...row,
+        className: classesMap.get(row.enrolledClassId)?.name || "",
+      });
+    } else if (existing.enrollmentStatus !== "ACTIVE" && row.enrollmentStatus === "ACTIVE") {
+      sMap.set(row.id, {
+        ...row,
+        className: classesMap.get(row.enrolledClassId)?.name || "",
+      });
     }
-    rawStudents = Array.from(sMap.values());
-  } catch (err) {
-    console.error("Error fetching students:", err);
-    rawStudents = [];
   }
+  const rawStudents: any[] = Array.from(sMap.values());
 
   // If the lesson is up (time has ended), auto-finalize attendance so no student is left non-recorded
   if (l.endsAt && new Date(l.endsAt) <= new Date() && !l.isTeacherAbsent) {
@@ -694,90 +696,88 @@ const TakeAttendancePage = async (
     }
   }
 
-  let existingAttendance: any[] = [];
-  try {
-    existingAttendance = await prisma.$queryRaw<any[]>`
-      SELECT id, "lessonId", "studentId", status, justification, "isRevisionVisitor"
-      FROM "Attendance"
-      WHERE "lessonId" = ${lessonId}
-    `;
-  } catch (err) {
-    console.error("Error fetching existing attendance:", err);
-    existingAttendance = [];
-  }
-
-  // Fetch full student credit info (vouchers and past non-free attendances in these classes)
+  // Stage 4: Fetch existing attendance and student billing details in parallel
   const studentIds = rawStudents.map((s) => s.id);
-  let studentsWithDetails: any[] = [];
-  try {
-    if (studentIds.length > 0) {
-      studentsWithDetails = await prisma.student.findMany({
-        where: { id: { in: studentIds } },
-        include: {
-          family: true,
-          vouchers: {
-            where: {
-              OR: [
-                { classId: { in: allClassIds } },
-                { paymentType: "INSCRIPTION" },
-              ],
-            },
+  const [existingAttendance, studentsWithDetails, bookReceipts] = await Promise.all([
+    prisma
+      .$queryRaw<any[]>`
+        SELECT id, "lessonId", "studentId", status, justification, "isRevisionVisitor"
+        FROM "Attendance"
+        WHERE "lessonId" = ${lessonId}
+      `
+      .catch((err) => {
+        console.error("Error fetching existing attendance:", err);
+        return [] as any[];
+      }),
+    studentIds.length > 0
+      ? prisma.student
+          .findMany({
+            where: { id: { in: studentIds } },
             include: {
-              refunds: true,
-              class: {
-                include: {
-                  branch: { select: { id: true, name: true } },
-                  level: { select: { id: true, name: true } },
+              family: true,
+              vouchers: {
+                where: {
+                  OR: [
+                    { classId: { in: allClassIds } },
+                    { paymentType: "INSCRIPTION" },
+                  ],
                 },
-              },
-              series: {
                 include: {
-                  issuingBranch: { select: { id: true, name: true } },
-                  targetBranch: { select: { id: true, name: true } },
-                  level: { select: { id: true, name: true } },
-                },
-              },
-            },
-            orderBy: { issuedAt: "desc" },
-          },
-          enrollments: {
-            where: { classId: { in: allClassIds } },
-            include: {
-              transfersFrom: true,
-              transfersTo: {
-                include: {
-                  fromEnrollment: {
-                    include: { class: true },
+                  refunds: true,
+                  class: {
+                    include: {
+                      branch: { select: { id: true, name: true } },
+                      level: { select: { id: true, name: true } },
+                    },
+                  },
+                  series: {
+                    include: {
+                      issuingBranch: { select: { id: true, name: true } },
+                      targetBranch: { select: { id: true, name: true } },
+                      level: { select: { id: true, name: true } },
+                    },
                   },
                 },
+                orderBy: { issuedAt: "desc" },
               },
-              payerHistory: { orderBy: { effectiveFrom: "asc" } },
-              class: { select: { id: true, pricePerCycle: true, isFormation: true } },
-            },
-          },
-          attendances: {
-            where: {
-              lesson: {
-                OR: [
-                  { classId: { in: allClassIds } },
-                  { lessonGroups: { some: { classId: { in: allClassIds } } } },
-                ],
-                isFree: false,
-              },
-            },
-            include: {
-              lesson: {
-                select: {
-                  id: true,
-                  startsAt: true,
-                  isFree: true,
-                  isTeacherAbsent: true,
-                  classId: true,
-                  lessonGroups: { select: { classId: true } },
+              enrollments: {
+                where: { classId: { in: allClassIds } },
+                include: {
+                  transfersFrom: true,
+                  transfersTo: {
+                    include: {
+                      fromEnrollment: {
+                        include: { class: true },
+                      },
+                    },
+                  },
+                  payerHistory: { orderBy: { effectiveFrom: "asc" } },
+                  class: { select: { id: true, pricePerCycle: true, isFormation: true } },
                 },
               },
-            },
-            orderBy: {
+              attendances: {
+                where: {
+                  lesson: {
+                    OR: [
+                      { classId: { in: allClassIds } },
+                      { lessonGroups: { some: { classId: { in: allClassIds } } } },
+                    ],
+                    isFree: false,
+                  },
+                },
+                include: {
+                  lesson: {
+                    select: {
+                      id: true,
+                      startsAt: true,
+                      isFree: true,
+                      isTeacherAbsent: true,
+                      classId: true,
+                      lessonGroups: { select: { classId: true } },
+                    },
+                  },
+                },
+                orderBy: {
               lesson: {
                 startsAt: "asc",
               },
@@ -806,29 +806,28 @@ const TakeAttendancePage = async (
             },
           },
         },
-      });
-    }
-  } catch (err) {
-    console.error("Error fetching students credit details:", err);
-  }
+        })
+        .catch((err) => {
+          console.error("Error fetching students credit details:", err);
+          return [] as any[];
+        })
+      : Promise.resolve([] as any[]),
+    groupBooks.length > 0 && studentIds.length > 0 && (prisma as any).bookReceipt?.findMany
+      ? prisma.bookReceipt
+          .findMany({
+            where: {
+              studentId: { in: studentIds },
+              bookId: { in: groupBooks.map((b) => b.id) },
+            },
+          })
+          .catch((err) => {
+            console.warn("Could not query bookReceipts:", err);
+            return [] as Array<{ studentId: string; bookId: number }>;
+          })
+      : Promise.resolve([] as Array<{ studentId: string; bookId: number }>),
+  ]);
 
   const detailsMap = new Map(studentsWithDetails.map((s) => [s.id, s]));
-
-  // Fetch existing BookReceipt records for the lesson's students and books (§7.20 / Phase 36 single source of truth)
-  let bookReceipts: Array<{ studentId: string; bookId: number }> = [];
-  try {
-    if (groupBooks.length > 0 && studentIds.length > 0 && (prisma as any).bookReceipt?.findMany) {
-      bookReceipts = await prisma.bookReceipt.findMany({
-        where: {
-          studentId: { in: studentIds },
-          bookId: { in: groupBooks.map((b) => b.id) },
-        },
-      });
-    }
-  } catch (err) {
-    console.warn("Could not query bookReceipts:", err);
-    bookReceipts = [];
-  }
 
   const studentReceivedMap = new Map<string, Set<number>>();
   for (const r of bookReceipts) {

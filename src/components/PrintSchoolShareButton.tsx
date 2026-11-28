@@ -1,9 +1,8 @@
 "use client";
 
 import React from "react";
-import ReactDOMServer from "react-dom/server";
 import { useLocale } from "next-intl";
-import { SchoolShareTicket, SchoolSharePrintData } from "./printable/SchoolShareTicket";
+import type { SchoolSharePrintData } from "./printable/SchoolShareTicket";
 
 interface PrintSchoolShareButtonProps {
   data: SchoolSharePrintData;
@@ -20,14 +19,20 @@ export const PrintSchoolShareButton = ({
   const isAr = locale === "ar";
   const defaultLabel = isAr ? "طباعة حصة المؤسسة" : "Imprimer la part école";
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
+    const printWindow = window.open("", "_blank", "width=900,height=800");
+    if (!printWindow) return;
+
+    const [{ default: ReactDOMServer }, { SchoolShareTicket }] = await Promise.all([
+      import("react-dom/server"),
+      import("./printable/SchoolShareTicket"),
+    ]);
+
     const printContent = ReactDOMServer.renderToString(
       <SchoolShareTicket data={data} locale={locale} />
     );
 
-    const printWindow = window.open("", "_blank", "width=900,height=800");
-
-    if (printWindow) {
+    if (!printWindow.closed) {
       printWindow.document.write(`
         <!DOCTYPE html>
         <html dir="${isAr ? "rtl" : "ltr"}" lang="${locale}">

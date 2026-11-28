@@ -50,15 +50,36 @@ const DEFAULT_TIME_SLOTS = [
   "18:00", "19:00", "20:00"
 ];
 
+const ALGIERS_HOUR_FMT = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  hour12: false,
+  timeZone: "Africa/Algiers",
+});
+
+const ALGIERS_DATE_FMT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Africa/Algiers",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+const ALGIERS_WEEKDAY_FMT = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  timeZone: "Africa/Algiers",
+});
+
+const ALGIERS_TIME_FMT = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  timeZone: "Africa/Algiers",
+});
+
 const getLessonHourInAlgiers = (startsAt: Date | string): string => {
   try {
     const d = new Date(startsAt);
     if (isNaN(d.getTime())) return "08";
-    return new Intl.DateTimeFormat("en-GB", {
-      hour: "2-digit",
-      hour12: false,
-      timeZone: "Africa/Algiers",
-    }).format(d);
+    return ALGIERS_HOUR_FMT.format(d);
   } catch {
     return "08";
   }
@@ -68,12 +89,7 @@ const getAlgiersDateString = (date: Date | string): string => {
   try {
     const d = new Date(date);
     if (isNaN(d.getTime())) return "";
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Africa/Algiers",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(d);
+    return ALGIERS_DATE_FMT.format(d);
   } catch {
     return "";
   }
@@ -81,10 +97,7 @@ const getAlgiersDateString = (date: Date | string): string => {
 
 const getTodayInAlgiers = (): Day => {
   try {
-    const dayStr = new Intl.DateTimeFormat("en-US", {
-      weekday: "long",
-      timeZone: "Africa/Algiers",
-    }).format(new Date()).toUpperCase() as Day;
+    const dayStr = ALGIERS_WEEKDAY_FMT.format(new Date()).toUpperCase() as Day;
     return daysOfWeek.includes(dayStr) ? dayStr : "SATURDAY";
   } catch {
     return "SATURDAY";
@@ -95,12 +108,7 @@ const formatLessonTimeInAlgiers = (date: Date | string): string => {
   try {
     const d = new Date(date);
     if (isNaN(d.getTime())) return "--:--";
-    return new Intl.DateTimeFormat("en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      timeZone: "Africa/Algiers",
-    }).format(d);
+    return ALGIERS_TIME_FMT.format(d);
   } catch {
     return "--:--";
   }

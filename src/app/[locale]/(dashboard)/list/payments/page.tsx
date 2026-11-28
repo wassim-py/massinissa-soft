@@ -427,6 +427,7 @@ const PaymentsListPage = async (props: {
                 return (
                   <Link
                     href={`/list/payments/class/${c.id}`}
+                    prefetch={false}
                     key={c.id}
                     className="block group h-full"
                   >

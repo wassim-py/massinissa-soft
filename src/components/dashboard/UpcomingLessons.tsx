@@ -57,13 +57,37 @@ export default function UpcomingLessons({
   const t = useTranslations("dashboard.upcomingLessons");
   const locale = useLocale();
 
-  // Heartbeat timer updating every 15 seconds so lessons move out of upcoming as time passes
+  // Heartbeat timer updating every 15 seconds while visible so lessons move out of upcoming as time passes
   useEffect(() => {
     setCurrentTime(Date.now());
-    const interval = setInterval(() => {
-      setCurrentTime(Date.now());
-    }, 15000);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const startTimer = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      interval = setInterval(() => {
+        setCurrentTime(Date.now());
+      }, 15000);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        setCurrentTime(Date.now());
+      }
+      startTimer();
+    };
+
+    startTimer();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      if (interval) clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
 
@@ -323,6 +347,7 @@ export default function UpcomingLessons({
                 <div className="shrink-0 flex items-center">
                   {lesson.canTakeAttendance ? (
                     <Link
+                      prefetch={false}
                       href={`/list/attendance/take/${lesson.id}?date=${encodeURIComponent(
                         lesson.dateStr ||
                           new Intl.DateTimeFormat("en-CA", {

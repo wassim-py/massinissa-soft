@@ -101,9 +101,6 @@ export async function revalidateFinancialRoutes(
     revalidateLocalizedPath(route);
   }
 
-  // 2. Revalidate root layout to refresh cashier headers and shared indicators
-  safeRevalidate("/", "layout");
-
   if (!targets) {
     return;
   }

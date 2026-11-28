@@ -1,12 +1,16 @@
 "use client";
 
 import React, { useState } from "react";
-import ReactDOMServer from "react-dom/server";
+import dynamic from "next/dynamic";
 import { useLocale } from "next-intl";
 import { buildPrintableReportHtml } from "@/lib/printReportHtml";
 import { getTeacherSalaryGrowthAction } from "@/lib/actions";
-import { PayslipTicket, PayslipPrintData } from "./printable/PayslipTicket";
-import TeacherPayslipConfigModal from "@/components/teachers/TeacherPayslipConfigModal";
+import type { PayslipPrintData } from "./printable/PayslipTicket";
+
+const TeacherPayslipConfigModal = dynamic(
+  () => import("@/components/teachers/TeacherPayslipConfigModal"),
+  { ssr: false }
+);
 
 interface PrintPayslipButtonProps {
   data: PayslipPrintData;
@@ -47,7 +51,12 @@ export const PrintPayslipButton = ({
       : "Imprimer le bulletin de paie (choisir les rubriques : cours, formations, livres, déductions)"
     : defaultLabel;
 
-  const writePayslipToWindow = (printWindow: Window, enrichedData: PayslipPrintData) => {
+  const writePayslipToWindow = async (printWindow: Window, enrichedData: PayslipPrintData) => {
+    const [{ default: ReactDOMServer }, { PayslipTicket }] = await Promise.all([
+      import("react-dom/server"),
+      import("./printable/PayslipTicket"),
+    ]);
+    if (printWindow.closed) return;
     const printContent = ReactDOMServer.renderToString(
       <PayslipTicket data={enrichedData} locale={locale} />
     );

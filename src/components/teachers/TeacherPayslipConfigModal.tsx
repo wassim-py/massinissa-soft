@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import ReactDOMServer from "react-dom/server";
 import {
   X,
   Printer,
@@ -23,8 +22,7 @@ import {
   getTeacherSelectivePayslipDataAction,
   TeacherSelectivePayslipData,
 } from "@/lib/financeActions";
-import {
-  PayslipTicket,
+import type {
   PayslipPrintData,
   PayslipSalaryGrowthPoint,
 } from "@/components/printable/PayslipTicket";
@@ -359,7 +357,7 @@ export default function TeacherPayslipConfigModal({
 
   if (!isOpen) return null;
 
-  const handlePrintPayslip = () => {
+  const handlePrintPayslip = async () => {
     if (!reportData || nothingSelected) return;
 
     // Open popup window synchronously inside click gesture to avoid popup blockers
@@ -491,6 +489,10 @@ export default function TeacherPayslipConfigModal({
         ? reportData.regularLessons.retroactiveLessonsCount
         : 0,
       retroactiveAmount: includeRegularLessons ? reportData.regularLessons.retroactiveAmount : 0,
+      revisionLessonsCount: includeRegularLessons
+        ? reportData.regularLessons.revisionLessonsCount
+        : 0,
+      revisionAmount: includeRegularLessons ? reportData.regularLessons.revisionAmount : 0,
       salaryHistory: reconciledHistory,
       displayOptions: {
         includeRegularLessons,
@@ -506,6 +508,11 @@ export default function TeacherPayslipConfigModal({
         showTeacherAbsences,
       },
     };
+
+    const [{ default: ReactDOMServer }, { PayslipTicket }] = await Promise.all([
+      import("react-dom/server"),
+      import("@/components/printable/PayslipTicket"),
+    ]);
 
     const printContent = ReactDOMServer.renderToString(
       <PayslipTicket data={printData} locale={locale} />
@@ -699,8 +706,16 @@ export default function TeacherPayslipConfigModal({
                     <p className="text-xs text-gray-500 mt-0.5">
                       {availability.hasRegular
                         ? isAr
-                          ? `${reportData.regularLessons.payableLessonsCount} حصة مستحقة (${reportData.regularLessons.sessionsCount} حصة) عبر ${reportData.regularLessons.groupLines.length} أفواج`
-                          : `${reportData.regularLessons.payableLessonsCount} séances payables (${reportData.regularLessons.sessionsCount} séances) sur ${reportData.regularLessons.groupLines.length} groupe(s)`
+                          ? `${reportData.regularLessons.payableLessonsCount} حصة مستحقة${
+                              reportData.regularLessons.revisionLessonsCount > 0
+                                ? ` (منها ${reportData.regularLessons.revisionLessonsCount} مراجعة)`
+                                : ""
+                            } (${reportData.regularLessons.sessionsCount} حصة) عبر ${reportData.regularLessons.groupLines.length} أفواج`
+                          : `${reportData.regularLessons.payableLessonsCount} séances payables${
+                              reportData.regularLessons.revisionLessonsCount > 0
+                                ? ` (dont ${reportData.regularLessons.revisionLessonsCount} révision)`
+                                : ""
+                            } (${reportData.regularLessons.sessionsCount} séances) sur ${reportData.regularLessons.groupLines.length} groupe(s)`
                         : isAr
                         ? "لا توجد دروس عادية مسجلة في هذه الفترة"
                         : "Aucune séance régulière enregistrée sur cette période"}

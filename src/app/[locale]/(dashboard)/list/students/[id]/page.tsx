@@ -92,14 +92,7 @@ const SingleStudentPage = async (
     const session = await getAuthSession();
     const activeBranchId = await getActiveBranchId();
 
-    const [rawStudent, studentPaymentData, availableClasses, configuredInscriptionFee, allBranches] = await Promise.all([
-      prisma.$queryRaw<any[]>`
-        SELECT s.*, b.name as "branchName"
-        FROM "Student" s
-        LEFT JOIN "Branch" b ON b.id = s."registeredBranchId"
-        WHERE s.id = ${id}
-        LIMIT 1
-      `,
+    const [studentPaymentData, availableClasses, configuredInscriptionFee, allBranches] = await Promise.all([
       prisma.student.findUnique({
         where: { id },
         include: {
@@ -328,16 +321,16 @@ const SingleStudentPage = async (
         orderBy: [{ branchId: "asc" }, { name: "asc" }],
       }),
       getFixedInscriptionFeeAction(),
-      prisma.branch.findMany({
-        select: { id: true, name: true },
-        orderBy: { id: "asc" },
-      }),
+      import("@/lib/cachedReferenceData").then((m) => m.getCachedBranches()),
     ]);
 
-    if (!rawStudent || rawStudent.length === 0) {
+    if (!studentPaymentData) {
       return notFound();
     }
-    const s = rawStudent[0];
+    const s = {
+      ...studentPaymentData,
+      branchName: studentPaymentData.registeredBranch?.name ?? null,
+    };
 
     // Sibling discount check (§2.4): applies ONLY on groups where BOTH siblings are enrolled in
     const hasPayerSibling = Boolean(

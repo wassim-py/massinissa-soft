@@ -54,7 +54,7 @@ const StudentListPage = async (props: {
     >
       {/* 1. ID Number (permanent globalNumber from §2.10) */}
       <td className="p-3.5 font-mono text-xs font-semibold text-gray-900">
-        <Link href={`/list/students/${item.id}`}>
+        <Link href={`/list/students/${item.id}`} prefetch={false}>
           <span className="bg-surface-subtle px-2.5 py-1 rounded-md border border-border/70 text-primary font-bold inline-block hover:border-primary transition-colors cursor-pointer">
             #{item.globalNumber}
           </span>
@@ -65,6 +65,7 @@ const StudentListPage = async (props: {
       <td className="p-3.5">
         <Link
           href={`/list/students/${item.id}`}
+          prefetch={false}
           className="font-semibold text-gray-900 text-table-body hover:text-primary hover:underline transition-colors cursor-pointer"
         >
           {item.name}
@@ -119,7 +120,7 @@ const StudentListPage = async (props: {
       {/* 6. Actions (View Profile, Delete for Owner only) */}
       <td className="text-end pe-3.5 p-3.5">
         <div className="flex items-center justify-end gap-2">
-          <Link href={`/list/students/${item.id}`}>
+          <Link href={`/list/students/${item.id}`} prefetch={false}>
             <Button
               variant="soft"
               size="icon-sm"

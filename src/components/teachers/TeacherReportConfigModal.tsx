@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import ReactDOMServer from "react-dom/server";
 import {
   X,
   Printer,
@@ -27,8 +26,7 @@ import {
   getTeacherSelectiveReportDataAction,
   TeacherSelectiveReportData,
 } from "@/lib/financeActions";
-import {
-  OwnerTeacherConsolidationReport,
+import type {
   OwnerTeacherConsolidationPrintData,
 } from "@/components/printable/OwnerTeacherConsolidationReport";
 import { toast } from "sonner";
@@ -180,7 +178,7 @@ export default function TeacherReportConfigModal({
 
   if (!isOpen) return null;
 
-  const handlePrintReport = () => {
+  const handlePrintReport = async () => {
     if (!reportData) return;
 
     let targetWindow: Window | null = null;
@@ -242,6 +240,11 @@ export default function TeacherReportConfigModal({
       netSchoolRevenue: calculations.schoolRevenue,
       generatedAt: new Date(),
     };
+
+    const [{ default: ReactDOMServer }, { OwnerTeacherConsolidationReport }] = await Promise.all([
+      import("react-dom/server"),
+      import("@/components/printable/OwnerTeacherConsolidationReport"),
+    ]);
 
     const printContent = ReactDOMServer.renderToString(
       <OwnerTeacherConsolidationReport data={printData} locale={locale} />

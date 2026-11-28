@@ -1702,6 +1702,8 @@ export interface SelectivePayslipGroupLine {
   courseSessionsCount: number;
   payableLessonsCount: number;
   paidSessionsCount: number;
+  revisionLessonsCount?: number;
+  revisionAmount?: number;
   freeSessionsCount: number;
   totalSessionsCount: number;
   amount: number;
@@ -1714,6 +1716,8 @@ export interface SelectivePayslipSessionItem {
   branchName: string;
   presentCount: number;
   payingCount?: number;
+  revisionPayingCount?: number;
+  revisionAmount?: number;
   sessionPrice?: number;
   teacherCut?: number;
   lessonAmount: number;
@@ -1745,6 +1749,8 @@ export interface TeacherSelectivePayslipData {
     payableLessonsCount: number;
     retroactiveLessonsCount: number;
     retroactiveAmount: number;
+    revisionLessonsCount: number;
+    revisionAmount: number;
     groupLines: SelectivePayslipGroupLine[];
     branchLines: SelectivePayslipBranchLine[];
     sessions: SelectivePayslipSessionItem[];
@@ -1960,6 +1966,8 @@ export async function getTeacherSelectivePayslipDataAction(params: {
       branchName: s.branchName,
       presentCount: s.presentCount,
       payingCount: s.payingCount,
+      revisionPayingCount: s.revisionPayingCount,
+      revisionAmount: s.revisionAmount !== undefined ? round2(s.revisionAmount) : undefined,
       sessionPrice: s.sessionPrice,
       teacherCut: s.teacherCut,
       lessonAmount: round2(s.lessonAmount),
@@ -1978,6 +1986,8 @@ export async function getTeacherSelectivePayslipDataAction(params: {
       courseSessionsCount: g.courseSessionsCount,
       payableLessonsCount: round2(g.payableLessonsCount),
       paidSessionsCount: round2(g.paidSessionsCount ?? g.payableLessonsCount),
+      revisionLessonsCount: round2(g.revisionLessonsCount || 0),
+      revisionAmount: round2(g.revisionAmount || 0),
       freeSessionsCount: g.freeSessionsCount,
       totalSessionsCount: g.totalSessionsCount,
       amount: round2(g.amount),
@@ -2021,6 +2031,14 @@ export async function getTeacherSelectivePayslipDataAction(params: {
       regularSessions
         .filter((s) => s.isRetroactive)
         .reduce((sum, s) => sum + Number(s.lessonAmount || 0), 0)
+    );
+    const regularRevisionLessons = round2(
+      normalCalc?.totalRevisionLessons ??
+        regularSessions.reduce((sum, s) => sum + Number(s.revisionPayingCount || 0), 0)
+    );
+    const regularRevisionAmount = round2(
+      normalCalc?.totalRevisionAmount ??
+        regularSessions.reduce((sum, s) => sum + Number(s.revisionAmount || 0), 0)
     );
     const regularPayableLessons = round2(
       regularGroupLines.reduce((sum, g) => sum + Number(g.payableLessonsCount || 0), 0)
@@ -2159,6 +2177,8 @@ export async function getTeacherSelectivePayslipDataAction(params: {
           payableLessonsCount: regularPayableLessons,
           retroactiveLessonsCount: regularRetroLessons,
           retroactiveAmount: regularRetroAmount,
+          revisionLessonsCount: regularRevisionLessons,
+          revisionAmount: regularRevisionAmount,
           groupLines: regularGroupLines,
           branchLines: regularBranchLines,
           sessions: regularSessions,

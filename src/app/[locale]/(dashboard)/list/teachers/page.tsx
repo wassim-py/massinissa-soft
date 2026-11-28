@@ -1,5 +1,11 @@
 import Pagination from "@/components/Pagination";
 import prisma from "@/lib/prisma";
+import {
+  getCachedBranches,
+  getCachedLanguages,
+  getCachedLevels,
+} from "@/lib/cachedReferenceData";
+import { Prisma } from "@prisma/client";
 import Image from "next/image";
 import Link from "next/link";
 import { ITEM_PER_PAGE } from "@/lib/settings";
@@ -84,15 +90,6 @@ const TeacherListPage = async (
   let activeBranchName = "";
 
   try {
-    const levelsPromise = (prisma as any).level?.findMany
-      ? (prisma as any).level.findMany({
-          orderBy: { id: "asc" },
-          select: { id: true, name: true },
-        })
-      : prisma.$queryRaw<Array<{ id: number; name: string }>>`
-          SELECT id, name FROM "Level" ORDER BY id ASC
-        `;
-
     const [rawTeachers, totalCount, allLevels, branches, subjectSettings, rawLanguages] = await Promise.all([
       prisma.teacher.findMany({
         where: whereClause,
@@ -103,13 +100,6 @@ const TeacherListPage = async (
           classes: {
             select: { id: true, name: true },
           },
-          lessons: {
-            select: {
-              class: {
-                select: { id: true, name: true },
-              },
-            },
-          },
           books: {
             include: {
               level: true,
@@ -119,17 +109,30 @@ const TeacherListPage = async (
         },
       }),
       prisma.teacher.count({ where: whereClause }),
-      levelsPromise,
-      prisma.branch.findMany({
-        select: { id: true, name: true },
-      }),
+      getCachedLevels(),
+      getCachedBranches(),
       prisma.setting.findMany({
         where: { id: { startsWith: "subject_teachers_" } },
       }),
-      prisma.$queryRaw<Array<{ id: number; name: string }>>`
-        SELECT id, name FROM "Language" ORDER BY name ASC
-      `,
+      getCachedLanguages(),
     ]);
+
+    const teacherIds = rawTeachers.map((t) => t.id);
+    const distinctLessonClasses =
+      teacherIds.length > 0
+        ? await prisma.$queryRaw<Array<{ teacherId: string; classId: number; className: string }>>`
+            SELECT DISTINCT l."teacherId" AS "teacherId", c.id AS "classId", c.name AS "className"
+            FROM "Lesson" l
+            INNER JOIN "Class" c ON c.id = l."classId"
+            WHERE l."teacherId" IN (${Prisma.join(teacherIds)})
+          `
+        : [];
+    const lessonClassesByTeacher = new Map<string, Array<{ id: number; name: string }>>();
+    for (const row of distinctLessonClasses) {
+      const arr = lessonClassesByTeacher.get(row.teacherId);
+      if (arr) arr.push({ id: row.classId, name: row.className });
+      else lessonClassesByTeacher.set(row.teacherId, [{ id: row.classId, name: row.className }]);
+    }
 
     count = totalCount;
     levels = allLevels;
@@ -160,8 +163,8 @@ const TeacherListPage = async (
       // Deduplicate classes from Class.teacherId and Lesson.teacherId
       const classMap = new Map<number, string>();
       t.classes.forEach((c) => classMap.set(c.id, c.name));
-      t.lessons.forEach((l) => {
-        if (l.class) classMap.set(l.class.id, l.class.name);
+      (lessonClassesByTeacher.get(t.id) || []).forEach((c) => {
+        classMap.set(c.id, c.name);
       });
       const classes = Array.from(classMap.entries()).map(([id, name]) => ({ id, name }));
 

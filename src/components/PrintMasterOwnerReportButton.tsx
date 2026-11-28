@@ -1,12 +1,8 @@
 "use client";
 
 import React, { useRef, useState } from "react";
-import ReactDOMServer from "react-dom/server";
 import { useLocale } from "next-intl";
-import {
-  MasterOwnerPayrollReport,
-  MasterOwnerPayrollPrintData,
-} from "./printable/MasterOwnerPayrollReport";
+import type { MasterOwnerPayrollPrintData } from "./printable/MasterOwnerPayrollReport";
 import { getMasterAccumulatedPayrollReportAction } from "@/lib/actions";
 import { buildPrintableReportHtml } from "@/lib/printReportHtml";
 import { Download, ExternalLink, FileSpreadsheet, Loader2, Printer, X } from "lucide-react";
@@ -265,6 +261,10 @@ export const PrintMasterOwnerReportButton = ({
         return;
       }
 
+      const [{ default: ReactDOMServer }, { MasterOwnerPayrollReport }] = await Promise.all([
+        import("react-dom/server"),
+        import("./printable/MasterOwnerPayrollReport"),
+      ]);
       const printContent = ReactDOMServer.renderToString(
         <MasterOwnerPayrollReport data={res.data} locale={locale} />
       );

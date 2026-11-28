@@ -102,6 +102,17 @@ async function handler(req: NextRequest) {
     resHeaders.set("Access-Control-Allow-Origin", clientOrigin);
     resHeaders.set("Access-Control-Allow-Credentials", "true");
 
+    // Versioned Clerk browser JS bundles (/npm/@clerk/clerk-js@...) are immutable:
+    // cache aggressively at browser/edge so slow links never re-download ~400KB through the proxy.
+    if (
+      req.method === "GET" &&
+      subpath.startsWith("/npm/") &&
+      clerkResponse.status === 200 &&
+      rawCookies.length === 0
+    ) {
+      resHeaders.set("Cache-Control", "public, max-age=31536000, immutable");
+    }
+
     const responseBody = await clerkResponse.arrayBuffer();
     return new NextResponse(responseBody, {
       status: clerkResponse.status,

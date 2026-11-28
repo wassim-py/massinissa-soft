@@ -40,7 +40,8 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const summary = await getTodayAttendanceSummary(targetBranchId);
+    const force = req.nextUrl.searchParams.get("force") === "1";
+    const summary = await getTodayAttendanceSummary(targetBranchId, new Date(), { force });
     return NextResponse.json(summary, { status: 200, headers: NO_CACHE_HEADERS });
   } catch (error) {
     console.error("[GET /api/dashboard/today-attendance] Failed:", error);

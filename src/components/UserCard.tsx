@@ -4,7 +4,9 @@ import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { getActiveBranchId } from "@/lib/auth";
-import { resolveRecurringLessonsForDate } from "@/lib/utils";
+import { getCachedActiveAcademicYear, getCachedBranches } from "@/lib/cachedReferenceData";
+import { getAlgiersDateInfo, resolveRecurringLessonsForDate } from "@/lib/utils";
+import { ACTIVE_CLASS_WHERE } from "@/lib/classStatus";
 import BranchTeacherModal, { BranchTeacherData } from "./dashboard/BranchTeacherModal";
 
 interface UserCardProps {
@@ -21,25 +23,22 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
   let academicYearLabel = "";
 
   try {
-    const [branchRecord, activeYearRecord] = await Promise.all([
-      prisma.branch.findUnique({
-        where: { id: activeBranchId },
-        select: { name: true },
-      }),
-      prisma.academicYear.findFirst({
-        orderBy: { startDate: "desc" },
-        select: { label: true },
-      }),
+    const [allBranches, activeYearRecord] = await Promise.all([
+      getCachedBranches(),
+      getCachedActiveAcademicYear(),
     ]);
-    branchName = branchRecord?.name || `Siège #${activeBranchId}`;
+    const branchNameById = new Map(allBranches.map((b) => [b.id, b.name]));
+    branchName = branchNameById.get(activeBranchId) || `Siège #${activeBranchId}`;
     academicYearLabel = activeYearRecord?.label || "";
 
     const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const endOfToday = new Date(now);
-    endOfToday.setHours(23, 59, 59, 999);
+    const todayInfo = getAlgiersDateInfo(now);
+    const startOfToday = new Date(
+      Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, -1, 0, 0, 0)
+    );
+    const endOfToday = new Date(
+      Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, 22, 59, 59, 999)
+    );
 
     switch (type) {
       case "student": {
@@ -62,74 +61,104 @@ const UserCard = async ({ type, branchId }: UserCardProps) => {
       }
       case "admin": {
         // Branches count: all branches in the school network
-        count = await prisma.branch.count();
+        count = allBranches.length;
         break;
       }
       case "teacher": {
-        // Teachers count: all registered teachers in all the school (not restricted by branch)
-        const allTeachers = await prisma.teacher.findMany({
-          include: {
-            TeacherBranch: {
-              include: { Branch: { select: { id: true, name: true } } },
+        // Lean parallel queries instead of loading every historical lesson row for every teacher
+        const [allTeachers, teacherLessonBranchPairs, candidateTodayLessons] = await Promise.all([
+          prisma.teacher.findMany({
+            select: {
+              id: true,
+              name: true,
+              TeacherBranch: { select: { branchId: true } },
+              classes: { select: { branchId: true } },
             },
-            classes: {
-              select: {
-                branchId: true,
-                branch: { select: { id: true, name: true } },
-              },
+            orderBy: { name: "asc" },
+          }),
+          prisma.lesson.groupBy({
+            by: ["teacherId", "branchId"],
+          }),
+          prisma.lesson.findMany({
+            where: {
+              class: ACTIVE_CLASS_WHERE,
+              OR: [
+                { startsAt: { gte: startOfToday, lte: endOfToday } },
+                {
+                  isExtra: false,
+                  isCatchUp: false,
+                  isFree: false,
+                  isSingleOccurrence: false,
+                },
+                {
+                  isSingleOccurrence: true,
+                  overridesDate: todayInfo.dateStr,
+                },
+              ],
             },
-            lessons: {
-              select: {
-                id: true,
-                classId: true,
-                branchId: true,
-                startsAt: true,
-                endsAt: true,
-                isExtra: true,
-                isCatchUp: true,
-                isFree: true,
-                isSingleOccurrence: true,
-                recurrenceStartAt: true,
-                recurrenceEndAt: true,
-                overridesDate: true,
-                overridesSlotKey: true,
-                class: { select: { isFormation: true, isCompleted: true, isPaused: true } },
-                branch: { select: { id: true, name: true } },
-              },
+            select: {
+              id: true,
+              teacherId: true,
+              classId: true,
+              branchId: true,
+              startsAt: true,
+              endsAt: true,
+              isExtra: true,
+              isCatchUp: true,
+              isFree: true,
+              isSingleOccurrence: true,
+              recurrenceStartAt: true,
+              recurrenceEndAt: true,
+              overridesDate: true,
+              overridesSlotKey: true,
             },
-          },
-          orderBy: { name: "asc" },
-        });
+          }),
+        ]);
+
+        const lessonBranchesByTeacher = new Map<string, Set<number>>();
+        for (const pair of teacherLessonBranchPairs) {
+          if (!pair.teacherId) continue;
+          let s = lessonBranchesByTeacher.get(pair.teacherId);
+          if (!s) {
+            s = new Set<number>();
+            lessonBranchesByTeacher.set(pair.teacherId, s);
+          }
+          s.add(pair.branchId);
+        }
+
+        const candidateLessonsByTeacher = new Map<string, typeof candidateTodayLessons>();
+        for (const l of candidateTodayLessons) {
+          if (!l.teacherId) continue;
+          const arr = candidateLessonsByTeacher.get(l.teacherId);
+          if (arr) arr.push(l);
+          else candidateLessonsByTeacher.set(l.teacherId, [l]);
+        }
 
         count = allTeachers.length;
 
         teachersList = allTeachers.map((t) => {
-          // Identify all branches this teacher is associated with
           const branchesSet = new Set<string>();
 
           t.TeacherBranch.forEach((tb) => {
-            if (tb.Branch?.name) {
-              branchesSet.add(tb.Branch.name);
-            }
+            const name = branchNameById.get(tb.branchId);
+            if (name) branchesSet.add(name);
           });
 
           t.classes.forEach((c) => {
-            if (c.branch?.name) {
-              branchesSet.add(c.branch.name);
-            }
+            const name = branchNameById.get(c.branchId);
+            if (name) branchesSet.add(name);
           });
 
-          t.lessons.forEach((l) => {
-            if (l.branch?.name) {
-              branchesSet.add(l.branch.name);
-            }
-          });
+          const tLessonBranches = lessonBranchesByTeacher.get(t.id);
+          if (tLessonBranches) {
+            tLessonBranches.forEach((bId) => {
+              const name = branchNameById.get(bId);
+              if (name) branchesSet.add(name);
+            });
+          }
 
-          // Count active lessons today across the school (respecting recurrence lifecycle & retired slots)
-          const activeClassLessons = t.lessons.filter(
-            (l) => !l.class?.isCompleted && !l.class?.isPaused
-          );
-          const todayLessons = resolveRecurringLessonsForDate(activeClassLessons, now);
+          const teacherCandidates = candidateLessonsByTeacher.get(t.id) || [];
+          const todayLessons = resolveRecurringLessonsForDate(teacherCandidates, now);
 
           if (todayLessons.length > 0) {
             teachersWithLessonsTodayCount++;

@@ -1,16 +1,17 @@
 "use client";
 
 import React, { useState } from "react";
-import ReactDOMServer from "react-dom/server";
+import dynamic from "next/dynamic";
 import { useLocale } from "next-intl";
-import {
-  OwnerTeacherConsolidationReport,
-  OwnerTeacherConsolidationPrintData,
-} from "./printable/OwnerTeacherConsolidationReport";
+import type { OwnerTeacherConsolidationPrintData } from "./printable/OwnerTeacherConsolidationReport";
 import { getTeacherPayslipConsolidatedReportAction } from "@/lib/actions";
 import { buildPrintableReportHtml } from "@/lib/printReportHtml";
 import { Printer, Loader2 } from "lucide-react";
-import TeacherReportConfigModal from "@/components/teachers/TeacherReportConfigModal";
+
+const TeacherReportConfigModal = dynamic(
+  () => import("@/components/teachers/TeacherReportConfigModal"),
+  { ssr: false }
+);
 
 interface PrintOwnerConsolidationButtonProps {
   data?: OwnerTeacherConsolidationPrintData | null;
@@ -147,7 +148,11 @@ export const PrintOwnerConsolidationButton = ({
     ? "تقرير المالك (تحديد العناصر: الدروس، الكتب، التكوين، الاقتطاعات)"
     : "Rapport consolidé propriétaire (Sélection des rubriques : cours, livres, formations)";
 
-  const renderAndPrint = (dataToPrint: OwnerTeacherConsolidationPrintData, targetWindow: Window | null) => {
+  const renderAndPrint = async (dataToPrint: OwnerTeacherConsolidationPrintData, targetWindow: Window | null) => {
+    const [{ default: ReactDOMServer }, { OwnerTeacherConsolidationReport }] = await Promise.all([
+      import("react-dom/server"),
+      import("./printable/OwnerTeacherConsolidationReport"),
+    ]);
     const printContent = ReactDOMServer.renderToString(
       <OwnerTeacherConsolidationReport data={dataToPrint} locale={locale} />
     );

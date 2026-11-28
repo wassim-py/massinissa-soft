@@ -1,5 +1,6 @@
 import { UserButton } from "@clerk/nextjs";
-import { currentUser, getActiveBranchId, getAuthSession } from "@/lib/auth";
+import { getCachedUserDisplay, getActiveBranchId, getAuthSession } from "@/lib/auth";
+import { getCachedBranches } from "@/lib/cachedReferenceData";
 import prisma from "@/lib/prisma";
 import { getAlgiersDayBounds, getAlgiersTodayDateString } from "@/lib/algiersDate";
 import { getTranslations } from "next-intl/server";
@@ -14,12 +15,12 @@ const Navbar = async ({
 }: {
   mobileNav?: React.ReactNode;
 }) => {
-  const [user, session, tRoles] = await Promise.all([
-    currentUser({ treatPendingAsSignedOut: false }).catch(() => null),
+  const [userDisplay, session, tRoles] = await Promise.all([
+    getCachedUserDisplay(),
     getAuthSession(),
     getTranslations("roles"),
   ]);
-  const rawRole = (user?.publicMetadata?.role as string) || session.rawRole || "";
+  const rawRole = userDisplay.rawRole || session.rawRole || "";
   const roleKey = rawRole.toLowerCase();
   const isAdminOrOwner =
     session.isOwnerOrAdmin ||
@@ -38,11 +39,8 @@ const Navbar = async ({
     activeBranchName = `Siège #${activeBranchId}`;
     try {
       const todayBounds = getAlgiersDayBounds(getAlgiersTodayDateString());
-      const [branchRow, countRow] = await Promise.all([
-        prisma.branch.findUnique({
-          where: { id: activeBranchId },
-          select: { name: true },
-        }),
+      const [branches, countRow] = await Promise.all([
+        getCachedBranches(),
         prisma.photocopyCharge.count({
           where: {
             branchId: activeBranchId,
@@ -53,6 +51,7 @@ const Navbar = async ({
           },
         }),
       ]);
+      const branchRow = branches.find((b) => b.id === activeBranchId);
       if (branchRow?.name) {
         activeBranchName = branchRow.name;
       }
@@ -103,7 +102,9 @@ const Navbar = async ({
 
         <div className="hidden sm:flex flex-col text-end">
           <span className="text-xs font-semibold text-gray-800 truncate max-w-[120px] md:max-w-none">
-            {user?.lastName ? `${user.lastName} ${user.firstName || ""}`.trim() : user?.firstName}
+            {userDisplay.lastName
+              ? `${userDisplay.lastName} ${userDisplay.firstName || ""}`.trim()
+              : userDisplay.firstName}
           </span>
           <span className="text-[11px] text-muted font-normal">
             {translatedRole}

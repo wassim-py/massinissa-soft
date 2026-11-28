@@ -17,7 +17,6 @@ import { classifyStudentAttendanceHistory, computePostRevisionEnrollmentGapInfo,
 import { getAlgiersDateInfo } from "@/lib/utils";
 import { StudentBalanceInfo } from "@/components/AttendanceGrid";
 import { autoSaveLessonAttendanceAction } from "@/lib/actions";
-import QuickRevisionButton from "@/components/forms/QuickRevisionButton";
 
 // This type will represent a unique column in our grid
 export type LessonInstance = {
@@ -94,15 +93,9 @@ const ClassAttendancePage = async (
     ]);
     const latestLesson = allClassLessons[0] || null;
 
-    if (latestLesson && !latestLesson.isTeacherAbsent) {
+    if (latestLesson && !latestLesson.isTeacherAbsent && new Date(latestLesson.endsAt) <= new Date()) {
         try {
-            const latestLessonInfo = await prisma.lesson.findUnique({
-                where: { id: latestLesson.id },
-                select: { endsAt: true },
-            });
-            if (latestLessonInfo && new Date(latestLessonInfo.endsAt) <= new Date()) {
-                await autoSaveLessonAttendanceAction(latestLesson.id);
-            }
+            await autoSaveLessonAttendanceAction(latestLesson.id);
         } catch {
             // Non-blocking background auto-save
         }
@@ -1262,15 +1255,6 @@ const ClassAttendancePage = async (
                             isOwner={session.isOwner}
                             showBadge
                         />
-                        {!classData.isFormation &&
-                            !isClassInactive(classHeader) &&
-                            (session.isOwner || session.isBranchAdmin || session.isOwnerOrAdmin) && (
-                                <QuickRevisionButton
-                                    classId={classData.id}
-                                    className={classData.name}
-                                    compact
-                                />
-                            )}
                         {todayMatchingLesson && !isClassInactive(classHeader) && (
                             <Link
                                 href={`/list/attendance/take/${todayMatchingLesson.id}?date=${encodeURIComponent(takeAttendanceDateStr)}`}

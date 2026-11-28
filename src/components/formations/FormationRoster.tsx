@@ -4,7 +4,9 @@ import { useState } from "react";
 import { Link } from "@/i18n/navigation";
 import Image from "next/image";
 import EnrollStudentModal from "./EnrollStudentModal";
-import PaymentForm from "@/components/forms/PaymentForm";
+import dynamic from "next/dynamic";
+
+const PaymentForm = dynamic(() => import("@/components/forms/PaymentForm"), { ssr: false });
 import { X, UserPlus, ArrowRightLeft } from "lucide-react";
 import RecordLevelTestModal from "./RecordLevelTestModal";
 import AssistedLevelUpModal from "./AssistedLevelUpModal";

@@ -98,6 +98,7 @@ const ClassListPage = async (
         <td className="p-3.5 font-semibold text-gray-900">
           <Link
             href={`/list/payments/class/${item.id}`}
+            prefetch={false}
             className="hover:text-primary hover:underline transition-colors block"
             title={t("paymentRecordsTooltip")}
           >
@@ -136,6 +137,7 @@ const ClassListPage = async (
             <div className="flex items-center justify-end gap-2 flex-wrap">
               <Link
                 href={`/list/payments/class/${item.id}`}
+                prefetch={false}
                 className="px-2 py-1 text-xs font-semibold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-colors whitespace-nowrap"
                 title={t("paymentRecordsTooltip")}
               >
@@ -143,6 +145,7 @@ const ClassListPage = async (
               </Link>
               <Link
                 href={`/list/classes/${item.id}?tab=books`}
+                prefetch={false}
                 className="px-2 py-1 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 transition-colors whitespace-nowrap"
                 title={t("booksTooltip")}
               >

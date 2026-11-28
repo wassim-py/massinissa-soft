@@ -405,11 +405,12 @@ export async function runRevisionMultiSessionTests() {
       expect(actions.includes("REVISION_VISITOR_MULTI_RECORDED")).toBe(true);
       expect(actions.includes("REVISION_VISITOR_RESCHEDULED")).toBe(true);
 
-      // Modal & quick entry points
+      // Modal & entry-point placement (only on taking attendance page via AttendanceRoster)
       expect(modal.includes("getClassRevisionLessonOptionsAction")).toBe(true);
       expect(modal.includes("splitTotalAcrossSessions")).toBe(true);
-      expect(attPage.includes("QuickRevisionButton")).toBe(true);
-      expect(classAttPage.includes("QuickRevisionButton")).toBe(true);
+      expect(attPage.includes("QuickRevisionButton")).toBe(false);
+      expect(classAttPage.includes("QuickRevisionButton")).toBe(false);
+      expect(roster.includes("<RevisionVisitorModal")).toBe(true);
 
       // Roster pre-paid workflow & modal stay-open fix
       expect(roster.includes("checkInPrepaidRevisionVisitorAction")).toBe(true);

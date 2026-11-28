@@ -21,6 +21,7 @@ import TeacherBooksSection from "@/components/teachers/TeacherBooksSection";
 import { calculateTeacherPayroll, getTeacherThreeMonthSalaryGrowth } from "@/lib/payroll";
 import {
   serializeForClient,
+  getAlgiersDateInfo,
   getAlgiersWeekBounds,
   resolveRecurringLessonsForWeek,
 } from "@/lib/utils";
@@ -179,14 +180,35 @@ const SingleTeacherPage = async (
       include: { Branch: true, class: true },
       orderBy: { date: "desc" },
     }),
-    prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
-    prisma.level.findMany({ select: { id: true, name: true }, orderBy: { id: "asc" } }),
+    import("@/lib/cachedReferenceData").then((m) => m.getCachedBranches()),
+    import("@/lib/cachedReferenceData").then((m) => m.getCachedLevels()),
     prisma.classroom.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
-    prisma.lesson.findMany({
-      where: { teacherId: id, class: ACTIVE_CLASS_WHERE },
-      include: { class: true, classroom: true, teacher: true },
-      orderBy: { startsAt: "asc" },
-    }),
+    (() => {
+      const wb = getAlgiersWeekBounds(0);
+      const weekStartStr = getAlgiersDateInfo(wb.startOfWeek).dateStr;
+      const weekEndStr = getAlgiersDateInfo(wb.endOfWeek).dateStr;
+      return prisma.lesson.findMany({
+        where: {
+          teacherId: id,
+          class: ACTIVE_CLASS_WHERE,
+          OR: [
+            { startsAt: { gte: wb.startOfWeek, lte: wb.endOfWeek } },
+            {
+              isExtra: false,
+              isCatchUp: false,
+              isFree: false,
+              isSingleOccurrence: false,
+            },
+            {
+              isSingleOccurrence: true,
+              overridesDate: { gte: weekStartStr, lte: weekEndStr },
+            },
+          ],
+        },
+        include: { class: true, classroom: true, teacher: true },
+        orderBy: { startsAt: "asc" },
+      });
+    })(),
     // 6. Current payroll per §2.9
     calculateTeacherPayroll(id, thisMonthStart, thisMonthEnd),
     // 7. Three-month salary growth for printable payslip
@@ -337,7 +359,6 @@ const SingleTeacherPage = async (
           table="lesson"
           type="update"
           data={serializeForClient(lesson)}
-          relatedData={serializeForClient(relatedDataForForms)}
         />
       </div>
     );

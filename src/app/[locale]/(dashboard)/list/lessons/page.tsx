@@ -536,7 +536,6 @@ const LessonListPage = async (props: {
                   table="lesson"
                   type="update"
                   data={lesson}
-                  relatedData={relatedDataForForms}
                 />
               </>
             )}
@@ -556,7 +555,6 @@ const LessonListPage = async (props: {
               table="lesson"
               type="update"
               data={lesson}
-              relatedData={relatedDataForForms}
             />
           </div>
         );

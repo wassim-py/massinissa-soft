@@ -175,15 +175,42 @@ export function buildTodayAttendanceSummary({
   };
 }
 
+const TODAY_SUMMARY_CACHE_TTL_MS = 10_000;
+
+function getTodaySummaryCache(): Map<
+  string,
+  { data: TodayAttendanceSummary; expiresAt: number }
+> {
+  const g = globalThis as unknown as {
+    __todayAttendanceSummaryCache?: Map<
+      string,
+      { data: TodayAttendanceSummary; expiresAt: number }
+    >;
+  };
+  if (!g.__todayAttendanceSummaryCache) {
+    g.__todayAttendanceSummaryCache = new Map();
+  }
+  return g.__todayAttendanceSummaryCache;
+}
+
 /**
- * Fetches today's branch-scoped attendance summary using a lean Prisma projection
- * for real-time dashboard polling/event refreshes.
+ * Fetches today's branch-scoped attendance summary using a 2-stage lean Prisma projection
+ * (branch-filtered metadata first, then enrollments/attendances/catch-ups ONLY for today's
+ * resolved lessons) with a short 10s server cache (bypassed via `force: true` on live events).
  */
 export async function getTodayAttendanceSummary(
   activeBranchId: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  options?: { force?: boolean }
 ): Promise<TodayAttendanceSummary> {
   const todayInfo = getAlgiersDateInfo(now);
+  const cacheKey = `${activeBranchId}:${todayInfo.dateStr}`;
+  const cache = getTodaySummaryCache();
+  const cached = cache.get(cacheKey);
+  if (!options?.force && cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
   const startOfToday = new Date(
     Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, -1, 0, 0, 0)
   );
@@ -191,25 +218,37 @@ export async function getTodayAttendanceSummary(
     Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, 22, 59, 59, 999)
   );
 
+  // Stage 1: Fetch lightweight lesson metadata filtered to this branch (+ today's single-occurrence overrides)
   const candidateLessons = await prisma.lesson.findMany({
     where: {
-      OR: [
+      AND: [
         {
-          startsAt: {
-            gte: startOfToday,
-            lte: endOfToday,
-          },
+          OR: [
+            { branchId: activeBranchId },
+            { classroom: { branchId: activeBranchId } },
+            { isSingleOccurrence: true, overridesDate: todayInfo.dateStr },
+          ],
         },
         {
-          isExtra: false,
-          isCatchUp: false,
-          isFree: false,
-          isSingleOccurrence: false,
-          class: ACTIVE_CLASS_WHERE,
-        },
-        {
-          isSingleOccurrence: true,
-          overridesDate: todayInfo.dateStr,
+          OR: [
+            {
+              startsAt: {
+                gte: startOfToday,
+                lte: endOfToday,
+              },
+            },
+            {
+              isExtra: false,
+              isCatchUp: false,
+              isFree: false,
+              isSingleOccurrence: false,
+              class: ACTIVE_CLASS_WHERE,
+            },
+            {
+              isSingleOccurrence: true,
+              overridesDate: todayInfo.dateStr,
+            },
+          ],
         },
       ],
     },
@@ -238,20 +277,6 @@ export async function getTodayAttendanceSummary(
           completedAt: true,
           isPaused: true,
           pausedAt: true,
-          enrollments: {
-            select: { status: true },
-          },
-        },
-      },
-      attendances: {
-        select: {
-          studentId: true,
-          status: true,
-        },
-      },
-      catchUpVisitsHosted: {
-        select: {
-          studentId: true,
         },
       },
     },
@@ -268,9 +293,109 @@ export async function getTodayAttendanceSummary(
     (l) => l.branchId === activeBranchId || l.classroom?.branchId === activeBranchId
   );
 
-  return buildTodayAttendanceSummary({
-    lessons: thisBranchTodaysLessons,
+  if (thisBranchTodaysLessons.length === 0) {
+    const emptySummary = buildTodayAttendanceSummary({
+      lessons: [],
+      branchId: activeBranchId,
+      now,
+    });
+    cache.set(cacheKey, {
+      data: emptySummary,
+      expiresAt: Date.now() + TODAY_SUMMARY_CACHE_TTL_MS,
+    });
+    return emptySummary;
+  }
+
+  // Stage 2: Fetch active enrollment counts + attendances + catch-ups ONLY for today's resolved lessons
+  const classIds = Array.from(
+    new Set(thisBranchTodaysLessons.map((l) => l.classId).filter((id): id is number => id != null))
+  );
+  const realTodayLessonIds = Array.from(
+    new Set(
+      thisBranchTodaysLessons
+        .filter(
+          (l) => getAlgiersDateInfo(l._dbStartsAt ?? l.startsAt).dateStr === todayInfo.dateStr
+        )
+        .map((l) => l.id)
+    )
+  );
+
+  const [activeEnrollmentCounts, todayAttendances, todayCatchUps] = await Promise.all([
+    classIds.length > 0
+      ? prisma.enrollment.groupBy({
+          by: ["classId"],
+          where: {
+            classId: { in: classIds },
+            status: "ACTIVE",
+          },
+          _count: { _all: true },
+        })
+      : Promise.resolve([]),
+    realTodayLessonIds.length > 0
+      ? prisma.attendance.findMany({
+          where: { lessonId: { in: realTodayLessonIds } },
+          select: { lessonId: true, studentId: true, status: true },
+        })
+      : Promise.resolve([]),
+    realTodayLessonIds.length > 0
+      ? prisma.catchUpAttendance.findMany({
+          where: { catchUpLessonId: { in: realTodayLessonIds } },
+          select: { catchUpLessonId: true, studentId: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const enrolledCountByClass = new Map<number, number>();
+  for (const row of activeEnrollmentCounts) {
+    enrolledCountByClass.set(row.classId, row._count._all);
+  }
+
+  const attendancesByLesson = new Map<number, Array<{ studentId: string; status: string }>>();
+  for (const att of todayAttendances) {
+    const arr = attendancesByLesson.get(att.lessonId);
+    if (arr) {
+      arr.push({ studentId: att.studentId, status: att.status });
+    } else {
+      attendancesByLesson.set(att.lessonId, [{ studentId: att.studentId, status: att.status }]);
+    }
+  }
+
+  const catchUpsByLesson = new Map<number, Array<{ studentId: string }>>();
+  for (const visit of todayCatchUps) {
+    const arr = catchUpsByLesson.get(visit.catchUpLessonId);
+    if (arr) {
+      arr.push({ studentId: visit.studentId });
+    } else {
+      catchUpsByLesson.set(visit.catchUpLessonId, [{ studentId: visit.studentId }]);
+    }
+  }
+
+  const hydratedLessons: AttendanceLessonInput[] = thisBranchTodaysLessons.map((l) => {
+    const activeCount = l.classId != null ? enrolledCountByClass.get(l.classId) ?? 0 : 0;
+    return {
+      id: l.id,
+      startsAt: l.startsAt,
+      _dbStartsAt: l._dbStartsAt,
+      isTeacherAbsent: l.isTeacherAbsent,
+      class: {
+        name: l.class.name,
+        enrollments: Array.from({ length: activeCount }, () => ({ status: "ACTIVE" })),
+      },
+      attendances: attendancesByLesson.get(l.id) ?? [],
+      catchUpVisitsHosted: catchUpsByLesson.get(l.id) ?? [],
+    };
+  });
+
+  const summary = buildTodayAttendanceSummary({
+    lessons: hydratedLessons,
     branchId: activeBranchId,
     now,
   });
+
+  cache.set(cacheKey, {
+    data: summary,
+    expiresAt: Date.now() + TODAY_SUMMARY_CACHE_TTL_MS,
+  });
+
+  return summary;
 }

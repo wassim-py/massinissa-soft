@@ -1,6 +1,5 @@
-// Classty Service Worker - App Shell Caching Only
-// Architecture §5: Internet is reliable across all branches.
-// Deliberately NO offline write queue or offline data synchronization.
+// Classty Service Worker - App Shell + Immutable Static Bundle Caching
+// Deliberately NO offline write queue or API/RSC caching so live data stays authoritative.
 
 // Auto-unregister immediately in local development environments
 if (
@@ -10,10 +9,9 @@ if (
   self.registration?.unregister();
 }
 
-const CACHE_NAME = 'classty-shell-v2';
+const CACHE_NAME = 'classty-shell-v3';
 
 const PRECACHE_ASSETS = [
-  '/',
   '/manifest.webmanifest',
   '/favicon.ico',
   '/logo.png',
@@ -25,26 +23,32 @@ const PRECACHE_ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_ASSETS).catch((err) => {
-        console.warn('[SW] Pre-caching partial failure, proceeding:', err);
-      });
-    }).then(() => self.skipWaiting())
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => {
+        return cache.addAll(PRECACHE_ASSETS).catch((err) => {
+          console.warn('[SW] Pre-caching partial failure, proceeding:', err);
+        });
+      })
+      .then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.map((key) => {
-          if (key !== CACHE_NAME) {
-            console.log('[SW] Removing old cache:', key);
-            return caches.delete(key);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+    caches
+      .keys()
+      .then((keys) => {
+        return Promise.all(
+          keys.map((key) => {
+            if (key !== CACHE_NAME) {
+              console.log('[SW] Removing old cache:', key);
+              return caches.delete(key);
+            }
+          })
+        );
+      })
+      .then(() => self.clients.claim())
   );
 });
 
@@ -57,23 +61,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Only handle GET requests
-  if (request.method !== 'GET') {
+  // Only handle GET requests on same-origin
+  if (request.method !== 'GET' || url.origin !== self.location.origin) {
     return;
   }
 
-  // Pass through external or Clerk authentication endpoints
+  // Always bypass API, tRPC, RSC flight requests, and Clerk auth API endpoints
   if (
-    url.hostname.includes('clerk') ||
-    url.hostname.includes('accounts.dev') ||
     url.pathname.startsWith('/api/') ||
-    url.pathname.startsWith('/trpc/')
+    url.pathname.startsWith('/trpc/') ||
+    (url.pathname.startsWith('/__clerk/') && !url.pathname.startsWith('/__clerk/npm/')) ||
+    request.headers.get('RSC') === '1'
   ) {
     return;
   }
 
-  // 1. Static immutable icons and image assets: Cache-First (deliberately excluding /_next/static)
+  // 1. Immutable content-hashed Next.js static chunks, versioned Clerk JS bundle, and static media: Cache-First
   if (
+    url.pathname.startsWith('/_next/static/') ||
+    url.pathname.startsWith('/__clerk/npm/') ||
     url.pathname.startsWith('/icons/') ||
     url.pathname.endsWith('.png') ||
     url.pathname.endsWith('.jpg') ||
@@ -100,7 +106,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2. Navigation requests: Network-First (online priority, fallback to cache if network fails)
+  // 2. Navigation requests: Network-First (online priority, fallback to cache if network drops)
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
@@ -116,10 +122,9 @@ self.addEventListener('fetch', (event) => {
         .catch(() => {
           return caches.match(request).then((cached) => {
             if (cached) return cached;
-            return caches.match('/');
+            return caches.match('/logo.png');
           });
         })
     );
-    return;
   }
 });

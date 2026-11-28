@@ -131,11 +131,10 @@ function safeRevalidatePhotocopyPaths(teacherIds: string[]): void {
       revalidatePath(`/fr${p}`);
       revalidatePath(`/ar${p}`);
     }
-    revalidatePath("/");
-    revalidatePath("/fr");
-    revalidatePath("/ar");
-    revalidatePath("/[locale]", "page");
-    revalidatePath("/", "layout");
+    revalidatePath("/admin");
+    revalidatePath("/[locale]/admin", "page");
+    revalidatePath("/fr/admin");
+    revalidatePath("/ar/admin");
   } catch {
     // Safe fallback outside active Next.js request context (e.g., CLI verification scripts)
   }

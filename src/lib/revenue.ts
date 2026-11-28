@@ -179,41 +179,23 @@ export async function getDailyRevenueDashboardData(options?: {
   const startDate = getAlgiersDayBounds(dateFromStr).startUtc;
   const endDate = getAlgiersDayBounds(dateToStr).endUtc;
 
-  // Fetch branches
-  const branches = await prisma.branch.findMany({
-    select: { id: true, name: true },
-    orderBy: { id: "asc" },
-  });
-
+  // Fetch cached branches + query DailyLedger ONCE (derive target branch slice in memory)
   const targetBranchId = branchFilter !== "all" ? Number(branchFilter) : undefined;
 
-  // Query DailyLedger within the date range, all MissingMoney/SurplusMoney in range, and individual Vouchers
-  const [ledgerRows, comparisonRows, allMissingRows, allSurplusRows, voucherRows] = await Promise.all([
+  const [branches, comparisonRows, allMissingRows, allSurplusRows, voucherRows] = await Promise.all([
+    import("./cachedReferenceData").then((m) => m.getCachedBranches()),
     prisma.dailyLedger.findMany({
       where: {
         date: {
           gte: startDate,
           lte: endDate,
         },
-        ...(targetBranchId ? { branchId: targetBranchId } : {}),
         type: { not: "PAYROLL_OUT" },
       },
       include: {
         Branch: { select: { id: true, name: true } },
       },
       orderBy: { date: "asc" },
-    }),
-    prisma.dailyLedger.findMany({
-      where: {
-        date: {
-          gte: startDate,
-          lte: endDate,
-        },
-        type: { not: "PAYROLL_OUT" },
-      },
-      include: {
-        Branch: { select: { id: true, name: true } },
-      },
     }),
     prisma.missingMoney.findMany({
       where: {
@@ -274,6 +256,10 @@ export async function getDailyRevenueDashboardData(options?: {
       orderBy: { issuedAt: "desc" },
     }),
   ]);
+
+  const ledgerRows = targetBranchId
+    ? comparisonRows.filter((r) => r.branchId === targetBranchId)
+    : comparisonRows;
 
   const confirmedMissingRows = allMissingRows.filter((m) => m.status === "CONFIRMED");
   const confirmedSurplusRows = allSurplusRows.filter((s) => s.status === "CONFIRMED");

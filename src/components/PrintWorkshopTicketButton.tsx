@@ -1,9 +1,8 @@
 "use client";
 
 import React from 'react';
-import ReactDOMServer from 'react-dom/server';
 import { useLocale } from 'next-intl';
-import { WorkshopTicket, WorkshopTicketPayment } from './printable/WorkshopTicket';
+import type { WorkshopTicketPayment } from './printable/WorkshopTicket';
 import Image from 'next/image';
 
 type PrintButtonProps = {
@@ -15,7 +14,15 @@ const PrintWorkshopTicketButton = ({ payment, amountOwedByParticipant }: PrintBu
   const locale = useLocale();
   const isAr = locale === "ar";
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    if (!printWindow) return;
+
+    const [{ default: ReactDOMServer }, { WorkshopTicket }] = await Promise.all([
+      import('react-dom/server'),
+      import('./printable/WorkshopTicket'),
+    ]);
+
     const printContent = ReactDOMServer.renderToString(
       <WorkshopTicket 
         payment={payment} 
@@ -24,9 +31,7 @@ const PrintWorkshopTicketButton = ({ payment, amountOwedByParticipant }: PrintBu
       />
     );
 
-    const printWindow = window.open('', '_blank', 'width=800,height=600');
-
-    if (printWindow) {
+    if (!printWindow.closed) {
       printWindow.document.write(`
         <!DOCTYPE html>
         <html dir="${isAr ? 'rtl' : 'ltr'}" lang="${locale}">

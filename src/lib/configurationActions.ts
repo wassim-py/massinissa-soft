@@ -3,6 +3,13 @@
 import prisma from "@/lib/prisma";
 import { getAuthSession } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
+import {
+  REF_CACHE_TAGS,
+  invalidateReferenceTag,
+  getCachedActiveTrimester,
+  getCachedFixedInscriptionFee,
+  getCachedFormationInscriptionFee,
+} from "@/lib/cachedReferenceData";
 import { createClerkClient } from "@clerk/nextjs/server";
 import {
   accountSchema,
@@ -409,6 +416,12 @@ export async function createBranchAction(
       },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.branches);
+    try {
+      revalidatePath("/", "layout");
+    } catch {
+      // ignore outside Next.js request context
+    }
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -486,6 +499,12 @@ export async function updateBranchAction(
       },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.branches);
+    try {
+      revalidatePath("/", "layout");
+    } catch {
+      // ignore outside Next.js request context
+    }
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -717,31 +736,7 @@ export async function deleteClassroomAction(
 // =================================================================
 
 export async function getActiveTrimester() {
-  try {
-    return await prisma.trimester.findFirst({
-      where: { status: "active" },
-      include: { academicYear: true },
-    });
-  } catch (err) {
-    try {
-      const rows = await prisma.$queryRaw<any[]>`
-        SELECT t.*, row_to_json(a.*) as "academicYear"
-        FROM "Trimester" t
-        LEFT JOIN "AcademicYear" a ON a.id = t."academicYearId"
-        WHERE t.status = 'active'
-        LIMIT 1
-      `;
-      if (rows && rows.length > 0) {
-        return rows[0];
-      }
-    } catch {
-      // Ignore if query fails
-    }
-    return prisma.trimester.findFirst({
-      include: { academicYear: true },
-      orderBy: { startDate: "asc" },
-    });
-  }
+  return getCachedActiveTrimester();
 }
 
 export async function startNextTrimesterAction(
@@ -827,6 +822,7 @@ export async function startNextTrimesterAction(
       });
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.trimesters);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -879,6 +875,7 @@ export async function finishCurrentTrimesterAction(
       data: { status: "finished" },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.trimesters);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1001,6 +998,8 @@ export async function createAcademicYearAction(
       },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.academicYear);
+    invalidateReferenceTag(REF_CACHE_TAGS.trimesters);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1080,6 +1079,8 @@ export async function deleteAcademicYearAction(
       where: { id },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.academicYear);
+    invalidateReferenceTag(REF_CACHE_TAGS.trimesters);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1147,6 +1148,7 @@ export async function createLevelAction(
       data: { name: trimmed },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.levels);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1222,6 +1224,7 @@ export async function updateLevelAction(
       data: { name: trimmed },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.levels);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1302,6 +1305,7 @@ export async function deleteLevelAction(
       where: { id: levelId },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.levels);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1368,6 +1372,7 @@ export async function createFormationLanguageAction(
       data: { name: trimmed },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.languages);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1442,6 +1447,7 @@ export async function updateFormationLanguageAction(
       data: { name: trimmed },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.languages);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1510,6 +1516,7 @@ export async function deleteFormationLanguageAction(
       await tx.language.delete({ where: { id } });
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.languages);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/fr/admin/configuration");
     safeRevalidatePath("/ar/admin/configuration");
@@ -1718,14 +1725,7 @@ export async function deleteFormationLevelConfigAction(
 // =================================================================
 
 export async function getFixedInscriptionFeeAction(): Promise<number> {
-  try {
-    const setting = await prisma.setting.findUnique({
-      where: { id: "DEFAULT_INSCRIPTION_FEE" },
-    });
-    return setting?.value ? Number(setting.value) : 1000;
-  } catch {
-    return 1000;
-  }
+  return getCachedFixedInscriptionFee();
 }
 
 export async function updateFixedInscriptionFeeAction(
@@ -1763,6 +1763,7 @@ export async function updateFixedInscriptionFeeAction(
       data: { inscriptionFee: amount },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.settings);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/list/classes");
     safeRevalidatePath("/list/finance");
@@ -1789,14 +1790,7 @@ export async function updateFixedInscriptionFeeAction(
 // =================================================================
 
 export async function getFormationInscriptionFeeAction(): Promise<number> {
-  try {
-    const setting = await prisma.setting.findUnique({
-      where: { id: "DEFAULT_FORMATION_INSCRIPTION_FEE" },
-    });
-    return setting?.value ? Number(setting.value) : 1500;
-  } catch {
-    return 1500;
-  }
+  return getCachedFormationInscriptionFee();
 }
 
 export async function updateFormationInscriptionFeeAction(
@@ -1834,6 +1828,7 @@ export async function updateFormationInscriptionFeeAction(
       data: { inscriptionFee: amount },
     });
 
+    invalidateReferenceTag(REF_CACHE_TAGS.settings);
     safeRevalidatePath("/admin/configuration");
     safeRevalidatePath("/list/formations");
     safeRevalidatePath("/list/finance");

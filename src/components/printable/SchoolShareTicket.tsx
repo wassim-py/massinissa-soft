@@ -1,6 +1,6 @@
 import React from 'react';
 import { MASSINISSA_LOGO_BASE64 } from "@/lib/receiptAssets";
-import { formatAlgiersDate, formatDZD as formatDZDLib, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
+import { formatAlgiersDate, formatDZD as formatDZDLib, formatNumber, ALGIERS_TIMEZONE } from "@/lib/algiersDate";
 
 export interface SchoolShareSessionItem {
   lessonId: number;
@@ -169,22 +169,38 @@ export function SchoolShareTicket({ data }: SchoolShareTicketProps) {
       </div>
 
       {/* Key Financial Totals Banner */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 text-center">
-          <span className="text-xs text-gray-500 font-medium block">Total Séances</span>
-          <span className="text-xl font-black text-gray-900 mt-1 block">{data.sessionsCount}</span>
+      <div
+        className="avoid-break mb-6"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 0.8fr) minmax(0, 1.07fr) minmax(0, 1.07fr) minmax(0, 1.07fr)',
+          gap: '10px',
+        }}
+      >
+        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 text-center min-w-0 overflow-hidden flex flex-col justify-between">
+          <span className="text-xs text-gray-500 font-medium block leading-snug">Total Séances</span>
+          <span className="text-xl font-black text-gray-900 mt-1 block font-mono leading-tight">{data.sessionsCount}</span>
         </div>
-        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 text-center">
-          <span className="text-xs text-gray-500 font-medium block">Recettes des Cours (Tuition)</span>
-          <span className="text-xl font-black text-gray-900 mt-1 block font-mono">{formatDZD(data.totalTuitionGross)}</span>
+        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 text-center min-w-0 overflow-hidden flex flex-col justify-between">
+          <span className="text-xs text-gray-500 font-medium block leading-snug">Recettes des Cours (Tuition)</span>
+          <span className="text-base font-black text-gray-900 mt-1 font-mono leading-tight flex flex-wrap items-baseline justify-center gap-x-1">
+            <span className="whitespace-nowrap">{formatNumber(data.totalTuitionGross)}</span>
+            <span className="text-[0.68em] font-bold text-gray-600 whitespace-nowrap">DZD</span>
+          </span>
         </div>
-        <div className="bg-orange-50 p-3 rounded-lg border border-orange-200 text-center">
-          <span className="text-xs text-orange-800 font-medium block">Part Enseignant(s)</span>
-          <span className="text-xl font-black text-orange-900 mt-1 block font-mono">{formatDZD(data.teacherGross)}</span>
+        <div className="bg-orange-50 p-3 rounded-lg border border-orange-200 text-center min-w-0 overflow-hidden flex flex-col justify-between">
+          <span className="text-xs text-orange-800 font-medium block leading-snug">Part Enseignant(s)</span>
+          <span className="text-base font-black text-orange-900 mt-1 font-mono leading-tight flex flex-wrap items-baseline justify-center gap-x-1">
+            <span className="whitespace-nowrap">{formatNumber(data.teacherGross)}</span>
+            <span className="text-[0.68em] font-bold text-orange-700 whitespace-nowrap">DZD</span>
+          </span>
         </div>
-        <div className="bg-emerald-50 p-3 rounded-lg border-2 border-emerald-400 text-center">
-          <span className="text-xs text-emerald-800 font-bold block">Net Part École</span>
-          <span className="text-xl font-black text-emerald-900 mt-1 block font-mono">{formatDZD(data.schoolNet)}</span>
+        <div className="bg-emerald-50 p-3 rounded-lg border-2 border-emerald-400 text-center min-w-0 overflow-hidden flex flex-col justify-between">
+          <span className="text-xs text-emerald-800 font-bold block leading-snug">Net Part École</span>
+          <span className="text-base font-black text-emerald-900 mt-1 font-mono leading-tight flex flex-wrap items-baseline justify-center gap-x-1">
+            <span className="whitespace-nowrap">{formatNumber(data.schoolNet)}</span>
+            <span className="text-[0.68em] font-bold text-emerald-700 whitespace-nowrap">DZD</span>
+          </span>
         </div>
       </div>
 

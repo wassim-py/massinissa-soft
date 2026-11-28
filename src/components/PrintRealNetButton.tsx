@@ -1,9 +1,8 @@
 "use client";
 
 import React from "react";
-import ReactDOMServer from "react-dom/server";
 import { useLocale } from "next-intl";
-import { RealNetTicket, RealNetPrintData } from "./printable/RealNetTicket";
+import type { RealNetPrintData } from "./printable/RealNetTicket";
 
 interface PrintRealNetButtonProps {
   data: RealNetPrintData;
@@ -20,14 +19,20 @@ export const PrintRealNetButton = ({
   const isAr = locale === "ar";
   const defaultLabel = isAr ? "طباعة كشف الصافي الحقيقي" : "Imprimer le bilan net réel";
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
+    const printWindow = window.open("", "_blank", "width=900,height=800");
+    if (!printWindow) return;
+
+    const [{ default: ReactDOMServer }, { RealNetTicket }] = await Promise.all([
+      import("react-dom/server"),
+      import("./printable/RealNetTicket"),
+    ]);
+
     const printContent = ReactDOMServer.renderToString(
       <RealNetTicket data={data} />
     );
 
-    const printWindow = window.open("", "_blank", "width=900,height=800");
-
-    if (printWindow) {
+    if (!printWindow.closed) {
       printWindow.document.write(`
         <!DOCTYPE html>
         <html dir="${isAr ? "rtl" : "ltr"}" lang="${locale}">

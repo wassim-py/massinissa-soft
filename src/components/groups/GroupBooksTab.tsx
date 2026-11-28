@@ -44,7 +44,9 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import BookStatusBadge, { BookStudentStatus, computeBookStatus } from "@/components/books/BookStatusBadge";
-import PaymentForm from "@/components/forms/PaymentForm";
+import dynamic from "next/dynamic";
+
+const PaymentForm = dynamic(() => import("@/components/forms/PaymentForm"), { ssr: false });
 
 export interface BookItem {
   id: number;

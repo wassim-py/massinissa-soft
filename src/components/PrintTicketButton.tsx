@@ -1,9 +1,7 @@
 "use client";
 
 import React from 'react';
-import ReactDOMServer from 'react-dom/server';
 import { useLocale } from 'next-intl';
-import { PaymentTicket } from './printable/PaymentTicket';
 import { Voucher, Student, Class } from "@prisma/client";
 import Image from 'next/image';
 
@@ -27,7 +25,15 @@ const PrintTicketButton = ({
   const locale = useLocale();
   const isAr = locale === "ar";
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    if (!printWindow) return;
+
+    const [{ default: ReactDOMServer }, { PaymentTicket }] = await Promise.all([
+      import('react-dom/server'),
+      import('./printable/PaymentTicket'),
+    ]);
+
     const printContent = ReactDOMServer.renderToString(
       <PaymentTicket 
         voucher={voucher} 
@@ -40,9 +46,7 @@ const PrintTicketButton = ({
       />
     );
 
-    const printWindow = window.open('', '_blank', 'width=800,height=600');
-
-    if (printWindow) {
+    if (!printWindow.closed) {
       printWindow.document.write(`
         <!DOCTYPE html>
         <html dir="${isAr ? 'rtl' : 'ltr'}" lang="${locale}">

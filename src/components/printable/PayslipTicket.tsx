@@ -23,6 +23,8 @@ export interface PayslipSessionItem {
   branchName: string;
   presentCount: number;
   payingCount?: number;
+  revisionPayingCount?: number;
+  revisionAmount?: number;
   sessionPrice?: number;
   teacherCut?: number;
   lessonAmount: number;
@@ -41,6 +43,8 @@ export interface PayslipGroupLine {
   courseSessionsCount?: number;
   payableLessonsCount?: number;
   paidSessionsCount?: number;
+  revisionLessonsCount?: number;
+  revisionAmount?: number;
   freeSessionsCount: number;
   totalSessionsCount: number;
   amount: number;
@@ -91,6 +95,8 @@ export interface PayslipPrintData {
   sessions?: PayslipSessionItem[];
   retroactiveLessonsCount?: number;
   retroactiveAmount?: number;
+  revisionLessonsCount?: number;
+  revisionAmount?: number;
   photocopyDetails?: Array<{
     branchName: string;
     pages: number;
@@ -250,6 +256,14 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
     (data.retroactiveAmount ??
       retroactiveLessons.reduce((sum, s) => sum + Number(s.lessonAmount || 0), 0)) * 100
   ) / 100;
+  const totalRevisionLessonsRaw = Math.round(
+    (data.revisionLessonsCount ??
+      allSessions.reduce((sum, s) => sum + Number(s.revisionPayingCount || 0), 0)) * 100
+  ) / 100;
+  const totalRevisionAmount = Math.round(
+    (data.revisionAmount ??
+      allSessions.reduce((sum, s) => sum + Number(s.revisionAmount || 0), 0)) * 100
+  ) / 100;
   const paidLessonsAmount = paidLessons.reduce((sum, l) => sum + Number(l.lessonAmount || 0), 0);
   const totalFreeSessions = data.freeSessionsCount ?? freeLessons.length;
   const totalPaidSessions = data.paidSessionsCount ?? (
@@ -265,6 +279,8 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         ...g,
         courseSessionsCount: g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount),
         payableLessonsCount: g.payableLessonsCount ?? g.paidSessionsCount ?? 0,
+        revisionLessonsCount: g.revisionLessonsCount ?? 0,
+        revisionAmount: g.revisionAmount ?? 0,
       }));
     }
     if (!allSessions || allSessions.length === 0) return [];
@@ -278,6 +294,8 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         courseSessionsCount: 0,
         payableLessonsCount: 0,
         paidSessionsCount: 0,
+        revisionLessonsCount: 0,
+        revisionAmount: 0,
         freeSessionsCount: 0,
         totalSessionsCount: 0,
         amount: 0,
@@ -296,6 +314,10 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
           const count = Number(s.payingCount ?? s.presentCount ?? 1);
           entry.payableLessonsCount = (entry.payableLessonsCount || 0) + count;
           entry.paidSessionsCount = entry.payableLessonsCount;
+          entry.revisionLessonsCount =
+            Math.round(((entry.revisionLessonsCount || 0) + Number(s.revisionPayingCount || 0)) * 100) / 100;
+          entry.revisionAmount =
+            Math.round(((entry.revisionAmount || 0) + Number(s.revisionAmount || 0)) * 100) / 100;
           entry.amount += Number(s.lessonAmount || 0);
         }
       }
@@ -305,7 +327,65 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
   }, [allSessions, data.groupLines]);
 
   const totalCourseSessions = groupLines.reduce((sum, g) => sum + (g.courseSessionsCount ?? 0), 0);
-  const totalPayableLessons = groupLines.reduce((sum, g) => sum + (g.payableLessonsCount ?? g.paidSessionsCount ?? 0), 0);
+  const totalPayableLessons = Math.round(
+    groupLines.reduce((sum, g) => sum + (g.payableLessonsCount ?? g.paidSessionsCount ?? 0), 0) * 100
+  ) / 100;
+  const groupRevisionLessonsTotal = Math.round(
+    groupLines.reduce((sum, g) => sum + Number(g.revisionLessonsCount || 0), 0) * 100
+  ) / 100;
+  const totalRevisionLessons =
+    totalRevisionLessonsRaw > 0 ? totalRevisionLessonsRaw : groupRevisionLessonsTotal;
+
+  const getKpiCountFontClass = (val: number | string) => {
+    const len = String(val).length;
+    if (len >= 8) return 'text-base';
+    if (len >= 6) return 'text-xl';
+    return 'text-2xl';
+  };
+
+  const getKpiMoneyFontClass = (formattedNum: string, isWideCard: boolean) => {
+    const len = formattedNum.length;
+    if (isWideCard) {
+      if (len >= 14) return 'text-sm';
+      if (len >= 11) return 'text-base';
+      return 'text-lg';
+    }
+    if (len >= 13) return 'text-xs';
+    if (len >= 10) return 'text-sm';
+    return 'text-base';
+  };
+
+  const renderKpiDzd = (amount: number, isWideCard: boolean, unitClassName: string) => {
+    const numStr = formatNumber(amount);
+    const sizeCls = getKpiMoneyFontClass(numStr, isWideCard);
+    return (
+      <span
+        className={`${sizeCls} font-mono leading-tight mt-1 flex flex-wrap items-baseline justify-center gap-x-1 max-w-full min-w-0`}
+        style={{ overflowWrap: 'anywhere' }}
+      >
+        <span className="whitespace-nowrap">{numStr}</span>
+        <span className={`text-[0.68em] font-bold whitespace-nowrap ${unitClassName}`}>DZD</span>
+      </span>
+    );
+  };
+
+  const payableMetricDisplay = totalPayableLessons > 0 ? totalPayableLessons : totalPaidSessions;
+  const courseMetricDisplay = totalCourseSessions > 0 ? totalCourseSessions : totalPaidSessions;
+  const payableMetricSubtitle =
+    totalRetroactiveLessons > 0 && totalRevisionLessons > 0
+      ? `dont ${totalRetroactiveLessons} régul. · ${totalRevisionLessons} rév.`
+      : totalRetroactiveLessons > 0
+      ? `dont ${totalRetroactiveLessons} régul. mois passé`
+      : totalRevisionLessons > 0
+      ? `dont ${totalRevisionLessons} révision${totalRevisionLessons > 1 ? "s" : ""}`
+      : "présences + absences";
+
+  const countKpiCardsCount =
+    2 + (totalRetroactiveLessons > 0 ? 1 : 0) + (totalRevisionLessons > 0 ? 1 : 0);
+  const coursesGrossNumStr = formatNumber(effectiveCoursesGross);
+  const netAmountNumStr = formatNumber(Number(data.netAmount));
+  const useTwoRowKpiBanner =
+    countKpiCardsCount >= 3 || coursesGrossNumStr.length >= 10 || netAmountNumStr.length >= 10;
 
   return (
     <div style={containerStyle} className="payslip-container">
@@ -353,112 +433,211 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
         </div>
       </div>
 
-      {/* Key Metrics Banner: Total Payable Lessons, Late Regulated (if any), Course Sessions, Gross, Net */}
+      {/* Key Metrics Banner: Total Payable Lessons, Late Regulated (if any), Revision (if any), Course Sessions, Gross, Net */}
       {!hasCoursesSelected && includeBooks ? (
-        <div className="grid grid-cols-3 gap-2.5 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center">
-          <div className="bg-purple-50 border-2 border-purple-400 p-2.5 rounded-md">
-            <span className="text-[11px] font-bold text-purple-900 uppercase tracking-wide block">
+        <div
+          className="avoid-break bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 0.9fr) minmax(0, 1.05fr) minmax(0, 1.05fr)',
+            gap: '10px',
+          }}
+        >
+          <div className="bg-purple-50 border-2 border-purple-400 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+            <span className="text-[11px] font-bold text-purple-900 uppercase tracking-wide block leading-snug">
               Ventes de Livres
             </span>
-            <span className="text-2xl font-black text-purple-950 font-mono block mt-0.5">
+            <span className={`${getKpiCountFontClass(data.bookRevenueDetails?.length || 0)} font-black text-purple-950 font-mono block mt-0.5 leading-tight`}>
               {data.bookRevenueDetails?.length || 0}
             </span>
-            <span className="text-[10px] text-purple-700 font-semibold block">
+            <span className="text-[10px] text-purple-700 font-semibold block leading-snug">
               exemplaire{(data.bookRevenueDetails?.length || 0) > 1 ? "s" : ""} payé{(data.bookRevenueDetails?.length || 0) > 1 ? "s" : ""}
             </span>
           </div>
 
-          <div className="bg-white border border-gray-200 p-2.5 rounded-md">
-            <span className="text-[11px] font-semibold text-gray-600 block">
+          <div className="bg-white border border-gray-200 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+            <span className="text-[11px] font-semibold text-gray-600 block leading-snug">
               Total Livres (100%)
             </span>
-            <span className="text-base font-bold text-purple-900 font-mono block mt-1">
-              {formatDZD(effectiveBookRevenue)}
-            </span>
-            <span className="text-[10px] text-gray-500 block">
+            <div className="font-bold text-purple-900">
+              {renderKpiDzd(effectiveBookRevenue, true, 'text-purple-700')}
+            </div>
+            <span className="text-[10px] text-gray-500 block leading-snug">
               part enseignant
             </span>
           </div>
 
-          <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950">
-            <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block">
+          <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950 min-w-0 overflow-hidden flex flex-col justify-between">
+            <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block leading-snug">
               Net à Payer
             </span>
-            <span className="text-base font-black text-white font-mono block mt-1">
-              {formatDZD(Number(data.netAmount))}
-            </span>
-            <span className="text-[10px] text-blue-200 block">
+            <div className="font-black text-white">
+              {renderKpiDzd(Number(data.netAmount), true, 'text-blue-200')}
+            </div>
+            <span className="text-[10px] text-blue-200 block leading-snug">
               net de déductions
             </span>
           </div>
         </div>
       ) : (
-        <div className={`grid ${totalRetroactiveLessons > 0 ? 'grid-cols-5' : 'grid-cols-4'} gap-2.5 bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center`}>
-          <div className="bg-blue-50 border-2 border-blue-400 p-2.5 rounded-md">
-            <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block">
-              Séances Payables
-            </span>
-            <span className="text-2xl font-black text-blue-950 font-mono block mt-0.5">
-              {totalPayableLessons > 0 ? totalPayableLessons : totalPaidSessions}
-            </span>
-            <span className="text-[10px] text-blue-700 font-semibold block">
-              {totalRetroactiveLessons > 0
-                ? `dont ${totalRetroactiveLessons} régul. mois passé`
-                : "présences + absences"}
-            </span>
-          </div>
+        <div className="avoid-break bg-gray-50 p-3 rounded-lg border border-gray-200 mb-6 text-center">
+          {useTwoRowKpiBanner ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {/* Row 1: Session & Payable Count KPIs */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: `repeat(${countKpiCardsCount}, minmax(0, 1fr))`,
+                  gap: '10px',
+                }}
+              >
+                <div className="bg-blue-50 border-2 border-blue-400 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+                  <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block leading-snug">
+                    Séances Payables
+                  </span>
+                  <span className={`${getKpiCountFontClass(payableMetricDisplay)} font-black text-blue-950 font-mono block mt-0.5 leading-tight`}>
+                    {payableMetricDisplay}
+                  </span>
+                  <span className="text-[10px] text-blue-700 font-semibold block leading-snug mt-0.5">
+                    {payableMetricSubtitle}
+                  </span>
+                </div>
 
-          {totalRetroactiveLessons > 0 && (
-            <div className="bg-purple-50 border-2 border-purple-400 p-2.5 rounded-md">
-              <span className="text-[11px] font-bold text-purple-900 uppercase tracking-wide block">
-                Régul. Mois Passé
-              </span>
-              <span className="text-2xl font-black text-purple-950 font-mono block mt-0.5">
-                {totalRetroactiveLessons}
-              </span>
-              <span className="text-[10px] text-purple-700 font-semibold block">
-                séances payables
-              </span>
+                {totalRetroactiveLessons > 0 && (
+                  <div className="bg-purple-50 border-2 border-purple-400 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+                    <span className="text-[11px] font-bold text-purple-900 uppercase tracking-wide block leading-snug">
+                      Régul. Mois Passé
+                    </span>
+                    <span className={`${getKpiCountFontClass(totalRetroactiveLessons)} font-black text-purple-950 font-mono block mt-0.5 leading-tight`}>
+                      {totalRetroactiveLessons}
+                    </span>
+                    <span className="text-[10px] text-purple-700 font-semibold block leading-snug mt-0.5">
+                      séance{totalRetroactiveLessons > 1 ? "s" : ""} payable{totalRetroactiveLessons > 1 ? "s" : ""}
+                    </span>
+                  </div>
+                )}
+
+                {totalRevisionLessons > 0 && (
+                  <div className="bg-teal-50 border-2 border-teal-400 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+                    <span className="text-[11px] font-bold text-teal-900 uppercase tracking-wide block leading-snug">
+                      Séances Révision
+                    </span>
+                    <span className={`${getKpiCountFontClass(totalRevisionLessons)} font-black text-teal-950 font-mono block mt-0.5 leading-tight`}>
+                      {totalRevisionLessons}
+                    </span>
+                    <span className="text-[10px] text-teal-700 font-semibold block leading-snug mt-0.5">
+                      séance{totalRevisionLessons > 1 ? "s" : ""} payable{totalRevisionLessons > 1 ? "s" : ""}
+                    </span>
+                  </div>
+                )}
+
+                <div className="bg-white border border-gray-200 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+                  <span className="text-[11px] font-semibold text-gray-600 block leading-snug">
+                    Séances de Cours
+                  </span>
+                  <span className={`${getKpiCountFontClass(courseMetricDisplay)} font-bold text-gray-900 font-mono block mt-0.5 leading-tight`}>
+                    {courseMetricDisplay}
+                  </span>
+                  <span className="text-[10px] text-gray-500 block leading-snug mt-0.5">
+                    {totalFreeSessions > 0
+                      ? `dont ${totalFreeSessions} gratuite${totalFreeSessions > 1 ? "s" : ""}`
+                      : "dispensées"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Row 2: Monetary KPIs (Full-width 2-column row prevents overflow for large amounts) */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                  gap: '10px',
+                }}
+              >
+                <div className="bg-white border border-gray-200 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+                  <span className="text-[11px] font-semibold text-gray-600 block leading-snug">
+                    Rémunération Cours
+                  </span>
+                  <div className="font-bold text-gray-900">
+                    {renderKpiDzd(effectiveCoursesGross, true, 'text-gray-600')}
+                  </div>
+                  <span className="text-[10px] text-gray-500 block leading-snug mt-0.5">
+                    brut des séances
+                  </span>
+                </div>
+
+                <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950 min-w-0 overflow-hidden flex flex-col justify-between">
+                  <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block leading-snug">
+                    Net à Payer
+                  </span>
+                  <div className="font-black text-white">
+                    {renderKpiDzd(Number(data.netAmount), true, 'text-blue-200')}
+                  </div>
+                  <span className="text-[10px] text-blue-200 block leading-snug mt-0.5">
+                    net de déductions
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, 1.35fr)',
+                gap: '10px',
+              }}
+            >
+              <div className="bg-blue-50 border-2 border-blue-400 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block leading-snug">
+                  Séances Payables
+                </span>
+                <span className={`${getKpiCountFontClass(payableMetricDisplay)} font-black text-blue-950 font-mono block mt-0.5 leading-tight`}>
+                  {payableMetricDisplay}
+                </span>
+                <span className="text-[10px] text-blue-700 font-semibold block leading-snug mt-0.5">
+                  {payableMetricSubtitle}
+                </span>
+              </div>
+
+              <div className="bg-white border border-gray-200 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[11px] font-semibold text-gray-600 block leading-snug">
+                  Séances de Cours
+                </span>
+                <span className={`${getKpiCountFontClass(courseMetricDisplay)} font-bold text-gray-900 font-mono block mt-0.5 leading-tight`}>
+                  {courseMetricDisplay}
+                </span>
+                <span className="text-[10px] text-gray-500 block leading-snug mt-0.5">
+                  {totalFreeSessions > 0
+                    ? `dont ${totalFreeSessions} gratuite${totalFreeSessions > 1 ? "s" : ""}`
+                    : "dispensées"}
+                </span>
+              </div>
+
+              <div className="bg-white border border-gray-200 p-2.5 rounded-md min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[11px] font-semibold text-gray-600 block leading-snug">
+                  Rémunération Cours
+                </span>
+                <div className="font-bold text-gray-900">
+                  {renderKpiDzd(effectiveCoursesGross, false, 'text-gray-600')}
+                </div>
+                <span className="text-[10px] text-gray-500 block leading-snug mt-0.5">
+                  brut des séances
+                </span>
+              </div>
+
+              <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950 min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block leading-snug">
+                  Net à Payer
+                </span>
+                <div className="font-black text-white">
+                  {renderKpiDzd(Number(data.netAmount), false, 'text-blue-200')}
+                </div>
+                <span className="text-[10px] text-blue-200 block leading-snug mt-0.5">
+                  net de déductions
+                </span>
+              </div>
             </div>
           )}
-
-          <div className="bg-white border border-gray-200 p-2.5 rounded-md">
-            <span className="text-[11px] font-semibold text-gray-600 block">
-              Séances de Cours
-            </span>
-            <span className="text-2xl font-bold text-gray-900 font-mono block mt-0.5">
-              {totalCourseSessions > 0 ? totalCourseSessions : totalPaidSessions}
-            </span>
-            <span className="text-[10px] text-gray-500 block">
-              {totalFreeSessions > 0
-                ? `dont ${totalFreeSessions} gratuite${totalFreeSessions > 1 ? "s" : ""}`
-                : "dispensées"}
-            </span>
-          </div>
-
-          <div className="bg-white border border-gray-200 p-2.5 rounded-md">
-            <span className="text-[11px] font-semibold text-gray-600 block">
-              Rémunération Cours
-            </span>
-            <span className="text-base font-bold text-gray-900 font-mono block mt-1">
-              {formatDZD(effectiveCoursesGross)}
-            </span>
-            <span className="text-[10px] text-gray-500 block">
-              brut des séances
-            </span>
-          </div>
-
-          <div className="bg-blue-900 text-white p-2.5 rounded-md border border-blue-950">
-            <span className="text-[11px] font-bold text-blue-100 uppercase tracking-wider block">
-              Net à Payer
-            </span>
-            <span className="text-base font-black text-white font-mono block mt-1">
-              {formatDZD(Number(data.netAmount))}
-            </span>
-            <span className="text-[10px] text-blue-200 block">
-              net de déductions
-            </span>
-          </div>
         </div>
       )}
 
@@ -825,17 +1004,19 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                         fontSize: '10px',
                         color: '#4b5563',
                         display: 'flex',
+                        flexWrap: 'wrap',
                         justifyContent: 'space-between',
-                        gap: '4px',
+                        gap: '2px 6px',
                       }}
                     >
-                      <span>Net : {formatDZD(Number(pt.netAmount || 0))}</span>
+                      <span style={{ whiteSpace: 'nowrap' }}>Net : {formatDZD(Number(pt.netAmount || 0))}</span>
                       {idx === 0 ? (
                         <span style={{ color: '#6b7280', fontFamily: 'system-ui, sans-serif' }}>Base</span>
                       ) : delta !== null && delta !== 0 ? (
                         <span
                           style={{
                             fontWeight: 700,
+                            whiteSpace: 'nowrap',
                             color: delta > 0 ? '#047857' : '#be123c',
                           }}
                         >
@@ -843,7 +1024,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                           {formatDZD(delta)}
                         </span>
                       ) : (
-                        <span style={{ color: '#6b7280' }}>0 DZD</span>
+                        <span style={{ color: '#6b7280', whiteSpace: 'nowrap' }}>0 DZD</span>
                       )}
                     </div>
                   </div>
@@ -857,15 +1038,20 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
       {/* Section 1a: Per-Group Breakdown (Classes / Groupes) */}
       {showGroupBreakdown && groupLines.length > 0 && (
         <div className="mb-6">
-          <div className="flex justify-between items-center mb-2">
+          <div className="flex flex-wrap justify-between items-center gap-2 mb-2">
             <h2 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
               <span>Répartition des séances par groupe / classe</span>
               <span className="text-xs font-normal text-gray-500">(Détail par groupe pédagogique)</span>
             </h2>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-blue-800 font-bold bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200">
                 Total séances payables : {totalPayableLessons}
               </span>
+              {totalRevisionLessons > 0 && (
+                <span className="text-xs text-teal-800 font-bold bg-teal-50 px-2.5 py-0.5 rounded border border-teal-200">
+                  Dont révision : {totalRevisionLessons}
+                </span>
+              )}
               <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded border border-gray-200 font-semibold">
                 {groupLines.length} groupe{groupLines.length > 1 ? "s" : ""}
               </span>
@@ -883,6 +1069,11 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                 <th className="p-2 border border-gray-300 font-bold text-center bg-blue-50/70 text-blue-950">
                   Séances payables
                 </th>
+                {totalRevisionLessons > 0 && (
+                  <th className="p-2 border border-gray-300 font-bold text-center bg-teal-50/70 text-teal-950">
+                    Révision
+                  </th>
+                )}
                 <th className="p-2 border border-gray-300 font-bold text-center text-orange-900 bg-orange-50/50">
                   Séances gratuites
                 </th>
@@ -893,6 +1084,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
               {groupLines.map((g, idx) => {
                 const courseCount = g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount);
                 const payableCount = g.payableLessonsCount ?? g.paidSessionsCount ?? 0;
+                const revisionCount = g.revisionLessonsCount ?? 0;
                 return (
                   <tr key={`${g.className}_${idx}`} className="border border-gray-200 hover:bg-gray-50/50">
                     <td className="p-2 border border-gray-200 font-bold text-gray-900">{g.className}</td>
@@ -903,6 +1095,17 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                     <td className="p-2 border border-gray-200 text-center font-mono font-bold text-blue-900 bg-blue-50/30 text-sm">
                       {payableCount}
                     </td>
+                    {totalRevisionLessons > 0 && (
+                      <td className="p-2 border border-gray-200 text-center font-mono bg-teal-50/20">
+                        {revisionCount > 0 ? (
+                          <span className="inline-block bg-teal-100 text-teal-900 font-bold px-1.5 py-0.5 rounded text-[11px] border border-teal-200">
+                            {revisionCount}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">0</span>
+                        )}
+                      </td>
+                    )}
                     <td className="p-2 border border-gray-200 text-center font-mono bg-orange-50/20">
                       {g.freeSessionsCount > 0 ? (
                         <span className="inline-block bg-orange-100 text-orange-800 font-bold px-1.5 py-0.5 rounded text-[11px] border border-orange-200">
@@ -912,7 +1115,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                         <span className="text-gray-400">0</span>
                       )}
                     </td>
-                    <td className="p-2 border border-gray-200 font-mono font-bold text-right text-emerald-800">
+                    <td className="p-2 border border-gray-200 font-mono font-bold text-right text-emerald-800 whitespace-nowrap">
                       {formatDZD(Number(g.amount))}
                     </td>
                   </tr>
@@ -930,10 +1133,15 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                 <td className="p-2 border border-gray-300 text-center font-mono text-blue-950 font-black text-sm bg-blue-50/70">
                   {totalPayableLessons}
                 </td>
+                {totalRevisionLessons > 0 && (
+                  <td className="p-2 border border-gray-300 text-center font-mono text-teal-950 font-black text-sm bg-teal-50/70">
+                    {totalRevisionLessons}
+                  </td>
+                )}
                 <td className="p-2 border border-gray-300 text-center font-mono text-orange-900 bg-orange-50/50 font-black">
                   {totalFreeSessions}
                 </td>
-                <td className="p-2 border border-gray-300 font-mono text-emerald-900 text-right font-black">
+                <td className="p-2 border border-gray-300 font-mono text-emerald-900 text-right font-black whitespace-nowrap">
                   {formatDZD(effectiveCoursesGross)}
                 </td>
               </tr>
@@ -1066,12 +1274,17 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                     )}
                   </td>
                   <td className="p-1.5 border border-gray-200 text-center font-mono font-bold text-blue-900">
-                    {l.presentCount}
+                    <span>{l.presentCount}</span>
+                    {(l.revisionPayingCount ?? 0) > 0 && (
+                      <span className="block text-[9.5px] font-semibold text-teal-700 leading-tight mt-0.5">
+                        dont {l.revisionPayingCount} rév.
+                      </span>
+                    )}
                   </td>
-                  <td className="p-1.5 border border-gray-200 text-right font-mono text-gray-600">
+                  <td className="p-1.5 border border-gray-200 text-right font-mono text-gray-600 whitespace-nowrap">
                     {formatDZD(Number(l.teacherCut || 0))}
                   </td>
-                  <td className="p-1.5 border border-gray-200 text-right font-mono font-bold text-emerald-800">
+                  <td className="p-1.5 border border-gray-200 text-right font-mono font-bold text-emerald-800 whitespace-nowrap">
                     {formatDZD(Number(l.lessonAmount || 0))}
                   </td>
                 </tr>
@@ -1082,7 +1295,7 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
                 <td colSpan={4} className="p-2 border border-gray-300">Total séances payantes</td>
                 <td className="p-2 border border-gray-300 text-center font-mono">{paidLessons.length}</td>
                 <td className="p-2 border border-gray-300 text-right font-mono">-</td>
-                <td className="p-2 border border-gray-300 text-right font-mono text-blue-900 font-bold">
+                <td className="p-2 border border-gray-300 text-right font-mono text-blue-900 font-bold whitespace-nowrap">
                   {formatDZD(paidLessonsAmount)}
                 </td>
               </tr>
@@ -1093,24 +1306,51 @@ export function PayslipTicket({ data }: PayslipTicketProps) {
 
       {/* Section 2b: Séances payables régularisées (Mois précédent) - Dans une case sans détails */}
       {showSessionDetails && totalRetroactiveLessons > 0 && (
-        <div className="mb-6 border-2 border-purple-400 bg-purple-50/40 rounded-lg p-3.5 shadow-2xs">
-          <div className="flex justify-between items-center bg-purple-900 text-white font-bold px-3 py-2 rounded-md shadow-xs">
+        <div className="mb-6 avoid-break border-2 border-purple-400 bg-purple-50/40 rounded-lg p-3.5 shadow-2xs">
+          <div className="flex justify-between items-center gap-2 bg-purple-900 text-white font-bold px-3 py-2 rounded-md shadow-xs">
             <span className="text-xs font-black uppercase tracking-wider">
               Séances payables régularisées (Mois précédent)
             </span>
-            <span className="bg-white text-purple-950 font-black px-2.5 py-0.5 text-xs rounded-full font-mono shadow-2xs">
+            <span className="bg-white text-purple-950 font-black px-2.5 py-0.5 text-xs rounded-full font-mono shadow-2xs whitespace-nowrap">
               {totalRetroactiveLessons} séance{totalRetroactiveLessons > 1 ? "s" : ""} payable{totalRetroactiveLessons > 1 ? "s" : ""}
             </span>
           </div>
-          <div className="flex justify-between items-center text-xs text-purple-950 px-3 py-2.5 font-semibold bg-white rounded border border-purple-200 mt-2">
+          <div className="flex justify-between items-center gap-2 text-xs text-purple-950 px-3 py-2.5 font-semibold bg-white rounded border border-purple-200 mt-2">
             <span>Total des séances payables du mois passé :</span>
-            <div className="text-right">
+            <div className="text-right whitespace-nowrap">
               <span className="font-mono font-black text-sm text-purple-900">
                 {totalRetroactiveLessons} séance{totalRetroactiveLessons > 1 ? "s" : ""} payable{totalRetroactiveLessons > 1 ? "s" : ""}
               </span>
               {totalRetroactiveAmount > 0 && (
                 <span className="ml-2 font-mono font-bold text-emerald-800 text-xs">
                   ({formatDZD(totalRetroactiveAmount)})
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Section 2c: Séances de révision payables (Visiteurs révision) */}
+      {showSessionDetails && totalRevisionLessons > 0 && (
+        <div className="mb-6 avoid-break border-2 border-teal-400 bg-teal-50/40 rounded-lg p-3.5 shadow-2xs">
+          <div className="flex justify-between items-center gap-2 bg-teal-800 text-white font-bold px-3 py-2 rounded-md shadow-xs">
+            <span className="text-xs font-black uppercase tracking-wider">
+              Séances de révision payables (Visiteurs révision)
+            </span>
+            <span className="bg-white text-teal-950 font-black px-2.5 py-0.5 text-xs rounded-full font-mono shadow-2xs whitespace-nowrap">
+              {totalRevisionLessons} séance{totalRevisionLessons > 1 ? "s" : ""} payable{totalRevisionLessons > 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="flex justify-between items-center gap-2 text-xs text-teal-950 px-3 py-2.5 font-semibold bg-white rounded border border-teal-200 mt-2">
+            <span>Total des séances de révision payables :</span>
+            <div className="text-right whitespace-nowrap">
+              <span className="font-mono font-black text-sm text-teal-900">
+                {totalRevisionLessons} séance{totalRevisionLessons > 1 ? "s" : ""} payable{totalRevisionLessons > 1 ? "s" : ""}
+              </span>
+              {totalRevisionAmount > 0 && (
+                <span className="ml-2 font-mono font-bold text-emerald-800 text-xs">
+                  ({formatDZD(totalRevisionAmount)})
                 </span>
               )}
             </div>

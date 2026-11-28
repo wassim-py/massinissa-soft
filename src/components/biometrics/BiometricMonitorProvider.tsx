@@ -47,12 +47,25 @@ import {
   recordBiometricCatchUpAction,
   getBiometricPaymentDataAction,
 } from "@/lib/biometricActions";
+import dynamic from "next/dynamic";
 import {
   getBiometricScansLiveBillingAction,
   type BiometricScanLiveBillingInfo,
 } from "@/lib/actions";
-import PaymentForm from "@/components/forms/PaymentForm";
 import { formatDZD } from "@/lib/algiersDate";
+
+const PaymentForm = dynamic(() => import("@/components/forms/PaymentForm"), {
+  ssr: false,
+});
+
+function getPinnedAlertsSignature(list: BiometricScanDisplayItem[]): string {
+  return list
+    .map(
+      (a) =>
+        `${a.id}:${a.status}:${a.isResolved ? 1 : 0}:${a.remainingCredits}:${a.billingSynced ? 1 : 0}:${a.isPayerSiblingPaid ? 1 : 0}:${a.formationRemaining ?? ""}:${a.lessonId ?? ""}`
+    )
+    .join("|");
+}
 
 export type BiometricScanDisplayItem = BiometricScanResult & {
   isFormation?: boolean;
@@ -1047,6 +1060,13 @@ export default function BiometricMonitorProvider({
     [applyBillingInfoToScan, saveJournalToStorage]
   );
 
+  const lastDrawerBillingSyncAtRef = useRef<number>(0);
+  const reschedulePollingRef = useRef<(() => void) | null>(null);
+  const hasEverConnectedLocalBridgeRef = useRef<boolean>(false);
+  const localBridgeSseRetryMsRef = useRef<number>(2000);
+  const localBridgeStatusBackoffMsRef = useRef<number>(4000);
+  const reconnectLocalSseNowRef = useRef<(() => void) | null>(null);
+
   // Hydrate persistent journal & dismissed alerts on mount / branch change
   useEffect(() => {
     if (
@@ -1065,14 +1085,19 @@ export default function BiometricMonitorProvider({
       if (maxSavedId > lastSeenIdRef.current) {
         lastSeenIdRef.current = maxSavedId;
       }
-      syncScansWithLiveBilling(savedScans);
+      // Do NOT run a heavy 250-student billing sync on mount; unresolved pinned alerts sync on init
+      // and historical drawer entries sync lazily when the drawer is actually opened.
     }
-  }, [initialBranchId, loadBranchPersistenceFromStorage, syncScansWithLiveBilling]);
+  }, [initialBranchId, loadBranchPersistenceFromStorage]);
 
-  // Re-sync live billing whenever the Journal Drawer is opened so any external payment/attendance changes are reflected
+  // Re-sync live billing lazily when the Journal Drawer is opened (capped to recent 30 scans, 60s cooldown)
   useEffect(() => {
     if (isDrawerOpen && recentScans.length > 0) {
-      syncScansWithLiveBilling(recentScans);
+      const now = Date.now();
+      if (now - lastDrawerBillingSyncAtRef.current >= 60_000) {
+        lastDrawerBillingSyncAtRef.current = now;
+        syncScansWithLiveBilling(recentScans.slice(0, 30));
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDrawerOpen]);
@@ -1102,7 +1127,11 @@ export default function BiometricMonitorProvider({
 
   const setIsEnabled = useCallback((val: boolean) => {
     if (val && typeof window !== "undefined") {
-      // Trigger a fresh K50 Pro hardware handshake on explicit reconnect request
+      // Reset backoff and trigger a fresh K50 Pro hardware handshake on explicit reconnect request
+      localBridgeSseRetryMsRef.current = 2000;
+      localBridgeStatusBackoffMsRef.current = 4000;
+      lastLocalBridgeFailAtRef.current = 0;
+      reconnectLocalSseNowRef.current?.();
       fetch("http://127.0.0.1:4375/status?forceReconnect=1", {
         cache: "no-store",
       }).catch(() => {});
@@ -1283,7 +1312,12 @@ export default function BiometricMonitorProvider({
 
         es.onopen = () => {
           localSseConnectedRef.current = true;
+          hasEverConnectedLocalBridgeRef.current = true;
+          localBridgeSseRetryMsRef.current = 2000;
+          localBridgeStatusBackoffMsRef.current = 4000;
           lastLocalBridgeFailAtRef.current = 0;
+          // Switch cloud polling interval to the intended gentle 12s cadence now that Local SSE is active
+          reschedulePollingRef.current?.();
           const activeBranch =
             currentBranchIdRef.current ||
             (initialBranchId && !isNaN(Number(initialBranchId))
@@ -1465,13 +1499,29 @@ export default function BiometricMonitorProvider({
         };
 
         es.onerror = () => {
+          const wasConnected = localSseConnectedRef.current;
           localSseConnectedRef.current = false;
+          if (wasConnected) {
+            // Immediately restore fast cloud fallback polling if Local SSE drops
+            reschedulePollingRef.current?.();
+          }
           if (es) {
             es.close();
             es = null;
           }
           if (!isCancelled) {
-            retryTimer = setTimeout(connectLocalSse, 2000);
+            // Reception PCs that previously connected keep fast 2s auto-reconnect;
+            // non-bridge devices (owner laptops/phones) back off smoothly up to 30s.
+            const delay = hasEverConnectedLocalBridgeRef.current
+              ? 2000
+              : localBridgeSseRetryMsRef.current;
+            if (!hasEverConnectedLocalBridgeRef.current) {
+              localBridgeSseRetryMsRef.current = Math.min(
+                30000,
+                Math.round(localBridgeSseRetryMsRef.current * 2.5)
+              );
+            }
+            retryTimer = setTimeout(connectLocalSse, delay);
           }
         };
       } catch {
@@ -1479,11 +1529,26 @@ export default function BiometricMonitorProvider({
       }
     };
 
+    const handleOnlineReconnect = () => {
+      if (!localSseConnectedRef.current && !isCancelled) {
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        localBridgeSseRetryMsRef.current = 2000;
+        connectLocalSse();
+      }
+    };
+
+    reconnectLocalSseNowRef.current = handleOnlineReconnect;
+    window.addEventListener("online", handleOnlineReconnect);
     connectLocalSse();
 
     return () => {
       isCancelled = true;
       localSseConnectedRef.current = false;
+      reconnectLocalSseNowRef.current = null;
+      window.removeEventListener("online", handleOnlineReconnect);
       if (retryTimer) clearTimeout(retryTimer);
       if (es) es.close();
     };
@@ -1542,7 +1607,7 @@ export default function BiometricMonitorProvider({
           typeof window !== "undefined" &&
           (localSseConnectedRef.current ||
             (!data.hardwareConnected &&
-              nowMs - lastLocalBridgeFailAtRef.current > 4000))
+              nowMs - lastLocalBridgeFailAtRef.current > localBridgeStatusBackoffMsRef.current))
         ) {
           try {
             const bridgeUrl = `http://127.0.0.1:4375/status?appUrl=${encodeURIComponent(
@@ -1555,6 +1620,8 @@ export default function BiometricMonitorProvider({
             );
             if (bridgeRes.ok) {
               lastLocalBridgeFailAtRef.current = 0;
+              hasEverConnectedLocalBridgeRef.current = true;
+              localBridgeStatusBackoffMsRef.current = 4000;
               const bridgeData = await bridgeRes.json();
               // Authoritative live hardware state from the local PC bridge
               anyOnline = Boolean(bridgeData.connected);
@@ -1592,10 +1659,22 @@ export default function BiometricMonitorProvider({
               }
             } else {
               lastLocalBridgeFailAtRef.current = nowMs;
+              if (!hasEverConnectedLocalBridgeRef.current) {
+                localBridgeStatusBackoffMsRef.current = Math.min(
+                  30000,
+                  Math.round(localBridgeStatusBackoffMsRef.current * 2)
+                );
+              }
             }
           } catch {
-            // Local bridge not running on 127.0.0.1:4375 — wait 4s before retrying
+            // Local bridge not running on 127.0.0.1:4375 — back off up to 30s on non-bridge devices
             lastLocalBridgeFailAtRef.current = nowMs;
+            if (!hasEverConnectedLocalBridgeRef.current) {
+              localBridgeStatusBackoffMsRef.current = Math.min(
+                30000,
+                Math.round(localBridgeStatusBackoffMsRef.current * 2)
+              );
+            }
           }
         }
 
@@ -1656,15 +1735,20 @@ export default function BiometricMonitorProvider({
           const serverAlerts = ((data.pinnedAlerts || []) as BiometricScanDisplayItem[])
             .filter((a) => !isAlertDismissed(a))
             .map((a) => applyBillingInfoToScan(a));
-          setPinnedAlerts(serverAlerts);
+          setPinnedAlerts((prev) =>
+            getPinnedAlertsSignature(prev) === getPinnedAlertsSignature(serverAlerts)
+              ? prev
+              : serverAlerts
+          );
 
           if (mergedScans.length > 0) {
             lastSeenIdRef.current = Math.max(...mergedScans.map((s) => s.id));
           }
 
-          const toSync = [...mergedScans, ...serverAlerts];
-          if (toSync.length > 0) {
-            syncScansWithLiveBilling(toSync);
+          // Sync live billing ONLY for active pinned alerts on init (typically 0-5 students);
+          // historical journal scans sync lazily when the user opens the Drawer.
+          if (serverAlerts.length > 0) {
+            syncScansWithLiveBilling(serverAlerts);
           }
           return;
         }
@@ -1712,7 +1796,11 @@ export default function BiometricMonitorProvider({
           )
             .filter((a) => !isAlertDismissed(a))
             .map((a) => applyBillingInfoToScan(a));
-          setPinnedAlerts(filteredAlerts);
+          setPinnedAlerts((prev) =>
+            getPinnedAlertsSignature(prev) === getPinnedAlertsSignature(filteredAlerts)
+              ? prev
+              : filteredAlerts
+          );
           const unsyncedAlerts = filteredAlerts.filter(
             (a) => !a.billingSynced && a.studentId
           );
@@ -1756,6 +1844,7 @@ export default function BiometricMonitorProvider({
       pollFeed();
     };
 
+    reschedulePollingRef.current = startPolling;
     pollFeed();
     startPolling();
 
@@ -1764,6 +1853,7 @@ export default function BiometricMonitorProvider({
 
     return () => {
       isMounted = false;
+      reschedulePollingRef.current = null;
       if (interval) clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
@@ -1782,9 +1872,19 @@ export default function BiometricMonitorProvider({
   ]);
 
   // Background heartbeat to automatically finalize and save attendance when lessons are up
+  // Coordinates across open browser tabs via localStorage so 5 open tabs send 1 sweep/min total.
   useEffect(() => {
+    const AUTO_SAVE_STORAGE_KEY = "classty_last_autosave_at";
     const runAutoSave = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      const now = Date.now();
+      try {
+        const lastRun = Number(localStorage.getItem(AUTO_SAVE_STORAGE_KEY) || "0");
+        if (now - lastRun < 55_000) return;
+        localStorage.setItem(AUTO_SAVE_STORAGE_KEY, String(now));
+      } catch {
+        // Proceed even if storage unavailable
+      }
       fetch("/api/attendance/auto-save", { method: "POST" })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
@@ -2223,28 +2323,49 @@ export default function BiometricMonitorProvider({
     pinnedAlerts.length - visiblePinnedAlerts.length
   );
 
+  const contextValue = useMemo(
+    () => ({
+      isEnabled,
+      setIsEnabled,
+      isMuted,
+      setIsMuted,
+      isDrawerOpen,
+      setIsDrawerOpen,
+      recentScans,
+      pinnedAlerts,
+      liveStreamCard,
+      deviceConnected,
+      isSyncingK50,
+      handleResolveAlert,
+      handleDismissPopup,
+      handleClearJournal,
+      handleSyncK50Devices,
+      openCatchUpModalForScan,
+      openPaymentModalForScan,
+    }),
+    [
+      isEnabled,
+      setIsEnabled,
+      isMuted,
+      setIsMuted,
+      isDrawerOpen,
+      setIsDrawerOpen,
+      recentScans,
+      pinnedAlerts,
+      liveStreamCard,
+      deviceConnected,
+      isSyncingK50,
+      handleResolveAlert,
+      handleDismissPopup,
+      handleClearJournal,
+      handleSyncK50Devices,
+      openCatchUpModalForScan,
+      openPaymentModalForScan,
+    ]
+  );
+
   return (
-    <BiometricMonitorContext.Provider
-      value={{
-        isEnabled,
-        setIsEnabled,
-        isMuted,
-        setIsMuted,
-        isDrawerOpen,
-        setIsDrawerOpen,
-        recentScans,
-        pinnedAlerts,
-        liveStreamCard,
-        deviceConnected,
-        isSyncingK50,
-        handleResolveAlert,
-        handleDismissPopup,
-        handleClearJournal,
-        handleSyncK50Devices,
-        openCatchUpModalForScan,
-        openPaymentModalForScan,
-      }}
-    >
+    <BiometricMonitorContext.Provider value={contextValue}>
       {children}
 
       {/* ===================================================================== */}

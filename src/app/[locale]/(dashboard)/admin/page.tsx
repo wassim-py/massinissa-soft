@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import prisma from "@/lib/prisma";
 import Announcements from "@/components/Announcements";
 import UserCard from "@/components/UserCard";
@@ -13,6 +14,7 @@ import {
   tagLessonSourceDates,
 } from "@/lib/dashboardAttendance";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
+import { getCachedBranches } from "@/lib/cachedReferenceData";
 import { canUserAccessBranch } from "@/lib/settings";
 import { computeStudentCreditAndSessions, formatDiscountBadgeLabel, resolvePayerCredit } from "@/lib/studentBilling";
 import {
@@ -25,16 +27,35 @@ import { ACTIVE_CLASS_WHERE, isLessonVisibleForClassStatus } from "@/lib/classSt
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const AdminPage = async () => {
-  const session = await getAuthSession();
-  const activeBranchId = await getActiveBranchId();
+function UserCardSkeleton() {
+  return (
+    <div className="p-4 sm:p-5 flex-1 min-w-[140px] rounded-xl border border-border/80 bg-surface animate-pulse h-[116px]">
+      <div className="h-4 w-20 bg-gray-200 rounded mb-4" />
+      <div className="h-7 w-14 bg-gray-200 rounded mb-3" />
+      <div className="h-3.5 w-24 bg-gray-100 rounded" />
+    </div>
+  );
+}
 
-  // Active branch details
-  const branch = await prisma.branch.findUnique({
-    where: { id: activeBranchId },
-    select: { id: true, name: true },
-  });
-  const branchName = branch?.name || `Siège #${activeBranchId}`;
+function AnnouncementsSkeleton() {
+  return (
+    <div className="rounded-xl border border-border/80 bg-surface p-4 space-y-3 animate-pulse">
+      <div className="h-5 w-36 bg-gray-200 rounded" />
+      <div className="h-16 bg-gray-100 rounded-lg" />
+      <div className="h-16 bg-gray-100 rounded-lg" />
+    </div>
+  );
+}
+
+const AdminPage = async () => {
+  const [session, activeBranchId, allBranches] = await Promise.all([
+    getAuthSession(),
+    getActiveBranchId(),
+    getCachedBranches(),
+  ]);
+
+  const branchNameById = new Map(allBranches.map((b) => [b.id, b.name]));
+  const branchName = branchNameById.get(activeBranchId) || `Siège #${activeBranchId}`;
 
   const now = new Date();
   const todayInfo = getAlgiersDateInfo(now);
@@ -47,7 +68,7 @@ const AdminPage = async () => {
     Date.UTC(todayInfo.year, todayInfo.month - 1, todayInfo.day, 22, 59, 59, 999)
   );
 
-  // Fetch today's lessons: dated one-offs occurring today + recurring normal lessons across all branches
+  // Stage 1: Lightweight metadata query for candidate lessons (no 7-level enrollment/voucher/attendance tree!)
   const candidateLessons = await prisma.lesson.findMany({
     where: {
       OR: [
@@ -70,100 +91,43 @@ const AdminPage = async () => {
         },
       ],
     },
-    include: {
-      branch: {
-        select: { id: true, name: true },
+    select: {
+      id: true,
+      branchId: true,
+      classId: true,
+      teacherId: true,
+      startsAt: true,
+      endsAt: true,
+      isExtra: true,
+      isCatchUp: true,
+      isFree: true,
+      isTeacherAbsent: true,
+      recurrenceStartAt: true,
+      recurrenceEndAt: true,
+      isSingleOccurrence: true,
+      overridesDate: true,
+      overridesSlotKey: true,
+      classroom: {
+        select: { id: true, name: true, branchId: true },
       },
       class: {
-        include: {
-          branch: {
-            select: { id: true, name: true },
-          },
-          enrollments: {
-            include: {
-              student: {
-                include: {
-                  family: {
-                    include: {
-                      payerStudent: {
-                        include: {
-                          enrollments: {
-                            include: {
-                              class: { select: { id: true, pricePerCycle: true, isFormation: true } },
-                              transfersFrom: true,
-                              transfersTo: true,
-                              payerHistory: { orderBy: { effectiveFrom: "asc" } },
-                            },
-                          },
-                          vouchers: {
-                            where: { isVoided: false, isRefund: false },
-                            include: { refunds: true },
-                          },
-                          attendances: {
-                            where: { lesson: { isFree: false } },
-                            include: {
-                              lesson: { select: { id: true, startsAt: true, isFree: true, classId: true, lessonGroups: { select: { classId: true } } } },
-                            },
-                          },
-                          catchUpAttendances: {
-                            include: {
-                              missedLesson: {
-                                select: { id: true, startsAt: true, isFree: true, isTeacherAbsent: true, classId: true, lessonGroups: { select: { classId: true } } },
-                              },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
-                  catchUpAttendances: {
-                    select: { missedLessonId: true },
-                  },
-                },
-              },
-              transfersFrom: true,
-              transfersTo: true,
-              payerHistory: { orderBy: { effectiveFrom: "asc" } },
-            },
-          },
-          vouchers: {
-            include: {
-              refunds: true,
-            },
-          },
-          lessons: {
-            select: {
-              id: true,
-              startsAt: true,
-              isFree: true,
-              attendances: {
-                select: {
-                  studentId: true,
-                  status: true,
-                },
-              },
-            },
-          },
-        },
-      },
-      classroom: true,
-      teacher: {
-        include: {
-          TeacherBranch: {
-            include: { Branch: true },
-          },
-          lessons: {
-            select: {
-              branchId: true,
-              branch: { select: { name: true } },
-            },
-          },
-        },
-      },
-      attendances: true,
-      catchUpVisitsHosted: {
         select: {
-          studentId: true,
+          id: true,
+          name: true,
+          branchId: true,
+          isCompleted: true,
+          completedAt: true,
+          isPaused: true,
+          pausedAt: true,
+        },
+      },
+      teacher: {
+        select: {
+          id: true,
+          name: true,
+          TeacherBranch: {
+            select: { branchId: true },
+          },
         },
       },
     },
@@ -177,25 +141,182 @@ const AdminPage = async () => {
     isLessonVisibleForClassStatus(l.endsAt, l.class)
   );
 
-  // Today's lessons strictly for THIS branch (hosted in this branch or group belonging to this branch)
+  // Today's lessons strictly for THIS branch (hosted in this branch or classroom in this branch)
   const thisBranchTodaysLessons = allTodaysLessons.filter(
     (l) => l.branchId === activeBranchId || (l.classroom as any)?.branchId === activeBranchId
   );
+
+  // Stage 2: Fetch heavy billing/attendance data ONLY for today's resolved branch classes & teachers
+  const todayTeacherIds = Array.from(new Set(allTodaysLessons.map((l) => l.teacherId).filter(Boolean)));
+  const thisBranchTodayClassIds = Array.from(
+    new Set(thisBranchTodaysLessons.map((l) => l.classId).filter((id): id is number => id != null))
+  );
+  const realTodayBranchLessonIds = Array.from(
+    new Set(
+      thisBranchTodaysLessons
+        .filter((l) => getAlgiersDateInfo(l._dbStartsAt ?? l.startsAt).dateStr === todayInfo.dateStr)
+        .map((l) => l.id)
+    )
+  );
+
+  const [teacherLessonBranchPairs, hydratedBranchClasses, todayLessonAttendances, todayLessonCatchUps] =
+    await Promise.all([
+      todayTeacherIds.length > 0
+        ? prisma.lesson.groupBy({
+            by: ["teacherId", "branchId"],
+            where: { teacherId: { in: todayTeacherIds } },
+          })
+        : Promise.resolve([]),
+      thisBranchTodayClassIds.length > 0
+        ? prisma.class.findMany({
+            where: { id: { in: thisBranchTodayClassIds } },
+            include: {
+              enrollments: {
+                where: { status: "ACTIVE" },
+                include: {
+                  student: {
+                    include: {
+                      family: {
+                        include: {
+                          payerStudent: {
+                            include: {
+                              enrollments: {
+                                include: {
+                                  class: { select: { id: true, pricePerCycle: true, isFormation: true } },
+                                  transfersFrom: true,
+                                  transfersTo: true,
+                                  payerHistory: { orderBy: { effectiveFrom: "asc" } },
+                                },
+                              },
+                              vouchers: {
+                                where: { isVoided: false, isRefund: false },
+                                include: { refunds: true },
+                              },
+                              attendances: {
+                                where: { lesson: { isFree: false } },
+                                include: {
+                                  lesson: {
+                                    select: {
+                                      id: true,
+                                      startsAt: true,
+                                      isFree: true,
+                                      classId: true,
+                                      lessonGroups: { select: { classId: true } },
+                                    },
+                                  },
+                                },
+                              },
+                              catchUpAttendances: {
+                                include: {
+                                  missedLesson: {
+                                    select: {
+                                      id: true,
+                                      startsAt: true,
+                                      isFree: true,
+                                      isTeacherAbsent: true,
+                                      classId: true,
+                                      lessonGroups: { select: { classId: true } },
+                                    },
+                                  },
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
+                      catchUpAttendances: {
+                        select: { missedLessonId: true },
+                      },
+                    },
+                  },
+                  transfersFrom: true,
+                  transfersTo: true,
+                  payerHistory: { orderBy: { effectiveFrom: "asc" } },
+                },
+              },
+              vouchers: {
+                where: { isVoided: false },
+                include: {
+                  refunds: true,
+                },
+              },
+              lessons: {
+                select: {
+                  id: true,
+                  startsAt: true,
+                  isFree: true,
+                  attendances: {
+                    select: {
+                      studentId: true,
+                      status: true,
+                      isRevisionVisitor: true,
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      realTodayBranchLessonIds.length > 0
+        ? prisma.attendance.findMany({
+            where: { lessonId: { in: realTodayBranchLessonIds } },
+            select: { lessonId: true, studentId: true, status: true },
+          })
+        : Promise.resolve([]),
+      realTodayBranchLessonIds.length > 0
+        ? prisma.catchUpAttendance.findMany({
+            where: { catchUpLessonId: { in: realTodayBranchLessonIds } },
+            select: { catchUpLessonId: true, studentId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+  const teacherBranchesMap = new Map<string, Set<number>>();
+  for (const pair of teacherLessonBranchPairs) {
+    if (!pair.teacherId) continue;
+    let set = teacherBranchesMap.get(pair.teacherId);
+    if (!set) {
+      set = new Set<number>();
+      teacherBranchesMap.set(pair.teacherId, set);
+    }
+    set.add(pair.branchId);
+  }
+
+  const hydratedClassMap = new Map(hydratedBranchClasses.map((c) => [c.id, c]));
+
+  const todayAttByLesson = new Map<number, Array<{ studentId: string; status: string }>>();
+  for (const att of todayLessonAttendances) {
+    const arr = todayAttByLesson.get(att.lessonId);
+    if (arr) arr.push({ studentId: att.studentId, status: att.status });
+    else todayAttByLesson.set(att.lessonId, [{ studentId: att.studentId, status: att.status }]);
+  }
+
+  const todayCatchUpByLesson = new Map<number, Array<{ studentId: string }>>();
+  for (const cu of todayLessonCatchUps) {
+    const arr = todayCatchUpByLesson.get(cu.catchUpLessonId);
+    if (arr) arr.push({ studentId: cu.studentId });
+    else todayCatchUpByLesson.set(cu.catchUpLessonId, [{ studentId: cu.studentId }]);
+  }
 
   // 1. Process Upcoming Lessons data (strictly today's lessons across branches)
   const upcomingLessonsData: DashboardLessonItem[] = allTodaysLessons.map(
     (l) => {
       const otherBranchesSet = new Set<string>();
       l.teacher.TeacherBranch.forEach((tb) => {
-        if (tb.branchId !== l.branchId && tb.Branch?.name) {
-          otherBranchesSet.add(tb.Branch.name);
+        if (tb.branchId !== l.branchId) {
+          const bName = branchNameById.get(tb.branchId);
+          if (bName) otherBranchesSet.add(bName);
         }
       });
-      l.teacher.lessons.forEach((ol) => {
-        if (ol.branchId !== l.branchId && ol.branch?.name) {
-          otherBranchesSet.add(ol.branch.name);
-        }
-      });
+      const lessonBranches = teacherBranchesMap.get(l.teacher.id);
+      if (lessonBranches) {
+        lessonBranches.forEach((bId) => {
+          if (bId !== l.branchId) {
+            const bName = branchNameById.get(bId);
+            if (bName) otherBranchesSet.add(bName);
+          }
+        });
+      }
 
       const lessonHostBranchId = l.branchId || (l.classroom as any)?.branchId;
       const canTakeAttendance =
@@ -216,8 +337,8 @@ const AdminPage = async () => {
       return {
         id: l.id,
         branchId: l.branchId,
-        branchName: l.branch?.name || `Siège #${l.branchId}`,
-        homeBranchName: (l.class as any)?.branch?.name || undefined,
+        branchName: branchNameById.get(l.branchId) || `Siège #${l.branchId}`,
+        homeBranchName: l.class.branchId ? branchNameById.get(l.class.branchId) : undefined,
         startsAt: new Date(l.startsAt).toISOString(),
         endsAt: new Date(l.endsAt).toISOString(),
         dateStr: l.instanceDate || todayInfo.dateStr,
@@ -239,7 +360,8 @@ const AdminPage = async () => {
   const studentsToWatchMap = new Map<string, StudentToWatchItem>();
 
   for (const lesson of thisBranchTodaysLessons) {
-    const cls = lesson.class;
+    const cls = hydratedClassMap.get(lesson.classId);
+    if (!cls) continue;
     const timeSlot = `${new Date(lesson.startsAt).toLocaleTimeString("en-GB", {
       hour: "2-digit",
       minute: "2-digit",
@@ -419,7 +541,21 @@ const AdminPage = async () => {
 
   // 3. Process Today's Attendance Chart data (scoped strictly to THIS branch)
   const todayAttendanceSummary = buildTodayAttendanceSummary({
-    lessons: thisBranchTodaysLessons,
+    lessons: thisBranchTodaysLessons.map((l) => {
+      const cls = hydratedClassMap.get(l.classId);
+      return {
+        id: l.id,
+        startsAt: l.startsAt,
+        _dbStartsAt: l._dbStartsAt,
+        isTeacherAbsent: l.isTeacherAbsent,
+        class: {
+          name: l.class.name,
+          enrollments: cls?.enrollments.map((e) => ({ status: e.status })) ?? [],
+        },
+        attendances: todayAttByLesson.get(l.id) ?? [],
+        catchUpVisitsHosted: todayCatchUpByLesson.get(l.id) ?? [],
+      };
+    }),
     branchId: activeBranchId,
     now,
   });
@@ -428,12 +564,20 @@ const AdminPage = async () => {
     <div className="p-4 md:p-6 flex gap-6 flex-col lg:flex-row">
       {/* LEFT (2/3) */}
       <div className="w-full lg:w-2/3 flex flex-col gap-6">
-        {/* SUMMARY CARDS */}
+        {/* SUMMARY CARDS (streamed independently via Suspense) */}
         <div className="flex gap-4 justify-between flex-wrap">
-          <UserCard type="student" branchId={activeBranchId} />
-          <UserCard type="teacher" branchId={activeBranchId} />
-          <UserCard type="parent" branchId={activeBranchId} />
-          <UserCard type="admin" branchId={activeBranchId} />
+          <Suspense fallback={<UserCardSkeleton />}>
+            <UserCard type="student" branchId={activeBranchId} />
+          </Suspense>
+          <Suspense fallback={<UserCardSkeleton />}>
+            <UserCard type="teacher" branchId={activeBranchId} />
+          </Suspense>
+          <Suspense fallback={<UserCardSkeleton />}>
+            <UserCard type="parent" branchId={activeBranchId} />
+          </Suspense>
+          <Suspense fallback={<UserCardSkeleton />}>
+            <UserCard type="admin" branchId={activeBranchId} />
+          </Suspense>
         </div>
 
         {/* STUDENTS TO WATCH (PAYMENT REMINDER NUDGE) */}
@@ -448,8 +592,10 @@ const AdminPage = async () => {
 
       {/* RIGHT (1/3) */}
       <div className="w-full lg:w-1/3 flex flex-col gap-6">
-        {/* ANNOUNCEMENTS PANEL (EXACT POSITION AS TODAY) */}
-        <Announcements branchId={activeBranchId} />
+        {/* ANNOUNCEMENTS PANEL (streamed independently via Suspense) */}
+        <Suspense fallback={<AnnouncementsSkeleton />}>
+          <Announcements branchId={activeBranchId} />
+        </Suspense>
 
         {/* UPCOMING LESSONS (REAL-TIME FOLLOWS DAY) */}
         <UpcomingLessons

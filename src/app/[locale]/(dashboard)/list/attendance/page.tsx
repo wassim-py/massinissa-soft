@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/Badge";
 import { FilterTabs } from "@/components/ui/FilterTabs";
 import { getTranslations, getLocale } from "next-intl/server";
 import { BookOpen, GraduationCap, Sparkles, Clock } from "lucide-react";
-import QuickRevisionButton from "@/components/forms/QuickRevisionButton";
 import { getAlgiersDayBounds } from "@/lib/algiersDate";
 import {
   ACTIVE_CLASS_WHERE,
@@ -498,9 +497,6 @@ const AttendanceListPage = async (
       ? workshopCount
       : totalAllCount;
 
-  const canRecordRevision =
-    session.isOwner || session.isBranchAdmin || session.isOwnerOrAdmin;
-
   return (
     <Card className="flex-1 w-full border-border/80 shadow-xs font-sans">
       <CardContent className="p-4 sm:p-5 md:p-6">
@@ -508,7 +504,6 @@ const AttendanceListPage = async (
           title={pageTitle}
           searchPlaceholder={t("searchPlaceholder")}
           createAction={null}
-          extraAction={canRecordRevision ? <QuickRevisionButton /> : null}
         />
 
         {/* Status Tabs: Active vs Closed / Paused */}
@@ -618,6 +613,7 @@ const AttendanceListPage = async (
             return (
               <Link
                 href={item.href}
+                prefetch={false}
                 key={`${item.category}-${item.id}`}
                 className="block group"
               >

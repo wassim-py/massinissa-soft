@@ -15,15 +15,17 @@ import { getTranslations, getLocale } from "next-intl/server";
 import { getActiveTrimester, getFixedInscriptionFeeAction, getFormationInscriptionFeeAction } from "@/lib/configurationActions";
 
 const ClassPaymentHistoryPage = async (
-  props: { 
-    params: Promise<{ id: string }>,
-    searchParams: Promise<{ [key: string]: string | undefined }> 
+  props: {
+    params: Promise<{ id: string }>;
+    searchParams: Promise<{ [key: string]: string | undefined }>;
   }
 ) => {
   const params = await props.params;
-  const t = await getTranslations("payments");
-  const locale = await getLocale();
-  const session = await getAuthSession();
+  const [t, locale, session] = await Promise.all([
+    getTranslations("payments"),
+    getLocale(),
+    getAuthSession(),
+  ]);
 
   if (!session.isOwnerOrAdmin && !session.isBranchAdmin) {
     return (
@@ -45,179 +47,218 @@ const ClassPaymentHistoryPage = async (
     notFound();
   }
 
-  // Fetch full class details with all relations required for the grid
-  const classData = await prisma.class.findUnique({
-    where: { id: classId },
-    include: {
-      branch: true,
-      teacherClassRates: true,
-      teacher: {
+  // Fetch class details, multi-group lessons, transfer target classes, and cached reference values in parallel
+  const [classData, multiGroupLessons, availableClasses, activeTrimester, fixedFee, formationFee] =
+    await Promise.all([
+      prisma.class.findUnique({
+        where: { id: classId },
         include: {
-          TeacherPayRate: {
-            orderBy: { effectiveFrom: "desc" },
-            take: 1,
+          branch: true,
+          teacherClassRates: true,
+          teacher: {
+            include: {
+              TeacherPayRate: {
+                orderBy: { effectiveFrom: "desc" },
+                take: 1,
+              },
+            },
+          },
+          enrollments: {
+            where: {
+              OR: [
+                { status: "ACTIVE" },
+                { status: "SUSPENDED" },
+                { status: "TRANSFERRED" },
+                { transfersFrom: { some: {} } },
+              ],
+            },
+            include: {
+              student: {
+                include: {
+                  family: {
+                    include: {
+                      payerStudent: {
+                        include: {
+                          enrollments: {
+                            where: { classId },
+                            include: {
+                              transfersFrom: true,
+                              transfersTo: true,
+                              payerHistory: { orderBy: { effectiveFrom: "asc" } },
+                              class: true,
+                            },
+                          },
+                          vouchers: {
+                            where: {
+                              isVoided: false,
+                              isRefund: false,
+                              OR: [{ classId }, { classId: null }],
+                            },
+                            include: { refunds: true },
+                          },
+                          attendances: {
+                            where: {
+                              lesson: {
+                                isFree: false,
+                                OR: [
+                                  { classId },
+                                  { lessonGroups: { some: { classId } } },
+                                ],
+                              },
+                            },
+                            include: {
+                              lesson: {
+                                select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true, lessonGroups: { select: { classId: true } } },
+                              },
+                            },
+                          },
+                          catchUpAttendances: {
+                            where: {
+                              missedLesson: {
+                                OR: [
+                                  { classId },
+                                  { lessonGroups: { some: { classId } } },
+                                ],
+                              },
+                            },
+                            include: {
+                              missedLesson: {
+                                select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true, lessonGroups: { select: { classId: true } } },
+                              },
+                              catchUpLesson: {
+                                select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true, lessonGroups: { select: { classId: true } } },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                  registeredBranch: true,
+                  enrollments: {
+                    include: {
+                      class: {
+                        include: {
+                          branch: true,
+                        },
+                      },
+                    },
+                  },
+                  vouchers: {
+                    where: {
+                      paymentType: "INSCRIPTION",
+                      isVoided: false,
+                      isRefund: false,
+                    },
+                    include: {
+                      refunds: true,
+                    },
+                  },
+                  catchUpAttendances: {
+                    include: {
+                      missedLesson: {
+                        select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                      },
+                      catchUpLesson: {
+                        select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
+                      },
+                    },
+                  },
+                },
+              },
+              transfersFrom: {
+                include: {
+                  toEnrollment: {
+                    include: {
+                      class: {
+                        include: {
+                          branch: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              transfersTo: {
+                include: {
+                  fromEnrollment: {
+                    include: {
+                      class: {
+                        include: {
+                          branch: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              payerHistory: {
+                orderBy: { effectiveFrom: "asc" },
+              },
+            },
+            orderBy: { enrolledAt: "asc" },
+          },
+          vouchers: {
+            include: {
+              series: {
+                include: {
+                  issuingBranch: true,
+                  targetBranch: true,
+                  level: true,
+                },
+              },
+              edits: {
+                orderBy: { editedAt: "desc" },
+              },
+              refunds: {
+                orderBy: { refundedAt: "desc" },
+              },
+            },
+            orderBy: { issuedAt: "asc" },
+          },
+          lessons: {
+            where: { isFree: false },
+            include: {
+              attendances: true,
+              lessonGroups: { select: { classId: true } },
+            },
+            orderBy: { startsAt: "asc" },
           },
         },
-      },
-      enrollments: {
+      }),
+      prisma.lesson.findMany({
         where: {
-          OR: [
-            { status: "ACTIVE" },
-            { status: "SUSPENDED" },
-            { status: "TRANSFERRED" },
-            { transfersFrom: { some: {} } },
-          ],
+          lessonGroups: { some: { classId } },
+          classId: { not: classId },
+          isFree: false,
         },
-        include: {
-          student: {
-            include: {
-              family: {
-                include: {
-                  payerStudent: {
-                    include: {
-                      enrollments: {
-                        include: {
-                          transfersFrom: true,
-                          transfersTo: true,
-                          payerHistory: { orderBy: { effectiveFrom: "asc" } },
-                          class: true,
-                        },
-                      },
-                      vouchers: {
-                        where: { isVoided: false, isRefund: false },
-                        include: { refunds: true },
-                      },
-                      attendances: {
-                        include: {
-                          lesson: {
-                            select: { id: true, isFree: true, isTeacherAbsent: true, classId: true, startsAt: true, lessonGroups: { select: { classId: true } } },
-                          },
-                        },
-                      },
-                      catchUpAttendances: {
-                        include: {
-                          missedLesson: {
-                            select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true, lessonGroups: { select: { classId: true } } },
-                          },
-                          catchUpLesson: {
-                            select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true, lessonGroups: { select: { classId: true } } },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-              registeredBranch: true,
-              enrollments: {
-                include: {
-                  class: {
-                    include: {
-                      branch: true,
-                    },
-                  },
-                },
-              },
-              vouchers: {
-                where: {
-                  paymentType: "INSCRIPTION",
-                  isVoided: false,
-                  isRefund: false,
-                },
-                include: {
-                  refunds: true,
-                },
-              },
-              catchUpAttendances: {
-                include: {
-                  missedLesson: {
-                    select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
-                  },
-                  catchUpLesson: {
-                    select: { id: true, classId: true, startsAt: true, isFree: true, isTeacherAbsent: true },
-                  },
-                },
-              },
-            },
-          },
-          transfersFrom: {
-            include: {
-              toEnrollment: {
-                include: {
-                  class: {
-                    include: {
-                      branch: true,
-                    },
-                  },
-                },
-              },
-            },
-          },
-          transfersTo: {
-            include: {
-              fromEnrollment: {
-                include: {
-                  class: {
-                    include: {
-                      branch: true,
-                    },
-                  },
-                },
-              },
-            },
-          },
-          payerHistory: {
-            orderBy: { effectiveFrom: "asc" },
-          },
-        },
-        orderBy: { enrolledAt: "asc" },
-      },
-      vouchers: {
-        include: {
-          series: {
-            include: {
-              issuingBranch: true,
-              targetBranch: true,
-              level: true,
-            },
-          },
-          edits: {
-            orderBy: { editedAt: "desc" },
-          },
-          refunds: {
-            orderBy: { refundedAt: "desc" },
-          },
-        },
-        orderBy: { issuedAt: "asc" },
-      },
-      lessons: {
-        where: { isFree: false },
         include: {
           attendances: true,
           lessonGroups: { select: { classId: true } },
         },
         orderBy: { startsAt: "asc" },
-      },
-    },
-  });
+      }),
+      prisma.class.findMany({
+        where: ACTIVE_CLASS_WHERE,
+        select: {
+          id: true,
+          name: true,
+          levelId: true,
+          formationLevelId: true,
+          isFormation: true,
+          pricePerCycle: true,
+          branch: { select: { id: true, name: true } },
+        },
+        orderBy: [{ branchId: "asc" }, { name: "asc" }],
+      }),
+      getActiveTrimester(),
+      getFixedInscriptionFeeAction(),
+      getFormationInscriptionFeeAction(),
+    ]);
 
   if (!classData) {
     notFound();
   }
-
-  // Include multi-group lessons where this class is a participating group via LessonGroup
-  const multiGroupLessons = await prisma.lesson.findMany({
-    where: {
-      lessonGroups: { some: { classId: classData.id } },
-      classId: { not: classData.id },
-      isFree: false,
-    },
-    include: {
-      attendances: true,
-      lessonGroups: { select: { classId: true } },
-    },
-    orderBy: { startsAt: "asc" },
-  });
 
   if (multiGroupLessons.length > 0) {
     classData.lessons = [...classData.lessons, ...multiGroupLessons].sort(
@@ -261,26 +302,6 @@ const ClassPaymentHistoryPage = async (
     }
   }
   classData.enrollments = Array.from(enrollmentMap.values());
-
-  // Fetch active classes across all branches for group credit transfers
-  const [availableClasses, activeTrimester, fixedFee, formationFee] = await Promise.all([
-    prisma.class.findMany({
-      where: ACTIVE_CLASS_WHERE,
-      select: {
-        id: true,
-        name: true,
-        levelId: true,
-        formationLevelId: true,
-        isFormation: true,
-        pricePerCycle: true,
-        branch: { select: { id: true, name: true } },
-      },
-      orderBy: [{ branchId: "asc" }, { name: "asc" }],
-    }),
-    getActiveTrimester(),
-    getFixedInscriptionFeeAction(),
-    getFormationInscriptionFeeAction(),
-  ]);
 
   const configuredInscriptionFee = classData.isFormation ? formationFee : fixedFee;
 

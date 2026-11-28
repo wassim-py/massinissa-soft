@@ -703,34 +703,34 @@ export default function PayrollClientTabs({
 
               {/* Summary KPIs for Displayed Payslips */}
               {filteredPayslips.length > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                  <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                    <span className="text-[11px] text-muted font-semibold block">{t("totalSessionsCol")}</span>
-                    <span className="text-base font-black font-mono text-gray-900 mt-1 block">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+                  <div className="p-3 rounded-xl bg-surface-subtle border border-border min-w-0 overflow-hidden flex flex-col justify-between">
+                    <span className="text-[11px] text-muted font-semibold block leading-snug">{t("totalSessionsCol")}</span>
+                    <span className="text-base font-black font-mono text-gray-900 mt-1 block tabular-nums">
                       {filteredPayslips.reduce((s, p) => s + (p.sessionsCount || 0), 0)}
                     </span>
                   </div>
-                  <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                    <span className="text-[11px] text-muted font-semibold block">{t("grossAmountCol")}</span>
-                    <span className="text-base font-black font-mono text-gray-900 mt-1 block">
+                  <div className="p-3 rounded-xl bg-surface-subtle border border-border min-w-0 overflow-hidden flex flex-col justify-between">
+                    <span className="text-[11px] text-muted font-semibold block leading-snug">{t("grossAmountCol")}</span>
+                    <span className="text-sm sm:text-base font-black font-mono text-gray-900 mt-1 block break-words leading-tight tabular-nums" dir="ltr">
                       {formatDZD(filteredPayslips.reduce((s, p) => s + p.grossAmount, 0))}
                     </span>
                   </div>
-                  <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                    <span className="text-[11px] text-muted font-semibold block">{t("advancesCol")}</span>
-                    <span className="text-base font-black font-mono text-danger mt-1 block">
+                  <div className="p-3 rounded-xl bg-surface-subtle border border-border min-w-0 overflow-hidden flex flex-col justify-between">
+                    <span className="text-[11px] text-muted font-semibold block leading-snug">{t("advancesCol")}</span>
+                    <span className="text-sm sm:text-base font-black font-mono text-danger mt-1 block break-words leading-tight tabular-nums" dir="ltr">
                       - {formatDZD(filteredPayslips.reduce((s, p) => s + p.advances, 0))}
                     </span>
                   </div>
-                  <div className="p-3 rounded-xl bg-surface-subtle border border-border">
-                    <span className="text-[11px] text-muted font-semibold block">{t("photocopyCol")}</span>
-                    <span className="text-base font-black font-mono text-warning-text mt-1 block">
+                  <div className="p-3 rounded-xl bg-surface-subtle border border-border min-w-0 overflow-hidden flex flex-col justify-between">
+                    <span className="text-[11px] text-muted font-semibold block leading-snug">{t("photocopyCol")}</span>
+                    <span className="text-sm sm:text-base font-black font-mono text-warning-text mt-1 block break-words leading-tight tabular-nums" dir="ltr">
                       - {formatDZD(filteredPayslips.reduce((s, p) => s + p.photocopyDeductions, 0))}
                     </span>
                   </div>
-                  <div className="p-3 rounded-xl bg-primary/5 border border-primary/20">
-                    <span className="text-[11px] text-primary font-bold block">{t("netDueCol")}</span>
-                    <span className="text-base font-black font-mono text-primary mt-1 block">
+                  <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 min-w-0 overflow-hidden flex flex-col justify-between sm:col-span-2 lg:col-span-2 xl:col-span-1">
+                    <span className="text-[11px] text-primary font-bold block leading-snug">{t("netDueCol")}</span>
+                    <span className="text-sm sm:text-base font-black font-mono text-primary mt-1 block break-words leading-tight tabular-nums" dir="ltr">
                       {formatDZD(filteredPayslips.reduce((s, p) => s + p.netAmount, 0))}
                     </span>
                   </div>

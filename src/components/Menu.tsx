@@ -5,6 +5,7 @@ import { getTranslations } from "next-intl/server";
 import { canAccessMenuItem } from "@/lib/permissions";
 
 import SidebarAnnouncementBadge from "./announcements/SidebarAnnouncementBadge";
+import NavPendingIndicator from "./NavPendingIndicator";
 
 const menuConfig = [
   {
@@ -118,6 +119,7 @@ const Menu = async () => {
                   />
                   <span className="text-table-body">{t(item.key)}</span>
                   {item.key === "announcements" && <SidebarAnnouncementBadge />}
+                  <NavPendingIndicator />
                 </Link>
               );
             }

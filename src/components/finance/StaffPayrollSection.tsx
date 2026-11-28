@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useMemo, useRef, useState, startTransition } from "react";
-import ReactDOMServer from "react-dom/server";
 import Image from "next/image";
 import {
   UserCheck,
@@ -38,11 +37,8 @@ import {
   updateStaffAdvanceAction,
   deleteStaffAdvanceAction,
 } from "@/lib/financeActions";
-import { StaffPayslipTicket, StaffPayslipPrintData } from "@/components/printable/StaffPayslipTicket";
-import {
-  StaffPayrollSummaryReport,
-  StaffPayrollSummaryPrintData,
-} from "@/components/printable/StaffPayrollSummaryReport";
+import type { StaffPayslipPrintData } from "@/components/printable/StaffPayslipTicket";
+import type { StaffPayrollSummaryPrintData } from "@/components/printable/StaffPayrollSummaryReport";
 import { OutcomeFundingSourceSelect, FundingSourceBadge } from "@/components/finance/OutcomeFundingSourceSelect";
 import {
   OUTCOME_FUNDING_SOURCES,
@@ -588,7 +584,8 @@ export default function StaffPayrollSection({
   };
 
   // Print Staff Payslip
-  const handlePrintStaffPayslip = (p: StaffPayrollItem) => {
+  const handlePrintStaffPayslip = async (p: StaffPayrollItem) => {
+    const printWindow = window.open("", "_blank", "width=900,height=800");
     const totalNet = Math.max(0, p.amount - (p.advance || 0) + (p.bonus || 0));
     const printData: StaffPayslipPrintData = {
       id: p.id,
@@ -608,6 +605,11 @@ export default function StaffPayrollSection({
       notes: p.notes,
     };
 
+    const [{ default: ReactDOMServer }, { StaffPayslipTicket }] = await Promise.all([
+      import("react-dom/server"),
+      import("@/components/printable/StaffPayslipTicket"),
+    ]);
+
     const printContent = ReactDOMServer.renderToString(
       <StaffPayslipTicket data={printData} />
     );
@@ -626,8 +628,7 @@ export default function StaffPayrollSection({
       closeAfterPrint: true,
     });
 
-    const printWindow = window.open("", "_blank", "width=900,height=800");
-    if (printWindow) {
+    if (printWindow && !printWindow.closed) {
       printWindow.document.open();
       printWindow.document.write(html);
       printWindow.document.close();
@@ -705,7 +706,9 @@ export default function StaffPayrollSection({
     });
   }, [staffAdvances, filterMonth, filterYear, filterSource, filterBranch, staffBranchMap]);
 
-  const handlePrintStaffPayrollSummary = (mode: "print" | "preview" = "print") => {
+  const handlePrintStaffPayrollSummary = async (mode: "print" | "preview" = "print") => {
+    const printWindow =
+      mode === "print" ? window.open("", "_blank", "width=1040,height=860") : null;
     const periodLabel =
       filterMonth !== "all" && filterYear !== "all"
         ? `${MONTH_NAMES_FR[Number(filterMonth) - 1]} ${filterYear}`
@@ -764,6 +767,11 @@ export default function StaffPayrollSection({
         notes: a.notes,
       })),
     };
+
+    const [{ default: ReactDOMServer }, { StaffPayrollSummaryReport }] = await Promise.all([
+      import("react-dom/server"),
+      import("@/components/printable/StaffPayrollSummaryReport"),
+    ]);
 
     const printContent = ReactDOMServer.renderToString(
       <StaffPayrollSummaryReport data={summaryData} />
@@ -830,8 +838,7 @@ export default function StaffPayrollSection({
       closeAfterPrint: false,
     });
 
-    const printWindow = window.open("", "_blank", "width=1040,height=860");
-    if (printWindow) {
+    if (printWindow && !printWindow.closed) {
       printWindow.document.open();
       printWindow.document.write(popupHtml);
       printWindow.document.close();

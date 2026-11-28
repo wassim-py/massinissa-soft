@@ -46,8 +46,15 @@ interface HoveredTooltipState {
   placeAbove: boolean;
 }
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 30000;
+const FOCUS_COOLDOWN_MS = 10000;
 const NICE_STEPS = [1, 2, 3, 4, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100];
+
+function getSummarySignature(s: TodayAttendanceSummary): string {
+  return `${s.branchId}|${s.dateStr}|${s.totalPresent}|${s.totalRegularPresent}|${s.totalCatchUp}|${s.totalAbsent}|${s.totalExcused}|${s.totalExpected}|${s.lessonsData
+    .map((l) => `${l.lessonId}:${l.present}:${l.absent}:${l.excused}:${l.enrolled}:${l.isTeacherAbsent ? 1 : 0}`)
+    .join(",")}`;
+}
 
 function computeNiceScale(rawMax: number): { max: number; ticks: number[] } {
   const target = Math.max(4, Math.ceil(rawMax * 1.1));
@@ -89,37 +96,61 @@ export default function TodayAttendanceChart({
     setSummary(initialSummary);
   }, [initialSummary]);
 
-  // Wire live updates: DOM custom events, Biometric live stream, BroadcastChannel, focus & 5s poll
+  // Wire live updates: instant DOM/Biometric/BroadcastChannel events + throttled focus + 30s fallback poll
   useEffect(() => {
     const branchId = summary.branchId;
     let isDisposed = false;
     let inFlight = false;
+    let queuedForce = false;
     let queued = false;
+    let lastFetchedAt = 0;
 
-    const fetchLatestSummary = async () => {
+    const fetchLatestSummary = async (force = false) => {
       if (isDisposed) return;
       if (inFlight) {
         queued = true;
+        if (force) queuedForce = true;
         return;
       }
 
       inFlight = true;
-      setIsUpdating(true);
+      if (force) setIsUpdating(true);
       try {
+        let nextForce = force;
         do {
           queued = false;
-          const res = await fetch(
-            `/api/dashboard/today-attendance?branchId=${encodeURIComponent(String(branchId))}`,
-            { cache: "no-store" }
-          );
-          if (!res.ok || isDisposed) continue;
-          const fresh: TodayAttendanceSummary = await res.json();
-          if (!isDisposed) {
-            setSummary((prev) => (prev.branchId !== branchId ? prev : fresh));
+          const useForce = nextForce || queuedForce;
+          queuedForce = false;
+          nextForce = false;
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 8000);
+          try {
+            const url = `/api/dashboard/today-attendance?branchId=${encodeURIComponent(
+              String(branchId)
+            )}${useForce ? "&force=1" : ""}`;
+            const res = await fetch(url, {
+              cache: "no-store",
+              signal: controller.signal,
+            });
+            if (!res.ok || isDisposed) continue;
+            const fresh: TodayAttendanceSummary = await res.json();
+            lastFetchedAt = Date.now();
+            if (!isDisposed) {
+              setSummary((prev) => {
+                if (prev.branchId !== branchId) return prev;
+                if (getSummarySignature(prev) === getSummarySignature(fresh)) {
+                  return prev;
+                }
+                return fresh;
+              });
+            }
+          } finally {
+            clearTimeout(timeoutId);
           }
         } while (queued && !isDisposed);
       } catch {
-        // Silently tolerate transient network issues during live polling
+        // Silently tolerate transient network issues / aborts during live polling
       } finally {
         inFlight = false;
         if (!isDisposed) {
@@ -128,19 +159,26 @@ export default function TodayAttendanceChart({
       }
     };
 
-    const triggerRefresh = () => {
+    const triggerLiveEventRefresh = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      void fetchLatestSummary();
+      void fetchLatestSummary(true);
+    };
+
+    const triggerPollRefresh = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void fetchLatestSummary(false);
     };
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === "visible") {
-        void fetchLatestSummary();
+        if (Date.now() - lastFetchedAt >= FOCUS_COOLDOWN_MS) {
+          void fetchLatestSummary(false);
+        }
       }
     };
 
-    window.addEventListener("biometric-attendance-marked", triggerRefresh);
-    window.addEventListener(ATTENDANCE_UPDATED_EVENT, triggerRefresh);
+    window.addEventListener("biometric-attendance-marked", triggerLiveEventRefresh);
+    window.addEventListener(ATTENDANCE_UPDATED_EVENT, triggerLiveEventRefresh);
     window.addEventListener("focus", handleVisibilityOrFocus);
     document.addEventListener("visibilitychange", handleVisibilityOrFocus);
 
@@ -148,18 +186,18 @@ export default function TodayAttendanceChart({
     try {
       if ("BroadcastChannel" in window) {
         channel = new BroadcastChannel(ATTENDANCE_BROADCAST_CHANNEL);
-        channel.onmessage = () => triggerRefresh();
+        channel.onmessage = () => triggerLiveEventRefresh();
       }
     } catch {
       channel = null;
     }
 
-    const intervalId = setInterval(triggerRefresh, POLL_INTERVAL_MS);
+    const intervalId = setInterval(triggerPollRefresh, POLL_INTERVAL_MS);
 
     return () => {
       isDisposed = true;
-      window.removeEventListener("biometric-attendance-marked", triggerRefresh);
-      window.removeEventListener(ATTENDANCE_UPDATED_EVENT, triggerRefresh);
+      window.removeEventListener("biometric-attendance-marked", triggerLiveEventRefresh);
+      window.removeEventListener(ATTENDANCE_UPDATED_EVENT, triggerLiveEventRefresh);
       window.removeEventListener("focus", handleVisibilityOrFocus);
       document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
       if (channel) {

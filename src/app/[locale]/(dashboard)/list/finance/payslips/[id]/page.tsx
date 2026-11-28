@@ -119,6 +119,8 @@ export default async function PayslipDetailPage(props: PageProps) {
       branchName: s.branchName,
       presentCount: s.presentCount,
       payingCount: s.payingCount,
+      revisionPayingCount: s.revisionPayingCount,
+      revisionAmount: s.revisionAmount,
       sessionPrice: s.sessionPrice,
       teacherCut: s.teacherCut,
       schoolCut: s.schoolCut,
@@ -211,6 +213,12 @@ export default async function PayslipDetailPage(props: PageProps) {
     retroactiveAmount: sessionItems
       .filter((s) => s.isRetroactive)
       .reduce((sum, s) => sum + Number(s.lessonAmount || 0), 0),
+    revisionLessonsCount:
+      payrollCalc?.totalRevisionLessons ??
+      sessionItems.reduce((sum, s) => sum + Number(s.revisionPayingCount || 0), 0),
+    revisionAmount:
+      payrollCalc?.totalRevisionAmount ??
+      sessionItems.reduce((sum, s) => sum + Number(s.revisionAmount || 0), 0),
     photocopyDetails: photocopyCharges.map((pc) => ({
       branchName: pc.Branch.name,
       pages: pc.pages,

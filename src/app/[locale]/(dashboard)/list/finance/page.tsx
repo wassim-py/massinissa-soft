@@ -125,7 +125,10 @@ export default async function FinancePage(props: PageProps) {
   if (currentTab === "overview" || currentTab === "payslips") currentTab = "runs";
   if (currentTab === "photocopy" || currentTab === "advances") currentTab = "deductions";
 
-  // Fetch Common Data: Daily Expenses, Caisse Noire, Staff Members, Staff Payrolls, Staff Advances, Branches
+  const effectiveDateFrom = searchParams.dateFrom || (searchParams as any).date;
+  const effectiveDateTo = searchParams.dateTo || (searchParams as any).date;
+
+  // Fetch Common Data + Top KPIs Revenue Data in ONE parallel batch (skipping tab-only queries when inactive)
   const [
     rawDailyExpenses,
     caisseNoireData,
@@ -134,16 +137,19 @@ export default async function FinancePage(props: PageProps) {
     rawStaffAdvances,
     allBranchesData,
     rawSectionTransfers,
+    dashboardData,
   ] = await Promise.all([
     prisma.dailyExpense.findMany({
       include: { branch: { select: { id: true, name: true } } },
       orderBy: { date: "desc" },
     }),
     getCaisseNoireSummary(),
-    prisma.staffMember.findMany({
-      include: { branch: { select: { id: true, name: true } } },
-      orderBy: { name: "asc" },
-    }),
+    activeSection === "staff"
+      ? prisma.staffMember.findMany({
+          include: { branch: { select: { id: true, name: true } } },
+          orderBy: { name: "asc" },
+        })
+      : Promise.resolve([]),
     prisma.staffPayroll.findMany({
       include: {
         staffMember: {
@@ -158,25 +164,32 @@ export default async function FinancePage(props: PageProps) {
       },
       orderBy: [{ year: "desc" }, { month: "desc" }],
     }),
-    prisma.staffAdvance.findMany({
-      include: {
-        staffMember: {
-          select: {
-            name: true,
-            roleTitle: true,
+    activeSection === "staff"
+      ? prisma.staffAdvance.findMany({
+          include: {
+            staffMember: {
+              select: {
+                name: true,
+                roleTitle: true,
+              },
+            },
           },
-        },
-      },
-      orderBy: { date: "desc" },
-      take: 100,
-    }),
-    prisma.branch.findMany({
-      select: { id: true, name: true },
-      orderBy: { id: "asc" },
-    }),
-    prisma.sectionTransfer.findMany({
-      orderBy: { date: "desc" },
-      take: 100,
+          orderBy: { date: "desc" },
+          take: 100,
+        })
+      : Promise.resolve([]),
+    import("@/lib/cachedReferenceData").then((m) => m.getCachedBranches()),
+    activeSection === "caisseNoire" || activeSection === "revenue" || activeSection === "expenses"
+      ? prisma.sectionTransfer.findMany({
+          orderBy: { date: "desc" },
+          take: 100,
+        })
+      : Promise.resolve([]),
+    getDailyRevenueDashboardData({
+      branchId: selectedBranchParam,
+      dateFrom: effectiveDateFrom,
+      dateTo: effectiveDateTo,
+      periodMode: searchParams.periodMode || "daily",
     }),
   ]);
 
@@ -249,18 +262,7 @@ export default async function FinancePage(props: PageProps) {
     createdAt: st.createdAt.toISOString(),
   }));
 
-  const effectiveDateFrom = searchParams.dateFrom || (searchParams as any).date;
-  const effectiveDateTo = searchParams.dateTo || (searchParams as any).date;
-
-  // Top KPIs Revenue data
-  const dashboardData = await getDailyRevenueDashboardData({
-    branchId: selectedBranchParam,
-    dateFrom: effectiveDateFrom,
-    dateTo: effectiveDateTo,
-    periodMode: searchParams.periodMode || "daily",
-  });
-
-  // Payroll data
+  // Payroll data (dashboardData already fetched in parallel above)
   let overviewData: any = {
     totalRevenue: 0,
     totalGrossPayroll: 0,
@@ -346,7 +348,7 @@ export default async function FinancePage(props: PageProps) {
           take: 100,
         }),
         prisma.teacher.findMany({ select: { id: true, name: true, photocopyRatePerPage: true }, orderBy: { name: "asc" } }),
-        prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { id: "asc" } }),
+        Promise.resolve(allBranchesData),
       ]);
 
       photocopyCharges = rawPhotocopy;
@@ -368,7 +370,7 @@ export default async function FinancePage(props: PageProps) {
           },
           orderBy: { name: "asc" },
         }),
-        prisma.branch.findMany({ select: { id: true, name: true }, orderBy: { id: "asc" } }),
+        Promise.resolve(allBranchesData),
       ]);
 
       teachers = teacherList;
@@ -381,7 +383,8 @@ export default async function FinancePage(props: PageProps) {
   if (activeSection === "transfers") {
     const branchMap = new Map(allBranchesData.map((b) => [b.id, b.name]));
 
-    const [rawTransfers, rawVouchers] = await Promise.all([
+    // Filter cross-branch vouchers directly in SQL instead of loading every voucher in the database
+    const [rawTransfers, crossBranchVoucherIdRows] = await Promise.all([
       prisma.enrollmentTransfer.findMany({
         include: {
           fromEnrollment: {
@@ -399,19 +402,29 @@ export default async function FinancePage(props: PageProps) {
         },
         orderBy: { transferredAt: "desc" },
       }),
-      prisma.voucher.findMany({
-        where: {
-          isVoided: false,
-          amount: { gt: 0 },
-        },
-        include: {
-          student: { select: { id: true, name: true, phone: true } },
-          class: { include: { branch: { select: { id: true, name: true } } } },
-          workshop: { include: { Branch: { select: { id: true, name: true } } } },
-        },
-        orderBy: { issuedAt: "desc" },
-      }),
+      prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id
+        FROM "Voucher"
+        WHERE "isVoided" = false
+          AND amount > 0
+          AND "issuingBranchId" <> "targetBranchId"
+        ORDER BY "issuedAt" DESC
+      `,
     ]);
+
+    const crossBranchIds = crossBranchVoucherIdRows.map((r) => r.id);
+    const crossBranchVouchers =
+      crossBranchIds.length > 0
+        ? await prisma.voucher.findMany({
+            where: { id: { in: crossBranchIds } },
+            include: {
+              student: { select: { id: true, name: true, phone: true } },
+              class: { include: { branch: { select: { id: true, name: true } } } },
+              workshop: { include: { Branch: { select: { id: true, name: true } } } },
+            },
+            orderBy: { issuedAt: "desc" },
+          })
+        : [];
 
     const formattedEnrollmentTransfers = rawTransfers.map((tr) => ({
       id: `tr-${tr.id}`,
@@ -433,9 +446,6 @@ export default async function FinancePage(props: PageProps) {
       transferredBy: tr.transferredBy,
       transferredAt: tr.transferredAt,
     }));
-
-    // Cross-branch vouchers: physical cash collected in issuingBranchId for student/class in targetBranchId
-    const crossBranchVouchers = rawVouchers.filter((v) => v.issuingBranchId !== v.targetBranchId);
 
     const formattedCrossBranchVouchers = crossBranchVouchers.map((v) => {
       const fromBranchName = branchMap.get(v.issuingBranchId) || `Branche #${v.issuingBranchId}`;
@@ -684,28 +694,33 @@ export default async function FinancePage(props: PageProps) {
       {/* Top 4 KPI Cards (Bilingual Layout) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Chiffre d'Affaires */}
-        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
-          <div className="flex items-center justify-between">
+        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold text-muted uppercase tracking-wider">
               {t("turnover")}
             </span>
-            <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
               <TrendingUp className="w-5 h-5" />
             </div>
           </div>
-          <div className="mt-4">
-            <div className="text-2xl font-bold font-mono text-gray-900 truncate">
-              {totalRevenueSum.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
-              <span className="text-xs font-normal text-muted">{t("currency")}</span>
+          <div className="mt-4 min-w-0">
+            <div
+              dir="ltr"
+              className="inline-flex flex-wrap items-baseline gap-x-1.5 leading-tight max-w-full font-bold font-mono text-gray-900 tabular-nums"
+            >
+              <span className="text-xl xl:text-2xl whitespace-nowrap">
+                {totalRevenueSum.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+              </span>
+              <span className="text-xs font-normal text-muted whitespace-nowrap">{t("currency")}</span>
             </div>
             <p className="text-form-helper text-muted mt-1">{t("turnoverDesc")}</p>
           </div>
         </Card>
 
         {/* Card 2: Dépenses Totales */}
-        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
+        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between min-w-0 overflow-hidden">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex flex-col">
+            <div className="flex flex-col min-w-0">
               <span className="text-xs font-semibold text-muted uppercase tracking-wider">
                 {t("totalExpensesLabel")}
               </span>
@@ -719,10 +734,15 @@ export default async function FinancePage(props: PageProps) {
               <TrendingDown className="w-5 h-5" />
             </div>
           </div>
-          <div className="mt-4">
-            <div className="text-2xl font-bold font-mono text-danger truncate">
-              - {Math.round(totalAllDecaissed).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
-              <span className="text-xs font-normal text-danger-soft">{t("currency")}</span>
+          <div className="mt-4 min-w-0">
+            <div
+              dir="ltr"
+              className="inline-flex flex-wrap items-baseline gap-x-1.5 leading-tight max-w-full font-bold font-mono text-danger tabular-nums"
+            >
+              <span className="text-xl xl:text-2xl whitespace-nowrap">
+                - {Math.round(totalAllDecaissed).toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+              </span>
+              <span className="text-xs font-normal text-danger-soft whitespace-nowrap">{t("currency")}</span>
             </div>
             <p className="text-form-helper text-muted mt-1">{t("totalExpensesDesc")}</p>
             {totalAllDecaissed > 0 && (
@@ -746,38 +766,48 @@ export default async function FinancePage(props: PageProps) {
         </Card>
 
         {/* Card 3: Bénéfice Net */}
-        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
-          <div className="flex items-center justify-between">
+        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold text-muted uppercase tracking-wider">
               {t("netProfit")}
             </span>
-            <div className="w-9 h-9 rounded-xl bg-success-light/50 text-success flex items-center justify-center">
+            <div className="w-9 h-9 rounded-xl bg-success-light/50 text-success flex items-center justify-center shrink-0">
               <Coins className="w-5 h-5" />
             </div>
           </div>
-          <div className="mt-4">
-            <div className={`text-2xl font-bold font-mono truncate ${netProfitSum >= 0 ? "text-success-text" : "text-danger"}`}>
-              {netProfitSum.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
-              <span className="text-xs font-normal text-muted">{t("currency")}</span>
+          <div className="mt-4 min-w-0">
+            <div
+              dir="ltr"
+              className={`inline-flex flex-wrap items-baseline gap-x-1.5 leading-tight max-w-full font-bold font-mono tabular-nums ${netProfitSum >= 0 ? "text-success-text" : "text-danger"}`}
+            >
+              <span className="text-xl xl:text-2xl whitespace-nowrap">
+                {netProfitSum.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+              </span>
+              <span className="text-xs font-normal text-muted whitespace-nowrap">{t("currency")}</span>
             </div>
             <p className="text-form-helper text-muted mt-1">{t("netProfitDesc")}</p>
           </div>
         </Card>
 
         {/* Card 4: Caisse Noire */}
-        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between">
-          <div className="flex items-center justify-between">
+        <Card className="p-5 border-border/80 shadow-xs bg-surface flex flex-col justify-between min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold text-muted uppercase tracking-wider">
               {t("caisseNoireBalance")}
             </span>
-            <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
               <Wallet className="w-5 h-5" />
             </div>
           </div>
-          <div className="mt-4">
-            <div className="text-2xl font-bold font-mono text-gray-900 truncate">
-              {caisseNoireData.balance.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}{" "}
-              <span className="text-xs font-normal text-muted">{t("currency")}</span>
+          <div className="mt-4 min-w-0">
+            <div
+              dir="ltr"
+              className="inline-flex flex-wrap items-baseline gap-x-1.5 leading-tight max-w-full font-bold font-mono text-gray-900 tabular-nums"
+            >
+              <span className="text-xl xl:text-2xl whitespace-nowrap">
+                {caisseNoireData.balance.toLocaleString(locale === "ar" ? "ar-DZ" : "fr-DZ")}
+              </span>
+              <span className="text-xs font-normal text-muted whitespace-nowrap">{t("currency")}</span>
             </div>
             <p className="text-form-helper text-muted mt-1">{t("caisseNoireDesc")}</p>
           </div>

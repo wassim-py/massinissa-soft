@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import ReactDOMServer from "react-dom/server";
 import {
   X,
   Printer,
@@ -24,9 +23,6 @@ import {
   getGlobalFinanceReportDataAction,
   GlobalFinanceReportData,
 } from "@/lib/financeActions";
-import {
-  GlobalFinanceConsolidatedReport,
-} from "@/components/printable/GlobalFinanceConsolidatedReport";
 import { toast } from "sonner";
 import { useLocale } from "next-intl";
 import { buildPrintableReportHtml } from "@/lib/printReportHtml";
@@ -168,7 +164,7 @@ export default function GlobalFinanceReportModal({
 
   if (!isOpen) return null;
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!reportData) return;
 
     let targetWindow: Window | null = null;
@@ -185,6 +181,11 @@ export default function GlobalFinanceReportModal({
       includePhotocopyDeductions,
       includeFormationBooks,
     };
+
+    const [{ default: ReactDOMServer }, { GlobalFinanceConsolidatedReport }] = await Promise.all([
+      import("react-dom/server"),
+      import("@/components/printable/GlobalFinanceConsolidatedReport"),
+    ]);
 
     const printContent = ReactDOMServer.renderToString(
       <GlobalFinanceConsolidatedReport

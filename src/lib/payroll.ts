@@ -19,6 +19,8 @@ export interface TeacherPayrollCalculation {
   totalSessions: number;
   totalPaidSessions?: number;
   totalFreeSessions?: number;
+  totalRevisionLessons?: number;
+  totalRevisionAmount?: number;
   teacherAbsencesCount?: number;
   absentSessions?: Array<{
     lessonId: number;
@@ -59,6 +61,8 @@ export interface TeacherPayrollCalculation {
     courseSessionsCount: number;
     payableLessonsCount: number;
     paidSessionsCount?: number;
+    revisionLessonsCount?: number;
+    revisionAmount?: number;
     freeSessionsCount: number;
     totalSessionsCount: number;
     amount: number;
@@ -73,6 +77,8 @@ export interface TeacherPayrollCalculation {
     branchName: string;
     presentCount: number;
     payingCount?: number;
+    revisionPayingCount?: number;
+    revisionAmount?: number;
     pricePerCycle: number;
     sessionPrice: number;
     teacherCut: number;
@@ -1662,25 +1668,27 @@ export async function computeTeacherPayrollFromData(params: {
           : (percentageOfSessionFee ?? 0);
 
       revisionVisitorAttendances.forEach((rAtt: any) => {
-        // Find matching REVISION_SESSION voucher for this student & lesson
-        const v = lessonVouchers.find(
+        // Find matching non-voided, non-refund REVISION_SESSION voucher(s) for this student & lesson
+        const matchingVouchers = lessonVouchers.filter(
           (voucher: any) =>
             voucher.studentId === rAtt.studentId &&
             voucher.paymentType === "REVISION_SESSION" &&
-            !voucher.isVoided
+            !voucher.isVoided &&
+            !voucher.isRefund
         );
-        if (v) {
+        let netPaid = 0;
+        for (const v of matchingVouchers) {
           const refunded = (v.refunds || []).reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0);
-          const netPaid = Math.max(0, Number(v.amount || 0) - refunded);
-          if (netPaid > 0) {
-            const vTeacherCut = Math.round(((netPaid * teacherPct) / 100) * 100) / 100;
-            const vSchoolCut = Math.max(0, netPaid - vTeacherCut);
+          netPaid += Math.max(0, Number(v.amount || 0) - refunded);
+        }
+        if (netPaid > 0) {
+          const vTeacherCut = Math.round(((netPaid * teacherPct) / 100) * 100) / 100;
+          const vSchoolCut = Math.max(0, netPaid - vTeacherCut);
 
-            revisionVisitorsGross += netPaid;
-            revisionVisitorsTeacherCut += vTeacherCut;
-            revisionVisitorsSchoolCut += vSchoolCut;
-            revisionVisitorsPayingCount += 1;
-          }
+          revisionVisitorsGross += netPaid;
+          revisionVisitorsTeacherCut += vTeacherCut;
+          revisionVisitorsSchoolCut += vSchoolCut;
+          revisionVisitorsPayingCount += 1;
         }
       });
     }
@@ -1705,6 +1713,8 @@ export async function computeTeacherPayrollFromData(params: {
       branchName: lesson.branch.name,
       presentCount,
       payingCount: Math.round((payingWeight + revisionVisitorsPayingCount) * 100) / 100,
+      revisionPayingCount: revisionVisitorsPayingCount,
+      revisionAmount: Math.round(revisionVisitorsTeacherCut * 100) / 100,
       pricePerCycle,
       sessionPrice,
       teacherCut: effectiveRateForSession,
@@ -2454,6 +2464,10 @@ export async function computeTeacherPayrollFromData(params: {
 
   const totalFreeSessions = sessionDetails.filter((s) => s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length;
   const totalPaidSessions = sessionDetails.filter((s) => !s.isFree && !s.isTeacherAbsent && !s.isRetroactive).length;
+  const totalRevisionLessons =
+    Math.round(sessionDetails.reduce((sum, s) => sum + Number(s.revisionPayingCount || 0), 0) * 100) / 100;
+  const totalRevisionAmount =
+    Math.round(sessionDetails.reduce((sum, s) => sum + Number(s.revisionAmount || 0), 0) * 100) / 100;
 
   const groupBreakdownMap = new Map<
     string,
@@ -2463,6 +2477,8 @@ export async function computeTeacherPayrollFromData(params: {
       courseSessionsCount: number;
       payableLessonsCount: number;
       paidSessionsCount: number;
+      revisionLessonsCount: number;
+      revisionAmount: number;
       freeSessionsCount: number;
       totalSessionsCount: number;
       amount: number;
@@ -2481,6 +2497,8 @@ export async function computeTeacherPayrollFromData(params: {
       courseSessionsCount: 0,
       payableLessonsCount: 0,
       paidSessionsCount: 0,
+      revisionLessonsCount: 0,
+      revisionAmount: 0,
       freeSessionsCount: 0,
       totalSessionsCount: 0,
       amount: 0,
@@ -2530,6 +2548,8 @@ export async function computeTeacherPayrollFromData(params: {
 
         g.payableLessonsCount += payingCountForLesson;
         g.paidSessionsCount = g.payableLessonsCount;
+        g.revisionLessonsCount += Number(s.revisionPayingCount || 0);
+        g.revisionAmount += Number(s.revisionAmount || 0);
         g.amount += lessonTeacherCut;
         g.tuitionGross += lessonTuition;
         g.schoolAmount += lessonSchoolCut;
@@ -2547,6 +2567,8 @@ export async function computeTeacherPayrollFromData(params: {
       courseSessionsCount: fSum.courseSessionsCount,
       payableLessonsCount: 0,
       paidSessionsCount: 0,
+      revisionLessonsCount: 0,
+      revisionAmount: 0,
       freeSessionsCount: 0,
       totalSessionsCount: fSum.courseSessionsCount,
       amount: 0,
@@ -2572,6 +2594,8 @@ export async function computeTeacherPayrollFromData(params: {
       courseSessionsCount: 0,
       payableLessonsCount: 0,
       paidSessionsCount: 0,
+      revisionLessonsCount: 0,
+      revisionAmount: 0,
       freeSessionsCount: 0,
       totalSessionsCount: 0,
       amount: 0,
@@ -2594,6 +2618,8 @@ export async function computeTeacherPayrollFromData(params: {
     ...g,
     payableLessonsCount: Math.round(g.payableLessonsCount * 100) / 100,
     paidSessionsCount: Math.round(g.payableLessonsCount * 100) / 100,
+    revisionLessonsCount: Math.round(g.revisionLessonsCount * 100) / 100,
+    revisionAmount: Math.round(g.revisionAmount * 100) / 100,
     amount: Math.round(g.amount * 100) / 100,
     tuitionGross: Math.round(g.tuitionGross * 100) / 100,
     schoolAmount: Math.round(g.schoolAmount * 100) / 100,
@@ -2615,6 +2641,8 @@ export async function computeTeacherPayrollFromData(params: {
     totalSessions,
     totalPaidSessions,
     totalFreeSessions,
+    totalRevisionLessons,
+    totalRevisionAmount,
     groupBreakdown,
     teacherAbsencesCount,
     absentSessions,

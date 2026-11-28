@@ -17,7 +17,6 @@ const safeRevalidatePath = (path: string) => {
     revalidatePath(`/[locale]${path}`, "page");
     revalidatePath(`/ar${path}`);
     revalidatePath(`/fr${path}`);
-    revalidatePath("/", "layout");
   } catch {
     // Ignore outside Next.js request contexts (e.g., CLI / test scripts)
   }
@@ -50,7 +49,7 @@ import { parseToAlgiersDate, formatAlgiersDate } from "./algiersDate";
 import prisma from "./prisma";
 import { Prisma } from "@prisma/client";
 import { v2 as cloudinary } from "cloudinary";
-import * as ExcelJS from "exceljs";
+import type * as ExcelJSType from "exceljs";
 import { cookies } from "next/headers";
 import { getAuthSession, getActiveBranchId } from "./auth";
 import { canUserAccessBranch } from "./settings";
@@ -127,6 +126,11 @@ export const setBranchAction = async (branchId: number) => {
       maxAge: 60 * 60 * 24 * 365,
       sameSite: "lax",
     });
+    try {
+      revalidatePath("/", "layout");
+    } catch {
+      // Ignore outside Next.js request context
+    }
     return { success: true, error: false, message: "تم تغيير الفرع بنجاح." };
   } catch (err) {
     console.error("setBranchAction error:", err);
@@ -3429,21 +3433,50 @@ export const autoSaveEndedLessonsAction = async (branchId?: number): Promise<{
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    const endedLessons = await prisma.lesson.findMany({
-      where: {
-        endsAt: { lte: now, gte: sevenDaysAgo },
-        isTeacherAbsent: false,
-        class: ACTIVE_CLASS_WHERE,
-        ...(branchId ? { branchId } : {}),
-      },
-      select: { id: true },
-      orderBy: { startsAt: "desc" },
-    });
+    // Single indexed SQL query returning ONLY ended lessons from the last 7 days
+    // that actually have at least one ACTIVE enrolled student without an Attendance row.
+    // Eliminates 300-900 redundant sequential queries per minute when lessons are already finalized.
+    const branchClause = branchId
+      ? Prisma.sql`AND l."branchId" = ${branchId}`
+      : Prisma.empty;
+
+    const pendingEndedLessons = await prisma.$queryRaw<Array<{ id: number }>>`
+      SELECT l.id
+      FROM "Lesson" l
+      INNER JOIN "Class" c ON c.id = l."classId"
+      WHERE l."endsAt" <= ${now}
+        AND l."endsAt" >= ${sevenDaysAgo}
+        AND l."isTeacherAbsent" = false
+        AND c."isCompleted" = false
+        AND c."isPaused" = false
+        ${branchClause}
+        AND EXISTS (
+          SELECT 1
+          FROM "Enrollment" e
+          WHERE e.status = 'ACTIVE'
+            AND (
+              e."classId" = l."classId"
+              OR EXISTS (
+                SELECT 1
+                FROM "LessonGroup" lg
+                WHERE lg."lessonId" = l.id
+                  AND lg."classId" = e."classId"
+              )
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM "Attendance" a
+              WHERE a."lessonId" = l.id
+                AND a."studentId" = e."studentId"
+            )
+        )
+      ORDER BY l."startsAt" DESC
+    `;
 
     let totalSaved = 0;
     const processedLessonIds: number[] = [];
 
-    for (const l of endedLessons) {
+    for (const l of pendingEndedLessons) {
       const res = await autoSaveLessonAttendanceAction(l.id);
       if (res.success && res.savedCount && res.savedCount > 0) {
         totalSaved += res.savedCount;
@@ -3456,7 +3489,7 @@ export const autoSaveEndedLessonsAction = async (branchId?: number): Promise<{
       error: false,
       totalSaved,
       processedLessonIds,
-      checkedCount: endedLessons.length,
+      checkedCount: pendingEndedLessons.length,
     };
   } catch (err: any) {
     console.error("autoSaveEndedLessonsAction error:", err);
@@ -12517,7 +12550,9 @@ export const exportToExcel = async (
       }
     }
 
-    const workbook = new ExcelJS.Workbook();
+    const ExcelJSModule = await import("exceljs");
+    const ExcelJS = (ExcelJSModule as any).default ?? ExcelJSModule;
+    const workbook: ExcelJSType.Workbook = new ExcelJS.Workbook();
     let filename = `${type}_export_${new Date().toISOString().split('T')[0]}.xlsx`;
 
     // Define columns and fetch data based on the export type
@@ -13073,7 +13108,7 @@ export const exportToExcel = async (
         const C_BORDER_GRAY = 'FFD3D3D3';
         const C_BORDER_DARK = 'FF888888';
 
-        const thinBorder: Partial<ExcelJS.Borders> = {
+        const thinBorder: Partial<ExcelJSType.Borders> = {
             top: { style: 'thin', color: { argb: C_BORDER_GRAY } },
             bottom: { style: 'thin', color: { argb: C_BORDER_GRAY } },
             left: { style: 'thin', color: { argb: C_BORDER_GRAY } },

@@ -7,7 +7,9 @@ import { PartialPaymentItem } from "@/lib/partialPayments";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import PaymentForm from "@/components/forms/PaymentForm";
+import dynamic from "next/dynamic";
+
+const PaymentForm = dynamic(() => import("@/components/forms/PaymentForm"), { ssr: false });
 import WorkshopPaymentForm from "@/components/forms/WorkshopPaymentForm";
 import { formatDZD, formatAlgiersDate } from "@/lib/algiersDate";
 import {

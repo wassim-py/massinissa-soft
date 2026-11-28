@@ -1,7 +1,7 @@
 "use client";
 
 import { Student, Attendance, Voucher, Lesson, Class, Teacher } from "@prisma/client";
-import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Link } from "@/i18n/navigation";
 import dynamic from "next/dynamic";
@@ -25,10 +25,7 @@ import { computeStudentConsumedSessions, computeStudentConsecutiveAbsences, comp
 import { buildVoucherBundleForPrint, formatPaymentDate } from "@/lib/voucherUtils";
 import { type RevisionLessonOption } from "@/lib/revisionSchedule";
 import { useTranslations, useLocale } from "next-intl";
-import PaymentForm from "./PaymentForm";
 import PrintTicketButton from "../PrintTicketButton";
-import CatchUpVisitorModal from "./CatchUpVisitorModal";
-import RevisionVisitorModal from "./RevisionVisitorModal";
 import { BookOpen, Check, X, Minus, ChevronDown, UserPlus, Send, Clock, CheckCircle2, CalendarClock, RotateCcw, Loader2 } from "lucide-react";
 import { toggleBookReceiptAction } from "@/lib/bookActions";
 import { Badge } from "@/components/ui/Badge";
@@ -38,6 +35,138 @@ import EnrollExistingStudentTab from "./EnrollExistingStudentTab";
 import TeacherAbsenceToggle from "../TeacherAbsenceToggle";
 
 const StudentForm = dynamic(() => import("./StudentForm"), { ssr: false });
+const PaymentForm = dynamic(() => import("./PaymentForm"), { ssr: false });
+const CatchUpVisitorModal = dynamic(() => import("./CatchUpVisitorModal"), { ssr: false });
+const RevisionVisitorModal = dynamic(() => import("./RevisionVisitorModal"), { ssr: false });
+
+function formatLessonCountdown(totalSec: number | null | undefined): string {
+  if (!totalSec || totalSec <= 0) return "00:00";
+  const hours = Math.floor(totalSec / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const seconds = totalSec % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
+  }
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function useIsolatedLessonCountdown(lessonEndTime: number): number | null {
+  const [remainingSec, setRemainingSec] = useState<number | null>(() => {
+    if (!lessonEndTime) return null;
+    return Math.floor((lessonEndTime - Date.now()) / 1000);
+  });
+
+  useEffect(() => {
+    if (!lessonEndTime) {
+      setRemainingSec(null);
+      return;
+    }
+    const tick = () => {
+      const diff = Math.floor((lessonEndTime - Date.now()) / 1000);
+      setRemainingSec(diff);
+      return diff;
+    };
+    if (tick() <= 0) return;
+    const id = setInterval(() => {
+      if (tick() <= 0) clearInterval(id);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [lessonEndTime]);
+
+  return remainingSec;
+}
+
+const LessonCountdownBadge = React.memo(function LessonCountdownBadge({
+  lessonEndTime,
+  locale,
+}: {
+  lessonEndTime: number;
+  locale: string;
+}) {
+  const timeRemainingSec = useIsolatedLessonCountdown(lessonEndTime);
+  if (timeRemainingSec !== null && timeRemainingSec > 0) {
+    return (
+      <Badge variant="warning" size="md" className="font-semibold flex items-center gap-1.5 shadow-xs">
+        <Clock className="w-3.5 h-3.5 animate-pulse text-amber-600" />
+        <span className="font-mono text-xs">
+          {locale === "ar"
+            ? `حفظ تلقائي عند انتهاء الحصة (${formatLessonCountdown(timeRemainingSec)})`
+            : `Enregistrement auto (${formatLessonCountdown(timeRemainingSec)})`}
+        </span>
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="success" size="md" className="font-semibold flex items-center gap-1.5 shadow-xs">
+      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+      <span className="text-xs">
+        {locale === "ar"
+          ? "الحصة منتهية — تم الحفظ التلقائي"
+          : "Séance terminée — Enregistrement automatique actif"}
+      </span>
+    </Badge>
+  );
+});
+
+const LessonAutoSaveBanner = React.memo(function LessonAutoSaveBanner({
+  lessonEndTime,
+  locale,
+}: {
+  lessonEndTime: number;
+  locale: string;
+}) {
+  const timeRemainingSec = useIsolatedLessonCountdown(lessonEndTime);
+  const isEnded = timeRemainingSec !== null && timeRemainingSec <= 0;
+
+  return (
+    <div
+      className={`p-3.5 mb-4 rounded-xl flex items-center justify-between gap-3 text-xs sm:text-sm shadow-xs font-sans transition-colors ${
+        isEnded
+          ? "bg-emerald-50 border-2 border-emerald-300 text-emerald-950"
+          : "bg-blue-50/90 border-2 border-blue-200 text-blue-950"
+      }`}
+    >
+      <div className="flex items-center gap-2.5">
+        {isEnded ? (
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+        ) : (
+          <Clock className="w-5 h-5 text-blue-600 shrink-0 animate-pulse" />
+        )}
+        <div>
+          <strong className="font-bold">
+            {isEnded
+              ? locale === "ar"
+                ? "انتهت الحصة :"
+                : "Séance terminée :"
+              : locale === "ar"
+              ? "حفظ الحضور التلقائي :"
+              : "Enregistrement automatique :"}
+          </strong>{" "}
+          {isEnded
+            ? locale === "ar"
+              ? "تم حفظ الحضور تلقائياً عند انتهاء الحصة. يتم تسجيل كل تلميذ لم يتم تعديل حضوره كغائب تلقائياً لضمان عدم بقاء أي تلميذ دون تسجيل."
+              : "Les présences sont automatiquement enregistrées à la fin de la séance. Tout élève non modifié est enregistré absent pour qu'aucun élève ne reste non enregistré."
+            : locale === "ar"
+            ? `سيتم حفظ الحضور تلقائياً فور انتهاء وقت الحصة (خلال ${formatLessonCountdown(timeRemainingSec)}). أي تلميذ لم يتم لمس حضوره سيُسجل كغائب تلقائياً.`
+            : `L'appel sera automatiquement validé et enregistré à la fin de la séance (dans ${formatLessonCountdown(timeRemainingSec)}). Tout élève non modifié sera enregistré absent.`}
+        </div>
+      </div>
+      <div className="shrink-0">
+        {isEnded ? (
+          <span className="bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-xs flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>{locale === "ar" ? "محفوظ تلقائياً" : "Auto-enregistré"}</span>
+          </span>
+        ) : (
+          <span className="bg-blue-600 text-white text-xs font-mono font-bold px-3 py-1 rounded-full shadow-xs flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5" />
+            <span>{formatLessonCountdown(timeRemainingSec || 0)}</span>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+});
 
 const SubmitButton = () => {
   const { pending } = useFormStatus();
@@ -924,23 +1053,8 @@ const AttendanceRoster = ({
     return raw ? new Date(raw).getTime() : 0;
   }, [lesson]);
 
-  const [timeRemainingSec, setTimeRemainingSec] = useState<number | null>(() => {
-    if (!lessonEndTime) return null;
-    return Math.floor((lessonEndTime - Date.now()) / 1000);
-  });
   const hasAutoSavedRef = useRef<boolean>(false);
   const isAutoSavingRef = useRef<boolean>(false);
-
-  const formatCountdown = useCallback((totalSec: number | null | undefined) => {
-    if (!totalSec || totalSec <= 0) return "00:00";
-    const hours = Math.floor(totalSec / 3600);
-    const minutes = Math.floor((totalSec % 3600) / 60);
-    const seconds = totalSec % 60;
-    if (hours > 0) {
-      return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
-    }
-    return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-  }, []);
 
   const triggerAutoSave = useCallback(() => {
     if (isAutoSavingRef.current || isTeacherAbsent) return;
@@ -973,17 +1087,14 @@ const AttendanceRoster = ({
     }, 150);
   }, [activeStudents, justifications, isTeacherAbsent, locale]);
 
-  // Monitor lesson time and automatically trigger save when the lesson is up
+  // Schedule a single one-shot timer at lessonEndTime (instead of re-rendering the entire roster every 1s)
   useEffect(() => {
-    if (!lessonEndTime) return;
+    if (!lessonEndTime || isTeacherAbsent || hasAutoSavedRef.current) return;
 
-    const checkTimer = () => {
-      const diffSec = Math.floor((lessonEndTime - Date.now()) / 1000);
-      setTimeRemainingSec(diffSec);
-
-      if (diffSec <= 0 && !isTeacherAbsent && !hasAutoSavedRef.current) {
+    const runIfExpired = () => {
+      if (hasAutoSavedRef.current || isTeacherAbsent) return;
+      if (Date.now() >= lessonEndTime) {
         hasAutoSavedRef.current = true;
-        // Verify if any active student has not yet been recorded in existingRecords
         const hasUnrecorded = activeStudents.some(
           (s) => !existingRecords.some((r) => r.studentId === s.id)
         );
@@ -993,9 +1104,15 @@ const AttendanceRoster = ({
       }
     };
 
-    checkTimer();
-    const interval = setInterval(checkTimer, 1000);
-    return () => clearInterval(interval);
+    const delayMs = lessonEndTime - Date.now();
+    if (delayMs <= 0) {
+      runIfExpired();
+      return;
+    }
+
+    // Cap setTimeout to 24h to avoid 32-bit overflow
+    const timer = setTimeout(runIfExpired, Math.min(delayMs + 250, 86_400_000));
+    return () => clearTimeout(timer);
   }, [lessonEndTime, activeStudents, existingRecords, triggerAutoSave, isTeacherAbsent]);
 
   const handleStatusChange = (studentId: string, status: AttendanceStatus) => {
@@ -1273,25 +1390,7 @@ const AttendanceRoster = ({
               ) : null}
             </Badge>
             {!isTeacherAbsent && lessonEndTime > 0 && (
-              timeRemainingSec !== null && timeRemainingSec > 0 ? (
-                <Badge variant="warning" size="md" className="font-semibold flex items-center gap-1.5 shadow-xs">
-                  <Clock className="w-3.5 h-3.5 animate-pulse text-amber-600" />
-                  <span className="font-mono text-xs">
-                    {locale === "ar"
-                      ? `حفظ تلقائي عند انتهاء الحصة (${formatCountdown(timeRemainingSec)})`
-                      : `Enregistrement auto (${formatCountdown(timeRemainingSec)})`}
-                  </span>
-                </Badge>
-              ) : (
-                <Badge variant="success" size="md" className="font-semibold flex items-center gap-1.5 shadow-xs">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  <span className="text-xs">
-                    {locale === "ar"
-                      ? "الحصة منتهية — تم الحفظ التلقائي"
-                      : "Séance terminée — Enregistrement automatique actif"}
-                  </span>
-                </Badge>
-              )
+              <LessonCountdownBadge lessonEndTime={lessonEndTime} locale={locale} />
             )}
           </div>
         </div>
@@ -1373,48 +1472,7 @@ const AttendanceRoster = ({
 
       {/* Automatic Attendance Save Banner */}
       {!isTeacherAbsent && lessonEndTime > 0 && (
-        <div
-          className={`p-3.5 mb-4 rounded-xl flex items-center justify-between gap-3 text-xs sm:text-sm shadow-xs font-sans transition-colors ${
-            timeRemainingSec !== null && timeRemainingSec <= 0
-              ? "bg-emerald-50 border-2 border-emerald-300 text-emerald-950"
-              : "bg-blue-50/90 border-2 border-blue-200 text-blue-950"
-          }`}
-        >
-          <div className="flex items-center gap-2.5">
-            {timeRemainingSec !== null && timeRemainingSec <= 0 ? (
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-            ) : (
-              <Clock className="w-5 h-5 text-blue-600 shrink-0 animate-pulse" />
-            )}
-            <div>
-              <strong className="font-bold">
-                {timeRemainingSec !== null && timeRemainingSec <= 0
-                  ? (locale === "ar" ? "انتهت الحصة :" : "Séance terminée :")
-                  : (locale === "ar" ? "حفظ الحضور التلقائي :" : "Enregistrement automatique :")}
-              </strong>{" "}
-              {timeRemainingSec !== null && timeRemainingSec <= 0
-                ? (locale === "ar"
-                    ? "تم حفظ الحضور تلقائياً عند انتهاء الحصة. يتم تسجيل كل تلميذ لم يتم تعديل حضوره كغائب تلقائياً لضمان عدم بقاء أي تلميذ دون تسجيل."
-                    : "Les présences sont automatiquement enregistrées à la fin de la séance. Tout élève non modifié est enregistré absent pour qu'aucun élève ne reste non enregistré.")
-                : (locale === "ar"
-                    ? `سيتم حفظ الحضور تلقائياً فور انتهاء وقت الحصة (خلال ${formatCountdown(timeRemainingSec)}). أي تلميذ لم يتم لمس حضوره سيُسجل كغائب تلقائياً.`
-                    : `L'appel sera automatiquement validé et enregistré à la fin de la séance (dans ${formatCountdown(timeRemainingSec)}). Tout élève non modifié sera enregistré absent.`)}
-            </div>
-          </div>
-          <div className="shrink-0">
-            {timeRemainingSec !== null && timeRemainingSec <= 0 ? (
-              <span className="bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-xs flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>{locale === "ar" ? "محفوظ تلقائياً" : "Auto-enregistré"}</span>
-              </span>
-            ) : (
-              <span className="bg-blue-600 text-white text-xs font-mono font-bold px-3 py-1 rounded-full shadow-xs flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5" />
-                <span>{formatCountdown(timeRemainingSec || 0)}</span>
-              </span>
-            )}
-          </div>
-        </div>
+        <LessonAutoSaveBanner lessonEndTime={lessonEndTime} locale={locale} />
       )}
 
       {/* Top action bar: Summary, Student Registration, Catch-Up Visitor, and Revision Visitor entry points */}

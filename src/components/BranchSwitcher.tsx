@@ -1,5 +1,5 @@
-import prisma from "@/lib/prisma";
 import { getActiveBranchId, getAuthSession } from "@/lib/auth";
+import { getCachedBranches } from "@/lib/cachedReferenceData";
 import BranchSwitcherDropdown from "./BranchSwitcherDropdown";
 
 export default async function BranchSwitcher() {
@@ -15,24 +15,10 @@ export default async function BranchSwitcher() {
     return null;
   }
 
-  const activeBranchId = await getActiveBranchId();
-
-  let branches: Array<{ id: number; name: string; address: string }> = [];
-  try {
-    branches = await prisma.$queryRaw<
-      Array<{ id: number; name: string; address: string }>
-    >`
-      SELECT id, name, address
-      FROM "Branch"
-      ORDER BY id ASC
-    `;
-  } catch (e) {
-    branches = [
-      { id: 1, name: "ECOLE", address: "Constantine - Centre, Algérie" },
-      { id: 2, name: "ANNEX", address: "Constantine - Annex, Algérie" },
-      { id: 3, name: "AMPHI", address: "Constantine - Amphi, Algérie" },
-    ];
-  }
+  const [activeBranchId, branches] = await Promise.all([
+    getActiveBranchId(),
+    getCachedBranches(),
+  ]);
 
   return (
     <BranchSwitcherDropdown

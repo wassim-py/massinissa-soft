@@ -6,6 +6,7 @@ import React, {
   useEffect,
   useState,
   useCallback,
+  useMemo,
   useRef,
   useTransition,
 } from "react";
@@ -174,6 +175,9 @@ export default function AnnouncementNotificationProvider({
   const [dashboardAnnouncements, setDashboardAnnouncements] = useState<DashboardAnnouncementData[]>([]);
 
   const userIdRef = useRef<string | null>(null);
+  const pathnameRef = useRef<string>(pathname);
+  const lastFetchedAtRef = useRef<number>(0);
+  const lastDashboardSigRef = useRef<string>("");
   const lastTopIdsRef = useRef<number[]>([]);
   const newAnnouncementIdsRef = useRef<number[]>([]);
   const viewedIdsSetRef = useRef<Set<number>>(new Set());
@@ -181,6 +185,10 @@ export default function AnnouncementNotificationProvider({
   const isFetchingRef = useRef<boolean>(false);
   const isMountedRef = useRef<boolean>(false);
   const [, startTransition] = useTransition();
+
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
 
   // Load viewed announcements from localStorage
   const loadStoredDataForUser = useCallback((uid: string | null) => {
@@ -297,14 +305,20 @@ export default function AnnouncementNotificationProvider({
     }
   }, [pathname, markAllAsRead]);
 
-  const checkForNewAnnouncements = useCallback(async () => {
+  const checkForNewAnnouncements = useCallback(async (force = false) => {
     if (isFetchingRef.current) return;
+    if (!force && lastFetchedAtRef.current > 0 && Date.now() - lastFetchedAtRef.current < 15000) {
+      return;
+    }
     isFetchingRef.current = true;
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
     try {
       const res = await fetch(`/api/announcements/check-new?_t=${Date.now()}`, {
         cache: "no-store",
         credentials: "same-origin",
+        signal: controller.signal,
         headers: {
           "Cache-Control": "no-cache",
           Pragma: "no-cache",
@@ -312,6 +326,7 @@ export default function AnnouncementNotificationProvider({
       });
 
       if (!res.ok) return;
+      lastFetchedAtRef.current = Date.now();
 
       const data: {
         recentNewAnnouncements: Array<{
@@ -333,16 +348,23 @@ export default function AnnouncementNotificationProvider({
         loadStoredDataForUser(data.userId);
       }
 
-      setLatestId(data.latestId || 0);
+      const nextLatestId = data.latestId || 0;
+      setLatestId((prev) => (prev === nextLatestId ? prev : nextLatestId));
 
       if (Array.isArray(data.dashboardAnnouncements)) {
-        setDashboardAnnouncements(data.dashboardAnnouncements);
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(
-            new CustomEvent("massinissa:dashboard_announcements_updated", {
-              detail: data.dashboardAnnouncements,
-            })
-          );
+        const nextSig = data.dashboardAnnouncements
+          .map((a) => `${a.id}:${a.title}:${a.isPinned ? 1 : 0}:${a.isNew ? 1 : 0}`)
+          .join("|");
+        if (nextSig !== lastDashboardSigRef.current) {
+          lastDashboardSigRef.current = nextSig;
+          setDashboardAnnouncements(data.dashboardAnnouncements);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("massinissa:dashboard_announcements_updated", {
+                detail: data.dashboardAnnouncements,
+              })
+            );
+          }
         }
       }
 
@@ -356,14 +378,14 @@ export default function AnnouncementNotificationProvider({
           lastTopIdsRef.current.some((id, idx) => id !== currentTopIds[idx]));
 
       // Unread count: exactly how many recent (last 72h) announcements haven't been viewed yet
-      const isOnAnnouncementsPage = pathname.includes("/list/announcements");
+      const isOnAnnouncementsPage = pathnameRef.current.includes("/list/announcements");
       if (isOnAnnouncementsPage) {
-        setUnreadCount(0);
+        setUnreadCount((prev) => (prev === 0 ? prev : 0));
       } else {
         const computedUnread = newIds.filter(
           (id) => !viewedIdsSetRef.current.has(id)
         ).length;
-        setUnreadCount(computedUnread);
+        setUnreadCount((prev) => (prev === computedUnread ? prev : computedUnread));
       }
 
       // Check for unviewed announcements that haven't been toasted in this session yet
@@ -445,9 +467,10 @@ export default function AnnouncementNotificationProvider({
     } catch {
       // Fail silently on network errors
     } finally {
+      clearTimeout(timeoutId);
       isFetchingRef.current = false;
     }
-  }, [t, router, pathname, loadStoredDataForUser]);
+  }, [t, router, loadStoredDataForUser]);
 
   // Cross-tab and window event listener for immediate sync
   useEffect(() => {
@@ -456,7 +479,7 @@ export default function AnnouncementNotificationProvider({
       bc = new BroadcastChannel("massinissa_announcements_channel");
       bc.onmessage = (event) => {
         if (event.data?.type === "ANNOUNCEMENT_CHANGED") {
-          checkForNewAnnouncements();
+          checkForNewAnnouncements(true);
           startTransition(() => {
             router.refresh();
           });
@@ -474,7 +497,7 @@ export default function AnnouncementNotificationProvider({
     }
 
     const onCustomChanged = () => {
-      checkForNewAnnouncements();
+      checkForNewAnnouncements(true);
       startTransition(() => {
         router.refresh();
       });
@@ -503,17 +526,18 @@ export default function AnnouncementNotificationProvider({
     };
   }, [checkForNewAnnouncements, router]);
 
-  // Initial check on mount
+  // Initial check on mount (once per provider lifecycle, not on every route change)
   useEffect(() => {
-    checkForNewAnnouncements();
+    checkForNewAnnouncements(true);
   }, [checkForNewAnnouncements]);
 
   // Real-time Heartbeat:
   // - 60s when page is active/visible
   // - Paused when backgrounded/hidden
-  // - Instant on focus, visibility change, online, or local BroadcastChannel event
+  // - Throttled (30s cooldown) on focus/visibility change; instant on online or local BroadcastChannel event
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
+    const FOCUS_RECHECK_COOLDOWN_MS = 30000;
 
     const startHeartbeat = () => {
       if (interval) {
@@ -524,25 +548,30 @@ export default function AnnouncementNotificationProvider({
         return;
       }
       interval = setInterval(() => {
-        checkForNewAnnouncements();
+        checkForNewAnnouncements(false);
       }, 60000);
     };
 
     startHeartbeat();
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        checkForNewAnnouncements();
+      if (
+        document.visibilityState === "visible" &&
+        Date.now() - lastFetchedAtRef.current >= FOCUS_RECHECK_COOLDOWN_MS
+      ) {
+        checkForNewAnnouncements(false);
       }
       startHeartbeat();
     };
 
     const onFocus = () => {
-      checkForNewAnnouncements();
+      if (Date.now() - lastFetchedAtRef.current >= FOCUS_RECHECK_COOLDOWN_MS) {
+        checkForNewAnnouncements(false);
+      }
     };
 
     const onOnline = () => {
-      checkForNewAnnouncements();
+      checkForNewAnnouncements(true);
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -557,19 +586,35 @@ export default function AnnouncementNotificationProvider({
     };
   }, [checkForNewAnnouncements]);
 
+  const refreshAnnouncements = useCallback(() => {
+    void checkForNewAnnouncements(true);
+  }, [checkForNewAnnouncements]);
+
+  const contextValue = useMemo(
+    () => ({
+      unreadCount,
+      markAllAsRead,
+      latestId,
+      viewedIds,
+      markAsViewed,
+      isViewed,
+      refreshAnnouncements,
+      dashboardAnnouncements,
+    }),
+    [
+      unreadCount,
+      markAllAsRead,
+      latestId,
+      viewedIds,
+      markAsViewed,
+      isViewed,
+      refreshAnnouncements,
+      dashboardAnnouncements,
+    ]
+  );
+
   return (
-    <AnnouncementNotificationContext.Provider
-      value={{
-        unreadCount,
-        markAllAsRead,
-        latestId,
-        viewedIds,
-        markAsViewed,
-        isViewed,
-        refreshAnnouncements: checkForNewAnnouncements,
-        dashboardAnnouncements,
-      }}
-    >
+    <AnnouncementNotificationContext.Provider value={contextValue}>
       {children}
     </AnnouncementNotificationContext.Provider>
   );

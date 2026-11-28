@@ -40,20 +40,47 @@ const clerkAuth = clerkMiddleware(
     (sessionClaims as any)?.publicMetadata?.branchIds ||
     (sessionClaims as any)?.branchIds;
 
-  // Fallback: If logged in but role or branchIds is missing from sessionClaims, fetch from Clerk API
-  if (userId && (!role || branchIds === undefined)) {
-    try {
-      const client = createClerkClient({
-        secretKey: process.env.CLERK_SECRET_KEY,
-      });
-      const user = await client.users.getUser(userId);
-      if (!role) role = (user.publicMetadata as { role?: string })?.role;
-      if (branchIds === undefined) {
-        const metaBranchIds = (user.publicMetadata as { branchIds?: number[] })?.branchIds;
-        branchIds = Array.isArray(metaBranchIds) ? metaBranchIds : undefined;
+  // Owners do not have branchIds in JWT claims — never hit remote Clerk API for owners.
+  // For non-owners missing claims, cache the remote Clerk lookup for 5 minutes to avoid blocking every nav/prefetch.
+  const isOwnerRole = typeof role === "string" && role.toLowerCase() === "owner";
+  if (userId && (!role || (!isOwnerRole && branchIds === undefined))) {
+    const globalForProxyCache = globalThis as unknown as {
+      __clerkProxyMetaCache?: Map<
+        string,
+        { role?: string; branchIds?: number[]; expiresAt: number }
+      >;
+    };
+    if (!globalForProxyCache.__clerkProxyMetaCache) {
+      globalForProxyCache.__clerkProxyMetaCache = new Map();
+    }
+    const cache = globalForProxyCache.__clerkProxyMetaCache;
+    const now = Date.now();
+    const cached = cache.get(userId);
+
+    if (cached && cached.expiresAt > now) {
+      if (!role && cached.role) role = cached.role;
+      if (branchIds === undefined && cached.branchIds !== undefined) {
+        branchIds = cached.branchIds;
       }
-    } catch (e: any) {
-      console.error("Error fetching Clerk user role/branch in proxy:", e?.message || e);
+    } else {
+      try {
+        const client = createClerkClient({
+          secretKey: process.env.CLERK_SECRET_KEY,
+        });
+        const user = await client.users.getUser(userId);
+        if (!role) role = (user.publicMetadata as { role?: string })?.role;
+        if (branchIds === undefined) {
+          const metaBranchIds = (user.publicMetadata as { branchIds?: number[] })?.branchIds;
+          branchIds = Array.isArray(metaBranchIds) ? metaBranchIds : undefined;
+        }
+        cache.set(userId, {
+          role,
+          branchIds,
+          expiresAt: now + 5 * 60 * 1000,
+        });
+      } catch (e: any) {
+        console.error("Error fetching Clerk user role/branch in proxy:", e?.message || e);
+      }
     }
   }
 

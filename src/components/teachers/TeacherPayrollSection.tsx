@@ -414,6 +414,12 @@ export default function TeacherPayrollSection({
         retroactiveAmount: currentPayroll.sessionDetails
           ?.filter((s) => s.isRetroactive)
           .reduce((sum, s) => sum + Number(s.lessonAmount || 0), 0),
+        revisionLessonsCount:
+          currentPayroll.totalRevisionLessons ??
+          currentPayroll.sessionDetails?.reduce((sum, s) => sum + Number(s.revisionPayingCount || 0), 0),
+        revisionAmount:
+          currentPayroll.totalRevisionAmount ??
+          currentPayroll.sessionDetails?.reduce((sum, s) => sum + Number(s.revisionAmount || 0), 0),
         sessions: currentPayroll.sessionDetails?.map((s) => ({
           lessonId: s.lessonId,
           startsAt: s.startsAt,
@@ -421,6 +427,8 @@ export default function TeacherPayrollSection({
           branchName: s.branchName,
           presentCount: s.presentCount,
           payingCount: s.payingCount,
+          revisionPayingCount: s.revisionPayingCount,
+          revisionAmount: s.revisionAmount,
           sessionPrice: s.sessionPrice,
           teacherCut: s.teacherCut,
           lessonAmount: s.lessonAmount,
@@ -822,221 +830,286 @@ export default function TeacherPayrollSection({
         ) : (
           <>
             {/* KPI Cards */}
-            <div
-              className={`grid grid-cols-2 ${
-                (currentPayroll.bookRevenue ?? 0) > 0
-                  ? "lg:grid-cols-4 xl:grid-cols-8"
-                  : "lg:grid-cols-4 xl:grid-cols-7"
-              } gap-3.5`}
-            >
-              {/* Payable Lessons count */}
-              <div className="bg-blue-50/80 p-4 rounded-xl border-2 border-blue-200/80 flex flex-col justify-between shadow-xs">
-                <span className="text-xs text-blue-900 font-bold">
-                  {locale === "ar" ? "الحصص المستحقة (تلاميذ)" : "Séances payables"}
-                </span>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-2xl font-black text-blue-950 font-mono">
-                    {currentPayroll.groupBreakdown
-                      ? currentPayroll.groupBreakdown.reduce((sum, g) => sum + (g.payableLessonsCount ?? g.paidSessionsCount ?? 0), 0)
-                      : (currentPayroll.totalPaidSessions ?? currentPayroll.totalSessions)}
-                  </span>
-                  <span className="text-xs text-blue-700 font-semibold">{t("sessionsUnit")}</span>
-                </div>
-              </div>
+            {(() => {
+              const hasBooksKpi = (currentPayroll.bookRevenue ?? 0) > 0;
+              const payableCountVal = currentPayroll.groupBreakdown
+                ? Math.round(
+                    currentPayroll.groupBreakdown.reduce(
+                      (sum, g) => sum + (g.payableLessonsCount ?? g.paidSessionsCount ?? 0),
+                      0
+                    ) * 100
+                  ) / 100
+                : (currentPayroll.totalPaidSessions ?? currentPayroll.totalSessions);
+              const revisionLessonsVal =
+                currentPayroll.totalRevisionLessons ??
+                Math.round(
+                  (currentPayroll.sessionDetails || []).reduce(
+                    (sum, s) => sum + Number(s.revisionPayingCount || 0),
+                    0
+                  ) * 100
+                ) / 100;
 
-              {/* Sessions count */}
-              <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
-                <span className="text-xs text-muted font-medium">{t("completedSessions")}</span>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-2xl font-bold text-gray-900">
-                    {currentPayroll.totalSessions}
-                  </span>
-                  <span className="text-xs text-muted">{t("sessionsUnit")}</span>
-                </div>
-              </div>
-
-              {/* Teacher Absences */}
-              <div
-                className={`p-4 rounded-xl border flex flex-col justify-between shadow-xs ${
-                  (currentPayroll.teacherAbsencesCount ?? 0) > 0
-                    ? "bg-rose-50/80 border-rose-200"
-                    : "bg-surface-subtle/70 border-border/80"
-                }`}
-              >
-                <span
-                  className={`text-xs font-medium ${
-                    (currentPayroll.teacherAbsencesCount ?? 0) > 0 ? "text-rose-800" : "text-muted"
-                  }`}
-                >
-                  {locale === "ar" ? "غيابات الأستاذ" : "Absences enseignant"}
-                </span>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span
-                    className={`text-2xl font-bold ${
-                      (currentPayroll.teacherAbsencesCount ?? 0) > 0
-                        ? "text-rose-700"
-                        : "text-gray-900"
-                    }`}
-                  >
-                    {currentPayroll.teacherAbsencesCount ?? 0}
-                  </span>
-                  <span
-                    className={`text-xs ${
-                      (currentPayroll.teacherAbsencesCount ?? 0) > 0 ? "text-rose-600" : "text-muted"
-                    }`}
-                  >
-                    {t("sessionsUnit")}
-                  </span>
-                </div>
-              </div>
-
-              {/* Total Actual Attendances */}
-              <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
-                <span className="text-xs text-muted font-medium">{t("actualAttendance")}</span>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-2xl font-bold text-primary">
-                    {currentPayroll.totalPresentAttendances ?? 0}
-                  </span>
-                  <span className="text-xs text-muted">{t("attendanceUnit")}</span>
-                </div>
-              </div>
-
-              {/* Gross Amount */}
-              <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted font-medium">{t("grossSalary")}</span>
-                  {savedBonus !== 0 && (
+              const renderKpiDzdValue = (
+                amount: number,
+                colorClass: string,
+                weightClass = "font-bold"
+              ) => {
+                const formatted = Number(amount || 0).toLocaleString(locale);
+                const len = formatted.length;
+                const sizeClass =
+                  len >= 13
+                    ? "text-sm sm:text-base"
+                    : len >= 10
+                    ? "text-base sm:text-lg"
+                    : len >= 8
+                    ? "text-lg sm:text-xl"
+                    : "text-xl sm:text-2xl";
+                return (
+                  <div className="mt-2 min-w-0 max-w-full">
                     <span
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
-                        savedBonus > 0
-                          ? "text-emerald-700 bg-emerald-50 border-emerald-200"
-                          : "text-rose-700 bg-rose-50 border-rose-200"
-                      }`}
+                      dir="ltr"
+                      className={`inline-flex flex-wrap items-baseline gap-x-1 gap-y-0.5 leading-tight max-w-full tabular-nums ${colorClass}`}
                     >
-                      {savedBonus > 0
-                        ? (locale === "ar" ? "(يشمل المنحة)" : "(Bonus inclus)")
-                        : (locale === "ar" ? "(يشمل الخصم)" : "(Déduction incluse)")}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-2xl font-bold text-success-text">
-                    {formatDZD(Math.max(0, currentPayroll.grossAmount + savedBonus))}
-                  </span>
-                </div>
-              </div>
-
-              {/* 100% Book Revenue KPI Card */}
-              {(currentPayroll.bookRevenue ?? 0) > 0 && (
-                <div className="bg-purple-50/70 p-4 rounded-xl border border-purple-200/80 flex flex-col justify-between shadow-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-purple-900 font-bold flex items-center gap-1">
-                      <BookOpen className="w-3.5 h-3.5 text-purple-700" />
-                      <span>{locale === "ar" ? "الكتب (100%)" : "Livres (100%)"}</span>
-                    </span>
-                    <Badge variant="secondary" size="sm" className="bg-purple-200 text-purple-900 font-bold">
-                      100%
-                    </Badge>
-                  </div>
-                  <div className="mt-2 flex items-baseline gap-1">
-                    <span className="text-2xl font-bold text-purple-900">
-                      {formatDZD(currentPayroll.bookRevenue || 0)}
+                      <span className={`${sizeClass} ${weightClass} font-mono whitespace-nowrap`}>
+                        {formatted}
+                      </span>
+                      <span className="text-[11px] font-semibold opacity-80 whitespace-nowrap">
+                        DZD
+                      </span>
                     </span>
                   </div>
-                </div>
-              )}
+                );
+              };
 
-              {/* School Share Card */}
-              <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200/80 flex flex-col justify-between shadow-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-blue-900 font-semibold">{t("schoolShareTitle")}</span>
-                  <Badge variant="primary" size="sm" title={`${formatDZD(schoolShareAmount)} / ${formatDZD(totalTuitionGross)}`}>
-                    {effectiveSchoolRate}%
-                  </Badge>
-                </div>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-2xl font-bold text-blue-900">
-                    {formatDZD(schoolShareAmount)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Deductions: Advances & Photocopies */}
-              <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted font-medium">{t("totalDeductions")}</span>
-                  {isOwner && (
-                    <button
-                      type="button"
-                      onClick={() => setShowAdvanceModal(true)}
-                      className="text-[11px] font-bold text-amber-700 hover:text-amber-900 hover:underline flex items-center gap-1 cursor-pointer bg-amber-100/70 hover:bg-amber-200/80 px-2 py-0.5 rounded-md transition-colors"
-                      title={locale === "ar" ? "تسجيل تسبيق مالي" : "Ajouter une avance"}
-                    >
-                      <Banknote className="w-3 h-3 text-amber-700" />
-                      <span>{locale === "ar" ? "+ تسبيق" : "+ Avance"}</span>
-                    </button>
-                  )}
-                </div>
-                <div className="mt-1 flex flex-col gap-1">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted">{t("copiesDeduction")}</span>
-                    <span className="font-semibold text-warning-text">
-                      - {formatDZD(currentPayroll.photocopyDeductions)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-muted">{t("advancesDeduction")}</span>
-                      {currentPayroll.salaryAdvanceDetails && currentPayroll.salaryAdvanceDetails.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setShowAdvanceDetails((prev) => !prev)}
-                          className="text-[10px] text-primary hover:underline font-bold cursor-pointer inline-flex items-center gap-0.5"
-                          title={locale === "ar" ? "عرض تفاصيل التسبيقات" : "Voir le détail des avances"}
-                        >
-                          <span>({currentPayroll.salaryAdvanceDetails.length})</span>
-                          {showAdvanceDetails ? (
-                            <ChevronUp className="w-2.5 h-2.5" />
-                          ) : (
-                            <ChevronDown className="w-2.5 h-2.5" />
-                          )}
-                        </button>
+              return (
+                <div className="space-y-3.5">
+                  {/* Row 1: Activity & Volume KPIs */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                    {/* Payable Lessons count */}
+                    <div className="bg-blue-50/80 p-4 rounded-xl border-2 border-blue-200/80 flex flex-col justify-between shadow-xs min-w-0 overflow-hidden">
+                      <span className="text-xs text-blue-900 font-bold leading-snug">
+                        {locale === "ar" ? "الحصص المستحقة (تلاميذ)" : "Séances payables"}
+                      </span>
+                      <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                        <span className="text-xl sm:text-2xl font-black text-blue-950 font-mono tabular-nums">
+                          {payableCountVal}
+                        </span>
+                        <span className="text-xs text-blue-700 font-semibold">{t("sessionsUnit")}</span>
+                      </div>
+                      {revisionLessonsVal > 0 && (
+                        <span className="mt-1 inline-flex w-fit items-center rounded-md bg-teal-100/90 px-1.5 py-0.5 text-[10px] font-bold text-teal-800 border border-teal-200">
+                          {locale === "ar"
+                            ? `منها ${revisionLessonsVal} حصة مراجعة`
+                            : `dont ${revisionLessonsVal} révision`}
+                        </span>
                       )}
                     </div>
-                    <span className="font-semibold text-danger">
-                      - {formatDZD(currentPayroll.salaryAdvances)}
-                    </span>
-                  </div>
-                </div>
-              </div>
 
-              {/* Net Amount Due */}
-              <div className="bg-emerald-50/70 border-2 border-emerald-300 p-4 rounded-xl flex flex-col justify-between shadow-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-emerald-800">{t("netDueAmount")}</span>
-                  {savedBonus !== 0 && (
-                    <Badge
-                      variant={savedBonus > 0 ? "success" : "danger"}
-                      size="sm"
-                      className={`font-bold border ${
-                        savedBonus > 0
-                          ? "bg-emerald-100 text-emerald-950 border-emerald-300"
-                          : "bg-rose-100 text-rose-950 border-rose-300"
+                    {/* Sessions count */}
+                    <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs min-w-0 overflow-hidden">
+                      <span className="text-xs text-muted font-medium leading-snug">{t("completedSessions")}</span>
+                      <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                        <span className="text-xl sm:text-2xl font-bold text-gray-900 font-mono tabular-nums">
+                          {currentPayroll.totalSessions}
+                        </span>
+                        <span className="text-xs text-muted">{t("sessionsUnit")}</span>
+                      </div>
+                    </div>
+
+                    {/* Teacher Absences */}
+                    <div
+                      className={`p-4 rounded-xl border flex flex-col justify-between shadow-xs min-w-0 overflow-hidden ${
+                        (currentPayroll.teacherAbsencesCount ?? 0) > 0
+                          ? "bg-rose-50/80 border-rose-200"
+                          : "bg-surface-subtle/70 border-border/80"
                       }`}
                     >
-                      {savedBonus > 0
-                        ? (locale === "ar" ? `+ ${formatDZD(savedBonus)} منحة` : `+ ${formatDZD(savedBonus)} bonus`)
-                        : (locale === "ar" ? `- ${formatDZD(Math.abs(savedBonus))} خصم` : `- ${formatDZD(Math.abs(savedBonus))} déduction`)}
-                    </Badge>
-                  )}
+                      <span
+                        className={`text-xs font-medium leading-snug ${
+                          (currentPayroll.teacherAbsencesCount ?? 0) > 0 ? "text-rose-800" : "text-muted"
+                        }`}
+                      >
+                        {locale === "ar" ? "غيابات الأستاذ" : "Absences enseignant"}
+                      </span>
+                      <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                        <span
+                          className={`text-xl sm:text-2xl font-bold font-mono tabular-nums ${
+                            (currentPayroll.teacherAbsencesCount ?? 0) > 0
+                              ? "text-rose-700"
+                              : "text-gray-900"
+                          }`}
+                        >
+                          {currentPayroll.teacherAbsencesCount ?? 0}
+                        </span>
+                        <span
+                          className={`text-xs ${
+                            (currentPayroll.teacherAbsencesCount ?? 0) > 0 ? "text-rose-600" : "text-muted"
+                          }`}
+                        >
+                          {t("sessionsUnit")}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Total Actual Attendances */}
+                    <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs min-w-0 overflow-hidden">
+                      <span className="text-xs text-muted font-medium leading-snug">{t("actualAttendance")}</span>
+                      <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                        <span className="text-xl sm:text-2xl font-bold text-primary font-mono tabular-nums">
+                          {currentPayroll.totalPresentAttendances ?? 0}
+                        </span>
+                        <span className="text-xs text-muted">{t("attendanceUnit")}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Financial KPIs */}
+                  <div
+                    className={`grid grid-cols-1 sm:grid-cols-2 ${
+                      hasBooksKpi
+                        ? "lg:grid-cols-3 2xl:grid-cols-5"
+                        : "lg:grid-cols-2 xl:grid-cols-4"
+                    } gap-3.5`}
+                  >
+                    {/* Gross Amount */}
+                    <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs min-w-0 overflow-hidden">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span className="text-xs text-muted font-medium">{t("grossSalary")}</span>
+                        {savedBonus !== 0 && (
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${
+                              savedBonus > 0
+                                ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                                : "text-rose-700 bg-rose-50 border-rose-200"
+                            }`}
+                          >
+                            {savedBonus > 0
+                              ? (locale === "ar" ? "(يشمل المنحة)" : "(Bonus inclus)")
+                              : (locale === "ar" ? "(يشمل الخصم)" : "(Déduction incluse)")}
+                          </span>
+                        )}
+                      </div>
+                      {renderKpiDzdValue(
+                        Math.max(0, currentPayroll.grossAmount + savedBonus),
+                        "text-success-text"
+                      )}
+                    </div>
+
+                    {/* 100% Book Revenue KPI Card */}
+                    {hasBooksKpi && (
+                      <div className="bg-purple-50/70 p-4 rounded-xl border border-purple-200/80 flex flex-col justify-between shadow-xs min-w-0 overflow-hidden">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <span className="text-xs text-purple-900 font-bold flex items-center gap-1">
+                            <BookOpen className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                            <span>{locale === "ar" ? "الكتب (100%)" : "Livres (100%)"}</span>
+                          </span>
+                          <Badge variant="secondary" size="sm" className="bg-purple-200 text-purple-900 font-bold shrink-0">
+                            100%
+                          </Badge>
+                        </div>
+                        {renderKpiDzdValue(currentPayroll.bookRevenue || 0, "text-purple-900")}
+                      </div>
+                    )}
+
+                    {/* School Share Card */}
+                    <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200/80 flex flex-col justify-between shadow-xs min-w-0 overflow-hidden">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span className="text-xs text-blue-900 font-semibold">{t("schoolShareTitle")}</span>
+                        <Badge
+                          variant="primary"
+                          size="sm"
+                          className="shrink-0"
+                          title={`${formatDZD(schoolShareAmount)} / ${formatDZD(totalTuitionGross)}`}
+                        >
+                          {effectiveSchoolRate}%
+                        </Badge>
+                      </div>
+                      {renderKpiDzdValue(schoolShareAmount, "text-blue-900")}
+                    </div>
+
+                    {/* Deductions: Advances & Photocopies */}
+                    <div className="bg-surface-subtle/70 p-4 rounded-xl border border-border/80 flex flex-col justify-between shadow-xs min-w-0 overflow-hidden">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span className="text-xs text-muted font-medium">{t("totalDeductions")}</span>
+                        {isOwner && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAdvanceModal(true)}
+                            className="text-[11px] font-bold text-amber-700 hover:text-amber-900 hover:underline flex items-center gap-1 cursor-pointer bg-amber-100/70 hover:bg-amber-200/80 px-2 py-0.5 rounded-md transition-colors whitespace-nowrap shrink-0"
+                            title={locale === "ar" ? "تسجيل تسبيق مالي" : "Ajouter une avance"}
+                          >
+                            <Banknote className="w-3 h-3 text-amber-700 shrink-0" />
+                            <span>{locale === "ar" ? "+ تسبيق" : "+ Avance"}</span>
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs">
+                          <span className="text-muted">{t("copiesDeduction")}</span>
+                          <span className="font-mono font-semibold text-warning-text whitespace-nowrap tabular-nums" dir="ltr">
+                            - {formatDZD(currentPayroll.photocopyDeductions)}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs">
+                          <div className="flex items-center gap-1">
+                            <span className="text-muted">{t("advancesDeduction")}</span>
+                            {currentPayroll.salaryAdvanceDetails && currentPayroll.salaryAdvanceDetails.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setShowAdvanceDetails((prev) => !prev)}
+                                className="text-[10px] text-primary hover:underline font-bold cursor-pointer inline-flex items-center gap-0.5"
+                                title={locale === "ar" ? "عرض تفاصيل التسبيقات" : "Voir le détail des avances"}
+                              >
+                                <span>({currentPayroll.salaryAdvanceDetails.length})</span>
+                                {showAdvanceDetails ? (
+                                  <ChevronUp className="w-2.5 h-2.5" />
+                                ) : (
+                                  <ChevronDown className="w-2.5 h-2.5" />
+                                )}
+                              </button>
+                            )}
+                          </div>
+                          <span className="font-mono font-semibold text-danger whitespace-nowrap tabular-nums" dir="ltr">
+                            - {formatDZD(currentPayroll.salaryAdvances)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Net Amount Due */}
+                    <div
+                      className={`bg-emerald-50/70 border-2 border-emerald-300 p-4 rounded-xl flex flex-col justify-between shadow-xs min-w-0 overflow-hidden ${
+                        hasBooksKpi ? "sm:col-span-2 lg:col-span-2 2xl:col-span-1" : ""
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span className="text-xs font-bold text-emerald-800">{t("netDueAmount")}</span>
+                        {savedBonus !== 0 && (
+                          <Badge
+                            variant={savedBonus > 0 ? "success" : "danger"}
+                            size="sm"
+                            className={`font-bold border max-w-full whitespace-nowrap ${
+                              savedBonus > 0
+                                ? "bg-emerald-100 text-emerald-950 border-emerald-300"
+                                : "bg-rose-100 text-rose-950 border-rose-300"
+                            }`}
+                          >
+                            {savedBonus > 0
+                              ? (locale === "ar" ? `+ ${formatDZD(savedBonus)} منحة` : `+ ${formatDZD(savedBonus)} bonus`)
+                              : (locale === "ar" ? `- ${formatDZD(Math.abs(savedBonus))} خصم` : `- ${formatDZD(Math.abs(savedBonus))} déduction`)}
+                          </Badge>
+                        )}
+                      </div>
+                      {renderKpiDzdValue(
+                        Math.max(0, currentPayroll.netAmount + savedBonus),
+                        "text-emerald-900",
+                        "font-black"
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-2xl font-black text-emerald-900">
-                    {formatDZD(Math.max(0, currentPayroll.netAmount + savedBonus))}
-                  </span>
-                </div>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Salary Advances Breakdown (if any exist or toggled) */}
             {currentPayroll.salaryAdvanceDetails && currentPayroll.salaryAdvanceDetails.length > 0 && (
@@ -1148,7 +1221,14 @@ export default function TeacherPayrollSection({
                             <td className="p-2.5 font-bold text-gray-900">{g.className}</td>
                             <td className="p-2.5 text-muted">{g.branchName}</td>
                             <td className="p-2.5 text-center font-mono font-semibold">{g.courseSessionsCount ?? Math.max(0, g.totalSessionsCount - g.freeSessionsCount)}</td>
-                            <td className="p-2.5 text-center font-mono font-bold text-blue-900 bg-blue-50/20 text-sm">{g.payableLessonsCount ?? g.paidSessionsCount}</td>
+                            <td className="p-2.5 text-center font-mono font-bold text-blue-900 bg-blue-50/20 text-sm">
+                              <div>{g.payableLessonsCount ?? g.paidSessionsCount}</div>
+                              {(g.revisionLessonsCount ?? 0) > 0 && (
+                                <span className="inline-block mt-0.5 text-[10px] font-semibold text-teal-800 bg-teal-50 border border-teal-200 px-1.5 py-0.2 rounded">
+                                  {locale === "ar" ? `${g.revisionLessonsCount} مراجعة` : `${g.revisionLessonsCount} rév.`}
+                                </span>
+                              )}
+                            </td>
                             <td className="p-2.5 text-center font-mono text-orange-800 bg-orange-50/20">{g.freeSessionsCount}</td>
                             <td className="p-2.5 text-center">
                               <Badge variant={isCustom ? "success" : "neutral"} size="sm" className="font-mono font-semibold">

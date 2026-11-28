@@ -170,51 +170,51 @@ export function StaffPayrollSummaryReport({
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-4 gap-2.5 mb-5 avoid-break">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-slate-500">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-5 avoid-break">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 min-w-0 overflow-hidden flex flex-col justify-between">
+          <p className="text-[10px] uppercase tracking-wider font-bold text-slate-500 leading-snug">
             Salaires de Base Bruts
           </p>
-          <p className="text-sm font-mono font-extrabold text-slate-900 mt-1">
+          <p className="text-sm font-mono font-extrabold text-slate-900 mt-1 break-words leading-tight">
             {formatDZD(totalBaseAll)}
           </p>
-          <p className="text-[10px] text-slate-500 mt-0.5">
+          <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
             {data.payrolls.length} bulletin(s) • {data.staffMembersCount} employé(s)
           </p>
         </div>
 
-        <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-3">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-amber-800">
+        <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-3 min-w-0 overflow-hidden flex flex-col justify-between">
+          <p className="text-[10px] uppercase tracking-wider font-bold text-amber-800 leading-snug">
             Avances Déduites
           </p>
-          <p className="text-sm font-mono font-extrabold text-amber-900 mt-1">
+          <p className="text-sm font-mono font-extrabold text-amber-900 mt-1 break-words leading-tight">
             - {formatDZD(totalAdvancesAll)}
           </p>
-          <p className="text-[10px] text-amber-700 mt-0.5">
+          <p className="text-[10px] text-amber-700 mt-0.5 break-words leading-snug">
             Primes : + {formatDZD(totalBonusAll)}
           </p>
         </div>
 
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 p-3">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-800">
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 p-3 min-w-0 overflow-hidden flex flex-col justify-between">
+          <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-800 leading-snug">
             Total Net Payé (Décaissé)
           </p>
-          <p className="text-sm font-mono font-black text-emerald-900 mt-1">
+          <p className="text-sm font-mono font-black text-emerald-900 mt-1 break-words leading-tight">
             {formatDZD(totalNetPaid)}
           </p>
-          <p className="text-[10px] text-emerald-700 mt-0.5">
+          <p className="text-[10px] text-emerald-700 mt-0.5 leading-snug">
             {data.payrolls.filter((r) => r.status === "PAID").length} règlement(s) effectué(s)
           </p>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-slate-600">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 min-w-0 overflow-hidden flex flex-col justify-between">
+          <p className="text-[10px] uppercase tracking-wider font-bold text-slate-600 leading-snug">
             Total Net Période (Global)
           </p>
-          <p className="text-sm font-mono font-extrabold text-slate-900 mt-1">
+          <p className="text-sm font-mono font-extrabold text-slate-900 mt-1 break-words leading-tight">
             {formatDZD(totalNetAll)}
           </p>
-          <p className="text-[10px] text-slate-500 mt-0.5">
+          <p className="text-[10px] text-slate-500 mt-0.5 break-words leading-snug">
             En attente : {formatDZD(totalNetPending)}
           </p>
         </div>

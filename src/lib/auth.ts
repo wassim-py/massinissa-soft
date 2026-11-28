@@ -1,4 +1,21 @@
+import * as React from "react";
 import { auth as clerkAuth, currentUser as clerkCurrentUser } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
+import { DEFAULT_BRANCH_ID, canUserAccessBranch } from "./settings";
+import {
+  isOwner as checkIsOwner,
+  isBranchAdmin as checkIsBranchAdmin,
+  can as checkCan,
+  cannot as checkCannot,
+  Action,
+  Resource,
+  PermissionContext,
+} from "./permissions";
+
+const requestCache = <T extends (...args: any[]) => any>(fn: T): T => {
+  const cacheFn = (React as any).cache;
+  return typeof cacheFn === "function" ? cacheFn(fn) : fn;
+};
 
 /**
  * Custom auth() helper that defaults treatPendingAsSignedOut to false,
@@ -16,17 +33,73 @@ export async function currentUser(opts?: Parameters<typeof clerkCurrentUser>[0])
   return clerkCurrentUser({ treatPendingAsSignedOut: false, ...opts });
 }
 
-import { cookies } from "next/headers";
-import { DEFAULT_BRANCH_ID, canUserAccessBranch } from "./settings";
-import {
-  isOwner as checkIsOwner,
-  isBranchAdmin as checkIsBranchAdmin,
-  can as checkCan,
-  cannot as checkCannot,
-  Action,
-  Resource,
-  PermissionContext,
-} from "./permissions";
+export interface CachedUserDisplay {
+  firstName: string | null;
+  lastName: string | null;
+  rawRole: string;
+}
+
+/**
+ * Returns user display name & role for layout headers without calling Clerk's remote API
+ * on every render. Reads JWT claims first, then falls back to a 10-minute in-memory TTL cache
+ * keyed by userId and deduplicated per request via React.cache().
+ */
+export const getCachedUserDisplay = requestCache(async (): Promise<CachedUserDisplay> => {
+  try {
+    const { userId, sessionClaims } = await clerkAuth({ treatPendingAsSignedOut: false });
+    const claims = sessionClaims as any;
+    const claimFirst = claims?.firstName ?? claims?.first_name ?? claims?.given_name ?? null;
+    const claimLast = claims?.lastName ?? claims?.last_name ?? claims?.family_name ?? null;
+    const claimRole =
+      claims?.metadata?.role ||
+      claims?.publicMetadata?.role ||
+      claims?.role ||
+      "";
+
+    if (!userId) {
+      return { firstName: null, lastName: null, rawRole: claimRole };
+    }
+
+    if (claimFirst || claimLast) {
+      return {
+        firstName: claimFirst ? String(claimFirst) : null,
+        lastName: claimLast ? String(claimLast) : null,
+        rawRole: claimRole,
+      };
+    }
+
+    const globalForDisplayCache = globalThis as unknown as {
+      __clerkUserDisplayCache?: Map<
+        string,
+        { firstName: string | null; lastName: string | null; rawRole: string; expiresAt: number }
+      >;
+    };
+    if (!globalForDisplayCache.__clerkUserDisplayCache) {
+      globalForDisplayCache.__clerkUserDisplayCache = new Map();
+    }
+    const cache = globalForDisplayCache.__clerkUserDisplayCache;
+    const now = Date.now();
+    const cached = cache.get(userId);
+    if (cached && cached.expiresAt > now) {
+      return {
+        firstName: cached.firstName,
+        lastName: cached.lastName,
+        rawRole: claimRole || cached.rawRole,
+      };
+    }
+
+    const user = await clerkCurrentUser({ treatPendingAsSignedOut: false }).catch(() => null);
+    const result: CachedUserDisplay = {
+      firstName: user?.firstName ?? null,
+      lastName: user?.lastName ?? null,
+      rawRole: ((user?.publicMetadata as any)?.role as string) || claimRole || "",
+    };
+    cache.set(userId, { ...result, expiresAt: now + 10 * 60 * 1000 });
+    return result;
+  } catch {
+    return { firstName: null, lastName: null, rawRole: "" };
+  }
+});
 
 export interface AuthSession {
   userId: string | null;
@@ -40,7 +113,7 @@ export interface AuthSession {
   cannot: (action: Action, resource: Resource, context?: PermissionContext) => boolean;
 }
 
-export async function getAuthSession(): Promise<AuthSession> {
+export const getAuthSession = requestCache(async (): Promise<AuthSession> => {
   try {
     const { userId, sessionClaims } = await clerkAuth({ treatPendingAsSignedOut: false });
 
@@ -158,14 +231,14 @@ export async function getAuthSession(): Promise<AuthSession> {
         checkCannot(testRole, action, resource, context),
     };
   }
-}
+});
 
 /**
  * Automatically resolves the active branch ID:
  * - Branch account: automatically and strictly resolves to the branch tied to their Clerk account.
  * - Owner account: reads from cookie so owner can switch freely between branches.
  */
-export async function getActiveBranchId(): Promise<number> {
+export const getActiveBranchId = requestCache(async (): Promise<number> => {
   const session = await getAuthSession();
 
   // Non-owner account: strictly and automatically use their account's branch
@@ -190,7 +263,7 @@ export async function getActiveBranchId(): Promise<number> {
   }
 
   return DEFAULT_BRANCH_ID;
-}
+});
 
 /**
  * Backward-compatible helper to get normalized user role.
@@ -247,5 +320,3 @@ export async function verifyBiometricApiAuth(request: Request): Promise<{
 
 function _noopAuthEnd() {
 }
-
-

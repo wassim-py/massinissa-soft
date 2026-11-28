@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useTransition, useEffect } from "react";
+import { useState, useTransition, useEffect, useMemo, useDeferredValue } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import { Class, Student, Voucher, Enrollment, EnrollmentTransfer, VoucherEdit, Refund } from "@prisma/client";
-import PaymentForm from "./forms/PaymentForm";
 import PrintTicketButton from "./PrintTicketButton";
+
+const PaymentForm = dynamic(() => import("./forms/PaymentForm"), { ssr: false });
 import { transferEnrollmentCredit, cancelEnrollmentTransfer, createRefund } from "@/lib/actions";
 import {
   computeStudentSessionFee,
@@ -287,42 +289,99 @@ export default function PaymentGrid({
     });
   };
 
-  // Deduplicate enrollments by studentId defensively and exclude permanently unenrolled/refunded students
-  const uniqueEnrollmentsMap = new Map<string, typeof classData.enrollments[0]>();
-  for (const enr of classData.enrollments) {
-    // Exclude permanently removed students
-    if (
-      enr.status === "UNENROLLED" ||
-      enr.status === "REFUNDED" ||
-      enr.status === "INACTIVE"
-    ) {
-      continue;
-    }
-    if (!uniqueEnrollmentsMap.has(enr.studentId)) {
-      uniqueEnrollmentsMap.set(enr.studentId, enr);
-    } else {
-      const existing = uniqueEnrollmentsMap.get(enr.studentId)!;
-      const isNewActive = enr.status === "ACTIVE" || enr.status === "SUSPENDED";
-      const isExistingActive = existing.status === "ACTIVE" || existing.status === "SUSPENDED";
-      const primary = (!isExistingActive && isNewActive) ? enr : existing;
-      const secondary = (!isExistingActive && isNewActive) ? existing : enr;
+  // Pre-index class vouchers, attendances, active enrollments, and book receipts into O(1) Maps inside useMemo
+  // so typing in search or opening modals never recomputes O(N²) billing loops.
+  const processedStudents = useMemo(() => {
+    // Deduplicate enrollments by studentId defensively and exclude permanently unenrolled/refunded students
+    const uniqueEnrollmentsMap = new Map<string, typeof classData.enrollments[0]>();
+    const activeEnrollmentByStudentId = new Map<string, typeof classData.enrollments[0]>();
+    for (const enr of classData.enrollments) {
+      if (enr.status === "ACTIVE" || !enr.status) {
+        if (!activeEnrollmentByStudentId.has(enr.student.id)) {
+          activeEnrollmentByStudentId.set(enr.student.id, enr);
+        }
+      }
+      if (
+        enr.status === "UNENROLLED" ||
+        enr.status === "REFUNDED" ||
+        enr.status === "INACTIVE"
+      ) {
+        continue;
+      }
+      if (!uniqueEnrollmentsMap.has(enr.studentId)) {
+        uniqueEnrollmentsMap.set(enr.studentId, enr);
+      } else {
+        const existing = uniqueEnrollmentsMap.get(enr.studentId)!;
+        const isNewActive = enr.status === "ACTIVE" || enr.status === "SUSPENDED";
+        const isExistingActive = existing.status === "ACTIVE" || existing.status === "SUSPENDED";
+        const primary = !isExistingActive && isNewActive ? enr : existing;
+        const secondary = !isExistingActive && isNewActive ? existing : enr;
 
-      uniqueEnrollmentsMap.set(enr.studentId, {
-        ...primary,
-        transfersFrom: [...(primary.transfersFrom || []), ...(secondary.transfersFrom || [])],
-        transfersTo: [...(primary.transfersTo || []), ...(secondary.transfersTo || [])],
-        feeOverriddenByOwner: primary.feeOverriddenByOwner || secondary.feeOverriddenByOwner,
-        inscriptionFeeCharged: primary.inscriptionFeeCharged && secondary.inscriptionFeeCharged,
-      });
+        uniqueEnrollmentsMap.set(enr.studentId, {
+          ...primary,
+          transfersFrom: [...(primary.transfersFrom || []), ...(secondary.transfersFrom || [])],
+          transfersTo: [...(primary.transfersTo || []), ...(secondary.transfersTo || [])],
+          feeOverriddenByOwner: primary.feeOverriddenByOwner || secondary.feeOverriddenByOwner,
+          inscriptionFeeCharged: primary.inscriptionFeeCharged && secondary.inscriptionFeeCharged,
+        });
+      }
     }
-  }
-  const uniqueEnrollments = Array.from(uniqueEnrollmentsMap.values());
+    const uniqueEnrollments = Array.from(uniqueEnrollmentsMap.values());
 
-  // Calculate stats
-  const processedStudents = uniqueEnrollments.map((enrollment) => {
-    const student = enrollment.student;
-    const studentVouchers = classData.vouchers.filter((v) => v.studentId === student.id);
-    const activeVouchers = studentVouchers.filter((v) => !v.isVoided && !v.isRefund);
+    // Pre-index vouchers by studentId
+    const vouchersByStudentId = new Map<string, typeof classData.vouchers>();
+    for (const v of classData.vouchers) {
+      const list = vouchersByStudentId.get(v.studentId);
+      if (list) list.push(v);
+      else vouchersByStudentId.set(v.studentId, [v]);
+    }
+
+    // Pre-index lesson attendances by studentId -> Map<lessonId, att>
+    const attByLessonAndStudent = new Map<string, Map<number, typeof classData.lessons[0]["attendances"][0]>>();
+    const classLessonIdSet = new Set<number>();
+    for (const l of classData.lessons) {
+      classLessonIdSet.add(l.id);
+      for (const a of l.attendances) {
+        let m = attByLessonAndStudent.get(a.studentId);
+        if (!m) {
+          m = new Map();
+          attByLessonAndStudent.set(a.studentId, m);
+        }
+        if (!m.has(l.id)) {
+          m.set(l.id, a);
+        }
+      }
+    }
+
+    // Pre-index book receipts by studentId -> Map<bookId, receivedAt>
+    const receiptsByStudentId = new Map<string, Map<number, string | Date>>();
+    for (const r of classBookReceipts) {
+      let m = receiptsByStudentId.get(r.studentId);
+      if (!m) {
+        m = new Map();
+        receiptsByStudentId.set(r.studentId, m);
+      }
+      m.set(r.bookId, r.receivedAt);
+    }
+
+    // Cache teacher percentage once for the class
+    const teacherClassOverride = (classData.teacherClassRates as any[])?.find(
+      (tcr: any) => tcr.teacherId === classData.teacherId
+    )?.percentage;
+    const teacherPercentage =
+      teacherClassOverride != null
+        ? Number(teacherClassOverride)
+        : classData.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
+        ? Number(classData.teacher.TeacherPayRate[0].percentageOfSessionFee)
+        : null;
+
+    // Cache payer resolution per payerId so sibling groups compute it once
+    const payerCreditCache = new Map<string, { isPayerActiveAndPaid: boolean; netSessions: number }>();
+
+    return uniqueEnrollments.map((enrollment) => {
+      const student = enrollment.student;
+      const studentVouchers = vouchersByStudentId.get(student.id) || [];
+      const activeVouchers = studentVouchers.filter((v) => !v.isVoided && !v.isRefund);
 
     // Inscription fee & 3-groups exemption rule across all student inscription vouchers
     const inscVouchers = activeVouchers.filter((v) => v.paymentType === "INSCRIPTION");
@@ -392,38 +451,64 @@ export default function PaymentGrid({
     const payerId = student.family?.payerStudentId;
     const hasPayerSibling = Boolean(payerId && payerId !== student.id);
 
-    // Check if designated payer sibling is actively enrolled in THIS class
-    const payerEnrollmentInClass = hasPayerSibling
-      ? classData.enrollments.find(
-          (e) => e.student.id === payerId && (e.status === "ACTIVE" || !e.status)
-        )
+    // Check if designated payer sibling is actively enrolled in THIS class (O(1) Map lookup)
+    const payerEnrollmentInClass = hasPayerSibling && payerId
+      ? activeEnrollmentByStudentId.get(payerId) || null
       : null;
 
     const isPayerInThisClass = Boolean(payerEnrollmentInClass);
 
     let isPayerActiveAndPaid = false;
     let payerNetSessions: number | undefined = undefined;
-    if (isPayerInThisClass && payerEnrollmentInClass) {
-      const targetPayerStudent = {
-        ...payerEnrollmentInClass.student,
-        enrollments: [payerEnrollmentInClass],
-        vouchers: classData.vouchers.filter(v => v.studentId === payerId && !v.isVoided && !v.isRefund),
-        attendances: classData.lessons.flatMap(l => 
-          l.attendances.filter(a => a.studentId === payerId).map(a => ({
-            lessonId: l.id,
-            status: a.status,
-            lesson: { id: l.id, classId: classData.id, startsAt: (l as any).startsAt || new Date(0), isFree: l.isFree, isTeacherAbsent: Boolean((l as any).isTeacherAbsent) }
-          }))
-        ),
-        catchUpAttendances: (payerEnrollmentInClass.student as any).catchUpAttendances || [],
-      };
+    if (isPayerInThisClass && payerEnrollmentInClass && payerId) {
+      let payerRes = payerCreditCache.get(payerId);
+      if (!payerRes) {
+        const payerAttMap = attByLessonAndStudent.get(payerId);
+        const payerAttendances: any[] = [];
+        if (payerAttMap) {
+          for (const l of classData.lessons) {
+            const a = payerAttMap.get(l.id);
+            if (a) {
+              payerAttendances.push({
+                lessonId: l.id,
+                status: a.status,
+                lesson: {
+                  id: l.id,
+                  classId: classData.id,
+                  startsAt: (l as any).startsAt || new Date(0),
+                  isFree: l.isFree,
+                  isTeacherAbsent: Boolean((l as any).isTeacherAbsent),
+                },
+              });
+            }
+          }
+        }
+        const targetPayerStudent = {
+          ...payerEnrollmentInClass.student,
+          enrollments: [payerEnrollmentInClass],
+          vouchers: (vouchersByStudentId.get(payerId) || []).filter(
+            (v) => !v.isVoided && !v.isRefund
+          ),
+          attendances: payerAttendances,
+          catchUpAttendances: (payerEnrollmentInClass.student as any).catchUpAttendances || [],
+        };
 
-      const payerRes = resolvePayerCredit({
-        payerStudent: targetPayerStudent,
-        classId: classData.id,
-        classPricePerCycle: Number(classData.pricePerCycle || 0),
-        isFormation: Boolean((classData as any).isFormation || (classData as any).FormationLevel || (classData as any).formationLevelId),
-      });
+        const computedPayer = resolvePayerCredit({
+          payerStudent: targetPayerStudent,
+          classId: classData.id,
+          classPricePerCycle: Number(classData.pricePerCycle || 0),
+          isFormation: Boolean(
+            (classData as any).isFormation ||
+              (classData as any).FormationLevel ||
+              (classData as any).formationLevelId
+          ),
+        });
+        payerRes = {
+          isPayerActiveAndPaid: computedPayer.isPayerActiveAndPaid,
+          netSessions: computedPayer.netSessions,
+        };
+        payerCreditCache.set(payerId, payerRes);
+      }
       isPayerActiveAndPaid = payerRes.isPayerActiveAndPaid;
       payerNetSessions = payerRes.netSessions;
     }
@@ -444,15 +529,6 @@ export default function PaymentGrid({
     const enrDiscountType = (enrollment as any).discountType || null;
     const enrDiscountValue = (enrollment as any).discountValue != null ? Number((enrollment as any).discountValue) : null;
     const enrPayerHistory = (enrollment as any).payerHistory || [];
-
-    const teacherClassOverride = (classData.teacherClassRates as any[])?.find(
-      (tcr: any) => tcr.teacherId === classData.teacherId
-    )?.percentage;
-    const teacherPercentage = teacherClassOverride != null
-      ? Number(teacherClassOverride)
-      : classData.teacher?.TeacherPayRate?.[0]?.percentageOfSessionFee
-        ? Number(classData.teacher.TeacherPayRate[0].percentageOfSessionFee)
-        : null;
 
     const baseFormationPrice = Number(classData.pricePerCycle || 0);
     const formationFeeCalc = isFormation
@@ -480,35 +556,36 @@ export default function PaymentGrid({
       (formationPrice > 0 && totalPaidFormation >= formationPrice);
     const isFormationPartiallyPaid = totalPaidFormation > 0 && totalPaidFormation < formationPrice;
 
-    // Consumed non-free sessions (accounting for Massinissa absence rules & preserving revision visits for gap exemption)
+    // Consumed non-free sessions (O(1) Map lookup per lesson instead of O(N) .find scan)
+    const studentAttMap = attByLessonAndStudent.get(student.id);
     const studentAtts: Array<{ lessonId: number; status: string; isRevisionVisitor?: boolean; lesson?: { id: number; startsAt?: Date | string } }> = [];
     const studentAllClassAttsForGap: Array<{ lessonId: number; status: string; isRevisionVisitor?: boolean; date?: Date | string }> = [];
-    classData.lessons.forEach((l) => {
-      const att = l.attendances.find((a) => a.studentId === student.id);
-      if (att) {
+    if (studentAttMap) {
+      for (const l of classData.lessons) {
+        const att = studentAttMap.get(l.id);
+        if (!att) continue;
         studentAllClassAttsForGap.push({
           lessonId: l.id,
           status: att.status,
           isRevisionVisitor: Boolean((att as any).isRevisionVisitor),
           date: (l as any).startsAt,
         });
+        if ((att as any).isRevisionVisitor) {
+          studentAtts.push({
+            lessonId: l.id,
+            status: att.status,
+            isRevisionVisitor: true,
+            lesson: { id: l.id, startsAt: (l as any).startsAt },
+          });
+          continue;
+        }
+        const hasExplicitAttendance = att?.status === "PRESENT";
+        if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance, status: att?.status } as any, classData.id, enrollment as any)) {
+          continue;
+        }
+        studentAtts.push({ lessonId: l.id, status: att.status });
       }
-      if (!att) return;
-      if ((att as any).isRevisionVisitor) {
-        studentAtts.push({
-          lessonId: l.id,
-          status: att.status,
-          isRevisionVisitor: true,
-          lesson: { id: l.id, startsAt: (l as any).startsAt },
-        });
-        return;
-      }
-      const hasExplicitAttendance = att?.status === "PRESENT";
-      if (!isLessonApplicableToEnrollment({ ...l, hasExplicitAttendance, status: att?.status } as any, classData.id, enrollment as any)) {
-        return;
-      }
-      studentAtts.push({ lessonId: l.id, status: att.status });
-    });
+    }
 
     const revisionGapInfo = computePostRevisionEnrollmentGapInfo({
       lessons: classData.lessons as any,
@@ -520,7 +597,7 @@ export default function PaymentGrid({
       (cu: any) =>
         cu.recordedBy !== "transfer" &&
         ((cu.missedLesson && cu.missedLesson.classId === classData.id) ||
-          classData.lessons.some((l: any) => l.id === cu.missedLessonId))
+          classLessonIdSet.has(cu.missedLessonId))
     );
 
     const creditMetrics = computeStudentCreditAndSessions({
@@ -577,13 +654,8 @@ export default function PaymentGrid({
           )[0]
         : null;
 
-    // Book status and copy receipts calculation
-    const studentReceiptMap = new Map<number, string | Date>();
-    classBookReceipts.forEach((r) => {
-      if (r.studentId === student.id) {
-        studentReceiptMap.set(r.bookId, r.receivedAt);
-      }
-    });
+    // Book status and copy receipts calculation (O(1) Map lookup)
+    const studentReceiptMap = receiptsByStudentId.get(student.id) || new Map<number, string | Date>();
 
     let bookReceivedCount = 0;
     const bookDetails: BookDetailItem[] = classBooks.map((b) => {
@@ -674,61 +746,82 @@ export default function PaymentGrid({
       bookStatus,
       bookDetails,
     };
-  });
+    });
+  }, [classData, classBooks, classBookReceipts, activeTrimester, configuredInscriptionFee, locale]);
 
-  // Filter logic
-  const filteredStudents = processedStudents.filter((item) => {
-    const isTransferred =
-      item.enrollment.status === "TRANSFERRED" ||
-      (item.enrollment.transfersFrom &&
-        item.enrollment.transfersFrom.length > 0 &&
-        item.enrollment.status !== "ACTIVE");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
 
-    const isSuspended = item.enrollment.status === "SUSPENDED";
+  // Filter logic (memoized with deferredSearchTerm so typing stays 60fps in large classes)
+  const filteredStudents = useMemo(() => {
+    const trimmedSearch = deferredSearchTerm.trim();
+    const q = trimmedSearch.toLowerCase();
+    const cleanNumeric = q.replace(/[^0-9]/g, "");
 
-    // Transferred and suspended students will not show on their group unless searched up
-    if ((isTransferred || isSuspended) && !searchTerm.trim()) {
-      return false;
+    return processedStudents.filter((item) => {
+      const isTransferred =
+        item.enrollment.status === "TRANSFERRED" ||
+        (item.enrollment.transfersFrom &&
+          item.enrollment.transfersFrom.length > 0 &&
+          item.enrollment.status !== "ACTIVE");
+
+      const isSuspended = item.enrollment.status === "SUSPENDED";
+
+      // Transferred and suspended students will not show on their group unless searched up
+      if ((isTransferred || isSuspended) && !trimmedSearch) {
+        return false;
+      }
+
+      // Search filter
+      if (trimmedSearch) {
+        const matchName = item.student.name.toLowerCase().includes(q);
+        const matchPhone = item.student.phone?.toLowerCase().includes(q);
+        const matchId =
+          cleanNumeric && item.student.globalNumber !== undefined
+            ? String(item.student.globalNumber).includes(cleanNumeric)
+            : false;
+        if (!matchName && !matchPhone && !matchId) return false;
+      }
+
+      // Type filter
+      if (filterType === "UNPAID_ONLY") return item.status === "UNPAID";
+      if (filterType === "EXPIRING_ONLY") return item.status === "EXPIRING";
+      if (filterType === "PAID_ONLY") return item.status === "PAID";
+      if (filterType === "SIBLING_WAIVED_ONLY") return item.status === "SIBLING_WAIVED";
+
+      return true;
+    });
+  }, [processedStudents, deferredSearchTerm, filterType]);
+
+  // Active non-transferred non-suspended students list & KPI counters (memoized)
+  const { totalCount, paidCount, expiringCount, unpaidCount, siblingWaivedCount } = useMemo(() => {
+    let total = 0;
+    let paid = 0;
+    let expiring = 0;
+    let unpaid = 0;
+    let siblingWaived = 0;
+    for (const item of processedStudents) {
+      const isActive =
+        item.enrollment.status === "ACTIVE" &&
+        !(
+          item.enrollment.transfersFrom &&
+          item.enrollment.transfersFrom.length > 0 &&
+          item.enrollment.status !== "ACTIVE"
+        );
+      if (!isActive) continue;
+      total++;
+      if (item.status === "PAID") paid++;
+      else if (item.status === "EXPIRING") expiring++;
+      else if (item.status === "UNPAID") unpaid++;
+      else if (item.status === "SIBLING_WAIVED") siblingWaived++;
     }
-
-    // Search filter
-    if (searchTerm.trim()) {
-      const q = searchTerm.toLowerCase().trim();
-      const cleanNumeric = q.replace(/[^0-9]/g, "");
-      const matchName = item.student.name.toLowerCase().includes(q);
-      const matchPhone = item.student.phone?.toLowerCase().includes(q);
-      const matchId = cleanNumeric && item.student.globalNumber !== undefined
-        ? String(item.student.globalNumber).includes(cleanNumeric)
-        : false;
-      if (!matchName && !matchPhone && !matchId) return false;
-    }
-
-    // Type filter
-    if (filterType === "UNPAID_ONLY") return item.status === "UNPAID";
-    if (filterType === "EXPIRING_ONLY") return item.status === "EXPIRING";
-    if (filterType === "PAID_ONLY") return item.status === "PAID";
-    if (filterType === "SIBLING_WAIVED_ONLY") return item.status === "SIBLING_WAIVED";
-
-    return true;
-  });
-
-  // Active non-transferred non-suspended students list for KPI counters
-  const activeStudentsList = processedStudents.filter(
-    (item) =>
-      item.enrollment.status === "ACTIVE" &&
-      !(
-        item.enrollment.transfersFrom &&
-        item.enrollment.transfersFrom.length > 0 &&
-        item.enrollment.status !== "ACTIVE"
-      )
-  );
-
-  // Counts for summary cards
-  const totalCount = activeStudentsList.length;
-  const paidCount = activeStudentsList.filter((s) => s.status === "PAID").length;
-  const expiringCount = activeStudentsList.filter((s) => s.status === "EXPIRING").length;
-  const unpaidCount = activeStudentsList.filter((s) => s.status === "UNPAID").length;
-  const siblingWaivedCount = activeStudentsList.filter((s) => s.status === "SIBLING_WAIVED").length;
+    return {
+      totalCount: total,
+      paidCount: paid,
+      expiringCount: expiring,
+      unpaidCount: unpaid,
+      siblingWaivedCount: siblingWaived,
+    };
+  }, [processedStudents]);
 
   const handleOpenTransfer = (item: any) => {
     const availableBalance = Math.max(0, item.transferableSessions ?? item.netRefundableSessions ?? item.refundableSessions ?? item.netSessions);

@@ -160,6 +160,7 @@ const WorkshopListPage = async (
                 >
                   <Link
                     href={`/list/workshops/${workshop.id}`}
+                    prefetch={false}
                     className="block p-6 flex-grow hover:bg-surface-subtle transition-colors"
                   >
                     <div className="flex items-center justify-between gap-4 mb-4">
@@ -216,6 +217,7 @@ const WorkshopListPage = async (
                     <div className="border-t border-border p-3 bg-surface-subtle flex items-center justify-between gap-2">
                       <Link
                         href={`/list/attendance/workshop/${workshop.id}`}
+                        prefetch={false}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                       >
                         <Image src="/attendance.png" alt="" width={14} height={14} />

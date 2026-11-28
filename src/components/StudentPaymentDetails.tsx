@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { Voucher, VoucherEdit, Refund } from "@prisma/client";
-import PaymentForm from "./forms/PaymentForm";
+import dynamic from "next/dynamic";
+
+const PaymentForm = dynamic(() => import("./forms/PaymentForm"), { ssr: false });
 import PrintTicketButton from "./PrintTicketButton";
 import {
   formatVoucherDisplay,

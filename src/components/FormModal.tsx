@@ -11,6 +11,7 @@ import {
   deleteWorkshop,
 } from "@/lib/actions";
 import { deleteFormationAction } from "@/lib/formationActions";
+import { getFormRelatedDataAction } from "@/lib/formRelatedDataAction";
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import {
@@ -22,6 +23,14 @@ import {
   useState,
   startTransition,
 } from "react";
+
+// Short-lived client cache for table-wide create dropdowns (avoids refetching on repeated modal opens)
+const formRelatedDataCache = new Map<string, { relatedData: any; expiresAt: number }>();
+const FORM_RELATED_CACHE_TTL_MS = 30_000;
+
+function invalidateFormRelatedDataCache() {
+  formRelatedDataCache.clear();
+}
 import { toast } from "react-toastify";
 import { FormContainerProps } from "./FormContainer";
 import { useTranslations, useLocale } from "next-intl";
@@ -116,6 +125,7 @@ const DeleteConfirmation = ({
 
   useEffect(() => {
     if (state.success) {
+      invalidateFormRelatedDataCache();
       toast.success(
         state.message || tModals("deleteSuccess", { name: tableName })
       );
@@ -222,6 +232,76 @@ const FormModal = ({
     classData: null,
   });
 
+  const hasPreSuppliedRelated =
+    Boolean(relatedData && typeof relatedData === "object" && Object.keys(relatedData).length > 0);
+  const needsLazyLoad = type !== "delete" && !hasPreSuppliedRelated;
+
+  const [lazyLoading, setLazyLoading] = useState(false);
+  const [resolvedRelatedData, setResolvedRelatedData] = useState<any>(
+    hasPreSuppliedRelated ? relatedData : undefined
+  );
+  const [resolvedData, setResolvedData] = useState<any>(data);
+
+  useEffect(() => {
+    if (hasPreSuppliedRelated) {
+      setResolvedRelatedData(relatedData);
+    }
+  }, [hasPreSuppliedRelated, relatedData]);
+
+  useEffect(() => {
+    setResolvedData(data);
+  }, [data]);
+
+  useEffect(() => {
+    if (!open || !needsLazyLoad) return;
+
+    const isCacheableTableWide =
+      type === "create" || table === "subject" || table === "parent" || table === "announcement";
+    const cacheKey = `${table}:${type}`;
+    if (isCacheableTableWide) {
+      const cached = formRelatedDataCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        setResolvedRelatedData(cached.relatedData);
+        setLazyLoading(false);
+        return;
+      }
+    }
+
+    let cancelled = false;
+    setLazyLoading(true);
+    getFormRelatedDataAction({
+      table,
+      type: type as "create" | "update",
+      id,
+      data,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setResolvedRelatedData(res.relatedData || {});
+        if (res.data !== undefined) {
+          setResolvedData(res.data);
+        }
+        if (isCacheableTableWide) {
+          formRelatedDataCache.set(cacheKey, {
+            relatedData: res.relatedData || {},
+            expiresAt: Date.now() + FORM_RELATED_CACHE_TTL_MS,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResolvedRelatedData({});
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLazyLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, needsLazyLoad, table, type, id, data]);
+
   if (isLoaded && !can(type, table)) {
     return null;
   }
@@ -282,29 +362,37 @@ const FormModal = ({
                 setOpen={setOpen}
               />
             ) : (type === "create" || type === "update") && FormComponent ? (
-              <div className="p-2">
-                <FormComponent
-                  setOpen={setOpen}
-                  type={type}
-                  data={data}
-                  relatedData={relatedData}
-                  onSuccess={(result: any) => {
-                    if (table === "student" && result?.andPay && result?.student && result?.classData) {
-                      setOpen(false);
-                      setPaymentHandover({
-                        isOpen: true,
-                        student: result.student,
-                        classData: result.classData,
-                      });
-                    } else {
-                      setOpen(false);
-                      startTransition(() => {
-                        router.refresh();
-                      });
-                    }
-                  }}
-                />
-              </div>
+              lazyLoading && !resolvedRelatedData ? (
+                <div className="p-8 flex flex-col items-center justify-center gap-3 text-sm text-muted">
+                  <div className="w-7 h-7 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+                  <span>{tCommon("loading")}</span>
+                </div>
+              ) : (
+                <div className="p-2">
+                  <FormComponent
+                    setOpen={setOpen}
+                    type={type}
+                    data={resolvedData}
+                    relatedData={resolvedRelatedData || {}}
+                    onSuccess={(result: any) => {
+                      invalidateFormRelatedDataCache();
+                      if (table === "student" && result?.andPay && result?.student && result?.classData) {
+                        setOpen(false);
+                        setPaymentHandover({
+                          isOpen: true,
+                          student: result.student,
+                          classData: result.classData,
+                        });
+                      } else {
+                        setOpen(false);
+                        startTransition(() => {
+                          router.refresh();
+                        });
+                      }
+                    }}
+                  />
+                </div>
+              )
             ) : (
               <div className="text-center p-8 text-muted">
                 {tModals("notFound")}

@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import BackButton from "./BackButton";
 import TableSearch from "./TableSearch";
 import FormContainer from "./FormContainer";
@@ -10,14 +9,12 @@ type PageHeaderProps = {
     table: any;
     type: "create";
   } | null;
-  extraAction?: ReactNode;
 };
 
 const PageHeader = ({
   title,
   searchPlaceholder,
   createAction,
-  extraAction,
 }: PageHeaderProps) => {
   return (
     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6 border-b border-border pb-4">
@@ -27,9 +24,8 @@ const PageHeader = ({
           {title}
         </h1>
       </div>
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-4">
         <TableSearch placeholder={searchPlaceholder} />
-        {extraAction}
         {createAction && (
           <FormContainer
             table={createAction.table}
